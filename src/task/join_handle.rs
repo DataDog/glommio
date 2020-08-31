@@ -3,6 +3,7 @@ use core::future::Future;
 use core::marker::{PhantomData, Unpin};
 use core::pin::Pin;
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering;
 use core::task::{Context, Poll, Waker};
 
 use crate::task::header::Header;
@@ -22,6 +23,9 @@ pub struct JoinHandle<R, T> {
     pub(crate) _marker: PhantomData<(R, T)>,
 }
 
+unsafe impl<R: Send, T> Send for JoinHandle<R, T> {}
+unsafe impl<R, T> Sync for JoinHandle<R, T> {}
+
 impl<R, T> Unpin for JoinHandle<R, T> {}
 
 impl<R, T> JoinHandle<R, T> {
@@ -32,34 +36,47 @@ impl<R, T> JoinHandle<R, T> {
     /// When a task is canceled, its future will not be polled again.
     pub fn cancel(&self) {
         let ptr = self.raw_task.as_ptr();
-        let mut header = ptr as *mut Header;
+        let header = ptr as *const Header;
 
         unsafe {
-            let state = (*header).state;
+            let mut state = (*header).state.load(Ordering::Acquire);
 
-            // If the task has been completed or closed, it can't be canceled.
-            if state & (COMPLETED | CLOSED) != 0 {
-                return;
-            }
+            loop {
+                // If the task has been completed or closed, it can't be canceled.
+                if state & (COMPLETED | CLOSED) != 0 {
+                    break;
+                }
 
-            // If the task is not scheduled nor running, we'll need to schedule it.
-            let new = if state & (SCHEDULED | RUNNING) == 0 {
-                (state | SCHEDULED | CLOSED) + REFERENCE
-            } else {
-                state | CLOSED
-            };
+                // If the task is not scheduled nor running, we'll need to schedule it.
+                let new = if state & (SCHEDULED | RUNNING) == 0 {
+                    (state | SCHEDULED | CLOSED) + REFERENCE
+                } else {
+                    state | CLOSED
+                };
 
-            // Mark the task as closed.
-            (*header).state = new;
-            // If the task is not scheduled nor running, schedule it one more time so
-            // that its future gets dropped by the executor.
-            if state & (SCHEDULED | RUNNING) == 0 {
-                ((*header).vtable.schedule)(ptr);
-            }
+                // Mark the task as closed.
+                match (*header).state.compare_exchange_weak(
+                    state,
+                    new,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        // If the task is not scheduled nor running, schedule it one more time so
+                        // that its future gets dropped by the executor.
+                        if state & (SCHEDULED | RUNNING) == 0 {
+                            ((*header).vtable.schedule)(ptr);
+                        }
 
-            // Notify the awaiter that the task has been closed.
-            if state & AWAITER != 0 {
-                (*header).notify(None);
+                        // Notify the awaiter that the task has been closed.
+                        if state & AWAITER != 0 {
+                            (*header).notify(None);
+                        }
+
+                        break;
+                    }
+                    Err(s) => state = s,
+                }
             }
         }
     }
@@ -90,42 +107,76 @@ impl<R, T> JoinHandle<R, T> {
 impl<R, T> Drop for JoinHandle<R, T> {
     fn drop(&mut self) {
         let ptr = self.raw_task.as_ptr();
-        let mut header = ptr as *mut Header;
+        let header = ptr as *const Header;
 
         // A place where the output will be stored in case it needs to be dropped.
         let mut output = None;
+
         unsafe {
-            let state = (*header).state;
+            // Optimistically assume the `JoinHandle` is being dropped just after creating the
+            // task. This is a common case so if the handle is not used, the overhead of it is only
+            // one compare-exchange operation.
+            if let Err(mut state) = (*header).state.compare_exchange_weak(
+                SCHEDULED | HANDLE | REFERENCE,
+                SCHEDULED | REFERENCE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                loop {
+                    // If the task has been completed but not yet closed, that means its output
+                    // must be dropped.
+                    if state & COMPLETED != 0 && state & CLOSED == 0 {
+                        // Mark the task as closed in order to grab its output.
+                        match (*header).state.compare_exchange_weak(
+                            state,
+                            state | CLOSED,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        ) {
+                            Ok(_) => {
+                                // Read the output.
+                                output =
+                                    Some((((*header).vtable.get_output)(ptr) as *mut R).read());
 
-            // If the task has been completed but not yet closed, that means its output
-            // must be dropped.
-            if state & COMPLETED != 0 && state & CLOSED == 0 {
-                // Mark the task as closed in order to grab its output.
-                (*header).state |= CLOSED;
-                // Read the output.
-                output = Some((((*header).vtable.get_output)(ptr) as *mut R).read());
-            } else {
-                // If this is the last reference to the task and it's not closed, then
-                // close it and schedule one more time so that its future gets dropped by
-                // the executor.
-                let new = if state & (!(REFERENCE - 1) | CLOSED) == 0 {
-                    SCHEDULED | CLOSED | REFERENCE
-                } else {
-                    state & !HANDLE
-                };
-
-                // Unset the handle flag.
-                (*header).state = new;
-                // If this is the last reference to the task, we need to either
-                // schedule dropping its future or destroy it.
-                if state & !(REFERENCE - 1) == 0 {
-                    if state & CLOSED == 0 {
-                        ((*header).vtable.schedule)(ptr);
+                                // Update the state variable because we're continuing the loop.
+                                state |= CLOSED;
+                            }
+                            Err(s) => state = s,
+                        }
                     } else {
-                        ((*header).vtable.destroy)(ptr);
+                        // If this is the last reference to the task and it's not closed, then
+                        // close it and schedule one more time so that its future gets dropped by
+                        // the executor.
+                        let new = if state & (!(REFERENCE - 1) | CLOSED) == 0 {
+                            SCHEDULED | CLOSED | REFERENCE
+                        } else {
+                            state & !HANDLE
+                        };
+
+                        // Unset the handle flag.
+                        match (*header).state.compare_exchange_weak(
+                            state,
+                            new,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        ) {
+                            Ok(_) => {
+                                // If this is the last reference to the task, we need to either
+                                // schedule dropping its future or destroy it.
+                                if state & !(REFERENCE - 1) == 0 {
+                                    if state & CLOSED == 0 {
+                                        ((*header).vtable.schedule)(ptr);
+                                    } else {
+                                        ((*header).vtable.destroy)(ptr);
+                                    }
+                                }
+
+                                break;
+                            }
+                            Err(s) => state = s,
+                        }
                     }
                 }
-                (*header).state = SCHEDULED | REFERENCE;
             }
         }
 
@@ -139,10 +190,10 @@ impl<R, T> Future for JoinHandle<R, T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let ptr = self.raw_task.as_ptr();
-        let mut header = ptr as *mut Header;
+        let header = ptr as *const Header;
 
         unsafe {
-            let mut state = (*header).state;
+            let mut state = (*header).state.load(Ordering::Acquire);
 
             loop {
                 // If the task has been closed, notify the awaiter and return `None`.
@@ -155,7 +206,7 @@ impl<R, T> Future for JoinHandle<R, T> {
 
                         // Reload the state after registering. It is possible changes occurred just
                         // before registration so we need to check for that.
-                        state = (*header).state;
+                        state = (*header).state.load(Ordering::Acquire);
 
                         // If the task is still scheduled or running, we need to wait because its
                         // future is not dropped yet.
@@ -177,7 +228,7 @@ impl<R, T> Future for JoinHandle<R, T> {
 
                     // Reload the state after registering. It is possible that the task became
                     // completed or closed just before registration so we need to check for that.
-                    state = (*header).state;
+                    state = (*header).state.load(Ordering::Acquire);
 
                     // If the task has been closed, restart.
                     if state & CLOSED != 0 {
@@ -191,16 +242,25 @@ impl<R, T> Future for JoinHandle<R, T> {
                 }
 
                 // Since the task is now completed, mark it as closed in order to grab its output.
-                (*header).state |= CLOSED;
-                // Notify the awaiter. Even though the awaiter is most likely the current
-                // task, it could also be another task.
-                if state & AWAITER != 0 {
-                    (*header).notify(Some(cx.waker()));
-                }
+                match (*header).state.compare_exchange(
+                    state,
+                    state | CLOSED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        // Notify the awaiter. Even though the awaiter is most likely the current
+                        // task, it could also be another task.
+                        if state & AWAITER != 0 {
+                            (*header).notify(Some(cx.waker()));
+                        }
 
-                // Take the output from the task.
-                let output = ((*header).vtable.get_output)(ptr) as *mut R;
-                return Poll::Ready(Some(output.read()));
+                        // Take the output from the task.
+                        let output = ((*header).vtable.get_output)(ptr) as *mut R;
+                        return Poll::Ready(Some(output.read()));
+                    }
+                    Err(s) => state = s,
+                }
             }
         }
     }

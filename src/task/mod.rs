@@ -129,5 +129,5 @@ pub(crate) mod utils;
 pub(crate) mod waker_fn;
 
 pub use crate::task::join_handle::JoinHandle;
-pub use crate::task::task::{spawn_local, Task};
+pub use crate::task::task::{spawn, Task, spawn_local};
 pub use crate::task::waker_fn::waker_fn;

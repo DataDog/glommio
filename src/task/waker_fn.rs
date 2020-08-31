@@ -1,4 +1,4 @@
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use core::mem::{self, ManuallyDrop};
 use core::task::{RawWaker, RawWakerVTable, Waker};
 
@@ -6,7 +6,7 @@ use core::task::{RawWaker, RawWakerVTable, Waker};
 ///
 /// The function gets called every time the waker is woken.
 pub fn waker_fn<F: Fn() + Send + Sync + 'static>(f: F) -> Waker {
-    let raw = Rc::into_raw(Rc::new(f)) as *const ();
+    let raw = Arc::into_raw(Arc::new(f)) as *const ();
     let vtable = &Helper::<F>::VTABLE;
     unsafe { Waker::from_raw(RawWaker::new(raw, vtable)) }
 }
@@ -22,22 +22,22 @@ impl<F: Fn() + Send + Sync + 'static> Helper<F> {
     );
 
     unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
-        let arc = ManuallyDrop::new(Rc::from_raw(ptr as *const F));
+        let arc = ManuallyDrop::new(Arc::from_raw(ptr as *const F));
         mem::forget(arc.clone());
         RawWaker::new(ptr, &Self::VTABLE)
     }
 
     unsafe fn wake(ptr: *const ()) {
-        let arc = Rc::from_raw(ptr as *const F);
+        let arc = Arc::from_raw(ptr as *const F);
         (arc)();
     }
 
     unsafe fn wake_by_ref(ptr: *const ()) {
-        let arc = ManuallyDrop::new(Rc::from_raw(ptr as *const F));
+        let arc = ManuallyDrop::new(Arc::from_raw(ptr as *const F));
         (arc)();
     }
 
     unsafe fn drop_waker(ptr: *const ()) {
-        drop(Rc::from_raw(ptr as *const F));
+        drop(Arc::from_raw(ptr as *const F));
     }
 }

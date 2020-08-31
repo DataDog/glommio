@@ -3,12 +3,75 @@ use core::future::Future;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering;
 use core::task::Waker;
 
 use crate::task::header::Header;
-use crate::task::join_handle::JoinHandle;
 use crate::task::raw::RawTask;
 use crate::task::state::*;
+use crate::task::JoinHandle;
+
+/// Creates a new task.
+///
+/// This constructor returns a [`Task`] reference that runs the future and a [`JoinHandle`] that
+/// awaits its result.
+///
+/// When run, the task polls `future`. When woken up, it gets scheduled for running by the
+/// `schedule` function. Argument `tag` is an arbitrary piece of data stored inside the task.
+///
+/// The schedule function should not attempt to run the task nor to drop it. Instead, it should
+/// push the task into some kind of queue so that it can be processed later.
+///
+/// If you need to spawn a future that does not implement [`Send`], consider using the
+/// [`spawn_local`] function instead.
+///
+/// [`Task`]: struct.Task.html
+/// [`JoinHandle`]: struct.JoinHandle.html
+/// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
+/// [`spawn_local`]: fn.spawn_local.html
+///
+/// # Examples
+///
+/// ```
+/// use crossbeam::channel;
+///
+/// // The future inside the task.
+/// let future = async {
+///     println!("Hello, world!");
+/// };
+///
+/// // If the task gets woken up, it will be sent into this channel.
+/// let (s, r) = channel::unbounded();
+/// let schedule = move |task| s.send(task).unwrap();
+///
+/// // Create a task with the future and the schedule function.
+/// let (task, handle) = async_task::spawn(future, schedule, ());
+/// ```
+pub fn spawn<F, R, S, T>(future: F, schedule: S, tag: T) -> (Task<T>, JoinHandle<R, T>)
+where
+    F: Future<Output = R> + Send + 'static,
+    R: Send + 'static,
+    S: Fn(Task<T>) + Send + Sync + 'static,
+    T: Send + Sync + 'static,
+{
+    // Allocate large futures on the heap.
+    let raw_task = if mem::size_of::<F>() >= 2048 {
+        let future = alloc::boxed::Box::pin(future);
+        RawTask::<_, R, S, T>::allocate(future, schedule, tag)
+    } else {
+        RawTask::<F, R, S, T>::allocate(future, schedule, tag)
+    };
+
+    let task = Task {
+        raw_task,
+        _marker: PhantomData,
+    };
+    let handle = JoinHandle {
+        raw_task,
+        _marker: PhantomData,
+    };
+    (task, handle)
+}
 
 /// Creates a new local task.
 ///
@@ -21,12 +84,16 @@ use crate::task::state::*;
 /// The schedule function should not attempt to run the task nor to drop it. Instead, it should
 /// push the task into some kind of queue so that it can be processed later.
 ///
-/// This function does not require the future to implement [`Send`]. If the
+/// Unlike [`spawn`], this function does not require the future to implement [`Send`]. If the
 /// [`Task`] reference is run or dropped on a thread it was not created on, a panic will occur.
+///
+/// **NOTE:** This function is only available when the `std` feature for this crate is enabled (it
+/// is by default).
 ///
 /// [`Task`]: struct.Task.html
 /// [`JoinHandle`]: struct.JoinHandle.html
 /// [`spawn`]: fn.spawn.html
+/// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
 ///
 /// # Examples
 ///
@@ -148,6 +215,9 @@ pub struct Task<T> {
     pub(crate) _marker: PhantomData<T>,
 }
 
+unsafe impl<T> Send for Task<T> {}
+unsafe impl<T> Sync for Task<T> {}
+
 impl<T> Task<T> {
     /// Schedules the task.
     ///
@@ -199,7 +269,7 @@ impl<T> Task<T> {
     /// [`Waker`]: https://doc.rust-lang.org/std/task/struct.Waker.html
     pub fn cancel(&self) {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *mut Header;
+        let header = ptr as *const Header;
 
         unsafe {
             (*header).cancel();
@@ -256,7 +326,7 @@ impl<T> Task<T> {
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *mut Header;
+        let header = ptr as *const Header;
 
         unsafe {
             // Cancel the task.
@@ -266,8 +336,7 @@ impl<T> Drop for Task<T> {
             ((*header).vtable.drop_future)(ptr);
 
             // Mark the task as unscheduled.
-            let state = (*header).state;
-            (*header).state &= !SCHEDULED;
+            let state = (*header).state.fetch_and(!SCHEDULED, Ordering::AcqRel);
 
             // Notify the awaiter that the future has been dropped.
             if state & AWAITER != 0 {

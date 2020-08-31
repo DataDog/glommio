@@ -1,6 +1,7 @@
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
 use core::fmt;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::Waker;
 
 use crate::task::raw::TaskVTable;
@@ -14,7 +15,7 @@ pub(crate) struct Header {
     /// Current state of the task.
     ///
     /// Contains flags representing the current state and the reference count.
-    pub(crate) state: usize,
+    pub(crate) state: AtomicUsize,
 
     /// The task that is blocked on the `JoinHandle`.
     ///
@@ -33,23 +34,35 @@ impl Header {
     ///
     /// This method will mark the task as closed, but it won't reschedule the task or drop its
     /// future.
-    pub(crate) fn cancel(&mut self) {
-        // If the task has been completed or closed, it can't be canceled.
-        if self.state & (COMPLETED | CLOSED) != 0 {
-            return;
-        }
+    pub(crate) fn cancel(&self) {
+        let mut state = self.state.load(Ordering::Acquire);
 
-        self.state = CLOSED;
+        loop {
+            // If the task has been completed or closed, it can't be canceled.
+            if state & (COMPLETED | CLOSED) != 0 {
+                break;
+            }
+
+            // Mark the task as closed.
+            match self.state.compare_exchange_weak(
+                state,
+                state | CLOSED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(s) => state = s,
+            }
+        }
     }
 
     /// Notifies the awaiter blocked on this task.
     ///
     /// If the awaiter is the same as the current waker, it will not be notified.
     #[inline]
-    pub(crate) fn notify(&mut self, current: Option<&Waker>) {
-        let state = self.state;
+    pub(crate) fn notify(&self, current: Option<&Waker>) {
         // Mark the awaiter as being notified.
-        self.state |= NOTIFYING;
+        let state = self.state.fetch_or(NOTIFYING, Ordering::AcqRel);
 
         // If the awaiter was not being notified nor registered...
         if state & (NOTIFYING | REGISTERING) == 0 {
@@ -57,7 +70,8 @@ impl Header {
             let waker = unsafe { (*self.awaiter.get()).take() };
 
             // Mark the state as not being notified anymore nor containing an awaiter.
-            self.state &= !NOTIFYING & !AWAITER;
+            self.state
+                .fetch_and(!NOTIFYING & !AWAITER, Ordering::Release);
 
             if let Some(w) = waker {
                 // We need a safeguard against panics because waking can panic.
@@ -74,22 +88,36 @@ impl Header {
     ///
     /// This method is called when `JoinHandle` is polled and the task has not completed.
     #[inline]
-    pub(crate) fn register(&mut self, waker: &Waker) {
+    pub(crate) fn register(&self, waker: &Waker) {
         // Load the state and synchronize with it.
-        let state = self.state;
+        let mut state = self.state.fetch_or(0, Ordering::Acquire);
 
-        // There can't be two concurrent registrations because `JoinHandle` can only be polled
-        // by a unique pinned reference.
-        debug_assert!(state & REGISTERING == 0);
+        loop {
+            // There can't be two concurrent registrations because `JoinHandle` can only be polled
+            // by a unique pinned reference.
+            debug_assert!(state & REGISTERING == 0);
 
-        // If we're in the notifying state at this moment, just wake and return without
-        // registering.
-        if state & NOTIFYING != 0 {
-            abort_on_panic(|| waker.wake_by_ref());
-            return;
+            // If we're in the notifying state at this moment, just wake and return without
+            // registering.
+            if state & NOTIFYING != 0 {
+                abort_on_panic(|| waker.wake_by_ref());
+                return;
+            }
+
+            // Mark the state to let other threads know we're registering a new awaiter.
+            match self.state.compare_exchange_weak(
+                state,
+                state | REGISTERING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    state |= REGISTERING;
+                    break;
+                }
+                Err(s) => state = s,
+            }
         }
-
-        self.state |= REGISTERING;
 
         // Put the waker into the awaiter field.
         unsafe {
@@ -100,22 +128,30 @@ impl Header {
         // we complete registration.
         let mut waker = None;
 
-        // If there was a notification, take the waker out of the awaiter field.
-        if state & NOTIFYING != 0 {
-            if let Some(w) = unsafe { (*self.awaiter.get()).take() } {
-                abort_on_panic(|| waker = Some(w));
+        loop {
+            // If there was a notification, take the waker out of the awaiter field.
+            if state & NOTIFYING != 0 {
+                if let Some(w) = unsafe { (*self.awaiter.get()).take() } {
+                    abort_on_panic(|| waker = Some(w));
+                }
+            }
+
+            // The new state is not being notified nor registered, but there might or might not be
+            // an awaiter depending on whether there was a concurrent notification.
+            let new = if waker.is_none() {
+                (state & !NOTIFYING & !REGISTERING) | AWAITER
+            } else {
+                state & !NOTIFYING & !REGISTERING & !AWAITER
+            };
+
+            match self
+                .state
+                .compare_exchange_weak(state, new, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(s) => state = s,
             }
         }
-
-        // The new state is not being notified nor registered, but there might or might not be
-        // an awaiter depending on whether there was a concurrent notification.
-        let new = if waker.is_none() {
-            (state & !NOTIFYING & !REGISTERING) | AWAITER
-        } else {
-            state & !NOTIFYING & !REGISTERING & !AWAITER
-        };
-
-        self.state = new;
 
         // If there was a notification during registration, wake the awaiter now.
         if let Some(w) = waker {
@@ -135,7 +171,7 @@ impl Header {
 
 impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.state;
+        let state = self.state.load(Ordering::SeqCst);
 
         f.debug_struct("Header")
             .field("scheduled", &(state & SCHEDULED != 0))
