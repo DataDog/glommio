@@ -823,9 +823,8 @@ fn invalid_task_queue() {
 }
 
 #[test]
-fn two_yielding_queues() {
-    //    use futures::future::join_all;
-    use futures::join;
+fn ten_yielding_queues() {
+    use futures::future::join_all;
 
     let local_ex = LocalExecutor::new(None).unwrap();
 
@@ -834,37 +833,19 @@ fn two_yielding_queues() {
     // 2 -> t2...
     let executed_last = Rc::new(RefCell::new(0));
     local_ex.run(async {
-        // FIXME: We should be using a vector here and use many classes,
-        // but for some reason this is segfaulting the tester.
-        // The test itself succeeds, and after it runs it segfaults.
-        // That does indicate that we're doing something wrong somewhere,
-        // but need to move on right now.
-        //        let mut joins = Vec::with_capacity(10);
-        //for id in 1..2 {
-        let exec = executed_last.clone();
-        let id = 1;
-        let t1 = Task::local(async move {
-            for _ in 0..10_000 {
-                let mut last = exec.borrow_mut();
-                assert!(id != *last);
-                *last = id;
-                drop(last);
-                Task::<()>::later().await;
-            }
-        });
-        let exec = executed_last.clone();
-        let id = 2;
-        let t2 = Task::local(async move {
-            for _ in 0..10_000 {
-                let mut last = exec.borrow_mut();
-                assert!(id != *last);
-                *last = id;
-                drop(last);
-                Task::<()>::later().await;
-            }
-        });
-
-        //}
-        join!(t1, t2);
+        let mut joins = Vec::with_capacity(10);
+        for id in 1..11 {
+            let exec = executed_last.clone();
+            joins.push(Task::local(async move {
+                for _ in 0..10_000 {
+                    let mut last = exec.borrow_mut();
+                    assert!(id != *last);
+                    *last = id;
+                    drop(last);
+                    Task::<()>::later().await;
+                }
+            }));
+        }
+        join_all(joins).await;
     });
 }
