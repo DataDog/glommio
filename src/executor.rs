@@ -25,7 +25,7 @@
 //!     }));
 //! ```
 
-#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 use std::cell::RefCell;
 use std::collections::{BinaryHeap, HashMap};

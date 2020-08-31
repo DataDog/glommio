@@ -1,7 +1,7 @@
 //! An executor for running async tasks.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 use crate::task::task;
 use crate::task::JoinHandle;
