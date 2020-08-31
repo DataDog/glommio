@@ -559,7 +559,7 @@ impl Reactor {
         let mut poll_ring = self.poll_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        flush_rings!(main_ring, poll_ring)?;
+        flush_rings!(main_ring, lat_ring, poll_ring)?;
 
         let mut should_sleep = poll_ring.can_sleep();
         if let Some(dur) = timeout {
