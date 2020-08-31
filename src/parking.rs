@@ -136,10 +136,11 @@ impl Parker {
         self.unparker.inner.park(None);
     }
 
-    /// Blocks until notified and then goes back into unnotified state, or times out after
-    /// `duration`.
-    ///
-    /// Returns `true` if notified before the timeout.
+    /// Performs non-sleepable pool and install a preempt timeout into the
+    /// ring with `Duration`. A value of zero means we are not interested in
+    /// installing a preempt timer. Tasks executing in the CPU right after this
+    /// will be able to check if the timer has elapsed and yield the CPU if that
+    /// is the case.
     ///
     /// # Examples
     ///
@@ -149,11 +150,11 @@ impl Parker {
     ///
     /// let p = Parker::new();
     ///
-    /// // Wait for a notification, or time out after 500 ms.
-    /// p.park_timeout(Duration::from_millis(500));
+    /// // Poll for existing I/O, and set next preemption point to 500ms
+    /// p.poll_io(Duration::from_millis(500));
     /// ```
-    pub fn park_timeout(&self, timeout: Duration) -> bool {
-        self.unparker.inner.park(Some(timeout))
+    pub fn poll_io(&self, timeout: Duration) {
+        self.unparker.inner.park(Some(timeout));
     }
 
     /// Blocks until notified and then goes back into unnotified state, or times out at `instant`.

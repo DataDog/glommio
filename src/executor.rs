@@ -556,7 +556,7 @@ impl LocalExecutor {
                 self.parker.park();
                 continue 'start;
             }
-            self.parker.park_timeout(Duration::from_secs(0));
+            self.parker.poll_io(Duration::from_secs(0));
         })
     }
 }
