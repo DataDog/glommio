@@ -231,7 +231,10 @@ impl UringCommon for PollRing {
     }
 
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
-        process_one_event(self.ring.peek_for_cqe(), |_| None, wakers)
+        process_one_event(self.ring.peek_for_cqe(), |_| None, wakers).and_then(|x| {
+            self.completed += 1;
+            Some(x)
+        })
     }
 
     fn submit_one_event(&mut self) -> Option<()> {
