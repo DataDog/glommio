@@ -239,6 +239,7 @@ struct ExecutorQueues {
     default_executor: TaskQueueHandle,
     executor_index: usize,
     last_vruntime: u64,
+    preempt_timer_duration: Duration,
 }
 
 impl ExecutorQueues {
@@ -250,9 +251,21 @@ impl ExecutorQueues {
             default_executor: TaskQueueHandle::default(),
             executor_index: 1, // 0 is the default
             last_vruntime: 0,
+            preempt_timer_duration: Duration::from_secs(u64::MAX),
         }))
     }
 
+    fn reevaluate_preempt_timer(&mut self) {
+        self.preempt_timer_duration = self
+            .active_executors
+            .iter()
+            .map(|tq| match tq.borrow().io_requirements.latency_req {
+                Latency::NotImportant => Duration::from_secs(u64::MAX),
+                Latency::Matters(d) => d,
+            })
+            .min()
+            .unwrap_or(Duration::from_secs(u64::MAX));
+    }
     fn maybe_activate(&mut self, index: usize) {
         let queue = self
             .available_executors
@@ -266,6 +279,7 @@ impl ExecutorQueues {
             state.active = true;
             drop(state);
             self.active_executors.push(queue);
+            self.reevaluate_preempt_timer();
         }
     }
 }
@@ -485,6 +499,10 @@ impl LocalExecutor {
             .ok_or(QueueNotFoundError::new(handle))
     }
 
+    fn preempt_timer_duration(&self) -> Duration {
+        self.queues.borrow().preempt_timer_duration
+    }
+
     fn run_one_task_queue(&self) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
@@ -495,14 +513,15 @@ impl LocalExecutor {
                 drop(tq);
 
                 let time = Instant::now();
-                let mut max_runs = 5;
-                for _ in 0..max_runs {
+                loop {
+                    if Reactor::need_preempt() {
+                        break;
+                    }
                     let mut queue_ref = queue.borrow_mut();
                     if let Some(r) = queue_ref.get_task() {
                         Reactor::get().inform_io_requirements(queue_ref.io_requirements);
                         drop(queue_ref);
                         r.run();
-                        max_runs -= 1;
                     } else {
                         break;
                     }
@@ -520,6 +539,8 @@ impl LocalExecutor {
 
                 if need_repush {
                     tq.active_executors.push(queue);
+                } else {
+                    tq.reevaluate_preempt_timer();
                 }
                 true
             }
@@ -547,16 +568,21 @@ impl LocalExecutor {
         let waker = waker_fn(|| {});
         let cx = &mut Context::from_waker(&waker);
 
-        LOCAL_EX.set(self, || 'start: loop {
+        LOCAL_EX.set(self, || loop {
             if let Poll::Ready(t) = future.as_mut().poll(cx) {
                 break t;
             }
 
+            // We want to do I/O before we call run_one_task queue,
+            // for the benefit of the latency ring. If there are pending
+            // requests that are latency sensitive we want them out of the
+            // ring ASAP (before we run the task queues). We will also use
+            // the opportunity to install the timer.
+            let duration = self.preempt_timer_duration();
+            self.parker.poll_io(duration);
             if !self.run_one_task_queue() {
                 self.parker.park();
-                continue 'start;
             }
-            self.parker.poll_io(Duration::from_secs(0));
         })
     }
 }
@@ -652,8 +678,9 @@ impl<T> Task<T> {
     /// has run for too long
     #[inline]
     pub async fn yield_if_needed() {
-        // FIXME: coming soon
-        Task::<()>::later().await;
+        if Reactor::need_preempt() {
+            Task::<()>::later().await;
+        }
     }
 
     /// Spawns a task onto the current single-threaded executor, in a particular task queue
@@ -847,5 +874,132 @@ fn ten_yielding_queues() {
             }));
         }
         join_all(joins).await;
+    });
+}
+
+#[test]
+fn task_with_latency_requirements() {
+    use futures::join;
+
+    let local_ex = LocalExecutor::new(None).unwrap();
+
+    local_ex.run(async {
+        let not_latency = Task::<()>::create_task_queue(1, Latency::NotImportant, "test");
+        let latency =
+            Task::<()>::create_task_queue(1, Latency::Matters(Duration::from_millis(2)), "testlat");
+
+        let nolat_started = Rc::new(RefCell::new(false));
+        let lat_status = Rc::new(RefCell::new(false));
+
+        let rust_capture_sucks = move || (nolat_started.clone(), lat_status.clone());
+        let nolat_sucks = rust_capture_sucks.clone();
+
+        // Loop until need_preempt is set. It is set to 2ms, but because this is a test
+        // and can be running overcommited or in whichever shared infrastructure, we'll
+        // allow the timer to fire in up to 1s. If it didn't fire in 1s, that's broken.
+        let nolat = local_ex
+            .spawn_into(
+                async move {
+                    let (nolat_started, lat_status) = nolat_sucks();
+                    *(nolat_started.borrow_mut()) = true;
+
+                    let start = Instant::now();
+                    // Now busy loop and make sure that we yield when we have too.
+                    loop {
+                        if *(lat_status.borrow()) {
+                            break; // Success!
+                        }
+                        if start.elapsed().as_secs() > 1 {
+                            panic!("Never received preempt signal");
+                        }
+                        Task::<()>::yield_if_needed().await;
+                    }
+                },
+                not_latency,
+            )
+            .unwrap();
+
+        let lat = local_ex
+            .spawn_into(
+                async move {
+                    let (nolat_started, lat_status) = rust_capture_sucks();
+                    // In case we are executed first, yield to the the other task
+                    loop {
+                        if *(nolat_started.borrow()) == false {
+                            Task::<()>::later().await;
+                        } else {
+                            break;
+                        }
+                    }
+                    *(lat_status.borrow_mut()) = true;
+                },
+                latency,
+            )
+            .unwrap();
+
+        join!(nolat, lat);
+    });
+}
+
+#[test]
+fn task_optimized_for_throughput() {
+    use futures::join;
+
+    let local_ex = LocalExecutor::new(None).unwrap();
+
+    local_ex.run(async {
+        let tq1 = Task::<()>::create_task_queue(1, Latency::NotImportant, "test");
+        let tq2 = Task::<()>::create_task_queue(1, Latency::NotImportant, "testlat");
+
+        let first_started = Rc::new(RefCell::new(false));
+        let second_status = Rc::new(RefCell::new(false));
+
+        let rust_capture_sucks = move || (first_started.clone(), second_status.clone());
+        let clone_sucks = rust_capture_sucks.clone();
+
+        // Loop until need_preempt is set. It is set to 2ms, but because this is a test
+        // and can be running overcommited or in whichever shared infrastructure, we'll
+        // allow the timer to fire in up to 1s. If it didn't fire in 1s, that's broken.
+        let first = local_ex
+            .spawn_into(
+                async move {
+                    let (first_started, second_status) = clone_sucks();
+                    *(first_started.borrow_mut()) = true;
+
+                    let start = Instant::now();
+                    // Now busy loop and make sure that we yield when we have too.
+                    loop {
+                        if *(second_status.borrow()) {
+                            panic!("I was preempted but should not have been");
+                        }
+                        if start.elapsed().as_secs() > 1 {
+                            break;
+                        }
+                        Task::<()>::yield_if_needed().await;
+                    }
+                },
+                tq1,
+            )
+            .unwrap();
+
+        let second = local_ex
+            .spawn_into(
+                async move {
+                    let (first_started, second_status) = rust_capture_sucks();
+                    // In case we are executed first, yield to the the other task
+                    loop {
+                        if *(first_started.borrow()) == false {
+                            Task::<()>::later().await;
+                        } else {
+                            break;
+                        }
+                    }
+                    *(second_status.borrow_mut()) = true;
+                },
+                tq2,
+            )
+            .unwrap();
+
+        join!(first, second);
     });
 }

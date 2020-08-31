@@ -104,6 +104,7 @@ pub(crate) enum SourceType {
     Close,
     LinkRings(bool),
     Statx(CString, Box<RefCell<libc::statx>>),
+    Timeout(bool),
     Invalid,
 }
 

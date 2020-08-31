@@ -1,6 +1,7 @@
 use nix::poll::PollFlags;
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::convert::TryInto;
 use std::ffi::CStr;
 use std::io;
 use std::os::unix::io::RawFd;
@@ -35,6 +36,8 @@ enum UringOpDescriptor {
     FDataSync,
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
+    Timeout(u64),
+    TimeoutRemove(*const Source),
 }
 
 #[derive(Debug)]
@@ -94,6 +97,17 @@ where
 
                 let path = CStr::from_ptr(path as _);
                 sqe.prep_statx(-1, path, flags, mode, &mut *statx_buf);
+            }
+            UringOpDescriptor::Timeout(micros) => {
+                let d = Duration::from_micros(micros);
+                let timeout: _ = uring_sys::__kernel_timespec {
+                    tv_sec: d.as_secs() as _,
+                    tv_nsec: d.subsec_nanos() as _,
+                };
+                sqe.prep_timeout(&timeout);
+            }
+            UringOpDescriptor::TimeoutRemove(timer) => {
+                sqe.prep_timeout_remove(timer as _);
             }
             UringOpDescriptor::Close => {
                 sqe.prep_close(op.fd);
@@ -285,10 +299,58 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
-    fn sleep(
+    pub(crate) fn rearm_preempt_timer(
         &mut self,
-        link: &mut Pin<Box<Source>>
-    ) -> io::Result<usize> {
+        source: &mut Pin<Box<Source>>,
+        d: Duration,
+    ) -> io::Result<()> {
+        let src = source.as_ref().as_ptr() as *const Source;
+
+        match source.source_type {
+            SourceType::Timeout(false) => {} // not armed, do nothing
+            SourceType::Timeout(true) => {
+                // armed, need to cancel first
+                let op_remove = UringOpDescriptor::TimeoutRemove(src);
+                source
+                    .as_mut()
+                    .update_source_type(SourceType::Timeout(false));
+
+                self.submission_queue().push_front(UringDescriptor {
+                    args: op_remove,
+                    fd: -1,
+                    user_data: 0,
+                });
+                loop {
+                    if self.consume_submission_queue().is_ok() {
+                        break;
+                    }
+                }
+            }
+            _ => panic!("Unexpected source type when linking rings"),
+        }
+
+        if d.as_secs() != u64::MAX {
+            let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
+            source
+                .as_mut()
+                .update_source_type(SourceType::Timeout(true));
+
+            // This assumes SQEs will be processed in the order they are
+            // seen. Because remove does not do anything asynchronously
+            // and is processed inline there is no need to link sqes.
+            self.submission_queue().push_front(UringDescriptor {
+                args: op,
+                fd: -1,
+                user_data: src as _,
+            });
+            // No need to submit, the next ring enter will submit for us. Because
+            // we just flushed and we got put in front of the queue we should get a SQE.
+            // Still it would be nice to verify if we did.
+        }
+        Ok(())
+    }
+
+    fn sleep(&mut self, link: &mut Pin<Box<Source>>) -> io::Result<usize> {
         match link.source_type {
             SourceType::LinkRings(true) => {} // nothing to do
             SourceType::LinkRings(false) => {
@@ -364,6 +426,14 @@ impl UringCommon for SleepableRing {
                 SourceType::LinkRings(false) => {
                     panic!("Impossible to have an event firing like this");
                 }
+                SourceType::Timeout(true) => {
+                    source.source_type = SourceType::Timeout(false);
+                    Some(())
+                }
+                // This is actually possible: when the request is cancelled
+                // the original source does complete, and the cancellation
+                // would have marked us as false. Just ignore it.
+                SourceType::Timeout(false) => None,
                 _ => None,
             },
             wakers,
@@ -390,6 +460,7 @@ pub struct Reactor {
     latency_ring: RefCell<SleepableRing>,
     poll_ring: RefCell<PollRing>,
     link_rings_src: RefCell<Pin<Box<Source>>>,
+    timeout_src: RefCell<Pin<Box<Source>>>,
 }
 
 fn common_flags() -> PollFlags {
@@ -461,6 +532,11 @@ impl Reactor {
                 IoRequirements::default(),
                 link_fd,
                 SourceType::LinkRings(false),
+            )),
+            timeout_src: RefCell::new(Source::new(
+                IoRequirements::default(),
+                -1,
+                SourceType::Timeout(false),
             )),
         })
     }
@@ -561,18 +637,20 @@ impl Reactor {
         wakers: &mut Vec<Waker>,
         timeout: Option<Duration>,
     ) -> io::Result<usize> {
-        let mut main_ring = self.main_ring.borrow_mut();
         let mut poll_ring = self.poll_ring.borrow_mut();
+        let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        flush_rings!(main_ring, lat_ring, poll_ring)?;
-
-        let mut should_sleep = poll_ring.can_sleep();
-        if let Some(dur) = timeout {
-            if dur == Duration::from_millis(0) {
-                should_sleep = false;
+        let mut should_sleep = match timeout {
+            None => true,
+            Some(dur) => {
+                let mut src = self.timeout_src.borrow_mut();
+                lat_ring.rearm_preempt_timer(&mut src, dur)?;
+                false
             }
         };
+        flush_rings!(main_ring, lat_ring, poll_ring)?;
+        should_sleep &= poll_ring.can_sleep();
 
         let mut completed = 0;
         if should_sleep {
@@ -583,7 +661,20 @@ impl Reactor {
         }
 
         completed += consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
+        // A Note about need_preempt:
+        //
+        // If in the last call to consume_rings! some events completed, the tail and
+        // head would have moved to match. So it does not matter that events were
+        // generated after we registered the timer: since we consumed them here,
+        // need_preempt() should be false at this point. As soon as the next event
+        // in the preempt ring completes, though, then it will be true.
         Ok(completed)
+    }
+
+    pub(crate) fn preempt_pointers(&self) -> (*const u32, *const u32) {
+        let mut lat_ring = self.latency_ring.borrow_mut();
+        let cq = &lat_ring.ring.raw_mut().cq;
+        (cq.khead, cq.ktail)
     }
 
     pub(crate) fn notify(&self) -> io::Result<()> {

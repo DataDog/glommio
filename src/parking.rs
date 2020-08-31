@@ -59,7 +59,7 @@ use std::panic::{self, RefUnwindSafe, UnwindSafe};
 use std::path::Path;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -334,16 +334,33 @@ pub(crate) struct Reactor {
 
     /// I/O Requirements of the task currently executing.
     current_io_requirements: RefCell<IoRequirements>,
+
+    /// Whether there are events in the latency ring.
+    ///
+    /// There will be events if the head and tail of the CQ ring are different.
+    /// liburing has an inline function in its header to do this, but it becomes
+    /// a function call if I use through uring-sys. This is quite critical and already
+    /// more expensive than it should be (see comments for need_preempt()), so implement
+    /// this ourselves.
+    ///
+    /// Also we don't want to acquire these addresses (which are behind a refcell)
+    /// every time. Acquire during initialization
+    preempt_ptr_head: *const u32,
+    preempt_ptr_tail: *const AtomicU32,
 }
 
 impl Reactor {
     fn new() -> Reactor {
+        let sys = sys::Reactor::new().expect("cannot initialize I/O event notification");
+        let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
-            sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
+            sys,
             ticker: AtomicUsize::new(0),
             timers: RefCell::new(BTreeMap::new()),
             timer_ops: ConcurrentQueue::bounded(1000),
             current_io_requirements: RefCell::new(IoRequirements::default()),
+            preempt_ptr_head,
+            preempt_ptr_tail: preempt_ptr_tail as _,
         }
     }
 
@@ -352,6 +369,38 @@ impl Reactor {
             LOCAL_REACTOR.with(|r| {
                 let rc = r as *const Reactor;
                 &*rc
+            })
+        }
+    }
+
+    #[inline(always)]
+    // FIXME: This is a bit less efficient than it needs, because the scoped thread local key
+    // does lazy initialization. Every time we call into this, we are paying to test if this
+    // is initialized. This is what I got from objdump:
+    //
+    // 0:    50                      push   %rax
+    // 1:    ff 15 00 00 00 00       callq  *0x0(%rip)
+    // 7:    48 85 c0                test   %rax,%rax
+    // a:    74 17                   je     23  <== will call into the initialization routine
+    // c:    48 8b 88 38 03 00 00    mov    0x338(%rax),%rcx <== address of the head
+    // 13:   48 8b 80 40 03 00 00    mov    0x340(%rax),%rax <== address of the tail
+    // 1a:   8b 00                   mov    (%rax),%eax
+    // 1c:   3b 01                   cmp    (%rcx),%eax <== need preempt
+    // 1e:   0f 95 c0                setne  %al
+    // 21:   59                      pop    %rcx
+    // 22:   c3                      retq
+    // 23    <== initialization stuff
+    //
+    // Rust has a thread local feature that is under experimental so we can maybe switch to
+    // that someday.
+    //
+    // We will prefer to use the stable compiler and pay that unfortunate price for now.
+    #[inline(always)]
+    pub(crate) fn need_preempt() -> bool {
+        unsafe {
+            LOCAL_REACTOR.with(|r| {
+                let rc = &*(r as *const Reactor);
+                *rc.preempt_ptr_head != (*rc.preempt_ptr_tail).load(Ordering::Acquire)
             })
         }
     }
