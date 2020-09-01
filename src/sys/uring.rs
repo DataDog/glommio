@@ -124,6 +124,7 @@ trait UringCommon {
     fn submit_sqes(&mut self) -> io::Result<usize>;
     fn submit_one_event(&mut self) -> Option<()>;
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
+    fn name(&self) -> &'static str;
 
     fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
         self.submission_queue().push_back(UringDescriptor {
@@ -219,6 +220,10 @@ impl Drop for PollRing {
 }
 
 impl UringCommon for PollRing {
+    fn name(&self) -> &'static str {
+        "poll"
+    }
+
     fn submission_queue(&mut self) -> &mut VecDeque<UringDescriptor> {
         &mut self.submission_queue
     }
@@ -263,14 +268,16 @@ impl UringCommon for PollRing {
 struct SleepableRing {
     ring: iou::IoUring,
     submission_queue: VecDeque<UringDescriptor>,
+    name: &'static str,
 }
 
 impl SleepableRing {
-    fn new(size: usize) -> io::Result<Self> {
+    fn new(size: usize, name: &'static str) -> io::Result<Self> {
         Ok(SleepableRing {
             //     ring: iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?,
             ring: iou::IoUring::new(size as _)?,
             submission_queue: VecDeque::with_capacity(size * 4),
+            name,
         })
     }
 
@@ -338,6 +345,10 @@ where
 }
 
 impl UringCommon for SleepableRing {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
     fn submission_queue(&mut self) -> &mut VecDeque<UringDescriptor> {
         &mut self.submission_queue
     }
@@ -442,8 +453,8 @@ macro_rules! queue_standard_request {
 
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
-        let main_ring = SleepableRing::new(128)?;
-        let latency_ring = SleepableRing::new(128)?;
+        let main_ring = SleepableRing::new(128, "main")?;
+        let latency_ring = SleepableRing::new(128, "latency")?;
         let link_fd = latency_ring.ring_fd();
 
         Ok(Reactor {
