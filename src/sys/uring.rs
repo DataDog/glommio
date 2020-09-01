@@ -287,8 +287,7 @@ impl SleepableRing {
 
     fn sleep(
         &mut self,
-        link: &mut Pin<Box<Source>>,
-        timeout: Option<Duration>,
+        link: &mut Pin<Box<Source>>
     ) -> io::Result<usize> {
         match link.source_type {
             SourceType::LinkRings(true) => {} // nothing to do
@@ -308,10 +307,7 @@ impl SleepableRing {
             _ => panic!("Unexpected source type when linking rings"),
         }
 
-        match timeout {
-            None => self.ring.submit_sqes_and_wait(1),
-            Some(dur) => self.ring.submit_sqes_and_wait_with_timeout(1, dur),
-        }
+        self.ring.submit_sqes_and_wait(1)
     }
 }
 
@@ -554,13 +550,9 @@ impl Reactor {
     //
     // We may not be able to register an SQE at this point, so we return an Error and
     // will just not sleep.
-    fn link_rings_and_sleep(
-        &self,
-        ring: &mut SleepableRing,
-        timeout: Option<Duration>,
-    ) -> io::Result<()> {
+    fn link_rings_and_sleep(&self, ring: &mut SleepableRing) -> io::Result<()> {
         let mut link_rings = self.link_rings_src.borrow_mut();
-        ring.sleep(&mut link_rings, timeout)?;
+        ring.sleep(&mut link_rings)?;
         Ok(())
     }
 
@@ -586,7 +578,7 @@ impl Reactor {
         if should_sleep {
             completed += consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
             if completed == 0 {
-                self.link_rings_and_sleep(&mut main_ring, timeout)?;
+                self.link_rings_and_sleep(&mut main_ring)?;
             }
         }
 
