@@ -1,10 +1,8 @@
 Component,Origin,License,Copyright
-# imported
 async-task,https://github.com/stjepang/async-task,MIT/Apache-2.0,Stjepan Glavina
 async-executor,https://github.com/stjepang/async-executor,MIT/Apache-2.0,Stjepan Glavina
 multitask,https://github.com/stjepang/multitask,MIT/Apache-2.0,Stjepan Glavina
 async-io,https://github.com/stjepang/async-io,MIT/Apache-2.0,Stjepan Glavina
-# from Cargo.toml, under MIT/Apache-2.0
 concurrent-queue,https://crates.io/crates/concurrent-queue,
 futures-lite,https://crates.io/crates/futures-lite, 
 libc,https://crates.io/crates/libc,MIT/Apache-2.0,The Rust Project Developers
@@ -16,5 +14,4 @@ scoped-tls,https://crates.io/crates/scoped-tls,MIT/Apache-2.0,Alex Crichton
 futures,https://crates.io/crates/futures,MIT/Apache-2.0,Alex Crichton
 uring-sys,https://crates.io/crates/uring-sys,MIT/Apache-2.0,Without Boats
 iou,https://crates.io/crates/iou,MIT/Apache-2.0,Without Boats
-# From Cargo.toml, under MPL
 bitmaps,https://crates.io/crates/bitmaps,MPL-2.0,Bodil Stokke
