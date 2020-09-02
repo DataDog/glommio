@@ -180,38 +180,17 @@ struct PollRing {
     submission_queue: VecDeque<UringDescriptor>,
     submitted: u64,
     completed: u64,
-    //buffers  : Rc<Vec<Rc<UringSlab>>>,
 }
 
 impl PollRing {
     fn new(size: usize) -> io::Result<Self> {
         let ring = iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?;
 
-        /*
-        let mut bufvec = Vec::with_capacity(8);
-        for (idx,sz) in [1, 4, 8, 16, 256].iter().enumerate() {
-            bufvec.push(UringSlab::new(sz << 10, idx));
-        }
-
-        let registry : Vec<IoSlice<'_>> = bufvec
-            .iter_mut()
-            .map(|b| b.as_io_slice())
-            .collect();
-
-        ring.registrar().register_buffers(&registry)?;
-
-        let mut buffers = Vec::with_capacity(8);
-        for b in bufvec {
-            buffers.push(Rc::new(b));
-        }
-        */
-
         Ok(PollRing {
             submitted: 0,
             completed: 0,
             ring,
             submission_queue: VecDeque::with_capacity(size * 4),
-            //   buffers: Rc::new(buffers),
         })
     }
 
@@ -220,21 +199,7 @@ impl PollRing {
     }
 
     pub(crate) fn alloc_dma_buffer(&mut self, size: usize) -> DmaBuffer {
-        /* FIXME: uring buffers need more work
-        let arena = self.buffers[self.buffers.len() -1].clone();
-        arena.alloc_buffer(size)
-            .expect("There are no buffers available. Because we only allocate (readers, at least) at the very last minute, this should not have happened. And yet it did. Life sucks")
-         */
         PosixDmaBuffer::new(size).expect("Buffer allocation failed")
-    }
-}
-
-impl Drop for PollRing {
-    fn drop(&mut self) {
-        match self.ring.registrar().unregister_buffers() {
-            Err(x) => eprintln!("Failed to unregister buffers!: {:?}", x),
-            Ok(_) => {}
-        }
     }
 }
 

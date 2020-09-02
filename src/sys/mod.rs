@@ -89,10 +89,8 @@ pub(crate) fn sync_open(path: &Path, flags: libc::c_int, mode: libc::c_int) -> i
 
 mod posix_buffers;
 mod uring;
-mod uring_buffers;
 pub use self::posix_buffers::*;
 pub use self::uring::*;
-pub use self::uring_buffers::*;
 use crate::IoRequirements;
 
 /// A buffer that can be used with DmaFile.
