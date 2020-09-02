@@ -18,8 +18,8 @@ concurrent-queue = "1.1.2"
 futures-lite = "0.1.9"
 libc = "0.2.73"
 socket2 = { version = "0.3.12", features = ["pair", "unix"] }
-iou = { version = "0.2.0", path = "./iou" }
-uring-sys = { version = "0.6.1", path="./uring-sys" }
+iou = { version = "0.2.0", path = "../iou" }
+uring-sys = { version = "0.6.1", path="../uring-sys" }
 nix = "0.16.0"
 aligned_alloc = "0.1"
 bitmaps = "2.1.0"

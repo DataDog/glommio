@@ -1,6 +1,0 @@
-[submodule "uring-sys"]
-	path = uring-sys
-	url = git@github.com:glommer/uring-sys.git
-[submodule "iou"]
-	path = iou
-	url = git@github.com:glommer/iou.git
