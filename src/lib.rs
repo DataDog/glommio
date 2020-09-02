@@ -48,6 +48,7 @@ mod sys;
 pub mod task;
 
 mod executor;
+#[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
     use crate::executor::{LocalExecutor, Task};
@@ -74,6 +75,7 @@ macro_rules! test_executor {
 // through update_cond!() (below)
 //
 // Mostly useful for tests.
+#[cfg(test)]
 macro_rules! wait_on_cond {
     ($var:expr, $val:expr) => {
         loop {
@@ -98,12 +100,14 @@ macro_rules! wait_on_cond {
     };
 }
 
+#[cfg(test)]
 macro_rules! update_cond {
     ($cond:expr, $val:expr) => {
         *($cond.borrow_mut()) = $val;
     };
 }
 
+#[cfg(test)]
 macro_rules! make_shared_var {
     ($var:expr, $( $name:ident ),+ ) => {
         let local_name = Rc::new($var);
@@ -111,6 +115,7 @@ macro_rules! make_shared_var {
     }
 }
 
+#[cfg(test)]
 macro_rules! make_shared_var_mut {
     ($var:expr, $( $name:ident ),+ ) => {
         let local_name = Rc::new(RefCell::new($var));
