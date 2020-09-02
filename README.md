@@ -60,6 +60,23 @@ that if both want to use the CPU to its maximum, tq1 will have 1/3 of the CPU ti
 (1 / (1 + 2)) and tq2 will have 2/3 of the CPU time. Those shares are dynamic and
 can be changed at any time.
 
+## Building
+
+Unfortunately this has unmerged dependencies on `iou` (which I am trying
+to merge upstream).
+
+So for the time being, both `iou` and `uring-sys` need to be present
+locally.
+
+To do that:
+
+```
+$ git submodule update --recursive --init
+```
+
+After that, it should be a matter of doing `cargo build --release` like
+any rust application.
+
 ## What does scipio mean?
 
 This crate is named after Publius Cornelius Scipio, who defeated Hannibal Barca
