@@ -1,3 +1,8 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under the
+// MIT/Apache-2.0 License, at your convenience
+//
+// This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
+//
 /// Set if the task is scheduled for running.
 ///
 /// A task is considered to be scheduled whenever its `Task` reference exists. It therefore also
