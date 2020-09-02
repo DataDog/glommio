@@ -47,10 +47,80 @@ pub mod parking;
 mod sys;
 pub mod task;
 
+mod executor;
+macro_rules! test_executor {
+    ($( $fut:expr ),+ ) => {
+    use crate::executor::{LocalExecutor, Task};
+    use futures::future::join_all;
+
+    let local_ex = LocalExecutor::new(None).unwrap();
+    local_ex.run(async move {
+        let mut joins = Vec::new();
+        $(
+            joins.push(Task::local($fut));
+        )*
+        join_all(joins).await;
+    });
+    }
+}
+
+// Wait for a variable to acquire a specific value.
+// The variable is expected to be a Rc<RefCell>
+//
+// Alternatively it is possible to pass a timeout in seconds
+// (through an Instant object)
+//
+// Updates to the variable gating the condition can be done (if convenient)
+// through update_cond!() (below)
+//
+// Mostly useful for tests.
+macro_rules! wait_on_cond {
+    ($var:expr, $val:expr) => {
+        loop {
+            if *($var.borrow()) == $val {
+                break;
+            }
+            Task::<()>::later().await;
+        }
+    };
+    ($var:expr, $val:expr, $instantval:expr) => {
+        let start = Instant::now();
+        loop {
+            if *($var.borrow()) == $val {
+                break;
+            }
+
+            if start.elapsed().as_secs() > $instantval {
+                panic!("test timed out");
+            }
+            Task::<()>::later().await;
+        }
+    };
+}
+
+macro_rules! update_cond {
+    ($cond:expr, $val:expr) => {
+        *($cond.borrow_mut()) = $val;
+    };
+}
+
+macro_rules! make_shared_var {
+    ($var:expr, $( $name:ident ),+ ) => {
+        let local_name = Rc::new($var);
+        $( let $name = local_name.clone(); )*
+    }
+}
+
+macro_rules! make_shared_var_mut {
+    ($var:expr, $( $name:ident ),+ ) => {
+        let local_name = Rc::new(RefCell::new($var));
+        $( let $name = local_name.clone(); )*
+    }
+}
+
 mod async_collections;
 mod dma_file;
 mod error;
-mod executor;
 mod local_semaphore;
 mod multitask;
 mod networking;
