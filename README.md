@@ -1,18 +1,81 @@
 # scipio
 
 Scipio (pronounced skip-iow) is a Cooperative Thread-per-Core crate for
-Rust & Linux based on `io_uring` It is named after Publius Cornelius Scipio,
-who defeated Hannibal Barca at the Battle of Zama, ending the Second Punic War.
-I actually like Hannibal a bit more (just a bit), but Scipio ends with IO, which
-makes for a nicer name for an I/O oriented framework.
+Rust & Linux based on `io_uring`. Like other rust asynchronous crates it allows
+one to write asynchronous code that takes advantage of rust async/await, but
+unlike its counterparts it doesn't use helper threads anywhere.
+
+Using Scipio is not hard if you are familiar with rust async. All you have to do is:
+
+```
+    let ex = LocalExecutor::new(None).unwrap();
+    ex.run(async {
+        /// your code here
+    });
+```
+
+Although this is not forced upon the user, by creating N executors and binding
+each to a specific CPU one can use this crate to implement a thread-per-core
+system where context switches essentially never happen, achieving maximum efficiency.
+
+You can easily bind an executor to a CPU by adjusting the parameter to `new` in the
+example above:
+
+```
+    /// This will now never leave CPU 0
+    let ex = LocalExecutor::new(Some(0)).unwrap();
+    ex.run(async {
+        /// your code here
+    });
+```
+
+Note that you can only have one executor per thread, so if you need more executor,
+you will have to create more threads (we do consider providing helper code for that soon)
+
+For a Thread-per-core-system to work well, it is paramount that some form of scheduling
+can happen within the thread. A traditional application would use many threads to divide
+the many aspects of its workload but that is a luxury that a Thread-per-Core application doesn't have.
+
+However what looks like a shortcoming, is actually an advantage: you can create many independent
+task queues inside each of your executors:
+
+```
+    let ex = LocalExecutor::new(Some(0)).unwrap();
+    ex.run(async {
+        let tq1 = Task::<()>::create_task_queue(2, Latency::NotImportant, "test1");
+        let tq2 = Task::<()>::create_task_queue(1, Latency::NotImportant, "test2");
+            let t1 = Task::local_into(async move {
+            // your code here
+                }, tq1);
+            let t2 = Task::local_into(async move {
+            // your code here
+                }, tq2);
+        join!(t1, t2);
+    });
+
+```
+
+This example creates two task queues: tq1 has 1 share, tq2 has 1 share. This means
+that if both want to use the CPU to its maximum, tq1 will have 1/3 of the CPU time
+(1 / (1 + 2)) and tq2 will have 2/3 of the CPU time. Those shares are dynamic and
+can be changed at any time.
+
+## What does scipio mean?
+
+This crate is named after Publius Cornelius Scipio, who defeated Hannibal Barca
+at the Battle of Zama, ending the Second Punic War.  I actually like Hannibal a
+bit more (just a bit), but Scipio ends with IO, which makes for a nicer name
+for an I/O oriented framework.
+
+## Prior work
 
 This work is heavily inspired (with some code respectfully imported) by
 the great work by Stjepan Glavina, in particular the following crates:
 
-* [async-io](https://github.com/stjepang/async-io)]
-* [async-task](https://github.com/stjepang/async-task)]
-* [async-executor](https://github.com/stjepang/async-executor)]
-* [multitask](https://github.com/stjepang/async-multitask)]
+* [async-io](https://github.com/stjepang/async-io)
+* [async-task](https://github.com/stjepang/async-task)
+* [async-executor](https://github.com/stjepang/async-executor)
+* [multitask](https://github.com/stjepang/async-multitask)
 
 ## Why is this its own crate?
 
