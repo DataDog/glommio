@@ -11,7 +11,7 @@
 //!
 //! Run four single-threaded executors concurrently:
 //!
-//! ```no_run
+//! ```
 //! use scipio::{LocalExecutor, Timer};
 //!
 //! for i in 0..4 {
