@@ -16,41 +16,6 @@
 //! You can treat this module as merely an optimization over the [`parking`][docs-parking] crate.
 //!
 //! [docs-parking]: https://docs.rs/parking
-//!
-//! # Examples
-//!
-//! A simple `block_on()` that runs a single future and waits on I/O:
-//!
-//! ```no_run
-//! use std::future::Future;
-//! use std::task::{Context, Poll};
-//!
-//! use scipio::parking;
-//! use futures_lite::{future, pin};
-//! use scipio::task::waker_fn;
-//!
-//! // Blocks on a future to complete, waiting on I/O when idle.
-//! fn block_on<T>(future: impl Future<Output = T>) -> T {
-//!     // Create a waker that notifies through I/O when done.
-//!     let (p, u) = parking::pair();
-//!     let waker = waker_fn(move || u.unpark());
-//!     let cx = &mut Context::from_waker(&waker);
-//!
-//!     pin!(future);
-//!     loop {
-//!         match future.as_mut().poll(cx) {
-//!             Poll::Ready(t) => return t, // Done!
-//!             Poll::Pending => p.park(),  // Wait for an I/O event.
-//!         }
-//!     }
-//! }
-//!
-//! block_on(async {
-//!     println!("Hello world!");
-//!     future::yield_now().await;
-//!     println!("Hello again!");
-//! });
-//! ```
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;

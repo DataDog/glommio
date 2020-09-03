@@ -44,34 +44,6 @@ pub type Runnable = task::Task<()>;
 ///
 /// If a task panics, the panic will be thrown by the [`Ticker::tick()`] invocation that polled it.
 ///
-/// # Examples
-///
-/// ```
-/// use futures_lite::future::block_on;
-/// use scipio::{LocalExecutor, parking};
-/// use std::thread;
-///
-/// let ex = LocalExecutor::new(None).expect("failed to create local executor");
-///
-/// // Spawn a future onto the executor.
-/// let task = ex.spawn(async {
-///     println!("Hello from a task!");
-///     1 + 2
-/// });
-///
-/// // Run an executor thread.
-/// thread::spawn(move || {
-///     let (p, u) = parking::pair();
-///     let ticker = ex.ticker(move || u.unpark());
-///     loop {
-///         if !ticker.tick() {
-///             p.park();
-///         }
-///     }
-/// });
-///
-/// // Wait for the result.
-/// assert_eq!(block_on(task), 3);
 /// ```
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
