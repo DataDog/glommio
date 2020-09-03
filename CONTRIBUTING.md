@@ -47,3 +47,8 @@ As of today (September 2020), this is the set of rules that materialize the prin
 If you are interested in understanding my motivations a bit better, you can check out
 [this
 article](https://medium.com/@glaubercosta_11125/the-linux-development-process-is-it-worth-the-hassle-4f09d7ff09a2)
+
+## Adding new crates or code
+
+If you add a new crate or import code from an existing repository,
+please update the file LICENSE-3rdparty.csv to reflect your changes.
