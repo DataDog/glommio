@@ -134,3 +134,14 @@ impl Future for Timer {
         }
     }
 }
+
+#[test]
+fn basic_timer_works() {
+    test_executor!(
+        async move {
+            let now = Instant::now();
+            Timer::new(Duration::from_millis(100)).await;
+            assert!(now.elapsed().as_millis() >= 100)
+        }
+    );
+}
