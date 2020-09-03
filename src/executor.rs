@@ -11,13 +11,13 @@
 //!
 //! Run a single-threaded and a multi-threaded executor at the same time:
 //!
-//! ```
+//! ```no_run
 //! use async_channel::unbounded;
-//! use async_executor::{Executor, LocalExecutor};
+//! use scipio::{Executor, LocalExecutor};
 //! use easy_parallel::Parallel;
 //!
 //! let ex = Executor::new();
-//! let local_ex = LocalExecutor::new();
+//! let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
 //! let (trigger, shutdown) = unbounded::<()>();
 //!
 //! Parallel::new()
@@ -296,9 +296,9 @@ impl ExecutorQueues {
 /// # Examples
 ///
 /// ```
-/// use async_executor::LocalExecutor;
+/// use scipio::LocalExecutor;
 ///
-/// let local_ex = LocalExecutor::new(None);
+/// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
 ///
 /// local_ex.run(async {
 ///     println!("Hello world!");
@@ -317,13 +317,13 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::LocalExecutor;
+    /// use scipio::LocalExecutor;
     ///
     /// // executor is a single thread, but not bound to any particular CPU.
-    /// let local_ex = LocalExecutor::new(None);
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// // executor is a a single thread, bound to logical CPU 1.
-    /// let bound_ex = LocalExecutor::new(Some(1));
+    /// let bound_ex = LocalExecutor::new(Some(1)).expect("failed to create local executor");
     /// ```
     pub fn new(binding: Option<usize>) -> io::Result<LocalExecutor> {
         let (p, _) = parking::pair();
@@ -358,14 +358,15 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::LocalExecutor;
+    /// use std::time::Duration;
+    /// use scipio::{LocalExecutor, Latency};
     ///
-    /// let local_ex = LocalExecutor::new();
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
-    /// let task_queue = local_ex.create_task_queue(1000, Latency::Matters, "my_tq");
+    /// let task_queue = local_ex.create_task_queue(1000, Latency::Matters(Duration::from_secs(1)), "my_tq");
     /// let task = local_ex.spawn_into(async {
     ///     println!("Hello world");
-    /// }, task_queue);
+    /// }, task_queue).expect("failed to spawn task");
     /// ```
     pub fn create_task_queue(
         &self,
@@ -455,9 +456,9 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::LocalExecutor;
+    /// use scipio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::new();
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// let task = local_ex.spawn(async {
     ///     println!("Hello world");
@@ -481,14 +482,14 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::LocalExecutor;
+    /// use scipio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::new();
-    /// let handle = local_ex.create_task_queue(1000);
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let handle = local_ex.create_task_queue(1000, scipio::Latency::NotImportant, "test_queue");
     ///
     /// let task = local_ex.spawn_into(async {
     ///     println!("Hello world");
-    /// }, handle);
+    /// }, handle).expect("failed to spawn task");
     /// ```
     pub fn spawn_into<T, F>(
         &self,
@@ -558,9 +559,9 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::LocalExecutor;
+    /// use scipio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::new();
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// let task = local_ex.spawn(async { 1 + 2 });
     /// let res = local_ex.run(async { task.await * 2 });
@@ -604,12 +605,12 @@ impl LocalExecutor {
 /// # Examples
 ///
 /// ```
-/// use async_executor::{Executor, Task};
+/// use scipio::{LocalExecutor, Task};
 ///
-/// let ex = Executor::new();
+/// let ex = LocalExecutor::new(None).expect("failed to create local executor");
 ///
 /// ex.run(async {
-///     let task = Task::spawn(async {
+///     let task = Task::local(async {
 ///         println!("Hello from a task!");
 ///         1 + 2
 ///     });
@@ -631,9 +632,9 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::{LocalExecutor, Task};
+    /// use scipio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::new();
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// local_ex.run(async {
     ///     let task = Task::local(async { 1 + 2 });
@@ -697,15 +698,15 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::{LocalExecutor, Task};
+    /// use scipio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::new();
-    /// let handle = local_ex.create_task_queue(1000);
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let handle = local_ex.create_task_queue(1000, scipio::Latency::NotImportant, "test_queue");
     ///
-    /// local_ex.run(async {
+    /// local_ex.spawn_into(async {
     ///     let task = Task::local(async { 1 + 2 });
     ///     assert_eq!(task.await, 3);
-    /// }, handle);
+    /// }, handle).expect("failed to spawn task");
     /// ```
     pub fn local_into(
         future: impl Future<Output = T> + 'static,
@@ -726,10 +727,10 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::{Executor, Task};
+    /// use scipio::{LocalExecutor, Timer};
     /// use futures_lite::future;
     ///
-    /// let ex = Executor::new();
+    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// ex.spawn(async {
     ///     loop {
@@ -739,7 +740,7 @@ impl<T> Task<T> {
     /// })
     /// .detach();
     ///
-    /// ex.run(future::yield_now());
+    /// ex.run(Timer::new(std::time::Duration::from_micros(100)));
     /// ```
     pub fn detach(self) {
         self.0.detach();
@@ -769,10 +770,10 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_executor::{Executor, Task};
+    /// use scipio::{LocalExecutor, Task};
     /// use futures_lite::future;
     ///
-    /// let ex = Executor::new();
+    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// let task = ex.spawn(async {
     ///     loop {

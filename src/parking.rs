@@ -21,13 +21,13 @@
 //!
 //! A simple `block_on()` that runs a single future and waits on I/O:
 //!
-//! ```
+//! ```no_run
 //! use std::future::Future;
 //! use std::task::{Context, Poll};
 //!
-//! use async_io::parking;
+//! use scipio::parking;
 //! use futures_lite::{future, pin};
-//! use waker_fn::waker_fn;
+//! use scipio::task::waker_fn;
 //!
 //! // Blocks on a future to complete, waiting on I/O when idle.
 //! fn block_on<T>(future: impl Future<Output = T>) -> T {
@@ -82,7 +82,7 @@ thread_local!(static LOCAL_REACTOR: Reactor = Reactor::new());
 /// # Examples
 ///
 /// ```
-/// use async_io::parking;
+/// use scipio::parking;
 ///
 /// let (p, u) = parking::pair();
 /// ```
@@ -106,7 +106,7 @@ impl Parker {
     /// # Examples
     ///
     /// ```
-    /// use async_io::parking::Parker;
+    /// use scipio::parking::Parker;
     ///
     /// let p = Parker::new();
     /// ```
@@ -125,8 +125,8 @@ impl Parker {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use async_io::parking::Parker;
+    /// ```no_run
+    /// use scipio::parking::Parker;
     ///
     /// let p = Parker::new();
     /// let u = p.unparker();
@@ -150,7 +150,7 @@ impl Parker {
     /// # Examples
     ///
     /// ```
-    /// use async_io::parking::Parker;
+    /// use scipio::parking::Parker;
     /// use std::time::Duration;
     ///
     /// let p = Parker::new();
@@ -169,7 +169,7 @@ impl Parker {
     /// # Examples
     ///
     /// ```
-    /// use async_io::parking::Parker;
+    /// use scipio::parking::Parker;
     /// use std::time::{Duration, Instant};
     ///
     /// let p = Parker::new();
@@ -187,20 +187,16 @@ impl Parker {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use async_io::parking::Parker;
-    /// use std::thread;
-    /// use std::time::Duration;
+    /// ```no_run
+    /// use scipio::parking::Parker;
     ///
     /// let p = Parker::new();
     /// let u = p.unparker();
     ///
-    /// thread::spawn(move || {
-    ///     thread::sleep(Duration::from_millis(500));
-    ///     u.unpark();
-    /// });
+    /// // Notify the parker.
+    /// u.unpark();
     ///
-    /// // Wakes up when `u.unpark()` notifies and then goes back into unnotified state.
+    /// // Wakes up immediately because the parker is notified.
     /// p.park();
     /// ```
     pub fn unpark(&self) {
@@ -213,8 +209,8 @@ impl Parker {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use async_io::parking::Parker;
+    /// ```no_run
+    /// use scipio::parking::Parker;
     ///
     /// let p = Parker::new();
     /// let u = p.unparker();
@@ -259,20 +255,16 @@ impl Unparker {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use async_io::parking::Parker;
-    /// use std::thread;
-    /// use std::time::Duration;
+    /// ```no_run
+    /// use scipio::parking::Parker;
     ///
     /// let p = Parker::new();
     /// let u = p.unparker();
     ///
-    /// thread::spawn(move || {
-    ///     thread::sleep(Duration::from_millis(500));
-    ///     u.unpark();
-    /// });
+    /// // Notify the parker.
+    /// u.unpark();
     ///
-    /// // Wakes up when `u.unpark()` notifies and then goes back into unnotified state.
+    /// // Wakes up immediately because the parker is notified.
     /// p.park();
     /// ```
     pub fn unpark(&self) {

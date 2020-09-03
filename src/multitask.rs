@@ -47,11 +47,11 @@ pub type Runnable = task::Task<()>;
 /// # Examples
 ///
 /// ```
-/// use blocking::block_on;
-/// use multitask::Executor;
+/// use futures_lite::future::block_on;
+/// use scipio::{LocalExecutor, parking};
 /// use std::thread;
 ///
-/// let ex = Executor::new();
+/// let ex = LocalExecutor::new(None).expect("failed to create local executor");
 ///
 /// // Spawn a future onto the executor.
 /// let task = ex.spawn(async {
@@ -83,16 +83,15 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_io::Timer;
-    /// use multitask::Executor;
     /// use std::time::Duration;
+    /// use scipio::{LocalExecutor,Timer};
     ///
-    /// let ex = Executor::new();
+    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// // Spawn a deamon future.
     /// ex.spawn(async {
-    ///     loop {
-    ///         println!("I'm a daemon task looping forever.");
+    ///     for i in 0..10 {
+    ///         println!("I'm a daemon task looping ({}/{})).", i+1, 10);
     ///         Timer::new(Duration::from_secs(1)).await;
     ///     }
     /// })
@@ -113,13 +112,12 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_io::Timer;
-    /// use blocking::block_on;
-    /// use multitask::Executor;
     /// use std::thread;
     /// use std::time::Duration;
+    /// use scipio::{LocalExecutor, Timer, parking};
+    /// use futures_lite::future::block_on;
     ///
-    /// let ex = Executor::new();
+    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// // Spawn a deamon future.
     /// let task = ex.spawn(async {
@@ -214,10 +212,11 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use multitask::LocalExecutor;
+    /// use scipio::{LocalExecutor, parking};
     ///
     /// let (p, u) = parking::pair();
-    /// let ex = LocalExecutor::new(move || u.unpark());
+    /// let ex = LocalExecutor::new(None).expect("failed to create executor");
+    /// ex.run(async { println!("hello, world!")});
     /// ```
     pub fn new(notify: impl Fn() + 'static) -> LocalExecutor {
         LocalExecutor {
@@ -234,10 +233,10 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use multitask::LocalExecutor;
+    /// use scipio::{LocalExecutor, parking};
     ///
     /// let (p, u) = parking::pair();
-    /// let ex = LocalExecutor::new(move || u.unpark());
+    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
     /// let task = ex.spawn(async { println!("hello") });
     /// ```

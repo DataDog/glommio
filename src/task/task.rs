@@ -38,7 +38,8 @@ use crate::task::JoinHandle;
 /// # Examples
 ///
 /// ```
-/// use crossbeam::channel;
+/// use scipio::task::spawn;
+/// use std::sync::mpsc::sync_channel;
 ///
 /// // The future inside the task.
 /// let future = async {
@@ -46,11 +47,11 @@ use crate::task::JoinHandle;
 /// };
 ///
 /// // If the task gets woken up, it will be sent into this channel.
-/// let (s, r) = channel::unbounded();
+/// let (s, r) = sync_channel(10);
 /// let schedule = move |task| s.send(task).unwrap();
 ///
 /// // Create a task with the future and the schedule function.
-/// let (task, handle) = async_task::spawn(future, schedule, ());
+/// let (task, handle) = spawn(future, schedule, ());
 /// ```
 pub fn spawn<F, R, S, T>(future: F, schedule: S, tag: T) -> (Task<T>, JoinHandle<R, T>)
 where
@@ -103,7 +104,8 @@ where
 /// # Examples
 ///
 /// ```
-/// use crossbeam::channel;
+/// use scipio::task::spawn_local;
+/// use std::sync::mpsc::sync_channel;
 ///
 /// // The future inside the task.
 /// let future = async {
@@ -111,11 +113,11 @@ where
 /// };
 ///
 /// // If the task gets woken up, it will be sent into this channel.
-/// let (s, r) = channel::unbounded();
+/// let (s, r) = sync_channel(10);
 /// let schedule = move |task| s.send(task).unwrap();
 ///
 /// // Create a task with the future and the schedule function.
-/// let (task, handle) = async_task::spawn_local(future, schedule, ());
+/// let (task, handle) = spawn_local(future, schedule, ());
 /// ```
 pub fn spawn_local<F, R, S, T>(future: F, schedule: S, tag: T) -> (Task<T>, JoinHandle<R, T>)
 where
