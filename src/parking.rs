@@ -321,9 +321,6 @@ pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
     sys: sys::Reactor,
 
-    /// Ticker bumped before polling.
-    ticker: AtomicUsize,
-
     /// An ordered map of registered timers.
     ///
     /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used to
@@ -360,7 +357,6 @@ impl Reactor {
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
             sys,
-            ticker: AtomicUsize::new(0),
             timers: RefCell::new(BTreeMap::new()),
             timer_ops: ConcurrentQueue::bounded(1000),
             current_io_requirements: RefCell::new(IoRequirements::default()),
@@ -626,13 +622,6 @@ impl ReactorLock<'_> {
             (Some(t), None) | (None, Some(t)) => Some(t),
             (Some(a), Some(b)) => Some(a.min(b)),
         };
-
-        // Bump the ticker before polling I/O.
-        let _ = self
-            .reactor
-            .ticker
-            .fetch_add(1, Ordering::SeqCst)
-            .wrapping_add(1);
 
         // Block on I/O events.
         let res = match self.reactor.sys.wait(&mut wakers, timeout) {
