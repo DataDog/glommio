@@ -119,27 +119,13 @@ impl<T> Task<T> {
     ///
     /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
-    /// // Spawn a deamon future.
     /// let task = ex.spawn(async {
-    ///     loop {
-    ///         println!("Even though I'm in an infinite loop, you can still cancel me!");
-    ///         Timer::new(Duration::from_secs(1)).await;
-    ///     }
+    ///     Timer::new(std::time::Duration::from_millis(100)).await;
+    ///     println!("jello, world!");
     /// });
     ///
-    /// // Run an executor thread.
-    /// thread::spawn(move || {
-    ///     let (p, u) = parking::pair();
-    ///     let ticker = ex.ticker(move || u.unpark());
-    ///     loop {
-    ///         if !ticker.tick() {
-    ///             p.park();
-    ///         }
-    ///     }
-    /// });
-    ///
-    /// block_on(async {
-    ///     Timer::new(Duration::from_secs(3)).await;
+    /// // task may or may not print
+    /// ex.run(async {
     ///     task.cancel().await;
     /// });
     /// ```

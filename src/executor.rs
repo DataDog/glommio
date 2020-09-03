@@ -9,25 +9,20 @@
 //!
 //! # Examples
 //!
-//! Run a single-threaded and a multi-threaded executor at the same time:
+//! Run four single-threaded executors concurrently:
 //!
 //! ```no_run
-//! use async_channel::unbounded;
-//! use scipio::{Executor, LocalExecutor};
-//! use easy_parallel::Parallel;
+//! use scipio::{LocalExecutor, Timer};
 //!
-//! let ex = Executor::new();
-//! let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
-//! let (trigger, shutdown) = unbounded::<()>();
-//!
-//! Parallel::new()
-//!     // Run four executor threads.
-//!     .each(0..4, |_| ex.run(shutdown.recv()))
-//!     // Run local executor on the current thread.
-//!     .finish(|| local_ex.run(async {
-//!         println!("Hello world!");
-//!         drop(trigger);
-//!     }));
+//! for i in 0..4 {
+//!     std::thread::spawn(move || {
+//!         let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+//!         local_ex.run(async {
+//!             Timer::new(std::time::Duration::from_millis(100)).await;
+//!             println!("Hello world!");
+//!         });
+//!     });
+//! }
 //! ```
 
 #![warn(missing_docs, missing_debug_implementations)]
