@@ -1001,3 +1001,22 @@ fn task_optimized_for_throughput() {
         join!(first, second);
     });
 }
+
+#[test]
+fn test_detach() {
+    use crate::Timer;
+
+    let ex = LocalExecutor::new(None).expect("failed to create local executor");
+
+    ex.spawn(async {
+        loop {
+            //   println!("I'm a background task looping forever.");
+            Task::<()>::later().await;
+        }
+    })
+    .detach();
+
+    ex.run(async {
+        Timer::new(std::time::Duration::from_micros(100)).await;
+    });
+}
