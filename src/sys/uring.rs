@@ -4,11 +4,13 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use nix::poll::PollFlags;
+use rlimit::Resource;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::io;
+use std::io::{Error, ErrorKind};
 use std::os::unix::io::RawFd;
 use std::pin::Pin;
 use std::task::Waker;
@@ -501,6 +503,12 @@ macro_rules! queue_standard_request {
 
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
+        const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
+        let (memlock_limit, _) = Resource::MEMLOCK.get()?;
+        if memlock_limit < MIN_MEMLOCK_LIMIT {
+            return Err(Error::new(ErrorKind::Other, format!("The memlock resource limit is too low: {} (recommended {})", memlock_limit, MIN_MEMLOCK_LIMIT)));
+        }
+        println!("{}\n", memlock_limit);
         let main_ring = SleepableRing::new(128, "main")?;
         let latency_ring = SleepableRing::new(128, "latency")?;
         let link_fd = latency_ring.ring_fd();
