@@ -14,7 +14,10 @@
 //! All executors have some kind of queue that holds runnable tasks:
 //!
 //! ```
-//! let (sender, receiver) = crossbeam::channel::unbounded();
+//! # use std::sync::mpsc::sync_channel;
+//! #
+//! # // a queue of task to eventually execute
+//! # let (sender, receiver) = sync_channel(10);
 //! #
 //! # // A future that will get spawned.
 //! # let future = async { 1 + 2 };
@@ -23,13 +26,16 @@
 //! # let schedule = move |task| sender.send(task).unwrap();
 //! #
 //! # // Construct a task.
-//! # let (task, handle) = async_task::spawn(future, schedule, ());
+//! # let (task, handle) = scipio::task::spawn(future, schedule, ());
 //! ```
 //!
 //! A task is constructed using either [`spawn`] or [`spawn_local`]:
 //!
 //! ```
-//! # let (sender, receiver) = crossbeam::channel::unbounded();
+//! # use std::sync::mpsc::sync_channel;
+//! #
+//! # // a queue of task to eventually execute
+//! # let (sender, receiver) = sync_channel(10);
 //! #
 //! // A future that will be spawned.
 //! let future = async { 1 + 2 };
@@ -38,7 +44,7 @@
 //! let schedule = move |task| sender.send(task).unwrap();
 //!
 //! // Construct a task.
-//! let (task, handle) = async_task::spawn(future, schedule, ());
+//! let (task, handle) = scipio::task::spawn(future, schedule, ());
 //!
 //! // Push the task into the queue by invoking its schedule function.
 //! task.schedule();
@@ -55,7 +61,10 @@
 //! runnable tasks out of the queue and running each one in order:
 //!
 //! ```no_run
-//! # let (sender, receiver) = crossbeam::channel::unbounded();
+//! # use std::sync::mpsc::sync_channel;
+//! #
+//! # // a queue of task to eventually execute
+//! # let (sender, receiver) = sync_channel(10);
 //! #
 //! # // A future that will get spawned.
 //! # let future = async { 1 + 2 };
@@ -64,7 +73,7 @@
 //! # let schedule = move |task| sender.send(task).unwrap();
 //! #
 //! # // Construct a task.
-//! # let (task, handle) = async_task::spawn(future, schedule, ());
+//! # let (task, handle) = scipio::task::spawn(future, schedule, ());
 //! #
 //! # // Push the task into the queue by invoking its schedule function.
 //! # task.schedule();
@@ -104,7 +113,7 @@
 //! woken, the function gets called:
 //!
 //! ```
-//! let waker = async_task::waker_fn(|| println!("Wake!"));
+//! let waker = scipio::task::waker_fn(|| println!("Wake!"));
 //!
 //! // Prints "Wake!" twice.
 //! waker.wake_by_ref();

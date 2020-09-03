@@ -17,21 +17,22 @@
 //! Connect to `example.com:80`, or time out after 10 seconds.
 //!
 //! ```
-//! use async_io::{Async, Timer};
+//! use scipio::{Async, Timer};
 //! use futures_lite::{future::FutureExt, io};
 //!
 //! use std::net::{TcpStream, ToSocketAddrs};
 //! use std::time::Duration;
 //!
-//! # futures_lite::future::block_on(async {
-//! let addr = "example.com:80".to_socket_addrs()?.next().unwrap();
+//! futures_lite::future::block_on(async {
+//!     let addr = "::80".to_socket_addrs()?.next().unwrap();
 //!
-//! let stream = Async::<TcpStream>::connect(addr).or(async {
-//!     Timer::new(Duration::from_secs(10)).await;
-//!     Err(io::ErrorKind::TimedOut.into())
-//! })
-//! .await?;
-//! # std::io::Result::Ok(()) });
+//!     let stream = Async::<TcpStream>::connect(addr).or(async {
+//!         Timer::new(Duration::from_secs(10)).await;
+//!         Err(io::ErrorKind::TimedOut.into())
+//!     })
+//!     .await?;
+//!     std::io::Result::Ok(())
+//! });
 //! ```
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]

@@ -15,19 +15,21 @@ use std::time::{Duration, Instant};
 ///
 /// # Examples
 ///
-/// Sleep for 1 second:
+/// Sleep for 100 milliseconds:
 ///
 /// ```
-/// use async_io::Timer;
+/// use scipio::{LocalExecutor,Timer};
 /// use std::time::Duration;
 ///
 /// async fn sleep(dur: Duration) {
 ///     Timer::new(dur).await;
 /// }
 ///
-/// # futures_lite::future::block_on(async {
-/// sleep(Duration::from_secs(1)).await;
-/// # });
+/// let ex = LocalExecutor::new(None).expect("failed to create local executor");
+///
+/// ex.run(async {
+///     sleep(Duration::from_millis(100)).await;
+/// });
 /// ```
 #[derive(Debug)]
 pub struct Timer {
@@ -46,12 +48,10 @@ impl Timer {
     /// # Examples
     ///
     /// ```
-    /// use async_io::Timer;
+    /// use scipio::Timer;
     /// use std::time::Duration;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// Timer::new(Duration::from_secs(1)).await;
-    /// # });
+    /// Timer::new(Duration::from_millis(100));
     /// ```
     pub fn new(dur: Duration) -> Timer {
         Timer {
@@ -69,13 +69,11 @@ impl Timer {
     /// # Examples
     ///
     /// ```
-    /// use async_io::Timer;
+    /// use scipio::Timer;
     /// use std::time::Duration;
     ///
-    /// # futures_lite::future::block_on(async {
     /// let mut t = Timer::new(Duration::from_secs(1));
     /// t.reset(Duration::from_millis(100));
-    /// # });
     /// ```
     pub fn reset(&mut self, dur: Duration) {
         if let Some((id, _)) = self.id_and_waker.as_ref() {
