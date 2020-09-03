@@ -727,7 +727,7 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Timer};
+    /// use scipio::{LocalExecutor, Timer, Task};
     /// use futures_lite::future;
     ///
     /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
@@ -735,12 +735,12 @@ impl<T> Task<T> {
     /// ex.spawn(async {
     ///     loop {
     ///         println!("I'm a background task looping forever.");
-    ///         future::yield_now().await;
+    ///         Task::<()>::later().await;
     ///     }
     /// })
     /// .detach();
     ///
-    /// ex.run(Timer::new(std::time::Duration::from_micros(100)));
+    /// ex.run(async { Timer::new(std::time::Duration::from_micros(100)).await; });
     /// ```
     pub fn detach(self) {
         self.0.detach();
