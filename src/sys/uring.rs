@@ -664,10 +664,6 @@ impl Reactor {
         let cq = &lat_ring.ring.raw_mut().cq;
         (cq.khead, cq.ktail)
     }
-
-    pub(crate) fn notify(&self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 impl Drop for Reactor {

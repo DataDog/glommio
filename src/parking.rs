@@ -373,11 +373,6 @@ impl Reactor {
         *ioreq = req;
     }
 
-    /// Notifies the thread blocked on the reactor.
-    pub(crate) fn notify(&self) {
-        self.sys.notify().expect("failed to notify reactor");
-    }
-
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         self.sys.alloc_dma_buffer(size)
     }
@@ -479,9 +474,6 @@ impl Reactor {
             let mut timers = self.timers.borrow_mut();
             self.process_timer_ops(&mut timers);
         }
-
-        // Notify that a timer has been inserted.
-        self.notify();
 
         id
     }
