@@ -150,6 +150,23 @@ register 3 rings per CPU:
    not relying on interrupts we can be even more efficient with I/O in
    high IOPS scenarios
 
+Please note Scipio requires at least 256 KiB of locked memory for `io_uring`
+to work. You can increase the `memlock` resource limit (rlimit) as follows:
+
+```
+$ vi /etc/security/limits.conf
+*	hard	memlock		512
+*	soft	memlock		512
+```
+
+To make the new limits effective, you need to login to the machine
+again. You can verify that the limits are updated by running the
+following:
+
+```
+$ ulimit -l
+512
+```
 
 ## Additional inspiration
 
