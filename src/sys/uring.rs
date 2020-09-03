@@ -310,24 +310,22 @@ impl SleepableRing {
             _ => panic!("Unexpected source type when linking rings"),
         }
 
-        if d.as_secs() != u64::MAX {
-            let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
-            source
-                .as_mut()
-                .update_source_type(SourceType::Timeout(true));
+        let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
+        source
+            .as_mut()
+            .update_source_type(SourceType::Timeout(true));
 
-            // This assumes SQEs will be processed in the order they are
-            // seen. Because remove does not do anything asynchronously
-            // and is processed inline there is no need to link sqes.
-            self.submission_queue().push_front(UringDescriptor {
-                args: op,
-                fd: -1,
-                user_data: src as _,
-            });
-            // No need to submit, the next ring enter will submit for us. Because
-            // we just flushed and we got put in front of the queue we should get a SQE.
-            // Still it would be nice to verify if we did.
-        }
+        // This assumes SQEs will be processed in the order they are
+        // seen. Because remove does not do anything asynchronously
+        // and is processed inline there is no need to link sqes.
+        self.submission_queue().push_front(UringDescriptor {
+            args: op,
+            fd: -1,
+            user_data: src as _,
+        });
+        // No need to submit, the next ring enter will submit for us. Because
+        // we just flushed and we got put in front of the queue we should get a SQE.
+        // Still it would be nice to verify if we did.
         Ok(())
     }
 
