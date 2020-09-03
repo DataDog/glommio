@@ -269,9 +269,24 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
+    fn force_submit(&mut self, wakers: &mut Vec<Waker>) {
+        let mut cnt = 0;
+        loop {
+            if self.consume_submission_queue().is_ok() {
+                break;
+            }
+            self.consume_completion_queue(wakers);
+            cnt += 1;
+            if cnt > 1_000_000 {
+                panic!("I tried literally a million times but couldn't flush to the {} ring", self.name());
+            }
+        }
+    }
+
     pub(crate) fn rearm_preempt_timer(
         &mut self,
         source: &mut Pin<Box<Source>>,
+        wakers: &mut Vec<Waker>,
         d: Duration,
     ) -> io::Result<()> {
         let src = source.as_ref().as_ptr() as *const Source;
@@ -290,11 +305,7 @@ impl SleepableRing {
                     fd: -1,
                     user_data: 0,
                 });
-                loop {
-                    if self.consume_submission_queue().is_ok() {
-                        break;
-                    }
-                }
+                self.force_submit(wakers);
             }
             _ => panic!("Unexpected source type when linking rings"),
         }
@@ -615,7 +626,7 @@ impl Reactor {
             None => true,
             Some(dur) => {
                 let mut src = self.timeout_src.borrow_mut();
-                lat_ring.rearm_preempt_timer(&mut src, dur)?;
+                lat_ring.rearm_preempt_timer(&mut src, wakers, dur)?;
                 false
             }
         };
