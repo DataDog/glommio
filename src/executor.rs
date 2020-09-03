@@ -251,7 +251,7 @@ impl ExecutorQueues {
             default_executor: TaskQueueHandle::default(),
             executor_index: 1, // 0 is the default
             last_vruntime: 0,
-            preempt_timer_duration: Duration::from_secs(u64::MAX),
+            preempt_timer_duration: Duration::from_secs(1),
         }))
     }
 
@@ -260,11 +260,11 @@ impl ExecutorQueues {
             .active_executors
             .iter()
             .map(|tq| match tq.borrow().io_requirements.latency_req {
-                Latency::NotImportant => Duration::from_secs(u64::MAX),
+                Latency::NotImportant => Duration::from_secs(1),
                 Latency::Matters(d) => d,
             })
             .min()
-            .unwrap_or(Duration::from_secs(u64::MAX));
+            .unwrap_or(Duration::from_secs(1));
     }
     fn maybe_activate(&mut self, index: usize) {
         let queue = self
@@ -958,9 +958,6 @@ fn task_optimized_for_throughput() {
         let rust_capture_sucks = move || (first_started.clone(), second_status.clone());
         let clone_sucks = rust_capture_sucks.clone();
 
-        // Loop until need_preempt is set. It is set to 2ms, but because this is a test
-        // and can be running overcommited or in whichever shared infrastructure, we'll
-        // allow the timer to fire in up to 1s. If it didn't fire in 1s, that's broken.
         let first = local_ex
             .spawn_into(
                 async move {
@@ -973,7 +970,7 @@ fn task_optimized_for_throughput() {
                         if *(second_status.borrow()) {
                             panic!("I was preempted but should not have been");
                         }
-                        if start.elapsed().as_secs() > 1 {
+                        if start.elapsed().as_millis() > 200 {
                             break;
                         }
                         Task::<()>::yield_if_needed().await;
@@ -1002,5 +999,24 @@ fn task_optimized_for_throughput() {
             .unwrap();
 
         join!(first, second);
+    });
+}
+
+#[test]
+fn test_detach() {
+    use crate::Timer;
+
+    let ex = LocalExecutor::new(None).expect("failed to create local executor");
+
+    ex.spawn(async {
+        loop {
+            //   println!("I'm a background task looping forever.");
+            Task::<()>::later().await;
+        }
+    })
+    .detach();
+
+    ex.run(async {
+        Timer::new(std::time::Duration::from_micros(100)).await;
     });
 }

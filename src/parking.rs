@@ -373,11 +373,6 @@ impl Reactor {
         *ioreq = req;
     }
 
-    /// Notifies the thread blocked on the reactor.
-    pub(crate) fn notify(&self) {
-        self.sys.notify().expect("failed to notify reactor");
-    }
-
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         self.sys.alloc_dma_buffer(size)
     }
@@ -480,9 +475,6 @@ impl Reactor {
             self.process_timer_ops(&mut timers);
         }
 
-        // Notify that a timer has been inserted.
-        self.notify();
-
         id
     }
 
@@ -573,21 +565,11 @@ impl ReactorLock<'_> {
         // Process ready timers.
         let next_timer = self.reactor.process_timers(&mut wakers);
 
-        // compute the timeout for blocking on I/O events.
-        let timeout = match (next_timer, timeout) {
-            (None, None) => None,
-            (Some(t), None) | (None, Some(t)) => Some(t),
-            (Some(a), Some(b)) => Some(a.min(b)),
-        };
-
         // Block on I/O events.
-        let res = match self.reactor.sys.wait(&mut wakers, timeout) {
-            // No I/O events occurred.
-            Ok(0) => {
-                if timeout != Some(Duration::from_secs(0)) {
-                    // The non-zero timeout was hit so fire ready timers.
-                    self.reactor.process_timers(&mut wakers);
-                }
+        let res = match self.reactor.sys.wait(&mut wakers, timeout, next_timer) {
+            // We slept, so don't wait for the next loop to process timers
+            Ok(true) => {
+                self.reactor.process_timers(&mut wakers);
                 Ok(())
             }
 
