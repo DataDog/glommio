@@ -58,6 +58,10 @@ impl PosixDmaBuffer {
     pub fn as_ptr(&self) -> *const u8 {
         unsafe { self.data.add(self.trim) }
     }
+
+    pub fn memset(&self, value: u8) {
+        unsafe { std::ptr::write_bytes(self.as_mut_ptr(), value, self.size) }
+    }
 }
 
 impl Drop for PosixDmaBuffer {
