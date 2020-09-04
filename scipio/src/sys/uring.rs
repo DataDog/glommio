@@ -280,7 +280,10 @@ impl SleepableRing {
             self.consume_completion_queue(wakers);
             cnt += 1;
             if cnt > 1_000_000 {
-                panic!("I tried literally a million times but couldn't flush to the {} ring", self.name());
+                panic!(
+                    "I tried literally a million times but couldn't flush to the {} ring",
+                    self.name()
+                );
             }
         }
     }
@@ -519,7 +522,13 @@ impl Reactor {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
-            return Err(Error::new(ErrorKind::Other, format!("The memlock resource limit is too low: {} (recommended {})", memlock_limit, MIN_MEMLOCK_LIMIT)));
+            return Err(Error::new(
+                ErrorKind::Other,
+                format!(
+                    "The memlock resource limit is too low: {} (recommended {})",
+                    memlock_limit, MIN_MEMLOCK_LIMIT
+                ),
+            ));
         }
         println!("{}\n", memlock_limit);
         let main_ring = SleepableRing::new(128, "main")?;
