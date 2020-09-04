@@ -313,10 +313,15 @@ impl DmaFile {
     /// In most platforms that means 512 bytes.
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size);
-        enhance!(source.collect_rw().await, "Reading", self)?;
+        let read_size = enhance!(source.collect_rw().await, "Reading", self)?;
         let stype = source.as_mut().extract_source_type();
         match stype {
-            SourceType::DmaRead(buffer) => buffer.ok_or(bad_buffer!(self)),
+            SourceType::DmaRead(buffer) => buffer
+                .and_then(|mut buffer| {
+                    buffer.trim_to_size(read_size);
+                    Some(buffer)
+                })
+                .ok_or(bad_buffer!(self)),
             _ => Err(bad_buffer!(self)),
         }
     }
@@ -334,13 +339,13 @@ impl DmaFile {
         let eff_size = self.align_up((size + b) as u64) as usize;
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size);
 
-        enhance!(source.collect_rw().await, "Reading", self)?;
+        let read_size = enhance!(source.collect_rw().await, "Reading", self)?;
         let stype = source.as_mut().extract_source_type();
         match stype {
             SourceType::DmaRead(buffer) => buffer
                 .and_then(|mut buffer| {
                     buffer.trim_front(b);
-                    buffer.trim_to_size(size);
+                    buffer.trim_to_size(std::cmp::min(read_size, size));
                     Some(buffer)
                 })
                 .ok_or(bad_buffer!(self)),
