@@ -344,7 +344,7 @@ impl SleepableRing {
                         user_data: link.as_ref().as_ptr() as *const Source as u64,
                         args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                     };
-                    fill_sqe(&mut sqe, &op, |_| None);
+                    fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
                 }
             }
             _ => panic!("Unexpected source type when linking rings"),
@@ -428,7 +428,7 @@ impl UringCommon for SleepableRing {
 
         if let Some(mut sqe) = self.ring.next_sqe() {
             let op = self.submission_queue.pop_front().unwrap();
-            fill_sqe(&mut sqe, &op, |_| None);
+            fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
             return Some(());
         }
         None
