@@ -240,7 +240,7 @@ I will close it and turn a leak bug into a performance bug. Please investigate",
                 self.path,
                 self.as_raw_fd()
             );
-            drop(&self.file);
+            let _ = unsafe { libc::close(self.file.as_raw_fd()) };
         }
     }
 }
