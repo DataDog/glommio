@@ -7,7 +7,7 @@ unlike its counterparts it doesn't use helper threads anywhere.
 
 Using Scipio is not hard if you are familiar with rust async. All you have to do is:
 
-```
+```rust
     let ex = LocalExecutor::new(None).unwrap();
     ex.run(async {
         /// your code here
@@ -21,7 +21,7 @@ system where context switches essentially never happen, achieving maximum effici
 You can easily bind an executor to a CPU by adjusting the parameter to `new` in the
 example above:
 
-```
+```rust
     /// This will now never leave CPU 0
     let ex = LocalExecutor::new(Some(0)).unwrap();
     ex.run(async {
@@ -39,7 +39,7 @@ the many aspects of its workload but that is a luxury that a Thread-per-Core app
 However what looks like a shortcoming, is actually an advantage: you can create many independent
 task queues inside each of your executors:
 
-```
+```rust
     let ex = LocalExecutor::new(Some(0)).unwrap();
     ex.run(async {
         let tq1 = Task::<()>::create_task_queue(2, Latency::NotImportant, "test1");
