@@ -1,5 +1,7 @@
 # scipio
 
+[![CircleCI](https://circleci.com/gh/DataDog/scipio.svg?style=svg)](https://circleci.com/gh/DataDog/scipio)
+
 Scipio (pronounced skip-iow) is a Cooperative Thread-per-Core crate for
 Rust & Linux based on `io_uring`. Like other rust asynchronous crates it allows
 one to write asynchronous code that takes advantage of rust async/await, but
