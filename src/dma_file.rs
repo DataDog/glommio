@@ -240,7 +240,6 @@ I will close it and turn a leak bug into a performance bug. Please investigate",
                 self.path,
                 self.as_raw_fd()
             );
-            drop(&self.file);
         }
     }
 }
@@ -439,5 +438,31 @@ impl DmaFile {
         enhance!(source.collect_rw().await, "Closing", self)?;
         self.file = unsafe { std::fs::File::from_raw_fd(-1) };
         Ok(())
+    }
+}
+
+#[test]
+fn fallback_drop_closes_the_file() {
+    use crate::executor::LocalExecutor;
+    use std::env;
+    use std::io::Error;
+
+    let ex = LocalExecutor::new(None).unwrap();
+    {
+        let mut path = env::current_dir().unwrap();
+        path.push("testfile");
+        ex.run(async {
+            let fd;
+            {
+                let file = DmaFile::create(&path).await.expect("failed to create file");
+                fd = file.as_raw_fd();
+                std::fs::remove_file(&path).unwrap();
+            }
+            assert!(fd != -1);
+            let ret = unsafe { libc::close(fd) };
+            assert_eq!(ret, -1);
+            let err = Error::last_os_error().raw_os_error().unwrap();
+            assert_eq!(err, libc::EBADF);
+        });
     }
 }
