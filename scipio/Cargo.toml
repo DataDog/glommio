@@ -1,0 +1,29 @@
+[package]
+name = "scipio"
+version = "0.1.0"
+authors = [ "Glauber Costa <glauber@datadoghq.com>",
+            "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
+            "DataDog"]
+edition = "2018"
+description = "A set of utilities to allow one to write thread per core applications"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/DataDog/scipio"
+homepage = "https://github.com/DataDog/scipio"
+keywords = ["uring", "reactor", "thread-per-core"]
+categories = ["asynchronous", "os"]
+readme = "README.md"
+
+[dependencies]
+concurrent-queue = "1.1.2"
+futures-lite = "0.1.9"
+libc = "0.2.73"
+socket2 = { version = "0.3.12", features = ["pair", "unix"] }
+iou = { git = "https://github.com/glommer/iou", branch = "master" }
+uring-sys = { git = "https://github.com/glommer/uring-sys", branch="master" }
+nix = "0.16.0"
+aligned_alloc = "0.1"
+bitmaps = "2.1.0"
+typenum = "1.12"
+scoped-tls = "1.0.0"
+futures = "0.3.5"
+rlimit = "0.3.0"
