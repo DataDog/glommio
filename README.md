@@ -57,10 +57,12 @@ task queues inside each of your executors:
 
 ```
 
-This example creates two task queues: tq1 has 2 share, tq2 has 1 share. This means
-that if both want to use the CPU to its maximum, tq1 will have `1/3` of the CPU time
-`(1 / (1 + 2))` and tq2 will have `2/3` of the CPU time. Those shares are dynamic and
+This example creates two task queues: `tq1` has 2 shares, `tq2` has 1 share. This means
+that if both want to use the CPU to its maximum, `tq1` will have `1/3` of the CPU time
+`(1 / (1 + 2))` and `tq2` will have `2/3` of the CPU time. Those shares are dynamic and
 can be changed at any time.
+Notice that this scheduling method doesn't prevent either `tq1` no `tq2` from using
+100% of CPU time: the shares are only concidered when multiple queues need to run.
 
 ## What does scipio mean?
 
@@ -84,7 +86,8 @@ the great work by Stjepan Glavina, in particular the following crates:
 
 Aside from Stjepan's work, this is also inspired greatly by the
 [Seastar](http://seastar.io) Framework for C++ that powers I/O intensive
-systems that are pushing the performance envelope, like ScyllaDB.
+systems that are pushing the performance envelope, like
+[ScyllaDB](https://www.scylladb.com/).
 
 ## Why is this its own crate?
 
