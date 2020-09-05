@@ -2,9 +2,9 @@
 
 [![CircleCI](https://circleci.com/gh/DataDog/scipio.svg?style=svg)](https://circleci.com/gh/DataDog/scipio)
 
-Scipio (pronounced skip-iow) is a Cooperative Thread-per-Core crate for
+Scipio (pronounced skip-io or |skɪpjəʊ|) is a Cooperative Thread-per-Core crate for
 Rust & Linux based on `io_uring`. Like other rust asynchronous crates it allows
-one to write asynchronous code that takes advantage of rust async/await, but
+one to write asynchronous code that takes advantage of rust `async`/`await`, but
 unlike its counterparts it doesn't use helper threads anywhere.
 
 Using Scipio is not hard if you are familiar with rust async. All you have to do is:
@@ -57,17 +57,20 @@ task queues inside each of your executors:
 
 ```
 
-This example creates two task queues: tq1 has 1 share, tq2 has 1 share. This means
-that if both want to use the CPU to its maximum, tq1 will have 1/3 of the CPU time
-(1 / (1 + 2)) and tq2 will have 2/3 of the CPU time. Those shares are dynamic and
+This example creates two task queues: tq1 has 2 share, tq2 has 1 share. This means
+that if both want to use the CPU to its maximum, tq1 will have `1/3` of the CPU time
+`(1 / (1 + 2))` and tq2 will have `2/3` of the CPU time. Those shares are dynamic and
 can be changed at any time.
 
 ## What does scipio mean?
 
-This crate is named after Publius Cornelius Scipio, who defeated Hannibal Barca
-at the Battle of Zama, ending the Second Punic War.  I actually like Hannibal a
-bit more (just a bit), but Scipio ends with IO, which makes for a nicer name
-for an I/O oriented framework.
+This crate is named after
+[Publius Cornelius Scipio](https://en.wikipedia.org/wiki/Scipio_Africanus), who
+defeated [Hannibal Barca](https://en.wikipedia.org/wiki/Hannibal) at the
+[Battle of Zama](https://en.wikipedia.org/wiki/Battle_of_Zama), ending the
+[Second Punic War](https://en.wikipedia.org/wiki/Second_Punic_War). I actually
+like Hannibal a bit more (just a bit), but Scipio ends with IO, which makes for a
+nicer name for an I/O oriented framework.
 
 ## Prior work
 
@@ -78,6 +81,10 @@ the great work by Stjepan Glavina, in particular the following crates:
 * [async-task](https://github.com/stjepang/async-task)
 * [async-executor](https://github.com/stjepang/async-executor)
 * [multitask](https://github.com/stjepang/async-multitask)
+
+Aside from Stjepan's work, this is also inspired greatly by the
+[Seastar](http://seastar.io) Framework for C++ that powers I/O intensive
+systems that are pushing the performance envelope, like ScyllaDB.
 
 ## Why is this its own crate?
 
@@ -170,19 +177,15 @@ $ ulimit -l
 512
 ```
 
-## Additional inspiration
+## Current limitations
 
-Aside from Stjepan's work, this is also inspired greatly by the
-[Seastar](http://seastar.io) Framework for C++ that powers I/O intensive
-systems that are pushing the performance envelope, like ScyllaDB.
-
-However due to my immediate needs which are a lot narrower, we make
+Due to our immediate needs which are a lot narrower, we make
 the following design assumptions:
 
  - NVMe. Supports for any other storage type is not even considered.
    This allow us to use io uring's poll ring for reads and writes which
-   are interrupt free. This also assumes that one is running either XFS
-   or Ext4 (an assumption that Seastar also makes)
+   are interrupt free. This also assumes that one is running either `XFS`
+   or `Ext4` (an assumption that Seastar also makes)
 
  - A corollary to the above is that the CPUs are likely to be the
    bottleneck, so this crate has a CPU scheduler but lacks an I/O
@@ -206,7 +209,7 @@ There are many. In particular:
 
 * As mentioned, an I/O Scheduler.
 
-* The networking code uses `poll + rw`. This is essentially so I could
+* The networking code uses `poll + rw`. This is essentially so we could
   get started sooner by reusing code from [async-io](https://github.com/stjepang/async-io)
   but we really should be using uring's native interface for that
 
@@ -222,7 +225,7 @@ Licensed under either of
 
 at your option.
 
-#### Contribution
+### Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
