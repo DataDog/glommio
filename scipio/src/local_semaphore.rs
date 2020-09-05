@@ -154,6 +154,15 @@ pub struct Semaphore {
 
 impl Semaphore {
     /// Creates a new semaphore with the specified amount of units
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::Semaphore;
+    ///
+    /// let _ = Semaphore::new(1);
+    ///
+    /// ```
     pub fn new(avail: u64) -> Semaphore {
         Semaphore {
             state: Rc::new(RefCell::new(State::new(avail))),
@@ -161,6 +170,16 @@ impl Semaphore {
     }
 
     /// Returns the amount of units currently available in this semaphore
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::Semaphore;
+    ///
+    /// let sem = Semaphore::new(1);
+    /// assert_eq!(sem.available(), 1);
+    ///
+    /// ```
     pub fn available(&self) -> u64 {
         self.state.borrow().available()
     }
@@ -168,6 +187,24 @@ impl Semaphore {
     /// Blocks until a permit can be acquired with the specified amount of units.
     ///
     /// Returns Err() if the semaphore is closed during the wait.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutor, Semaphore};
+    ///
+    /// let sem = Semaphore::new(1);
+    ///
+    /// let ex = LocalExecutor::new(None).unwrap();
+    /// ex.run(async move {
+    ///     {
+    ///         let permit = sem.acquire_permit(1).await.unwrap();
+    ///         // once it is dropped it can be acquired again
+    ///         // going out of scope will drop
+    ///     }
+    ///     let _ = sem.acquire_permit(1).await.unwrap();
+    /// });
+    /// ```
     pub async fn acquire_permit(&self, units: u64) -> Result<Permit> {
         self.acquire(units).await?;
         Ok(Permit::new(units, self.state.clone()))
@@ -177,6 +214,19 @@ impl Semaphore {
     ///
     /// The caller is then responsible to release it. Whenever possible,
     /// prefer acquire_permit().
+    ///
+    /// # Examples
+    ///
+    /// use scipio::{LocalExecutor, Semaphore};
+    ///
+    /// let sem = Semaphore::new(1);
+    ///
+    /// let ex = LocalExecutor::new(None).unwrap();
+    /// ex.run(async move {
+    ///     sem.acquire(1).await.unwrap();
+    ///     sem.signal(1); // Has to be signaled explicity. Be careful
+    /// });
+    /// ```
     pub async fn acquire(&self, units: u64) -> Result<()> {
         loop {
             let mut state = self.state.borrow_mut();
@@ -194,6 +244,20 @@ impl Semaphore {
     ///
     /// This needs to be paired with a call to acquire(). You should not
     /// call this if the units were acquired with acquire_permit().
+    ///
+    /// # Examples
+    ///
+    /// use scipio::{LocalExecutor, Semaphore};
+    ///
+    /// let sem = Semaphore::new(0);
+    ///
+    /// let ex = LocalExecutor::new(None).unwrap();
+    /// ex.run(async move {
+    ///     // Note that we can signal to expand to more units than the original capacity had.
+    ///     sem.signal(1);
+    ///     sem.acquire(1).await.unwrap();
+    /// });
+    /// ```
     pub fn signal(&self, units: u64) {
         let waker = self.state.borrow_mut().signal(units);
         waker.and_then(|w| {
@@ -205,6 +269,23 @@ impl Semaphore {
     /// Closes the semaphore
     ///
     /// All existing waiters will return Err(), and no new waiters are allowed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutor, Semaphore};
+    ///
+    /// let sem = Semaphore::new(0);
+    ///
+    /// let ex = LocalExecutor::new(None).unwrap();
+    /// ex.run(async move {
+    ///     // Note that we can signal to expand to more units than the original capacity had.
+    ///     sem.close();
+    ///     if let Ok(_) = sem.acquire(1).await {
+    ///         panic!("a closed semaphore should have errored");
+    ///     }
+    /// });
+    /// ```
     pub fn close(&self) {
         let mut state = self.state.borrow_mut();
         state.close();
