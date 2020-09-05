@@ -31,7 +31,7 @@ example above:
     });
 ```
 
-Note that you can only have one executor per thread, so if you need more executor,
+Note that you can only have one executor per thread, so if you need more executors,
 you will have to create more threads (we do consider providing helper code for that soon)
 
 For a Thread-per-core-system to work well, it is paramount that some form of scheduling
