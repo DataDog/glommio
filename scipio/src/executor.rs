@@ -34,6 +34,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,8 @@ use crate::parking;
 use crate::task::waker_fn::waker_fn;
 use crate::Reactor;
 use crate::{IoRequirements, Latency};
+
+static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
 /// Error thrown when a Task Queue is not found.
@@ -304,6 +307,7 @@ pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
     parker: parking::Parker,
     binding: Option<usize>,
+    id: usize,
 }
 
 impl LocalExecutor {
@@ -326,6 +330,7 @@ impl LocalExecutor {
             queues: ExecutorQueues::new(),
             parker: p,
             binding,
+            id: EXECUTOR_ID.fetch_add(1, Ordering::Relaxed),
         };
 
         if let Some(cpu) = binding {
@@ -344,6 +349,19 @@ impl LocalExecutor {
             }),
         );
         Ok(le)
+    }
+
+    /// Returns a unique identifier for this Executor.
+    ///
+    /// # Examples
+    /// ```
+    /// use scipio::LocalExecutor;
+    ///
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// println!("My ID: {}", local_ex.id());
+    /// ```
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     /// Creates a task queue in the executor.
@@ -714,6 +732,34 @@ impl<T> Task<T> {
             LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle))
         } else {
             panic!("`Task::local()` must be called from a `LocalExecutor`")
+        }
+    }
+
+    /// Returns the id of the current executor
+    ///
+    /// If called from a [`LocalExecutor`], returns the id of the executor.
+    ///
+    /// Otherwise, this method panics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutor, Task};
+    ///
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    ///
+    /// local_ex.run(async {
+    ///     println!("my ID: {}", Task::<()>::id());
+    /// });
+    /// ```
+    pub fn id() -> usize
+    where
+        T: 'static,
+    {
+        if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| local_ex.id())
+        } else {
+            panic!("`Task::id()` must be called from a `LocalExecutor`")
         }
     }
 
