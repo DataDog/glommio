@@ -144,6 +144,17 @@ pub use crate::pollable::Async;
 pub use crate::sys::DmaBuffer;
 pub use crate::timer::Timer;
 
+/// Local is an ergonomic way to access the local executor.
+/// The local is executed through a Task type, but the Task type has a type
+/// parameter consisting of the return type of the future encapsulated by this
+/// task.
+///
+/// However for associated functions without a self parameter, like local() and
+/// local_into(), the type is always () and Rust is not able to ellide.
+///
+/// Writing Task::<()>::function() works, but it is not very ergonomic.
+pub type Local = Task<()>;
+
 /// An attribute of a TaskQueue, passed during its creation.
 ///
 /// This tells the executor whether or not tasks in this class are latency
