@@ -306,7 +306,7 @@ impl DmaFile {
         }
 
         let mut f = enhance!(res, "Opening", Some(&path), None)?;
-        f.o_direct_alignment = 4096;
+        f.o_direct_alignment = 512;
         Ok(f)
     }
 
