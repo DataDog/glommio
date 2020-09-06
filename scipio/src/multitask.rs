@@ -69,7 +69,7 @@ impl<T> Task<T> {
     /// })
     /// .detach();
     /// ```
-    pub fn detach(mut self) {
+    pub(crate) fn detach(mut self) {
         self.0.take().unwrap();
     }
 
@@ -101,7 +101,7 @@ impl<T> Task<T> {
     ///     task.cancel().await;
     /// });
     /// ```
-    pub async fn cancel(self) -> Option<T> {
+    pub(crate) async fn cancel(self) -> Option<T> {
         let mut task = self;
         let handle = task.0.take().unwrap();
         handle.cancel();
@@ -166,17 +166,7 @@ impl RefUnwindSafe for LocalExecutor {}
 
 impl LocalExecutor {
     /// Creates a new single-threaded executor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use scipio::{LocalExecutor, parking};
-    ///
-    /// let (p, u) = parking::pair();
-    /// let ex = LocalExecutor::new(None).expect("failed to create executor");
-    /// ex.run(async { println!("hello, world!")});
-    /// ```
-    pub fn new(notify: impl Fn() + 'static) -> LocalExecutor {
+    pub(crate) fn new(notify: impl Fn() + 'static) -> LocalExecutor {
         LocalExecutor {
             local_queue: LocalQueue::new(),
             callback: Callback::new(notify),
@@ -185,20 +175,7 @@ impl LocalExecutor {
     }
 
     /// Spawns a thread-local future onto this executor.
-    ///
-    /// Returns a [`Task`] handle for the spawned future.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use scipio::{LocalExecutor, parking};
-    ///
-    /// let (p, u) = parking::pair();
-    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
-    ///
-    /// let task = ex.spawn(async { println!("hello") });
-    /// ```
-    pub fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
+    pub(crate) fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let callback = self.callback.clone();
         let queue = self.local_queue.clone();
 
@@ -217,7 +194,7 @@ impl LocalExecutor {
     /// Gets one task from the queue, if one exists.
     ///
     /// Returns an option rapping the task.
-    pub fn get_task(&self) -> Option<Runnable> {
+    pub(crate) fn get_task(&self) -> Option<Runnable> {
         self.local_queue.pop()
     }
 }

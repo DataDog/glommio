@@ -321,7 +321,7 @@ impl LocalExecutor {
     /// let bound_ex = LocalExecutor::new(Some(1)).expect("failed to create local executor");
     /// ```
     pub fn new(binding: Option<usize>) -> io::Result<LocalExecutor> {
-        let (p, _) = parking::pair();
+        let p = parking::Parker::new();
         let le = LocalExecutor {
             queues: ExecutorQueues::new(),
             parker: p,

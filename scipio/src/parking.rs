@@ -3,19 +3,24 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-//! Thread parking and unparking.
+//! Thread parking
 //!
-//! This module exposes the exact same API as [`parking`][docs-parking]. The only
-//! difference is that [`Parker`] in this module will wait on epoll/kqueue/wepoll and wake tasks
-//! blocked on I/O or timers.
+//! This module exposes a similar API as [`parking`][docs-parking]. However it is adapted to be
+//! used in a thread-per-core environment. Because there is a single thread per reactor, there
+//! is no way to forceably unpark a parked reactor so we don't expose an unpark function.
+//!
+//! Also, we expose a function called poll_io aside from park.
+//!
+//! poll_io will poll for I/O, but not ever sleep. This is useful when we know there are more
+//! events and are just doing I/O so we don't starve anybody.
+//!
+//! park() is different in that it may sleep if no new events arrive. It essentially means:
+//! "I, the executor, have nothing else to do. If you don't find work feel free to sleep"
 //!
 //! Executors may use this mechanism to go to sleep when idle and wake up when more work is
 //! scheduled. By waking tasks blocked on I/O and then running those tasks on the same thread,
 //! no thread context switch is necessary when going between task execution and I/O.
 //!
-//! You can treat this module as merely an optimization over the [`parking`][docs-parking] crate.
-//!
-//! [docs-parking]: https://docs.rs/parking
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -42,24 +47,9 @@ use crate::IoRequirements;
 
 thread_local!(static LOCAL_REACTOR: Reactor = Reactor::new());
 
-/// Creates a parker and an associated unparker.
-///
-/// # Examples
-///
-/// ```
-/// use scipio::parking;
-///
-/// let (p, u) = parking::pair();
-/// ```
-pub fn pair() -> (Parker, Unparker) {
-    let p = Parker::new();
-    let u = p.unparker();
-    (p, u)
-}
-
 /// Waits for a notification.
-pub struct Parker {
-    unparker: Unparker,
+pub(crate) struct Parker {
+    inner: Rc<Inner>,
 }
 
 impl UnwindSafe for Parker {}
@@ -67,43 +57,17 @@ impl RefUnwindSafe for Parker {}
 
 impl Parker {
     /// Creates a new parker.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use scipio::parking::Parker;
-    ///
-    /// let p = Parker::new();
-    /// ```
-    ///
-    pub fn new() -> Parker {
+    pub(crate) fn new() -> Parker {
         // Ensure `Reactor` is initialized now to prevent it from being initialized in `Drop`.
         let parker = Parker {
-            unparker: Unparker {
-                inner: Rc::new(Inner {}),
-            },
+            inner: Rc::new(Inner {}),
         };
         parker
     }
 
     /// Blocks until notified and then goes back into unnotified state.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use scipio::parking::Parker;
-    ///
-    /// let p = Parker::new();
-    /// let u = p.unparker();
-    ///
-    /// // Notify the parker.
-    /// u.unpark();
-    ///
-    /// // Wakes up immediately because the parker is notified.
-    /// p.park();
-    /// ```
-    pub fn park(&self) {
-        self.unparker.inner.park(None);
+    pub(crate) fn park(&self) {
+        self.inner.park(None);
     }
 
     /// Performs non-sleepable pool and install a preempt timeout into the
@@ -111,83 +75,8 @@ impl Parker {
     /// installing a preempt timer. Tasks executing in the CPU right after this
     /// will be able to check if the timer has elapsed and yield the CPU if that
     /// is the case.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use scipio::parking::Parker;
-    /// use std::time::Duration;
-    ///
-    /// let p = Parker::new();
-    ///
-    /// // Poll for existing I/O, and set next preemption point to 500ms
-    /// p.poll_io(Duration::from_millis(500));
-    /// ```
-    pub fn poll_io(&self, timeout: Duration) {
-        self.unparker.inner.park(Some(timeout));
-    }
-
-    /// Blocks until notified and then goes back into unnotified state, or times out at `instant`.
-    ///
-    /// Returns `true` if notified before the deadline.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use scipio::parking::Parker;
-    /// use std::time::{Duration, Instant};
-    ///
-    /// let p = Parker::new();
-    ///
-    /// // Wait for a notification, or time out after 500 ms.
-    /// p.park_deadline(Instant::now() + Duration::from_millis(500));
-    /// ```
-    pub fn park_deadline(&self, deadline: Instant) -> bool {
-        self.unparker
-            .inner
-            .park(Some(deadline.saturating_duration_since(Instant::now())))
-    }
-
-    /// Notifies the parker.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use scipio::parking::Parker;
-    ///
-    /// let p = Parker::new();
-    /// let u = p.unparker();
-    ///
-    /// // Notify the parker.
-    /// u.unpark();
-    ///
-    /// // Wakes up immediately because the parker is notified.
-    /// p.park();
-    /// ```
-    pub fn unpark(&self) {
-        self.unparker.unpark()
-    }
-
-    /// Returns a handle for unparking.
-    ///
-    /// The returned [`Unparker`] can be cloned and shared among threads.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use scipio::parking::Parker;
-    ///
-    /// let p = Parker::new();
-    /// let u = p.unparker();
-    ///
-    /// // Notify the parker.
-    /// u.unpark();
-    ///
-    /// // Wakes up immediately because the parker is notified.
-    /// p.park();
-    /// ```
-    pub fn unparker(&self) -> Unparker {
-        self.unparker.clone()
+    pub(crate) fn poll_io(&self, timeout: Duration) {
+        self.inner.park(Some(timeout));
     }
 }
 
@@ -207,50 +96,6 @@ impl fmt::Debug for Parker {
     }
 }
 
-/// Notifies a parker.
-pub struct Unparker {
-    inner: Rc<Inner>,
-}
-
-impl UnwindSafe for Unparker {}
-impl RefUnwindSafe for Unparker {}
-
-impl Unparker {
-    /// Notifies the associated parker.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use scipio::parking::Parker;
-    ///
-    /// let p = Parker::new();
-    /// let u = p.unparker();
-    ///
-    /// // Notify the parker.
-    /// u.unpark();
-    ///
-    /// // Wakes up immediately because the parker is notified.
-    /// p.park();
-    /// ```
-    pub fn unpark(&self) {
-        self.inner.unpark()
-    }
-}
-
-impl fmt::Debug for Unparker {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad("Unparker { .. }")
-    }
-}
-
-impl Clone for Unparker {
-    fn clone(&self) -> Unparker {
-        Unparker {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
 struct Inner {}
 
 impl Inner {
@@ -261,11 +106,6 @@ impl Inner {
         let _ = reactor_lock.react(timeout);
         return false;
     }
-
-    // Because this is a Thread-per-core system it is impossible to unpark.
-    // We can only be awaken by some external event, and that will wake up the
-    // blocking system call in park().
-    pub fn unpark(&self) {}
 }
 
 /// The reactor.
