@@ -126,7 +126,11 @@ where
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
                 sqe.prep_read(op.fd, buf.as_mut_bytes(), pos);
                 let source = &mut *(op.user_data as *mut Source);
-                source.source_type = SourceType::DmaRead(Some(buf));
+                if let SourceType::DmaRead(pollable, _) = &source.source_type {
+                    source.source_type = SourceType::DmaRead(*pollable, Some(buf));
+                } else {
+                    panic!("Expected DmaRead source type");
+                }
             }
 
             UringOpDescriptor::WriteFixed(ptr, len, pos, _) => {

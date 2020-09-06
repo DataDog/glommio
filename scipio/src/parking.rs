@@ -377,14 +377,26 @@ impl Reactor {
         self.sys.alloc_dma_buffer(size)
     }
 
-    pub(crate) fn write_dma(&self, raw: RawFd, buf: &DmaBuffer, pos: u64) -> Pin<Box<Source>> {
-        let source = self.new_source(raw, SourceType::DmaWrite);
+    pub(crate) fn write_dma(
+        &self,
+        raw: RawFd,
+        buf: &DmaBuffer,
+        pos: u64,
+        pollable: bool,
+    ) -> Pin<Box<Source>> {
+        let source = self.new_source(raw, SourceType::DmaWrite(pollable));
         self.sys.write_dma(&source.as_ref(), buf, pos);
         source
     }
 
-    pub(crate) fn read_dma<'a>(&self, raw: RawFd, pos: u64, size: usize) -> Pin<Box<Source>> {
-        let source = self.new_source(raw, SourceType::DmaRead(None));
+    pub(crate) fn read_dma<'a>(
+        &self,
+        raw: RawFd,
+        pos: u64,
+        size: usize,
+        pollable: bool,
+    ) -> Pin<Box<Source>> {
+        let source = self.new_source(raw, SourceType::DmaRead(pollable, None));
         self.sys.read_dma(&source.as_ref(), pos, size);
         source
     }

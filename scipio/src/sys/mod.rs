@@ -98,8 +98,8 @@ pub type DmaBuffer = PosixDmaBuffer;
 
 #[derive(Debug)]
 pub(crate) enum SourceType {
-    DmaWrite,
-    DmaRead(Option<DmaBuffer>),
+    DmaWrite(bool),
+    DmaRead(bool, Option<DmaBuffer>),
     PollableFd,
     Open(CString),
     FdataSync,

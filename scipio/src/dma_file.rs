@@ -315,7 +315,7 @@ impl DmaFile {
     /// It is expected that the buffer is properly aligned for Direct I/O.
     /// In most platforms that means 512 bytes.
     pub async fn write_dma(&self, buf: &DmaBuffer, pos: u64) -> Result<usize> {
-        let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos);
+        let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
         enhance!(source.collect_rw().await, "Writing", self)
     }
 
@@ -324,11 +324,11 @@ impl DmaFile {
     /// It is expected that the buffer is properly aligned for Direct I/O.
     /// In most platforms that means 512 bytes.
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
-        let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size);
+        let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhance!(source.collect_rw().await, "Reading", self)?;
         let stype = source.as_mut().extract_source_type();
         match stype {
-            SourceType::DmaRead(buffer) => buffer
+            SourceType::DmaRead(_, buffer) => buffer
                 .and_then(|mut buffer| {
                     buffer.trim_to_size(read_size);
                     Some(buffer)
@@ -349,12 +349,13 @@ impl DmaFile {
         let b = (pos - eff_pos) as usize;
 
         let eff_size = self.align_up((size + b) as u64) as usize;
-        let mut source = Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size);
+        let mut source =
+            Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
         let read_size = enhance!(source.collect_rw().await, "Reading", self)?;
         let stype = source.as_mut().extract_source_type();
         match stype {
-            SourceType::DmaRead(buffer) => buffer
+            SourceType::DmaRead(_, buffer) => buffer
                 .and_then(|mut buffer| {
                     buffer.trim_front(b);
                     buffer.trim_to_size(std::cmp::min(read_size, size));
