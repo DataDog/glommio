@@ -3,27 +3,28 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-//! Async I/O and timers.
+//! Scipio - asynchronous thread per core applications in Rust.
 //!
-//! To wait for the next I/O event, the reactor calls [epoll] on Linux/Android, [kqueue] on
-//! macOS/iOS/BSD, and [wepoll] on Windows.
+//! Makes heavy use of io_uring so this is Linux-only. 5.8 or
+//! newer is recommended.
 //!
-//! [epoll]: https://en.wikipedia.org/wiki/Epoll
-//! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
-//! [wepoll]: https://github.com/piscisaureus/wepoll
+//! This library provides abstractions for timers, file I/O and
+//! networking plus support for multiple-queues and an internal
+//! scheduler. All without using threads.
 //!
 //! # Examples
 //!
 //! Connect to `example.com:80`, or time out after 10 seconds.
 //!
 //! ```
-//! use scipio::{Async, Timer};
+//! use scipio::{Async, Timer, LocalExecutor};
 //! use futures_lite::{future::FutureExt, io};
 //!
 //! use std::net::{TcpStream, ToSocketAddrs};
 //! use std::time::Duration;
 //!
-//! futures_lite::future::block_on(async {
+//! let local_ex = LocalExecutor::new(None).unwrap();
+//! local_ex.run(async {
 //!     let addr = "::80".to_socket_addrs()?.next().unwrap();
 //!
 //!     let stream = Async::<TcpStream>::connect(addr).or(async {
