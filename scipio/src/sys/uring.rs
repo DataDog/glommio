@@ -530,7 +530,6 @@ impl Reactor {
                 ),
             ));
         }
-        println!("{}\n", memlock_limit);
         let main_ring = SleepableRing::new(128, "main")?;
         let latency_ring = SleepableRing::new(128, "latency")?;
         let link_fd = latency_ring.ring_fd();
