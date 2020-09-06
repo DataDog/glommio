@@ -15,6 +15,7 @@ use std::rc::Rc;
 use std::task::Waker;
 use std::time::Duration;
 use std::{fmt, io};
+use crate::uring_sys::uring_sys;
 
 macro_rules! syscall {
     ($fn:ident $args:tt) => {{

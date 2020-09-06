@@ -19,6 +19,8 @@ use crate::free_list::{FreeList, Idx};
 use crate::sys::posix_buffers::PosixDmaBuffer;
 use crate::sys::{IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
+use crate::iou::iou;
+use crate::uring_sys::uring_sys;
 
 use uring_sys::IoRingOp;
 
