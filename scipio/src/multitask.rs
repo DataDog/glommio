@@ -166,16 +166,6 @@ impl RefUnwindSafe for LocalExecutor {}
 
 impl LocalExecutor {
     /// Creates a new single-threaded executor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use scipio::{LocalExecutor, parking};
-    ///
-    /// let (p, u) = parking::pair();
-    /// let ex = LocalExecutor::new(None).expect("failed to create executor");
-    /// ex.run(async { println!("hello, world!")});
-    /// ```
     pub(crate) fn new(notify: impl Fn() + 'static) -> LocalExecutor {
         LocalExecutor {
             local_queue: LocalQueue::new(),
@@ -185,19 +175,6 @@ impl LocalExecutor {
     }
 
     /// Spawns a thread-local future onto this executor.
-    ///
-    /// Returns a [`Task`] handle for the spawned future.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use scipio::{LocalExecutor, parking};
-    ///
-    /// let (p, u) = parking::pair();
-    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
-    ///
-    /// let task = ex.spawn(async { println!("hello") });
-    /// ```
     pub(crate) fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let callback = self.callback.clone();
         let queue = self.local_queue.clone();
