@@ -493,7 +493,16 @@ macro_rules! queue_request_into_ring {
 
 macro_rules! queue_storage_io_request {
     ($self:expr, $source:ident, $op:expr) => {{
-        queue_request_into_ring!($self.poll_ring, $source, $op)
+        let pollable = match $source.source_type {
+            SourceType::DmaRead(p, _) => p,
+            SourceType::DmaWrite(p) => p,
+            _ => panic!("SourceType should declare if it supports poll operations"),
+        };
+        if pollable {
+            queue_request_into_ring!($self.poll_ring, $source, $op)
+        } else {
+            queue_request_into_ring!($self.main_ring, $source, $op)
+        }
     }};
 }
 
