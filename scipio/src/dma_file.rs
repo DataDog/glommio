@@ -252,12 +252,28 @@ impl DmaFile {
         path: &Path,
         flags: libc::c_int,
         mode: libc::c_int,
-        pollable: bool,
     ) -> io::Result<DmaFile> {
-        let source = Reactor::get().open_at(dir, path, flags, mode);
-        let fd = source.collect_rw().await?;
+        let mut pollable = true;
+        let mut source = Reactor::get().open_at(dir, path, flags, mode);
+        let mut res = source.collect_rw().await;
+
+        res = match res {
+            Err(os_err) => {
+                // if we failed to open the file with a recoverable error,
+                // open again without O_DIRECT
+                if os_err.raw_os_error().unwrap() == libc::EINVAL {
+                    pollable = false;
+                    source = Reactor::get().open_at(dir, path, flags & !libc::O_DIRECT, mode);
+                    source.collect_rw().await
+                } else {
+                    Err(os_err)
+                }
+            }
+            Ok(res) => Ok(res),
+        };
+
         Ok(DmaFile {
-            file: unsafe { std::fs::File::from_raw_fd(fd as _) },
+            file: unsafe { std::fs::File::from_raw_fd(res? as _) },
             path: Some(path.to_path_buf()),
             o_direct_alignment: 4096,
             pollable,
@@ -278,13 +294,7 @@ impl DmaFile {
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags =
             libc::O_DIRECT | libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
-        let mut res = DmaFile::open_at(-1 as _, &path, flags, 0o644, true).await;
-
-        if res.is_err() {
-            // we failed to open the file, try again without O_DIRECT
-            let flags = flags & !libc::O_DIRECT;
-            res = DmaFile::open_at(-1 as _, &path, flags, 0o644, false).await;
-        }
+        let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
 
         let mut f = enhance!(res, "Creating", Some(&path), None)?;
         f.o_direct_alignment = 4096;
@@ -297,13 +307,7 @@ impl DmaFile {
 
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags = libc::O_DIRECT | libc::O_CLOEXEC | libc::O_RDONLY;
-        let mut res = DmaFile::open_at(-1 as _, &path, flags, 0o644, true).await;
-
-        if res.is_err() {
-            // we failed to open the file, try again without O_DIRECT
-            let flags = flags & !libc::O_DIRECT;
-            res = DmaFile::open_at(-1 as _, &path, flags, 0o644, false).await;
-        }
+        let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
 
         let mut f = enhance!(res, "Opening", Some(&path), None)?;
         f.o_direct_alignment = 512;
