@@ -34,7 +34,9 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
+use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use futures_lite::pin;
@@ -45,6 +47,8 @@ use crate::parking;
 use crate::task::waker_fn::waker_fn;
 use crate::Reactor;
 use crate::{IoRequirements, Latency};
+
+static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
 /// Error thrown when a Task Queue is not found.
@@ -304,9 +308,29 @@ pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
     parker: parking::Parker,
     binding: Option<usize>,
+    id: usize,
 }
 
 impl LocalExecutor {
+    fn init(&mut self) -> io::Result<()> {
+        if let Some(cpu) = self.binding {
+            bind_to_cpu(cpu)?;
+        }
+
+        let queues = self.queues.clone();
+        let index = 0;
+
+        let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
+        self.queues.borrow_mut().available_executors.insert(
+            0,
+            TaskQueue::new("default", 1000, io_requirements, move || {
+                let mut queues = queues.borrow_mut();
+                queues.maybe_activate(index);
+            }),
+        );
+        Ok(())
+    }
+
     /// Creates a single-threaded executor, optionally bound to a specific CPU
     ///
     /// # Examples
@@ -322,28 +346,79 @@ impl LocalExecutor {
     /// ```
     pub fn new(binding: Option<usize>) -> io::Result<LocalExecutor> {
         let p = parking::Parker::new();
-        let le = LocalExecutor {
+        let mut le = LocalExecutor {
             queues: ExecutorQueues::new(),
             parker: p,
             binding,
+            id: EXECUTOR_ID.fetch_add(1, Ordering::Relaxed),
         };
 
-        if let Some(cpu) = binding {
-            bind_to_cpu(cpu)?;
-        }
-
-        let queues = le.queues.clone();
-        let index = 0;
-
-        let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
-        le.queues.borrow_mut().available_executors.insert(
-            0,
-            TaskQueue::new("default", 1000, io_requirements, move || {
-                let mut queues = queues.borrow_mut();
-                queues.maybe_activate(index);
-            }),
-        );
+        le.init()?;
         Ok(le)
+    }
+
+    /// Creates a single-threaded executor, optionally bound to a specific CPU, inside
+    /// a newly craeted thread. The parameter `name` specifies the name of the thread.
+    ///
+    /// This is a more ergonomic way to create a thread and then run an executor inside it
+    /// This function panics if creating the thread or the executor fails. If you need more
+    /// fine-grained error handling consider initializing those entities manually.
+    ///
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::LocalExecutor;
+    ///
+    /// // executor is a single thread, but not bound to any particular CPU.
+    /// let handle = LocalExecutor::spawn_executor("myname", None, || async move {
+    ///     println!("hello");
+    /// }).unwrap();
+    ///
+    /// handle.join().unwrap();
+    /// ```
+    #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
+    pub fn spawn_executor<G, F, T>(
+        name: &'static str,
+        binding: Option<usize>,
+        fut_gen: G,
+    ) -> io::Result<JoinHandle<()>>
+    where
+        G: FnOnce() -> F + std::marker::Send + 'static,
+        F: Future<Output = T> + 'static,
+    {
+        let id = EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
+
+        Builder::new()
+            .name(format!("{}-{}", name, id).to_string())
+            .spawn(move || {
+                let mut le = LocalExecutor {
+                    queues: ExecutorQueues::new(),
+                    parker: parking::Parker::new(),
+                    binding,
+                    id,
+                };
+                le.init().unwrap();
+                le.run(async move {
+                    let task = Task::local(async move {
+                        fut_gen().await;
+                    });
+                    task.await;
+                })
+            })
+    }
+
+    /// Returns a unique identifier for this Executor.
+    ///
+    /// # Examples
+    /// ```
+    /// use scipio::LocalExecutor;
+    ///
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// println!("My ID: {}", local_ex.id());
+    /// ```
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     /// Creates a task queue in the executor.
@@ -714,6 +789,34 @@ impl<T> Task<T> {
             LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle))
         } else {
             panic!("`Task::local()` must be called from a `LocalExecutor`")
+        }
+    }
+
+    /// Returns the id of the current executor
+    ///
+    /// If called from a [`LocalExecutor`], returns the id of the executor.
+    ///
+    /// Otherwise, this method panics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutor, Task};
+    ///
+    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    ///
+    /// local_ex.run(async {
+    ///     println!("my ID: {}", Task::<()>::id());
+    /// });
+    /// ```
+    pub fn id() -> usize
+    where
+        T: 'static,
+    {
+        if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| local_ex.id())
+        } else {
+            panic!("`Task::id()` must be called from a `LocalExecutor`")
         }
     }
 
