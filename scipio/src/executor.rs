@@ -371,7 +371,7 @@ impl LocalExecutor {
     /// use scipio::LocalExecutor;
     ///
     /// // executor is a single thread, but not bound to any particular CPU.
-    /// let handle = LocalExecutor::spawn_executor("myname", None, async move {
+    /// let handle = LocalExecutor::spawn_executor("myname", None, || async move {
     ///     println!("hello");
     /// }).unwrap();
     ///
