@@ -17,7 +17,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{Source, SourceType};
+use crate::sys::{PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 type DmaBuffer = PosixDmaBuffer;
@@ -498,10 +498,9 @@ macro_rules! queue_storage_io_request {
             SourceType::DmaWrite(p) => p,
             _ => panic!("SourceType should declare if it supports poll operations"),
         };
-        if pollable {
-            queue_request_into_ring!($self.poll_ring, $source, $op)
-        } else {
-            queue_request_into_ring!($self.main_ring, $source, $op)
+        match pollable {
+            PollableStatus::Pollable => queue_request_into_ring!($self.poll_ring, $source, $op),
+            PollableStatus::NonPollable => queue_request_into_ring!($self.main_ring, $source, $op),
         }
     }};
 }

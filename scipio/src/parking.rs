@@ -37,7 +37,7 @@ use concurrent_queue::ConcurrentQueue;
 use futures_lite::*;
 
 use crate::sys;
-use crate::sys::{DmaBuffer, Source, SourceType};
+use crate::sys::{DmaBuffer, PollableStatus, Source, SourceType};
 use crate::IoRequirements;
 
 thread_local!(static LOCAL_REACTOR: Reactor = Reactor::new());
@@ -382,7 +382,7 @@ impl Reactor {
         raw: RawFd,
         buf: &DmaBuffer,
         pos: u64,
-        pollable: bool,
+        pollable: PollableStatus,
     ) -> Pin<Box<Source>> {
         let source = self.new_source(raw, SourceType::DmaWrite(pollable));
         self.sys.write_dma(&source.as_ref(), buf, pos);
@@ -394,7 +394,7 @@ impl Reactor {
         raw: RawFd,
         pos: u64,
         size: usize,
-        pollable: bool,
+        pollable: PollableStatus,
     ) -> Pin<Box<Source>> {
         let source = self.new_source(raw, SourceType::DmaRead(pollable, None));
         self.sys.read_dma(&source.as_ref(), pos, size);

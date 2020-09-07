@@ -89,6 +89,7 @@ pub(crate) fn sync_open(path: &Path, flags: libc::c_int, mode: libc::c_int) -> i
 
 mod posix_buffers;
 mod uring;
+
 pub use self::posix_buffers::*;
 pub use self::uring::*;
 use crate::IoRequirements;
@@ -96,10 +97,16 @@ use crate::IoRequirements;
 /// A buffer that can be used with DmaFile.
 pub type DmaBuffer = PosixDmaBuffer;
 
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum PollableStatus {
+    Pollable,
+    NonPollable,
+}
+
 #[derive(Debug)]
 pub(crate) enum SourceType {
-    DmaWrite(bool),
-    DmaRead(bool, Option<DmaBuffer>),
+    DmaWrite(PollableStatus),
+    DmaRead(PollableStatus, Option<DmaBuffer>),
     PollableFd,
     Open(CString),
     FdataSync,

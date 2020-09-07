@@ -6,7 +6,7 @@
 use crate::error::Error;
 use crate::parking::Reactor;
 use crate::sys;
-use crate::sys::{DmaBuffer, SourceType};
+use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use crate::Result;
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -186,7 +186,7 @@ pub struct DmaFile {
     // facilitate error displaying.
     path: Option<PathBuf>,
     o_direct_alignment: u64,
-    pollable: bool,
+    pollable: PollableStatus,
 }
 
 impl DmaFile {
@@ -228,7 +228,7 @@ impl Default for DmaFile {
             file: unsafe { std::fs::File::from_raw_fd(-1) },
             path: None,
             o_direct_alignment: 4096,
-            pollable: true,
+            pollable: PollableStatus::Pollable,
         }
     }
 }
@@ -253,7 +253,7 @@ impl DmaFile {
         flags: libc::c_int,
         mode: libc::c_int,
     ) -> io::Result<DmaFile> {
-        let mut pollable = true;
+        let mut pollable = PollableStatus::Pollable;
         let mut source = Reactor::get().open_at(dir, path, flags, mode);
         let mut res = source.collect_rw().await;
 
@@ -262,7 +262,7 @@ impl DmaFile {
                 // if we failed to open the file with a recoverable error,
                 // open again without O_DIRECT
                 if os_err.raw_os_error().unwrap() == libc::EINVAL {
-                    pollable = false;
+                    pollable = PollableStatus::NonPollable;
                     source = Reactor::get().open_at(dir, path, flags & !libc::O_DIRECT, mode);
                     source.collect_rw().await
                 } else {
