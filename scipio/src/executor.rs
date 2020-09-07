@@ -35,11 +35,9 @@ use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::task::{Context, Poll};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
-use std::vec::Vec;
 
 use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
@@ -51,10 +49,6 @@ use crate::Reactor;
 use crate::{IoRequirements, Latency};
 
 static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
-
-lazy_static! {
-    static ref SPAWNED_EXECUTORS: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
-}
 
 #[derive(Debug, Clone)]
 /// Error thrown when a Task Queue is not found.
@@ -370,8 +364,6 @@ impl LocalExecutor {
     /// This function panics if creating the thread or the executor fails. If you need more
     /// fine-grained error handling consider initializing those entities manually.
     ///
-    /// You must call wait_on_executors() to wait for all executors spawned through spawn_new
-    /// to return
     ///
     /// # Examples
     ///
@@ -379,13 +371,18 @@ impl LocalExecutor {
     /// use scipio::LocalExecutor;
     ///
     /// // executor is a single thread, but not bound to any particular CPU.
-    /// LocalExecutor::spawn_new("myname", None, async move {
+    /// let handle = LocalExecutor::spawn_executor("myname", None, async move {
     ///     println!("hello");
-    /// });
+    /// }).unwrap();
     ///
-    /// LocalExecutor::wait_on_executors();
+    /// handle.join().unwrap();
     /// ```
-    pub fn spawn_new<F, T>(name: &'static str, binding: Option<usize>, fut: F)
+    #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
+    pub fn spawn_executor<F, T>(
+        name: &'static str,
+        binding: Option<usize>,
+        fut: F,
+    ) -> io::Result<JoinHandle<()>>
     where
         F: Send + 'static,
         F: Future<Output = T>,
@@ -393,45 +390,23 @@ impl LocalExecutor {
     {
         let id = EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
 
-        let mut executors = SPAWNED_EXECUTORS.lock().unwrap();
-        (*executors).push(
-            Builder::new()
-                .name(format!("{}-{}", name, id).to_string())
-                .spawn(move || {
-                    let mut le = LocalExecutor {
-                        queues: ExecutorQueues::new(),
-                        parker: parking::Parker::new(),
-                        binding,
-                        id,
-                    };
-                    le.init().unwrap();
-                    le.run(async move {
-                        let task = Task::local(async move {
-                            fut.await;
-                        });
-                        task.await;
-                    })
+        Builder::new()
+            .name(format!("{}-{}", name, id).to_string())
+            .spawn(move || {
+                let mut le = LocalExecutor {
+                    queues: ExecutorQueues::new(),
+                    parker: parking::Parker::new(),
+                    binding,
+                    id,
+                };
+                le.init().unwrap();
+                le.run(async move {
+                    let task = Task::local(async move {
+                        fut.await;
+                    });
+                    task.await;
                 })
-                .unwrap(),
-        )
-    }
-
-    /// Wait for all executors called through spawn_new to return
-    ///
-    /// # Examples
-    /// use scipio::LocalExecutor;
-    ///
-    /// // executor is a single thread, but not bound to any particular CPU.
-    /// LocalExecutor::spawn_new("myname", None, async move {
-    ///     println!("hello");
-    /// });
-    ///
-    /// LocalExecutor::wait_on_executors();
-    pub fn wait_on_executors() {
-        let mut executors = SPAWNED_EXECUTORS.lock().unwrap();
-        for ex in std::mem::replace(&mut *executors, Vec::new()) {
-            ex.join().unwrap();
-        }
+            })
     }
 
     /// Returns a unique identifier for this Executor.

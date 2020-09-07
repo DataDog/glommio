@@ -40,8 +40,6 @@
 #[macro_use]
 extern crate nix;
 extern crate alloc;
-#[macro_use]
-extern crate lazy_static;
 
 use crate::parking::Reactor;
 use std::fmt::Debug;
