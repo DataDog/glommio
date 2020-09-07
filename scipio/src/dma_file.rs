@@ -285,6 +285,48 @@ impl DmaFile {
         Reactor::get().alloc_dma_buffer(size)
     }
 
+    /// Returns the system's preferred alignment for the file
+    async fn fetch_device_alignment(&self) -> io::Result<u64> {
+        use std::fs;
+        use std::path;
+
+        // dev major + minor gives enough information about te file to determine physical location
+        let stats = self.statx().await?;
+        let major = stats.stx_dev_major;
+        let minor = stats.stx_dev_minor;
+
+        // /sys/dev/block/major:minor is a symlink to the device in /sys/devices/
+        let dir_path = format!("/sys/dev/block/{}:{}", major, minor);
+        let mut dir = path::Path::new(dir_path.as_str()).to_path_buf();
+        dir = dir.parent().unwrap().join(std::fs::read_link(&dir)?);
+
+        // if the device directory is a partition (contains a file named "partition"),
+        // we navigate to its parent directory, the host device
+        let device = if dir.join("/partition").exists() {
+            let parent = dir.parent();
+            if parent.is_some() {
+                Ok(path::Path::new(parent.unwrap().to_str().unwrap()).to_path_buf())
+            } else {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            }
+        } else {
+            Ok(path::Path::new(dir.to_str().unwrap()).to_path_buf())
+        }?;
+
+        // read logical_block_size that contains the preferred alignment for the device
+        // and parse it into a u64
+        let logical_align_file_path = device.join("queue/logical_block_size");
+        let align_bytes = fs::read(logical_align_file_path)?;
+        let align_str = match std::str::from_utf8(align_bytes.as_ref()) {
+            Ok(v) => Ok(v.trim_end_matches('\n')),
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        };
+        match u64::from_str_radix(align_str?, 10) {
+            Ok(align) => Ok(align),
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
+    }
+
     /// Similar to create() in the standard library, but returns a DMA file
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
         // FIXME: because we use the poll ring, we really only support xfs and ext4 for this.
@@ -297,7 +339,20 @@ impl DmaFile {
         let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
 
         let mut f = enhance!(res, "Creating", Some(&path), None)?;
+
         f.o_direct_alignment = 4096;
+        if let PollableStatus::Pollable = f.pollable {
+            match f.fetch_device_alignment().await {
+                Ok(align) => f.o_direct_alignment = align,
+                Err(e) => {
+                    eprintln!(
+                        "failed to fetch alignment for file, defaulting to {}: {}",
+                        f.o_direct_alignment, e
+                    );
+                }
+            }
+        }
+
         Ok(f)
     }
 
@@ -310,7 +365,19 @@ impl DmaFile {
         let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
 
         let mut f = enhance!(res, "Opening", Some(&path), None)?;
+
         f.o_direct_alignment = 512;
+        if let PollableStatus::Pollable = f.pollable {
+            match f.fetch_device_alignment().await {
+                Ok(align) => f.o_direct_alignment = align,
+                Err(e) => {
+                    eprintln!(
+                        "failed to fetch alignment for file, defaulting to {}: {}",
+                        f.o_direct_alignment, e
+                    );
+                }
+            }
+        }
         Ok(f)
     }
 
