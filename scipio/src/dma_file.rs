@@ -62,10 +62,23 @@ macro_rules! bad_buffer {
     }};
 }
 
+#[inline(always)]
+/// Align value `v` up where align = 2^n.
+///
+/// align_up = align_down(v + (align-1))
+///     v % align == 0 => v
+///     v % align != 0 => (1+floor(v/align))*align
 fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
 }
 
+#[inline(always)]
+/// Align value `v` down where align = 2^n.
+///
+/// v = 0b111, align     = 0b010
+///     0b111, align - 1 = 0b001
+///     0b111,  !( ... ) = 0b110
+///     0b111 & !( ... ) = 0b110
 fn align_down(v: u64, align: u64) -> u64 {
     v & !(align - 1)
 }
