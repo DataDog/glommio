@@ -17,7 +17,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{Source, SourceType};
+use crate::sys::{PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 type DmaBuffer = PosixDmaBuffer;
@@ -126,7 +126,11 @@ where
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
                 sqe.prep_read(op.fd, buf.as_mut_bytes(), pos);
                 let source = &mut *(op.user_data as *mut Source);
-                source.source_type = SourceType::DmaRead(Some(buf));
+                if let SourceType::DmaRead(pollable, _) = &source.source_type {
+                    source.source_type = SourceType::DmaRead(*pollable, Some(buf));
+                } else {
+                    panic!("Expected DmaRead source type");
+                }
             }
 
             UringOpDescriptor::WriteFixed(ptr, len, pos, _) => {
@@ -489,7 +493,15 @@ macro_rules! queue_request_into_ring {
 
 macro_rules! queue_storage_io_request {
     ($self:expr, $source:ident, $op:expr) => {{
-        queue_request_into_ring!($self.poll_ring, $source, $op)
+        let pollable = match $source.source_type {
+            SourceType::DmaRead(p, _) => p,
+            SourceType::DmaWrite(p) => p,
+            _ => panic!("SourceType should declare if it supports poll operations"),
+        };
+        match pollable {
+            PollableStatus::Pollable => queue_request_into_ring!($self.poll_ring, $source, $op),
+            PollableStatus::NonPollable => queue_request_into_ring!($self.main_ring, $source, $op),
+        }
     }};
 }
 
