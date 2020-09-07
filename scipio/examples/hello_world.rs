@@ -5,6 +5,7 @@
 //
 use futures::future::join_all;
 use scipio::{Local, LocalExecutor};
+use std::io::Result;
 
 async fn hello() {
     let mut tasks = vec![];
@@ -18,16 +19,16 @@ async fn hello() {
     join_all(tasks).await;
 }
 
-fn main() {
+fn main() -> Result<()> {
     // There are two ways to create an executor, demonstrated in this example.
     //
     // We can create it in the current thread, and run it separately later...
-    let ex = LocalExecutor::new(Some(0)).unwrap();
+    let ex = LocalExecutor::new(Some(0))?;
 
     // Or we can spawn a new thread with an executor inside.
-    LocalExecutor::spawn_new("hello", Some(1), async move {
+    let handle = LocalExecutor::spawn_executor("hello", Some(1), async move {
         hello().await;
-    });
+    })?;
 
     // If you create the executor manually, you have to run it like so.
     //
@@ -36,8 +37,8 @@ fn main() {
         hello().await;
     });
 
-    // This waits for all executors called through spawn_new to return.
-    // Note that the executor created through new() is not waited here.
-    // But because run() is synchronous, that is not needed.
-    LocalExecutor::wait_on_executors();
+    // The newly spawned executor runs on a thread, so we need to join on
+    // its handle so we can wait for it to finish
+    handle.join().unwrap();
+    Ok(())
 }
