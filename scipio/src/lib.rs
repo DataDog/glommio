@@ -150,7 +150,7 @@ pub use crate::timer::Timer;
 /// task.
 ///
 /// However for associated functions without a self parameter, like local() and
-/// local_into(), the type is always () and Rust is not able to ellide.
+/// local_into(), the type is always () and Rust is not able to elide.
 ///
 /// Writing Task::<()>::function() works, but it is not very ergonomic.
 pub type Local = Task<()>;
