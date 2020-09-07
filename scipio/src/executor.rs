@@ -378,15 +378,14 @@ impl LocalExecutor {
     /// handle.join().unwrap();
     /// ```
     #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
-    pub fn spawn_executor<F, T>(
+    pub fn spawn_executor<G, F, T>(
         name: &'static str,
         binding: Option<usize>,
-        fut: F,
+        fut_gen: G,
     ) -> io::Result<JoinHandle<()>>
     where
-        F: Send + 'static,
-        F: Future<Output = T>,
-        T: Send + 'static,
+        G: FnOnce() -> F + std::marker::Send + 'static,
+        F: Future<Output = T> + 'static,
     {
         let id = EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
 
@@ -402,7 +401,7 @@ impl LocalExecutor {
                 le.init().unwrap();
                 le.run(async move {
                     let task = Task::local(async move {
-                        fut.await;
+                        fut_gen().await;
                     });
                     task.await;
                 })
