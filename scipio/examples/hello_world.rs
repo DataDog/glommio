@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     let ex = LocalExecutor::new(Some(0))?;
 
     // Or we can spawn a new thread with an executor inside.
-    let handle = LocalExecutor::spawn_executor("hello", Some(1), async move {
+    let handle = LocalExecutor::spawn_executor("hello", Some(1), || async move {
         hello().await;
     })?;
 
