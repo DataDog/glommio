@@ -290,12 +290,13 @@ impl DmaFile {
         use std::fs;
         use std::path;
 
-        // dev major + minor gives enough information about te file to determine physical location
+        // dev major + minor is enough to determine physical location
         let stats = self.statx().await?;
         let major = stats.stx_dev_major;
         let minor = stats.stx_dev_minor;
 
         // /sys/dev/block/major:minor is a symlink to the device in /sys/devices/
+        // if the file doesn't exist, we are opening a tempfs-located file without O_DIRECT
         let dir_path = format!("/sys/dev/block/{}:{}", major, minor);
         let mut dir = path::Path::new(dir_path.as_str()).to_path_buf();
         dir = dir.parent().unwrap().join(std::fs::read_link(&dir)?);
@@ -303,17 +304,12 @@ impl DmaFile {
         // if the device directory is a partition (contains a file named "partition"),
         // we navigate to its parent directory, the host device
         let device = if dir.join("/partition").exists() {
-            let parent = dir.parent();
-            if parent.is_some() {
-                Ok(path::Path::new(parent.unwrap().to_str().unwrap()).to_path_buf())
-            } else {
-                Err(io::Error::from(io::ErrorKind::NotFound))
-            }
+            path::Path::new(dir.parent().unwrap().to_str().unwrap()).to_path_buf()
         } else {
-            Ok(path::Path::new(dir.to_str().unwrap()).to_path_buf())
-        }?;
+            dir
+        };
 
-        // read logical_block_size that contains the preferred alignment for the device
+        // read logical_block_size containing the preferred alignment for the device
         // and parse it into a u64
         let logical_align_file_path = device.join("queue/logical_block_size");
         let align_bytes = fs::read(logical_align_file_path)?;
