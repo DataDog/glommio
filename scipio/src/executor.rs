@@ -94,7 +94,7 @@ impl fmt::Display for QueueStillActiveError {
 
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 /// An opaque handler indicating in which queue a group of tasks will execute.
 /// Tasks in the same group will execute in FIFO order but no guarantee is made
 /// about ordering on different task queues.
@@ -138,6 +138,7 @@ struct TaskQueue {
     vruntime: u64,
     io_requirements: IoRequirements,
     name: &'static str,
+    index: usize, // so we can easily produce a handle
 }
 
 // Impl a custom order so we use a min-heap
@@ -163,6 +164,7 @@ impl Eq for TaskQueue {}
 
 impl TaskQueue {
     fn new<F>(
+        index: usize,
         name: &'static str,
         shares: usize,
         ioreq: IoRequirements,
@@ -180,6 +182,7 @@ impl TaskQueue {
             vruntime: 0,
             io_requirements: ioreq,
             name,
+            index,
         };
         tq.set_shares(shares);
         Rc::new(RefCell::new(tq))
@@ -323,7 +326,7 @@ impl LocalExecutor {
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
             0,
-            TaskQueue::new("default", 1000, io_requirements, move || {
+            TaskQueue::new(0, "default", 1000, io_requirements, move || {
                 let mut queues = queues.borrow_mut();
                 queues.maybe_activate(index);
             }),
@@ -453,7 +456,7 @@ impl LocalExecutor {
         };
 
         let io_requirements = IoRequirements::new(latency, index);
-        let tq = TaskQueue::new(name, shares, io_requirements, move || {
+        let tq = TaskQueue::new(index, name, shares, io_requirements, move || {
             let mut queues = queues.borrow_mut();
             queues.maybe_activate(index);
         });
@@ -498,6 +501,19 @@ impl LocalExecutor {
     fn get_executor(&self, handle: &TaskQueueHandle) -> Option<Rc<multitask::LocalExecutor>> {
         self.get_queue(handle)
             .and_then(|x| Some(x.borrow().ex.clone()))
+    }
+
+    fn current_task_queue(&self) -> TaskQueueHandle {
+        TaskQueueHandle {
+            index: self
+                .queues
+                .borrow()
+                .active_executing
+                .as_ref()
+                .unwrap()
+                .borrow()
+                .index,
+        }
     }
 
     /// Sets the number of shares used for a particular TaskQueue
@@ -857,6 +873,36 @@ impl<T> Task<T> {
         }
     }
 
+    /// Returns the [`TaskQueueHandle`] that represents the TaskQueue currently running.
+    /// This can be passed directly into [`local_into`]. This must be run from a task that
+    /// was generated through [`local`] or [`local_into`]
+    ///
+    /// # Examples
+    /// ```
+    /// use scipio::{LocalExecutor, Local, Latency};
+    ///
+    /// let ex = LocalExecutor::spawn_executor("example", None, || async move {
+    ///     let original_tq = Local::current_task_queue();
+    ///     let new_tq = Local::create_task_queue(1000, Latency::NotImportant, "test");
+    ///
+    ///     let task = Local::local_into(async move {
+    ///         Local::local_into(async move {
+    ///             assert_eq!(Local::current_task_queue(), original_tq);
+    ///         }, original_tq).unwrap();
+    ///     }, new_tq).unwrap();
+    ///     task.await;
+    /// }).unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    pub fn current_task_queue() -> TaskQueueHandle {
+        if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| local_ex.current_task_queue())
+        } else {
+            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
+        }
+    }
+
     /// Cancels the task and waits for it to stop running.
     ///
     /// Returns the task's output if it was completed just before it got canceled, or [`None`] if
@@ -1043,6 +1089,39 @@ fn task_with_latency_requirements() {
 
         join!(nolat, lat);
     });
+}
+
+#[test]
+fn current_task_queue_matches() {
+    use crate::Local;
+    use futures::join;
+
+    let local_ex = LocalExecutor::new(None).unwrap();
+    local_ex.run(async {
+        let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test1");
+        let tq2 = Local::create_task_queue(1, Latency::NotImportant, "test2");
+
+        let id1 = tq1.index;
+        let id2 = tq2.index;
+        let j0 = Local::local(async {
+            assert_eq!(Local::current_task_queue().index, 0);
+        });
+        let j1 = Local::local_into(
+            async move {
+                assert_eq!(Local::current_task_queue().index, id1);
+            },
+            tq1,
+        )
+        .unwrap();
+        let j2 = Local::local_into(
+            async move {
+                assert_eq!(Local::current_task_queue().index, id2);
+            },
+            tq2,
+        )
+        .unwrap();
+        join!(j0, j1, j2);
+    })
 }
 
 #[test]
