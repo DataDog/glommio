@@ -1058,25 +1058,23 @@ fn task_optimized_for_throughput() {
         let first_started = Rc::new(RefCell::new(false));
         let second_status = Rc::new(RefCell::new(false));
 
-        let rust_capture_sucks = move || (first_started.clone(), second_status.clone());
-        let clone_sucks = rust_capture_sucks.clone();
-
         let first = local_ex
             .spawn_into(
-                async move {
-                    let (first_started, second_status) = clone_sucks();
-                    *(first_started.borrow_mut()) = true;
+                enclose! { (first_started, second_status)
+                    async move {
+                        *(first_started.borrow_mut()) = true;
 
-                    let start = Instant::now();
-                    // Now busy loop and make sure that we yield when we have too.
-                    loop {
-                        if *(second_status.borrow()) {
-                            panic!("I was preempted but should not have been");
+                        let start = Instant::now();
+                        // Now busy loop and make sure that we yield when we have too.
+                        loop {
+                            if *(second_status.borrow()) {
+                                panic!("I was preempted but should not have been");
+                            }
+                            if start.elapsed().as_millis() > 200 {
+                                break;
+                            }
+                            Task::<()>::yield_if_needed().await;
                         }
-                        if start.elapsed().as_millis() > 200 {
-                            break;
-                        }
-                        Task::<()>::yield_if_needed().await;
                     }
                 },
                 tq1,
@@ -1085,18 +1083,19 @@ fn task_optimized_for_throughput() {
 
         let second = local_ex
             .spawn_into(
-                async move {
-                    let (first_started, second_status) = rust_capture_sucks();
-                    // In case we are executed first, yield to the the other task
-                    loop {
-                        if *(first_started.borrow()) == false {
-                            Task::<()>::later().await;
-                        } else {
-                            break;
+                (|f: Rc<RefCell<bool>>, s: Rc<RefCell<bool>>| {
+                    async move {
+                        // In case we are executed first, yield to the the other task
+                        loop {
+                            if *(f.borrow()) == false {
+                                Task::<()>::later().await;
+                            } else {
+                                break;
+                            }
                         }
+                        *(s.borrow_mut()) = true;
                     }
-                    *(second_status.borrow_mut()) = true;
-                },
+                })(first_started.clone(), second_status.clone()),
                 tq2,
             )
             .unwrap();

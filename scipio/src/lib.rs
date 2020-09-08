@@ -49,7 +49,6 @@ pub mod parking;
 mod sys;
 pub mod task;
 
-mod executor;
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
@@ -125,9 +124,20 @@ macro_rules! make_shared_var_mut {
     }
 }
 
+#[cfg(test)]
+macro_rules! enclose {
+    ( ($( $x:ident ),*) $y:expr ) => {
+        {
+            $(let $x = $x.clone();)*
+            $y
+        }
+    };
+}
+
 mod async_collections;
 mod dma_file;
 mod error;
+mod executor;
 mod local_semaphore;
 mod multitask;
 mod networking;
