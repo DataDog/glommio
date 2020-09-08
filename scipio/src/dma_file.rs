@@ -13,7 +13,7 @@ use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 
-macro_rules! enhance {
+macro_rules! enhanced_try {
     ($expr:expr, $op:expr, $path:expr, $fd:expr) => {{
         match $expr {
             Ok(val) => Ok(val),
@@ -28,7 +28,7 @@ macro_rules! enhance {
         }
     }};
     ($expr:expr, $op:expr, $obj:expr) => {{
-        enhance!(
+        enhanced_try!(
             $expr,
             $op,
             $obj.path.as_ref().and_then(|x| Some(x.as_path())),
@@ -89,7 +89,7 @@ impl Directory {
     /// The new object has a different file descriptor and has to be
     /// closed separately.
     pub fn try_clone(&self) -> Result<Directory> {
-        let fd = enhance!(
+        let fd = enhanced_try!(
             sys::duplicate_file(self.file.as_raw_fd()),
             "Cloning directory",
             self
@@ -104,7 +104,7 @@ impl Directory {
     pub fn sync_open<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
         let flags = libc::O_CLOEXEC | libc::O_DIRECTORY;
-        let fd = enhance!(
+        let fd = enhanced_try!(
             sys::sync_open(&path, flags, 0o755),
             "Synchronously opening directory",
             Some(&path),
@@ -121,7 +121,7 @@ impl Directory {
         let path = path.as_ref().to_owned();
         let flags = libc::O_DIRECTORY | libc::O_CLOEXEC;
         let source = Reactor::get().open_at(-1, &path, flags, 0o755);
-        let fd = enhance!(
+        let fd = enhanced_try!(
             source.collect_rw().await,
             "Opening directory",
             Some(&path),
@@ -136,7 +136,7 @@ impl Directory {
     /// Similar to create() in the standard library, but returns a DMA file
     pub fn sync_create<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
-        enhance!(
+        enhanced_try!(
             match std::fs::create_dir(&path) {
                 Ok(_) => Ok(()),
                 Err(x) => {
@@ -156,7 +156,7 @@ impl Directory {
     /// Returns an iterator to the contents of this directory
     pub fn sync_read_dir(&self) -> Result<std::fs::ReadDir> {
         let path = path_required!(self, "read directory")?;
-        enhance!(std::fs::read_dir(path), "Reading a directory", self)
+        enhanced_try!(std::fs::read_dir(path), "Reading a directory", self)
     }
 
     /// Issues fdatasync into the underlying file.
@@ -296,7 +296,7 @@ impl DmaFile {
             libc::O_DIRECT | libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
         let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
 
-        let mut f = enhance!(res, "Creating", Some(&path), None)?;
+        let mut f = enhanced_try!(res, "Creating", Some(&path), None)?;
         f.o_direct_alignment = 4096;
         Ok(f)
     }
@@ -309,7 +309,7 @@ impl DmaFile {
         let flags = libc::O_DIRECT | libc::O_CLOEXEC | libc::O_RDONLY;
         let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
 
-        let mut f = enhance!(res, "Opening", Some(&path), None)?;
+        let mut f = enhanced_try!(res, "Opening", Some(&path), None)?;
         f.o_direct_alignment = 512;
         Ok(f)
     }
@@ -320,7 +320,7 @@ impl DmaFile {
     /// In most platforms that means 512 bytes.
     pub async fn write_dma(&self, buf: &DmaBuffer, pos: u64) -> Result<usize> {
         let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
-        enhance!(source.collect_rw().await, "Writing", self)
+        enhanced_try!(source.collect_rw().await, "Writing", self)
     }
 
     /// Reads into buffer in buf from a specific position in the file.
@@ -329,7 +329,7 @@ impl DmaFile {
     /// In most platforms that means 512 bytes.
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
-        let read_size = enhance!(source.collect_rw().await, "Reading", self)?;
+        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
         let stype = source.as_mut().extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
@@ -356,7 +356,7 @@ impl DmaFile {
         let mut source =
             Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
-        let read_size = enhance!(source.collect_rw().await, "Reading", self)?;
+        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
         let stype = source.as_mut().extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
@@ -373,7 +373,7 @@ impl DmaFile {
     /// Issues fdatasync into the underlying file.
     pub async fn fdatasync(&self) -> Result<()> {
         let source = Reactor::get().fdatasync(self.as_raw_fd());
-        enhance!(source.collect_rw().await, "Syncing", self)?;
+        enhanced_try!(source.collect_rw().await, "Syncing", self)?;
         Ok(())
     }
 
@@ -381,7 +381,7 @@ impl DmaFile {
     pub async fn pre_allocate(&self, size: u64) -> Result<()> {
         let flags = libc::FALLOC_FL_ZERO_RANGE;
         let source = Reactor::get().fallocate(self.as_raw_fd(), 0, size, flags);
-        enhance!(source.collect_rw().await, "Pre-allocate space", self)?;
+        enhanced_try!(source.collect_rw().await, "Pre-allocate space", self)?;
         Ok(())
     }
 
@@ -403,7 +403,7 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn truncate(&self, size: u64) -> Result<()> {
-        enhance!(
+        enhanced_try!(
             sys::truncate_file(self.as_raw_fd(), size),
             "Truncating",
             self
@@ -417,7 +417,7 @@ impl DmaFile {
         let new_path = new_path.as_ref().to_owned();
         let old_path = path_required!(self, "rename")?;
 
-        enhance!(sys::rename_file(&old_path, &new_path), "Renaming", self)?;
+        enhanced_try!(sys::rename_file(&old_path, &new_path), "Renaming", self)?;
         self.path = Some(new_path);
         Ok(())
     }
@@ -426,7 +426,7 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
-        enhance!(
+        enhanced_try!(
             sys::remove_file(path.as_ref()),
             "Removing",
             Some(path.as_ref()),
@@ -439,7 +439,7 @@ impl DmaFile {
         let path = path_required!(self, "stat")?;
 
         let mut source = Reactor::get().statx(self.as_raw_fd(), path);
-        enhance!(source.collect_rw().await, "getting file metadata", self)?;
+        enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
         let stype = source.as_mut().extract_source_type();
         let stat_buf = match stype {
             SourceType::Statx(_, buf) => buf,
@@ -457,7 +457,7 @@ impl DmaFile {
     /// Closes this DMA file.
     pub async fn close(&mut self) -> Result<()> {
         let source = Reactor::get().close(self.as_raw_fd());
-        enhance!(source.collect_rw().await, "Closing", self)?;
+        enhanced_try!(source.collect_rw().await, "Closing", self)?;
         self.file = unsafe { std::fs::File::from_raw_fd(-1) };
         Ok(())
     }
