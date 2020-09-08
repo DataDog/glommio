@@ -44,7 +44,7 @@ use scoped_tls::scoped_thread_local;
 
 use crate::multitask;
 use crate::parking;
-use crate::task::waker_fn::waker_fn;
+use crate::task::{self, waker_fn::waker_fn};
 use crate::Reactor;
 use crate::{IoRequirements, Latency};
 
@@ -856,8 +856,8 @@ impl<T> Task<T> {
     ///
     /// ex.run(async { Timer::new(std::time::Duration::from_micros(100)).await; });
     /// ```
-    pub fn detach(self) {
-        self.0.detach();
+    pub fn detach(self) -> task::JoinHandle<T, ()> {
+        self.0.detach()
     }
 
     /// Creates a new task queue, with a given latency hint and the provided name

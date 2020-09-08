@@ -69,8 +69,8 @@ impl<T> Task<T> {
     /// })
     /// .detach();
     /// ```
-    pub(crate) fn detach(mut self) {
-        self.0.take().unwrap();
+    pub(crate) fn detach(mut self) -> JoinHandle<T, ()> {
+        self.0.take().unwrap()
     }
 
     /// Cancels the task and waits for it to stop running.
