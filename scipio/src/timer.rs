@@ -447,152 +447,145 @@ impl<T: 'static> TimerAction<T> {
     }
 }
 
-#[test]
-fn basic_timer_works() {
-    test_executor!(async move {
-        let now = Instant::now();
-        Timer::new(Duration::from_millis(100)).await;
-        assert!(now.elapsed().as_millis() >= 100)
-    });
-}
-
-#[test]
-fn basic_timer_action_instant_works() {
+#[cfg(test)]
+mod test {
+    use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
-    make_shared_var_mut!(0, exec1, exec2);
 
-    test_executor!(async move {
-        let when = Instant::now()
-            .checked_add(Duration::from_millis(50))
-            .unwrap();
-        let _ = TimerAction::once_at(when, async move {
-            *(exec1.borrow_mut()) = 1;
+    #[test]
+    fn basic_timer_works() {
+        test_executor!(async move {
+            let now = Instant::now();
+            Timer::new(Duration::from_millis(100)).await;
+            assert!(now.elapsed().as_millis() >= 100)
         });
+    }
 
-        Timer::new(Duration::from_millis(100)).await;
-        assert_eq!(*(exec2.borrow()), 1);
-    });
-}
+    #[test]
+    fn basic_timer_action_instant_works() {
+        make_shared_var_mut!(0, exec1, exec2);
 
-#[test]
-fn basic_timer_action_instant_past_works() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    make_shared_var_mut!(0, exec1, exec2);
+        test_executor!(async move {
+            let when = Instant::now()
+                .checked_add(Duration::from_millis(50))
+                .unwrap();
+            let _ = TimerAction::once_at(when, async move {
+                *(exec1.borrow_mut()) = 1;
+            });
 
-    test_executor!(async move {
-        let when = Instant::now()
-            .checked_sub(Duration::from_millis(50))
-            .unwrap();
-        let _ = TimerAction::once_at(when, async move {
-            *(exec1.borrow_mut()) = 1;
+            Timer::new(Duration::from_millis(100)).await;
+            assert_eq!(*(exec2.borrow()), 1);
         });
+    }
 
-        Task::<()>::later().await;
-        assert_eq!(*(exec2.borrow()), 1);
-    });
-}
+    #[test]
+    fn basic_timer_action_instant_past_works() {
+        make_shared_var_mut!(0, exec1, exec2);
 
-#[test]
-fn basic_timer_action_works() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    make_shared_var_mut!(0, exec1, exec2);
+        test_executor!(async move {
+            let when = Instant::now()
+                .checked_sub(Duration::from_millis(50))
+                .unwrap();
+            let _ = TimerAction::once_at(when, async move {
+                *(exec1.borrow_mut()) = 1;
+            });
 
-    test_executor!(async move {
-        let _ = TimerAction::once_in(Duration::from_millis(50), async move {
-            *(exec1.borrow_mut()) = 1;
+            Task::<()>::later().await;
+            assert_eq!(*(exec2.borrow()), 1);
         });
+    }
 
-        Timer::new(Duration::from_millis(100)).await;
-        assert_eq!(*(exec2.borrow()), 1);
-    });
-}
+    #[test]
+    fn basic_timer_action_works() {
+        make_shared_var_mut!(0, exec1, exec2);
 
-#[test]
-fn basic_timer_action_cancel_works() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    make_shared_var_mut!(0, exec1, exec2);
+        test_executor!(async move {
+            let _ = TimerAction::once_in(Duration::from_millis(50), async move {
+                *(exec1.borrow_mut()) = 1;
+            });
 
-    test_executor!(async move {
-        let action = TimerAction::once_in(Duration::from_millis(50), async move {
-            *(exec1.borrow_mut()) = 1;
+            Timer::new(Duration::from_millis(100)).await;
+            assert_eq!(*(exec2.borrow()), 1);
         });
-        // Force this to go into the task queue to make the test more
-        // realistic
-        Task::<()>::later().await;
-        action.cancel().await;
+    }
 
-        Timer::new(Duration::from_millis(100)).await;
-        assert_eq!(*(exec2.borrow()), 0);
-    });
-}
+    #[test]
+    fn basic_timer_action_cancel_works() {
+        make_shared_var_mut!(0, exec1, exec2);
 
-#[test]
-fn basic_timer_action_cancel_fails_if_fired() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    make_shared_var_mut!(0, exec1, exec2);
+        test_executor!(async move {
+            let action = TimerAction::once_in(Duration::from_millis(50), async move {
+                *(exec1.borrow_mut()) = 1;
+            });
+            // Force this to go into the task queue to make the test more
+            // realistic
+            Task::<()>::later().await;
+            action.cancel().await;
 
-    test_executor!(async move {
-        let action = TimerAction::once_in(Duration::from_millis(1), async move {
-            *(exec1.borrow_mut()) = 1;
+            Timer::new(Duration::from_millis(100)).await;
+            assert_eq!(*(exec2.borrow()), 0);
         });
-        // Force this to go into the task queue to make the test more
-        // realistic
-        Timer::new(Duration::from_millis(10)).await;
-        action.cancel().await;
+    }
 
-        Timer::new(Duration::from_millis(90)).await;
-        // too late, fired
-        assert_eq!(*(exec2.borrow()), 1);
-    });
-}
+    #[test]
+    fn basic_timer_action_cancel_fails_if_fired() {
+        make_shared_var_mut!(0, exec1, exec2);
 
-#[test]
-fn basic_timer_action_repeat_works() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    make_shared_var_mut!(0, exec1, exec2);
+        test_executor!(async move {
+            let action = TimerAction::once_in(Duration::from_millis(1), async move {
+                *(exec1.borrow_mut()) = 1;
+            });
+            // Force this to go into the task queue to make the test more
+            // realistic
+            Timer::new(Duration::from_millis(10)).await;
+            action.cancel().await;
 
-    test_executor!(async move {
-        let _ = TimerAction::repeat(move || {
-            let ex = exec1.clone();
-            async move {
-                *(ex.borrow_mut()) += 1;
-                if (*ex.borrow()) == 10 {
-                    return None;
-                } else {
-                    return Some(Duration::from_millis(5));
+            Timer::new(Duration::from_millis(90)).await;
+            // too late, fired
+            assert_eq!(*(exec2.borrow()), 1);
+        });
+    }
+
+    #[test]
+    fn basic_timer_action_repeat_works() {
+        make_shared_var_mut!(0, exec1, exec2);
+
+        test_executor!(async move {
+            let _ = TimerAction::repeat(move || {
+                let ex = exec1.clone();
+                async move {
+                    *(ex.borrow_mut()) += 1;
+                    if (*ex.borrow()) == 10 {
+                        return None;
+                    } else {
+                        return Some(Duration::from_millis(5));
+                    }
                 }
-            }
+            });
+            Timer::new(Duration::from_millis(100)).await;
+            let value = *(exec2.borrow());
+            assert!(value == 10);
         });
-        Timer::new(Duration::from_millis(100)).await;
-        let value = *(exec2.borrow());
-        assert!(value == 10);
-    });
-}
+    }
 
-#[test]
-fn basic_timer_action_cancellation_works() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    make_shared_var_mut!(0, exec1, exec2);
+    #[test]
+    fn basic_timer_action_cancellation_works() {
+        make_shared_var_mut!(0, exec1, exec2);
 
-    test_executor!(async move {
-        let action = TimerAction::repeat(move || {
-            let ex = exec1.clone();
-            async move {
-                *(ex.borrow_mut()) += 1;
-                Some(Duration::from_millis(10))
-            }
+        test_executor!(async move {
+            let action = TimerAction::repeat(move || {
+                let ex = exec1.clone();
+                async move {
+                    *(ex.borrow_mut()) += 1;
+                    Some(Duration::from_millis(10))
+                }
+            });
+            Timer::new(Duration::from_millis(50)).await;
+            action.cancel().await;
+            let old_value = *(exec2.borrow());
+            Timer::new(Duration::from_millis(50)).await;
+            assert_eq!(*(exec2.borrow()), old_value);
         });
-        Timer::new(Duration::from_millis(50)).await;
-        action.cancel().await;
-        let old_value = *(exec2.borrow());
-        Timer::new(Duration::from_millis(50)).await;
-        assert_eq!(*(exec2.borrow()), old_value);
-    });
+    }
 }
