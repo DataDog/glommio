@@ -217,6 +217,7 @@ impl Semaphore {
     ///
     /// # Examples
     ///
+    /// ```
     /// use scipio::{LocalExecutor, Semaphore};
     ///
     /// let sem = Semaphore::new(1);
@@ -247,6 +248,7 @@ impl Semaphore {
     ///
     /// # Examples
     ///
+    /// ```
     /// use scipio::{LocalExecutor, Semaphore};
     ///
     /// let sem = Semaphore::new(0);
