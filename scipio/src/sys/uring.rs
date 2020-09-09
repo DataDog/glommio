@@ -20,6 +20,8 @@ use crate::sys::posix_buffers::PosixDmaBuffer;
 use crate::sys::{PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
+use uring_sys::IoRingOp;
+
 type DmaBuffer = PosixDmaBuffer;
 
 pub(crate) fn add_flag(fd: RawFd, flag: libc::c_int) -> io::Result<()> {
@@ -52,6 +54,60 @@ struct UringDescriptor {
     fd: RawFd,
     user_data: u64,
     args: UringOpDescriptor,
+}
+
+pub fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
+    unsafe {
+        let probe = uring_sys::io_uring_get_probe();
+        if probe.is_null() {
+            panic!("Failed to register a probe. The most likely reason is that your kernel witnessed Romulus killing Remus (too old!!)");
+        }
+
+        let mut ret = true;
+        for op in ops {
+            let opint = *{ op as *const uring_sys::IoRingOp as *const libc::c_int };
+            let sup = uring_sys::io_uring_opcode_supported(probe, opint) > 0;
+            ret &= sup;
+            if !sup {
+                println!("Yo kernel is so old it was with Hannibal when he crossed the Alps! Missing {:?}", op);
+            }
+        }
+        uring_sys::io_uring_free_probe(probe);
+        if !ret {
+            eprintln!("Your kernel is older than Caesar. Bye");
+            std::process::exit(1);
+        }
+        ret
+    }
+}
+
+static SCIPIO_URING_OPS: &[IoRingOp] = &[
+    IoRingOp::IORING_OP_NOP,
+    IoRingOp::IORING_OP_READV,
+    IoRingOp::IORING_OP_WRITEV,
+    IoRingOp::IORING_OP_FSYNC,
+    IoRingOp::IORING_OP_READ_FIXED,
+    IoRingOp::IORING_OP_WRITE_FIXED,
+    IoRingOp::IORING_OP_POLL_ADD,
+    IoRingOp::IORING_OP_POLL_REMOVE,
+    IoRingOp::IORING_OP_SENDMSG,
+    IoRingOp::IORING_OP_RECVMSG,
+    IoRingOp::IORING_OP_TIMEOUT,
+    IoRingOp::IORING_OP_TIMEOUT_REMOVE,
+    IoRingOp::IORING_OP_ACCEPT,
+    IoRingOp::IORING_OP_CONNECT,
+    IoRingOp::IORING_OP_FALLOCATE,
+    IoRingOp::IORING_OP_OPENAT,
+    IoRingOp::IORING_OP_CLOSE,
+    IoRingOp::IORING_OP_STATX,
+    IoRingOp::IORING_OP_READ,
+    IoRingOp::IORING_OP_WRITE,
+    IoRingOp::IORING_OP_SEND,
+    IoRingOp::IORING_OP_RECV,
+];
+
+lazy_static! {
+    static ref IO_URING_RECENT_ENOUGH: bool = check_supported_operations(SCIPIO_URING_OPS);
 }
 
 fn fill_sqe<F>(sqe: &mut iou::SubmissionQueueEvent<'_>, op: &UringDescriptor, buffer_allocation: F)
@@ -263,6 +319,7 @@ struct SleepableRing {
 
 impl SleepableRing {
     fn new(size: usize, name: &'static str) -> io::Result<Self> {
+        assert_eq!(*IO_URING_RECENT_ENOUGH, true);
         Ok(SleepableRing {
             //     ring: iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?,
             ring: iou::IoUring::new(size as _)?,

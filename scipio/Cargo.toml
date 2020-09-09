@@ -18,8 +18,8 @@ concurrent-queue = "1.1.2"
 futures-lite = "0.1.9"
 libc = "0.2.73"
 socket2 = { version = "0.3.12", features = ["pair", "unix"] }
-iou = { git = "https://github.com/glommer/iou", tag = "poll-ring-works" }
-uring-sys = { git = "https://github.com/glommer/uring-sys", tag= "poll-ring-works" }
+iou = { git = "https://github.com/glommer/iou", tag = "scipio-2020-09-10" }
+uring-sys = { git = "https://github.com/glommer/uring-sys", tag = "scipio-2020-09-10" }
 nix = "0.16.0"
 aligned_alloc = "0.1"
 bitmaps = "2.1.0"
@@ -27,3 +27,4 @@ typenum = "1.12"
 scoped-tls = "1.0.0"
 futures = "0.3.5"
 rlimit = "0.3.0"
+lazy_static = "1.4.0"
