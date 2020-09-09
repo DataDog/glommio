@@ -23,7 +23,7 @@
 //!
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::CString;
 use std::fmt;
 use std::io;
@@ -34,11 +34,10 @@ use std::panic::{self, RefUnwindSafe, UnwindSafe};
 use std::path::Path;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
-use concurrent_queue::ConcurrentQueue;
 use futures_lite::*;
 
 use crate::sys;
@@ -108,6 +107,73 @@ impl Inner {
     }
 }
 
+struct Timers {
+    timer_id: u64,
+    timers_by_id: HashMap<u64, Instant>,
+
+    /// An ordered map of registered timers.
+    ///
+    /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used to
+    /// distinguish timers that fire at the same time. The `Waker` represents the task awaiting the
+    /// timer.
+    timers: BTreeMap<(Instant, u64), Waker>,
+}
+
+impl Timers {
+    fn new() -> Timers {
+        Timers {
+            timer_id: 0,
+            timers_by_id: HashMap::new(),
+            timers: BTreeMap::new(),
+        }
+    }
+
+    fn new_id(&mut self) -> u64 {
+        self.timer_id += 1;
+        self.timer_id
+    }
+
+    fn remove(&mut self, id: u64) {
+        if let Some(when) = self.timers_by_id.remove(&id) {
+            self.timers.remove(&(when, id));
+        }
+    }
+
+    fn insert(&mut self, id: u64, when: Instant, waker: Waker) {
+        if let Some(when) = self.timers_by_id.get_mut(&id) {
+            self.timers.remove(&(*when, id));
+        }
+        self.timers_by_id.insert(id, when);
+        self.timers.insert((when, id), waker);
+    }
+
+    fn process_timers(&mut self, wakers: &mut Vec<Waker>) -> Option<Duration> {
+        let now = Instant::now();
+
+        // Split timers into ready and pending timers.
+        let pending = self.timers.split_off(&(now, 0));
+        let ready = mem::replace(&mut self.timers, pending);
+
+        // Calculate the duration until the next event.
+        let dur = if ready.is_empty() {
+            // Duration until the next timer.
+            self.timers
+                .keys()
+                .next()
+                .map(|(when, _)| when.saturating_duration_since(now))
+        } else {
+            // Timers are about to fire right now.
+            Some(Duration::from_secs(0))
+        };
+        // Add wakers to the list.
+        for (_, waker) in ready {
+            wakers.push(waker);
+        }
+
+        dur
+    }
+}
+
 /// The reactor.
 ///
 /// Every async I/O handle and every timer is registered here. Invocations of
@@ -118,18 +184,7 @@ pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
     sys: sys::Reactor,
 
-    /// An ordered map of registered timers.
-    ///
-    /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used to
-    /// distinguish timers that fire at the same time. The `Waker` represents the task awaiting the
-    /// timer.
-    timers: RefCell<BTreeMap<(Instant, usize), Waker>>,
-
-    /// A queue of timer operations (insert and remove).
-    ///
-    /// When inserting or removing a timer, we don't process it immediately - we just push it into
-    /// this queue. Timers actually get processed when the queue fills up or the reactor is polled.
-    timer_ops: ConcurrentQueue<TimerOp>,
+    timers: RefCell<Timers>,
 
     /// I/O Requirements of the task currently executing.
     current_io_requirements: RefCell<IoRequirements>,
@@ -154,8 +209,7 @@ impl Reactor {
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
             sys,
-            timers: RefCell::new(BTreeMap::new()),
-            timer_ops: ConcurrentQueue::bounded(1000),
+            timers: RefCell::new(Timers::new()),
             current_io_requirements: RefCell::new(IoRequirements::default()),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
@@ -310,34 +364,24 @@ impl Reactor {
 
     /// Registers a timer in the reactor.
     ///
+    /// Returns the registered timer's ID.
+    pub(crate) fn register_timer(&self) -> u64 {
+        let mut timers = self.timers.borrow_mut();
+        timers.new_id()
+    }
+
+    /// Registers a timer in the reactor.
+    ///
     /// Returns the inserted timer's ID.
-    pub(crate) fn insert_timer(&self, when: Instant, waker: &Waker) -> usize {
-        // Generate a new timer ID.
-        static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
-        let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
-
-        // Push an insert operation.
-        while self
-            .timer_ops
-            .push(TimerOp::Insert(when, id, waker.clone()))
-            .is_err()
-        {
-            // If the queue is full, drain it and try again.
-            let mut timers = self.timers.borrow_mut();
-            self.process_timer_ops(&mut timers);
-        }
-
-        id
+    pub(crate) fn insert_timer(&self, id: u64, when: Instant, waker: &Waker) {
+        let mut timers = self.timers.borrow_mut();
+        timers.insert(id, when, waker.clone());
     }
 
     /// Deregisters a timer from the reactor.
-    pub(crate) fn remove_timer(&self, when: Instant, id: usize) {
-        // Push a remove operation.
-        while self.timer_ops.push(TimerOp::Remove(when, id)).is_err() {
-            // If the queue is full, drain it and try again.
-            let mut timers = self.timers.borrow_mut();
-            self.process_timer_ops(&mut timers);
-        }
+    pub(crate) fn remove_timer(&self, id: u64) {
+        let mut timers = self.timers.borrow_mut();
+        timers.remove(id);
     }
 
     /// Locks the reactor, potentially blocking if the lock is held by another thread.
@@ -351,52 +395,7 @@ impl Reactor {
     /// Returns the duration until the next timer before this method was called.
     fn process_timers(&self, wakers: &mut Vec<Waker>) -> Option<Duration> {
         let mut timers = self.timers.borrow_mut();
-        self.process_timer_ops(&mut timers);
-
-        let now = Instant::now();
-
-        // Split timers into ready and pending timers.
-        let pending = timers.split_off(&(now, 0));
-        let ready = mem::replace(&mut *timers, pending);
-
-        // Calculate the duration until the next event.
-        let dur = if ready.is_empty() {
-            // Duration until the next timer.
-            timers
-                .keys()
-                .next()
-                .map(|(when, _)| when.saturating_duration_since(now))
-        } else {
-            // Timers are about to fire right now.
-            Some(Duration::from_secs(0))
-        };
-
-        // Drop the lock before waking.
-        drop(timers);
-
-        // Add wakers to the list.
-        for (_, waker) in ready {
-            wakers.push(waker);
-        }
-
-        dur
-    }
-
-    /// Processes queued timer operations.
-    fn process_timer_ops(&self, timers: &mut BTreeMap<(Instant, usize), Waker>) {
-        // Process only as much as fits into the queue, or else this loop could in theory run
-        // forever.
-        for _ in 0..self.timer_ops.capacity().unwrap() {
-            match self.timer_ops.pop() {
-                Ok(TimerOp::Insert(when, id, waker)) => {
-                    timers.insert((when, id), waker);
-                }
-                Ok(TimerOp::Remove(when, id)) => {
-                    timers.remove(&(when, id));
-                }
-                Err(_) => break,
-            }
-        }
+        timers.process_timers(wakers)
     }
 }
 
@@ -443,12 +442,6 @@ impl ReactorLock<'_> {
 
         res
     }
-}
-
-/// A single timer operation.
-enum TimerOp {
-    Insert(Instant, usize, Waker),
-    Remove(Instant, usize),
 }
 
 // FIXME: source should be partitioned in two, write_dma and read_dma should not be allowed
