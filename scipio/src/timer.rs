@@ -43,7 +43,9 @@ pub struct Timer {
     /// This timer's ID and last waker that polled it.
     ///
     /// When this field is set to `None`, this timer is not registered in the reactor.
-    id_and_waker: Option<(usize, Waker)>,
+    id: u64,
+
+    waker: Option<Waker>,
 
     /// When this timer fires.
     when: Instant,
@@ -62,7 +64,18 @@ impl Timer {
     /// ```
     pub fn new(dur: Duration) -> Timer {
         Timer {
-            id_and_waker: None,
+            id: Reactor::get().register_timer(),
+            waker: None,
+            when: Instant::now() + dur,
+        }
+    }
+
+    // Useful in generating repeat timers that have a constant
+    // id. Not for external usage.
+    fn from_id(id: u64, dur: Duration) -> Timer {
+        Timer {
+            id,
+            waker: None,
             when: Instant::now() + dur,
         }
     }
@@ -83,26 +96,26 @@ impl Timer {
     /// t.reset(Duration::from_millis(100));
     /// ```
     pub fn reset(&mut self, dur: Duration) {
-        if let Some((id, _)) = self.id_and_waker.as_ref() {
+        if let Some(_) = self.waker.as_ref() {
             // Deregister the timer from the reactor.
-            Reactor::get().remove_timer(self.when, *id);
+            Reactor::get().remove_timer(self.id);
         }
 
         // Update the timeout.
         self.when = Instant::now() + dur;
 
-        if let Some((id, waker)) = self.id_and_waker.as_mut() {
+        if let Some(waker) = self.waker.as_mut() {
             // Re-register the timer with the new timeout.
-            *id = Reactor::get().insert_timer(self.when, waker);
+            Reactor::get().insert_timer(self.id, self.when, waker);
         }
     }
 }
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        if let Some((id, _)) = self.id_and_waker.take() {
+        if let Some(_) = self.waker.take() {
             // Deregister the timer from the reactor.
-            Reactor::get().remove_timer(self.when, id);
+            Reactor::get().remove_timer(self.id);
         }
     }
 }
@@ -111,30 +124,14 @@ impl Future for Timer {
     type Output = Instant;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Check if the timer has already fired.
         if Instant::now() >= self.when {
-            if let Some((id, _)) = self.id_and_waker.take() {
-                // Deregister the timer from the reactor.
-                Reactor::get().remove_timer(self.when, id);
-            }
+            // Deregister the timer from the reactor if needed
+            Reactor::get().remove_timer(self.id);
             Poll::Ready(self.when)
         } else {
-            match &self.id_and_waker {
-                None => {
-                    // Register the timer in the reactor.
-                    let id = Reactor::get().insert_timer(self.when, cx.waker());
-                    self.id_and_waker = Some((id, cx.waker().clone()));
-                }
-                Some((id, w)) if !w.will_wake(cx.waker()) => {
-                    // Deregister the timer from the reactor to remove the old waker.
-                    Reactor::get().remove_timer(self.when, *id);
-
-                    // Register the timer in the reactor with the new waker.
-                    let id = Reactor::get().insert_timer(self.when, cx.waker());
-                    self.id_and_waker = Some((id, cx.waker().clone()));
-                }
-                Some(_) => {}
-            }
+            // Register the timer in the reactor.
+            Reactor::get().insert_timer(self.id, self.when, cx.waker());
+            self.waker = Some(cx.waker().clone());
             Poll::Pending
         }
     }
@@ -153,6 +150,7 @@ impl Future for Timer {
 #[derive(Debug)]
 pub struct TimerAction<T> {
     handle: JoinHandle<T, ()>,
+    timer_id: u64,
 }
 
 // This is mainly a trick because we want the function we return in repeat()
@@ -183,12 +181,13 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
     ///         println!("Executed once");
     ///     });
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -211,13 +210,14 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction, Local, Latency};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let action = TimerAction::once_in_into(Duration::from_millis(100), async move {
     ///         println!("Executed once");
     ///     }, tq).unwrap();
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -227,9 +227,11 @@ impl<T: 'static> TimerAction<T> {
         action: impl Future<Output = T> + 'static,
         tq: TaskQueueHandle,
     ) -> Result<TimerAction<T>, QueueNotFoundError> {
+        let timer_id = Reactor::get().register_timer();
+
         let task = Task::local_into(
             async move {
-                Timer::new(when).await;
+                Timer::from_id(timer_id, when).await;
                 action.await
             },
             tq,
@@ -237,6 +239,7 @@ impl<T: 'static> TimerAction<T> {
 
         Ok(TimerAction {
             handle: task.detach(),
+            timer_id,
         })
     }
 
@@ -253,13 +256,14 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::{Instant, Duration};
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let when = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
     ///     let action = TimerAction::once_at(when, async move {
     ///         println!("Executed once");
     ///     });
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
     /// [`TimerAction`]: struct.TimerAction
@@ -282,14 +286,15 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction, Local, Latency};
     /// use std::time::{Instant, Duration};
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let when = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
     ///     let action = TimerAction::once_at_into(when, async move {
     ///         println!("Executed once");
     ///     }, tq).unwrap();
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
     /// [`TimerAction`]: struct.TimerAction
@@ -299,12 +304,14 @@ impl<T: 'static> TimerAction<T> {
         action: impl Future<Output = T> + 'static,
         tq: TaskQueueHandle,
     ) -> Result<TimerAction<T>, QueueNotFoundError> {
+        let timer_id = Reactor::get().register_timer();
+
         let task = Task::local_into(
             async move {
                 let now = Instant::now();
                 if when > now {
                     let dur = when.duration_since(now);
-                    Timer::new(dur).await;
+                    Timer::from_id(timer_id, dur).await;
                 }
                 action.await
             },
@@ -313,6 +320,7 @@ impl<T: 'static> TimerAction<T> {
 
         Ok(TimerAction {
             handle: task.detach(),
+            timer_id,
         })
     }
 
@@ -332,14 +340,15 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction, Latency, Local};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let action = TimerAction::repeat_into(|| async move {
     ///         println!("Execute this!");
     ///         Some(Duration::from_millis(100))
     ///     }, tq).unwrap();
     ///     action.join().await; // this never returns
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -353,11 +362,13 @@ impl<T: 'static> TimerAction<T> {
         G: Fn() -> F + 'static,
         F: Future<Output = Option<T>> + 'static,
     {
+        let timer_id = Reactor::get().register_timer();
+
         let task = Task::local_into(
             async move {
                 loop {
                     if let Some(period) = action_gen().await {
-                        Timer::new(period.duration()).await;
+                        Timer::from_id(timer_id, period.duration()).await;
                     } else {
                         break;
                     }
@@ -368,6 +379,7 @@ impl<T: 'static> TimerAction<T> {
 
         Ok(TimerAction {
             handle: task.detach(),
+            timer_id: timer_id,
         })
     }
 
@@ -386,13 +398,14 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::repeat(|| async move {
     ///         println!("Execute this!");
     ///         Some(Duration::from_millis(100))
     ///     });
     ///     action.join().await; // this never returns
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -405,7 +418,10 @@ impl<T: 'static> TimerAction<T> {
         Self::repeat_into(action_gen, Local::current_task_queue()).unwrap()
     }
 
-    /// Cancel an existing [`TimerAction`]
+    /// Cancel an existing [`TimerAction`] and waits for it to return
+    ///
+    /// If you want to cancel the timer but doesn't want to .await on it,
+    /// prefer [`destroy`].
     ///
     /// # Examples
     ///
@@ -413,17 +429,49 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
     ///         println!("Will not execute this");
     ///     });
     ///     action.cancel().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`TimerAction`]: struct.TimerAction
+    /// [`destroy`]: struct.TimerAction.html#method.destroy
     pub async fn cancel(self) {
+        self.destroy();
+        self.join().await;
+    }
+
+    /// Cancel an existing [`TimerAction`], without waiting for it to return
+    ///
+    /// This is a non-async version of [`cancel`]. It will remove the timer if
+    /// it hasn't fired already and destroy the [`TimerAction`] releasing the resources
+    /// associated with it, but without blocking the current task. It is still possible
+    /// to [`join`] the task if needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutor, TimerAction};
+    /// use std::time::Duration;
+    ///
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
+    ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
+    ///         println!("Will not execute this");
+    ///     });
+    ///     action.destroy();
+    ///     action.join().await;
+    /// }).unwrap();
+    /// handle.join().unwrap();
+    /// ```
+    /// [`TimerAction`]: struct.TimerAction
+    /// [`cancel`]: struct.TimerAction.html#method.cancel
+    /// [`join`]: struct.TimerAction.html#method.join
+    pub fn destroy(&self) {
+        Reactor::get().remove_timer(self.timer_id);
         self.handle.cancel();
-        self.handle.await;
     }
 
     /// Waits for a [`TimerAction`] to return
@@ -434,12 +482,13 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
     ///         println!("Execute this in 100ms");
     ///     });
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`TimerAction`]: struct.TimerAction
     pub async fn join(self) {
@@ -525,6 +574,75 @@ mod test {
 
             Timer::new(Duration::from_millis(100)).await;
             assert_eq!(*(exec2.borrow()), 0);
+        });
+    }
+
+    #[test]
+    fn basic_timer_action_destroy_works() {
+        make_shared_var_mut!(0, exec1, exec2);
+
+        test_executor!(async move {
+            let action = TimerAction::once_in(Duration::from_millis(50), async move {
+                *(exec1.borrow_mut()) = 1;
+            });
+            action.destroy();
+
+            Timer::new(Duration::from_millis(100)).await;
+            assert_eq!(*(exec2.borrow()), 0);
+            // joining doesn't lead to infinite blocking or anything, and eventually completes.
+            action.join().await;
+        });
+    }
+
+    #[test]
+    fn basic_timer_action_destroy_cancel_initiated_action() {
+        make_shared_var_mut!(0, exec1, exec2);
+
+        test_executor!(async move {
+            let action = TimerAction::once_in(Duration::from_millis(10), async move {
+                *(exec1.borrow_mut()) = 1;
+                // Test that if we had already started the action, it will run to completion.
+                for _ in 0..10 {
+                    Timer::new(Duration::from_millis(10)).await;
+                    *(exec1.borrow_mut()) += 1;
+                }
+            });
+            Timer::new(Duration::from_millis(50)).await;
+            action.destroy();
+
+            action.join().await;
+            // it did start, but should not have finished
+            assert!(*(exec2.borrow()) > 1);
+            assert_ne!(*(exec2.borrow()), 11);
+        });
+    }
+
+    #[test]
+    fn basic_timer_action_destroy_detached_spawn_survives() {
+        make_shared_var_mut!(0, exec1, exec2);
+
+        test_executor!(async move {
+            let action = TimerAction::once_in(Duration::from_millis(10), async move {
+                Local::local(async move {
+                    *(exec1.borrow_mut()) = 1;
+                    // Test that if we had already started the action, it will run to completion.
+                    for _ in 0..10 {
+                        Timer::new(Duration::from_millis(10)).await;
+                        *(exec1.borrow_mut()) += 1;
+                    }
+                })
+                .detach();
+            });
+
+            Timer::new(Duration::from_millis(50)).await;
+            action.destroy();
+            action.join().await;
+            // When action completes we are halfway through the count
+            assert_ne!(*(exec2.borrow()), 11);
+            Timer::new(Duration::from_millis(100)).await;
+
+            // But because it is detached then it completes the count
+            assert_eq!(*(exec2.borrow()), 11);
         });
     }
 
