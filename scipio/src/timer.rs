@@ -181,12 +181,13 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
     ///         println!("Executed once");
     ///     });
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -209,13 +210,14 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction, Local, Latency};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let action = TimerAction::once_in_into(Duration::from_millis(100), async move {
     ///         println!("Executed once");
     ///     }, tq).unwrap();
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -254,13 +256,14 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::{Instant, Duration};
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let when = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
     ///     let action = TimerAction::once_at(when, async move {
     ///         println!("Executed once");
     ///     });
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
     /// [`TimerAction`]: struct.TimerAction
@@ -283,14 +286,15 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction, Local, Latency};
     /// use std::time::{Instant, Duration};
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let when = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
     ///     let action = TimerAction::once_at_into(when, async move {
     ///         println!("Executed once");
     ///     }, tq).unwrap();
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
     /// [`TimerAction`]: struct.TimerAction
@@ -336,14 +340,15 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction, Latency, Local};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let action = TimerAction::repeat_into(|| async move {
     ///         println!("Execute this!");
     ///         Some(Duration::from_millis(100))
     ///     }, tq).unwrap();
     ///     action.join().await; // this never returns
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -393,13 +398,14 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::repeat(|| async move {
     ///         println!("Execute this!");
     ///         Some(Duration::from_millis(100))
     ///     });
     ///     action.join().await; // this never returns
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerAction`]: struct.TimerAction
@@ -423,12 +429,13 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
     ///         println!("Will not execute this");
     ///     });
     ///     action.cancel().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`TimerAction`]: struct.TimerAction
     /// [`destroy`]: struct.TimerAction.html#method.destroy
@@ -450,13 +457,14 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
     ///         println!("Will not execute this");
     ///     });
     ///     action.destroy();
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`TimerAction`]: struct.TimerAction
     /// [`cancel`]: struct.TimerAction.html#method.cancel
@@ -474,12 +482,13 @@ impl<T: 'static> TimerAction<T> {
     /// use scipio::{LocalExecutor, TimerAction};
     /// use std::time::Duration;
     ///
-    /// LocalExecutor::spawn_executor("test", None, || async move {
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
     ///     let action = TimerAction::once_in(Duration::from_millis(100), async move {
     ///         println!("Execute this in 100ms");
     ///     });
     ///     action.join().await;
-    /// });
+    /// }).unwrap();
+    /// handle.join().unwrap();
     /// ```
     /// [`TimerAction`]: struct.TimerAction
     pub async fn join(self) {
