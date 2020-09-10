@@ -355,6 +355,24 @@ mod test {
             }
         );
     }
+
+    #[test]
+    fn explicit_signal_unblocks_many_wakers() {
+        make_shared_var!(Semaphore::new(0), sem1, sem2, sem3);
+
+        test_executor!(
+            async move {
+                sem1.acquire(1).await.unwrap();
+            },
+            async move {
+                sem2.acquire(1).await.unwrap();
+            },
+            async move {
+                sem3.signal(2);
+            }
+        );
+    }
+
     #[test]
     fn broken_semaphore_returns_the_right_error() {
         test_executor!(async move {
