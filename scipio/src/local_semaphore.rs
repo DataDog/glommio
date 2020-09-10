@@ -294,115 +294,117 @@ impl Semaphore {
     }
 }
 
-#[test]
-fn semaphore_acquisition_for_zero_unit_works() {
-    make_shared_var!(Semaphore::new(1), sem1);
-
-    test_executor!(async move {
-        sem1.acquire(0).await.unwrap();
-    });
-}
-
-#[test]
-fn permit_raii_works() {
+#[cfg(test)]
+mod test {
+    use super::*;
     use std::time::Instant;
 
-    make_shared_var!(Semaphore::new(1), sem1, sem2);
-    make_shared_var_mut!(0, exec1, exec2, exec3);
+    #[test]
+    fn semaphore_acquisition_for_zero_unit_works() {
+        make_shared_var!(Semaphore::new(1), sem1);
 
-    test_executor!(
-        async move {
-            {
-                let _ = sem1.acquire_permit(1).await.unwrap();
-                update_cond!(exec1, 1);
-            }
-        },
-        async move {
-            wait_on_cond!(exec2, 1);
-            // This statement will only execute if the permit was released successfully
-            let _ = sem2.acquire_permit(1).await.unwrap();
-            update_cond!(exec2, 2);
-        },
-        async move {
-            // Busy loop yielding, waiting for the previous semaphore to return
-            wait_on_cond!(exec3, 2, 1);
-        }
-    );
-}
+        test_executor!(async move {
+            sem1.acquire(0).await.unwrap();
+        });
+    }
 
-#[test]
-fn explicit_signal_unblocks_waiting_semaphore() {
-    use std::time::Instant;
+    #[test]
+    fn permit_raii_works() {
+        make_shared_var!(Semaphore::new(1), sem1, sem2);
+        make_shared_var_mut!(0, exec1, exec2, exec3);
 
-    make_shared_var!(Semaphore::new(0), sem1, sem2);
-    make_shared_var_mut!(0, exec1, exec2);
-
-    test_executor!(
-        async move {
-            {
-                wait_on_cond!(exec1, 1);
-                let _ = sem1.acquire_permit(1).await.unwrap();
-                update_cond!(exec1, 2);
-            }
-        },
-        async move {
-            update_cond!(exec2, 1);
-            let _ = sem2.signal(1);
-            wait_on_cond!(exec2, 2, 1);
-        }
-    );
-}
-#[test]
-fn broken_semaphore_returns_the_right_error() {
-    test_executor!(async move {
-        let sem = Semaphore::new(0);
-        sem.close();
-        match sem.acquire(0).await {
-            Ok(_) => panic!("Should have failed"),
-            Err(e) => match e.kind() {
-                ErrorKind::BrokenPipe => {}
-                _ => panic!("Wrong Error"),
+        test_executor!(
+            async move {
+                {
+                    let _ = sem1.acquire_permit(1).await.unwrap();
+                    update_cond!(exec1, 1);
+                }
             },
-        }
-    });
-}
+            async move {
+                wait_on_cond!(exec2, 1);
+                // This statement will only execute if the permit was released successfully
+                let _ = sem2.acquire_permit(1).await.unwrap();
+                update_cond!(exec2, 2);
+            },
+            async move {
+                // Busy loop yielding, waiting for the previous semaphore to return
+                wait_on_cond!(exec3, 2, 1);
+            }
+        );
+    }
 
-#[test]
-#[should_panic]
-fn broken_semaphore_if_close_happens_first() {
-    make_shared_var!(Semaphore::new(1), sem1, sem2);
-    make_shared_var_mut!(0, exec1, exec2);
+    #[test]
+    fn explicit_signal_unblocks_waiting_semaphore() {
+        make_shared_var!(Semaphore::new(0), sem1, sem2);
+        make_shared_var_mut!(0, exec1, exec2);
 
-    test_executor!(
-        async move {
-            wait_on_cond!(exec1, 1);
-            // even if try to acquire 0, which always succeed,
-            // we should fail if it is closed.
-            let _ = sem1.acquire_permit(0).await.unwrap();
-        },
-        async move {
-            sem2.close();
-            update_cond!(exec2, 1);
-        }
-    );
-}
+        test_executor!(
+            async move {
+                {
+                    wait_on_cond!(exec1, 1);
+                    let _ = sem1.acquire_permit(1).await.unwrap();
+                    update_cond!(exec1, 2);
+                }
+            },
+            async move {
+                update_cond!(exec2, 1);
+                let _ = sem2.signal(1);
+                wait_on_cond!(exec2, 2, 1);
+            }
+        );
+    }
+    #[test]
+    fn broken_semaphore_returns_the_right_error() {
+        test_executor!(async move {
+            let sem = Semaphore::new(0);
+            sem.close();
+            match sem.acquire(0).await {
+                Ok(_) => panic!("Should have failed"),
+                Err(e) => match e.kind() {
+                    ErrorKind::BrokenPipe => {}
+                    _ => panic!("Wrong Error"),
+                },
+            }
+        });
+    }
 
-#[test]
-#[should_panic]
-fn broken_semaphore_if_acquire_happens_first() {
-    // Notice how in this test, for the acquire to happen first, we
-    // need to block on the acquisition. So the semaphore starts at 0
-    make_shared_var!(Semaphore::new(0), sem1, sem2);
-    make_shared_var_mut!(0, exec1, exec2);
+    #[test]
+    #[should_panic]
+    fn broken_semaphore_if_close_happens_first() {
+        make_shared_var!(Semaphore::new(1), sem1, sem2);
+        make_shared_var_mut!(0, exec1, exec2);
 
-    test_executor!(
-        async move {
-            update_cond!(exec1, 1);
-            let _ = sem1.acquire_permit(1).await.unwrap();
-        },
-        async move {
-            wait_on_cond!(exec2, 1);
-            sem2.close();
-        }
-    );
+        test_executor!(
+            async move {
+                wait_on_cond!(exec1, 1);
+                // even if try to acquire 0, which always succeed,
+                // we should fail if it is closed.
+                let _ = sem1.acquire_permit(0).await.unwrap();
+            },
+            async move {
+                sem2.close();
+                update_cond!(exec2, 1);
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn broken_semaphore_if_acquire_happens_first() {
+        // Notice how in this test, for the acquire to happen first, we
+        // need to block on the acquisition. So the semaphore starts at 0
+        make_shared_var!(Semaphore::new(0), sem1, sem2);
+        make_shared_var_mut!(0, exec1, exec2);
+
+        test_executor!(
+            async move {
+                update_cond!(exec1, 1);
+                let _ = sem1.acquire_permit(1).await.unwrap();
+            },
+            async move {
+                wait_on_cond!(exec2, 1);
+                sem2.close();
+            }
+        );
+    }
 }
