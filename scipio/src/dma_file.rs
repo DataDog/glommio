@@ -323,10 +323,7 @@ impl DmaFile {
         enhanced_try!(source.collect_rw().await, "Writing", self)
     }
 
-    /// Reads into buffer in buf from a specific position in the file.
-    ///
-    /// It is expected that the buffer is properly aligned for Direct I/O.
-    /// In most platforms that means 512 bytes.
+    /// Reads from a specific position in the file and returns the buffer.
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
