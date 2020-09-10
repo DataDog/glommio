@@ -1,0 +1,17 @@
+[package]
+name = "examples"
+version = "0.0.0"
+publish = false
+edition = "2018"
+
+[dev-dependencies]
+futures = "0.3.5"
+scipio = { version = "0.1.0", path = "../scipio" }
+
+[[example]]
+name = "echo"
+path = "echo.rs"
+
+[[example]]
+name = "hello_world"
+path = "hello_world.rs"
