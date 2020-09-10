@@ -476,6 +476,9 @@ impl<T: 'static> TimerAction<T> {
 
     /// Waits for a [`TimerAction`] to return
     ///
+    /// Returns an [`Option`] with value None if the task was canceled and Some if
+    /// the action finished successfuly
+    ///
     /// # Examples
     ///
     /// ```
@@ -491,8 +494,9 @@ impl<T: 'static> TimerAction<T> {
     /// handle.join().unwrap();
     /// ```
     /// [`TimerAction`]: struct.TimerAction
-    pub async fn join(self) {
-        self.handle.await;
+    /// [`Option`]: https://doc.rust-lang.org/std/option/enum.Option.html
+    pub async fn join(self) -> Option<T> {
+        self.handle.await
     }
 }
 
@@ -556,6 +560,35 @@ mod test {
 
             Timer::new(Duration::from_millis(100)).await;
             assert_eq!(*(exec2.borrow()), 1);
+        });
+    }
+
+    #[test]
+    fn basic_timer_action_return_ok() {
+        test_executor!(async move {
+            let now = Instant::now();
+            let action : TimerAction<usize> = TimerAction::once_in(Duration::from_millis(50), async move {
+                1
+            });
+
+            let ret = action.join().await;
+            assert_eq!(ret.unwrap(), 1);
+            assert!(now.elapsed().as_millis() >= 50);
+        });
+    }
+
+    #[test]
+    fn basic_timer_action_join_reflects_cancel() {
+        test_executor!(async move {
+            let now = Instant::now();
+            let action : TimerAction<usize> = TimerAction::once_in(Duration::from_millis(50), async move {
+                1
+            });
+
+            action.destroy();
+            let ret = action.join().await;
+            assert!(ret.is_none());
+            assert!(now.elapsed().as_millis() < 50);
         });
     }
 
