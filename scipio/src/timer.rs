@@ -412,6 +412,59 @@ impl<T: 'static> TimerActionOnce<T> {
     pub async fn join(self) -> Option<T> {
         self.handle.await
     }
+
+    /// Rearm a [`TimerActionOnce`], so it fires in the specified [`Duration`] from now
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutor, TimerActionOnce};
+    /// use std::time::Duration;
+    ///
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
+    ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
+    ///         println!("hello");
+    ///     });
+    ///     action.rearm_in(Duration::from_millis(100));
+    /// }).unwrap();
+    /// handle.join().unwrap();
+    /// ```
+    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
+    pub fn rearm_in(&self, dur: Duration) {
+        let mut inner = self.inner.borrow_mut();
+        inner.reset(dur);
+    }
+
+    /// Rearm a [`TimerActionOnce`], so it fires at the specified [`Instant`]
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutor, TimerActionOnce};
+    /// use std::time::{Duration, Instant};
+    ///
+    /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
+    ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
+    ///         println!("hello");
+    ///     });
+    ///     action.rearm_at(Instant::now());
+    /// }).unwrap();
+    /// handle.join().unwrap();
+    /// ```
+    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
+    pub fn rearm_at(&self, when: Instant) {
+        let now = Instant::now();
+        let dur = {
+            if when > now {
+                when.duration_since(now)
+            } else {
+                Duration::from_micros(0)
+            }
+        };
+        self.rearm_in(dur);
+    }
 }
 
 impl TimerActionRepeat {
@@ -651,6 +704,57 @@ mod test {
 
             Timer::new(Duration::from_millis(100)).await;
             assert_eq!(*(exec2.borrow()), 1);
+        });
+    }
+
+    #[test]
+    fn basic_timer_rearm_pending_timer_for_the_past_ok() {
+        test_executor!(async move {
+            let now = Instant::now();
+            let action: TimerActionOnce<usize> =
+                TimerActionOnce::do_in(Duration::from_millis(50), async move {
+                    Timer::new(Duration::from_millis(50)).await;
+                    1
+                });
+
+            Timer::new(Duration::from_millis(60)).await;
+            action.rearm_at(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
+            let ret = action.join().await;
+            assert_eq!(ret.unwrap(), 1);
+            assert!(now.elapsed().as_millis() >= 100);
+        });
+    }
+
+    #[test]
+    fn basic_timer_rearm_executed_action_ok() {
+        test_executor!(async move {
+            let action: TimerActionOnce<usize> =
+                TimerActionOnce::do_in(Duration::from_millis(1), async move { 1 });
+
+            Timer::new(Duration::from_millis(10)).await;
+            action.rearm_at(
+                Instant::now()
+                    .checked_add(Duration::from_secs(100))
+                    .unwrap(),
+            );
+            let now = Instant::now();
+            let ret = action.join().await;
+            assert_eq!(ret.unwrap(), 1);
+            assert!(now.elapsed().as_millis() <= 10);
+        });
+    }
+
+    #[test]
+    fn basic_timer_rearm_future_timer_ok() {
+        test_executor!(async move {
+            let now = Instant::now();
+            let action: TimerActionOnce<usize> =
+                TimerActionOnce::do_in(Duration::from_millis(10), async move { 1 });
+
+            action.rearm_in(Duration::from_millis(100));
+            let ret = action.join().await;
+            assert_eq!(ret.unwrap(), 1);
+            assert!(now.elapsed().as_millis() >= 100);
         });
     }
 
