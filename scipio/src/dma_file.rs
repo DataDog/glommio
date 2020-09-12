@@ -464,14 +464,26 @@ impl DmaFile {
 mod test {
     use super::*;
 
+    #[derive(Copy, Clone)]
     enum TestDirectoryKind {
         TempFs,
         StorageMedia,
     }
 
+    struct TestDirectory {
+        path: PathBuf,
+        kind: TestDirectoryKind,
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
     #[cfg(test)]
-    fn make_test_directories(test_name: &str) -> std::vec::Vec<(PathBuf, TestDirectoryKind)> {
-        let mut vec: std::vec::Vec<(PathBuf, TestDirectoryKind)> = Vec::new();
+    fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
+        let mut vec = Vec::new();
 
         // Scipio currently only supports NVMe-backed volumes formatted with XFS or EXT4.
         // We therefore let the user decide what directory scipio should use to host the unit tests in.
@@ -491,7 +503,10 @@ mod test {
                 dir.push(test_name);
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).unwrap();
-                vec.push((dir, TestDirectoryKind::StorageMedia))
+                vec.push(TestDirectory {
+                    path: dir,
+                    kind: TestDirectoryKind::StorageMedia,
+                })
             }
         };
 
@@ -499,7 +514,10 @@ mod test {
         dir.push(test_name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        vec.push((dir, TestDirectoryKind::TempFs));
+        vec.push(TestDirectory {
+            path: dir,
+            kind: TestDirectoryKind::TempFs,
+        });
         return vec;
     }
 
@@ -507,7 +525,8 @@ mod test {
     fn fallback_drop_closes_the_file() {
         let paths = make_test_directories("fallback_drop_closes_the_file");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 let fd;
                 {
@@ -530,7 +549,8 @@ mod test {
     fn file_create_close() {
         let paths = make_test_directories("io_file_create_close");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 let mut new_file = DmaFile::create(path.join("testfile"))
                     .await
@@ -546,7 +566,8 @@ mod test {
     fn file_open() {
         let paths = make_test_directories("file_open");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 let mut new_file = DmaFile::create(path.join("testfile"))
                     .await
@@ -567,7 +588,8 @@ mod test {
     fn file_open_nonexistent() {
         let paths = make_test_directories("file_open_nonexistent");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 DmaFile::open(path.join("testfile"))
                     .await
@@ -581,7 +603,8 @@ mod test {
     fn file_rename() {
         let paths = make_test_directories("io_file_rename");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 let mut new_file = DmaFile::create(path.join("testfile"))
                     .await
@@ -604,7 +627,8 @@ mod test {
     fn file_rename_noop() {
         let paths = make_test_directories("file_rename_noop");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 let mut new_file = DmaFile::create(path.join("testfile"))
                     .await
@@ -625,7 +649,9 @@ mod test {
     fn file_allocatfile_allocatee() {
         let paths = make_test_directories("io_file_allocate");
 
-        for (path, kind) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
+            let kind = dir.kind;
             test_executor!(async move {
                 let mut new_file = DmaFile::create(path.join("testfile"))
                     .await
@@ -666,7 +692,8 @@ mod test {
     fn file_allocate_zero() {
         let paths = make_test_directories("io_file_allocate_zero");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 let mut new_file = DmaFile::create(path.join("testfile"))
                     .await
@@ -685,7 +712,8 @@ mod test {
     fn file_simple_readwrite() {
         let paths = make_test_directories("io_file_simple_readwrite");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             test_executor!(async move {
                 let mut new_file = DmaFile::create(path.join("testfile"))
                     .await
@@ -723,7 +751,8 @@ mod test {
     fn file_invalid_readonly_write() {
         let paths = make_test_directories("file_invalid_readonly_write");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             let file = std::fs::File::create(path.join("testfile")).expect("failed to create file");
             let mut perms = file
                 .metadata()
@@ -756,7 +785,8 @@ mod test {
     fn file_empty_read() {
         let paths = make_test_directories("file_empty_read");
 
-        for (path, _) in paths {
+        for dir in paths {
+            let path = dir.path.clone();
             std::fs::File::create(path.join("testfile")).expect("failed to create file");
 
             test_executor!(async move {
