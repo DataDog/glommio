@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::Latency;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::io;
@@ -145,7 +146,7 @@ impl Wakers {
 
 /// A registered source of I/O events.
 #[derive(Debug)]
-pub struct Source {
+pub struct InnerSource {
     /// Raw file descriptor on Unix platforms.
     pub(crate) raw: RawFd,
 
@@ -159,37 +160,57 @@ pub struct Source {
     _pin: PhantomPinned,
 }
 
+#[derive(Debug)]
+pub struct Source {
+    pub(crate) inner: Pin<Box<InnerSource>>,
+}
+
 impl Source {
     /// Registers an I/O source in the reactor.
-    pub(crate) fn new(
-        ioreq: IoRequirements,
-        raw: RawFd,
-        source_type: SourceType,
-    ) -> Pin<Box<Source>> {
-        let b = Box::new(Source {
-            _pin: PhantomPinned,
-            raw,
-            wakers: RefCell::new(Wakers::new()),
-            source_type,
-            io_requirements: ioreq,
-        });
-        b.into()
+    pub(crate) fn new(ioreq: IoRequirements, raw: RawFd, source_type: SourceType) -> Source {
+        Source {
+            inner: Box::pin(InnerSource {
+                _pin: PhantomPinned,
+                raw,
+                wakers: RefCell::new(Wakers::new()),
+                source_type,
+                io_requirements: ioreq,
+            }),
+        }
+    }
+}
+
+impl Source {
+    pub(crate) fn latency_req(&self) -> Latency {
+        self.inner.io_requirements.latency_req
     }
 
-    pub(crate) fn as_ptr(self: Pin<&Self>) -> *const Self {
-        self.get_ref() as *const Self
+    pub(crate) fn source_type<'a>(&'a self) -> &'a SourceType {
+        &self.inner.source_type
     }
 
-    pub(crate) fn update_source_type(self: Pin<&mut Self>, source_type: SourceType) {
+    pub(crate) fn raw(&self) -> RawFd {
+        self.inner.raw
+    }
+
+    pub(crate) fn wakers(&self) -> &RefCell<Wakers> {
+        &self.inner.wakers
+    }
+
+    pub(crate) fn as_ptr(&self) -> *const InnerSource {
+        self.inner.as_ref().get_ref() as *const InnerSource
+    }
+
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) {
         unsafe {
-            let source = self.get_unchecked_mut();
+            let source = self.inner.as_mut().get_unchecked_mut();
             source.source_type = source_type;
         }
     }
 
-    pub(crate) fn extract_source_type(self: Pin<&mut Self>) -> SourceType {
+    pub(crate) fn extract_source_type(&mut self) -> SourceType {
         unsafe {
-            let source = self.get_unchecked_mut();
+            let source = self.inner.as_mut().get_unchecked_mut();
             let invalid = SourceType::Invalid;
             std::mem::replace(&mut source.source_type, invalid)
         }
@@ -198,7 +219,7 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        let w = self.wakers.get_mut();
+        let w = self.wakers().borrow_mut();
         if !w.waiters.is_empty() {
             panic!("Attempting to release a source with pending waiters!");
             // This cancellation will be problematic, because

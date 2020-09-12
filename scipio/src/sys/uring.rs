@@ -12,12 +12,11 @@ use std::ffi::CStr;
 use std::io;
 use std::io::{Error, ErrorKind};
 use std::os::unix::io::RawFd;
-use std::pin::Pin;
 use std::task::Waker;
 use std::time::Duration;
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
@@ -46,7 +45,7 @@ enum UringOpDescriptor {
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
     Timeout(u64),
-    TimeoutRemove(*const Source),
+    TimeoutRemove(*const InnerSource),
 }
 
 #[derive(Debug)]
@@ -181,9 +180,9 @@ where
 
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
                 sqe.prep_read(op.fd, buf.as_mut_bytes(), pos);
-                let source = &mut *(op.user_data as *mut Source);
-                if let SourceType::DmaRead(pollable, _) = &source.source_type {
-                    source.source_type = SourceType::DmaRead(*pollable, Some(buf));
+                let mut source = user_data_as_src(op.user_data);
+                if let SourceType::DmaRead(pollable, _) = source.source_type {
+                    source.source_type = SourceType::DmaRead(pollable, Some(buf));
                 } else {
                     panic!("Expected DmaRead source type");
                 }
@@ -210,8 +209,8 @@ trait UringCommon {
     fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
         self.submission_queue().push_back(UringDescriptor {
             args: descriptor,
-            fd: source.raw,
-            user_data: source as *const Source as _,
+            fd: source.raw(),
+            user_data: source.as_ptr() as _,
         });
     }
 
@@ -351,20 +350,18 @@ impl SleepableRing {
 
     pub(crate) fn rearm_preempt_timer(
         &mut self,
-        source: &mut Pin<Box<Source>>,
+        source: &mut Source,
         wakers: &mut Vec<Waker>,
         d: Duration,
     ) -> io::Result<()> {
-        let src = source.as_ref().as_ptr() as *const Source;
+        let src = source.as_ptr() as *const InnerSource;
 
-        match source.source_type {
+        match source.source_type() {
             SourceType::Timeout(false) => {} // not armed, do nothing
             SourceType::Timeout(true) => {
                 // armed, need to cancel first
                 let op_remove = UringOpDescriptor::TimeoutRemove(src);
-                source
-                    .as_mut()
-                    .update_source_type(SourceType::Timeout(false));
+                source.update_source_type(SourceType::Timeout(false));
 
                 self.submission_queue().push_front(UringDescriptor {
                     args: op_remove,
@@ -377,9 +374,7 @@ impl SleepableRing {
         }
 
         let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
-        source
-            .as_mut()
-            .update_source_type(SourceType::Timeout(true));
+        source.update_source_type(SourceType::Timeout(true));
 
         // This assumes SQEs will be processed in the order they are
         // seen. Because remove does not do anything asynchronously
@@ -395,17 +390,16 @@ impl SleepableRing {
         Ok(())
     }
 
-    fn sleep(&mut self, link: &mut Pin<Box<Source>>) -> io::Result<usize> {
-        match link.source_type {
+    fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
+        match link.source_type() {
             SourceType::LinkRings(LinkStatus::Linked) => {} // nothing to do
             SourceType::LinkRings(LinkStatus::Freestanding) => {
                 if let Some(mut sqe) = self.ring.next_sqe() {
-                    link.as_mut()
-                        .update_source_type(SourceType::LinkRings(LinkStatus::Linked));
+                    link.update_source_type(SourceType::LinkRings(LinkStatus::Linked));
 
                     let op = UringDescriptor {
-                        fd: link.as_ref().raw,
-                        user_data: link.as_ref().as_ptr() as *const Source as u64,
+                        fd: link.raw(),
+                        user_data: link.as_ptr() as *const InnerSource as u64,
                         args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                     };
                     fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
@@ -418,13 +412,20 @@ impl SleepableRing {
     }
 }
 
+fn user_data_as_src(user_data: u64) -> &'static mut InnerSource {
+    unsafe {
+        let s = user_data as *mut InnerSource;
+        &mut *s
+    }
+}
+
 fn process_one_event<F>(
     cqe: Option<iou::CompletionQueueEvent>,
     try_process: F,
     wakers: &mut Vec<Waker>,
 ) -> Option<()>
 where
-    F: FnOnce(&mut Source) -> Option<()>,
+    F: FnOnce(&mut InnerSource) -> Option<()>,
 {
     if let Some(value) = cqe {
         // No user data is POLL_REMOVE or CANCEL, we won't process.
@@ -432,10 +433,7 @@ where
             return Some(());
         }
 
-        let source = unsafe {
-            let s = value.user_data() as *mut Source;
-            &mut *s
-        };
+        let source = user_data_as_src(value.user_data());
 
         if let None = try_process(source) {
             let mut w = source.wakers.borrow_mut();
@@ -504,8 +502,8 @@ pub struct Reactor {
     main_ring: RefCell<SleepableRing>,
     latency_ring: RefCell<SleepableRing>,
     poll_ring: RefCell<PollRing>,
-    link_rings_src: RefCell<Pin<Box<Source>>>,
-    timeout_src: RefCell<Pin<Box<Source>>>,
+    link_rings_src: RefCell<Source>,
+    timeout_src: RefCell<Source>,
 }
 
 fn common_flags() -> PollFlags {
@@ -550,7 +548,7 @@ macro_rules! queue_request_into_ring {
 
 macro_rules! queue_storage_io_request {
     ($self:expr, $source:ident, $op:expr) => {{
-        let pollable = match $source.source_type {
+        let pollable = match $source.source_type() {
             SourceType::DmaRead(p, _) => p,
             SourceType::DmaWrite(p) => p,
             _ => panic!("SourceType should declare if it supports poll operations"),
@@ -564,7 +562,7 @@ macro_rules! queue_storage_io_request {
 
 macro_rules! queue_standard_request {
     ($self:expr, $source:ident, $op:expr) => {{
-        match $source.io_requirements.latency_req {
+        match $source.latency_req() {
             Latency::NotImportant => queue_request_into_ring!($self.main_ring, $source, $op),
             Latency::Matters(_) => queue_request_into_ring!($self.latency_ring, $source, $op),
         }
@@ -663,7 +661,7 @@ impl Reactor {
     }
 
     pub(crate) fn statx(&self, source: &Source) {
-        let op = match &source.source_type {
+        let op = match source.source_type() {
             SourceType::Statx(path, buf) => {
                 let path = path.as_c_str().as_ptr();
                 let buf = buf.as_ptr();
@@ -675,7 +673,7 @@ impl Reactor {
     }
 
     pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::c_int) {
-        let pathptr = match &source.source_type {
+        let pathptr = match source.source_type() {
             SourceType::Open(cstring) => cstring.as_c_str().as_ptr(),
             _ => panic!("Wrong source type!"),
         };

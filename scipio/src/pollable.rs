@@ -65,7 +65,7 @@ use crate::sys::{self, Source};
 #[derive(Debug)]
 pub struct Async<T> {
     /// A source registered in the reactor.
-    source: Pin<Box<Source>>,
+    source: Source,
 
     /// The inner I/O handle.
     io: Option<Box<T>>,
@@ -105,7 +105,7 @@ impl<T: AsRawFd> Async<T> {
 
 impl<T: AsRawFd> AsRawFd for Async<T> {
     fn as_raw_fd(&self) -> RawFd {
-        self.source.raw
+        self.source.raw()
     }
 }
 
@@ -419,7 +419,7 @@ impl<T: Write> AsyncWrite for Async<T> {
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown_write(self.source.raw))
+        Poll::Ready(sys::shutdown_write(self.source.raw()))
     }
 }
 
@@ -448,7 +448,7 @@ where
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown_write(self.source.raw))
+        Poll::Ready(sys::shutdown_write(self.source.raw()))
     }
 }
 

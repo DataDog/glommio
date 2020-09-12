@@ -332,7 +332,7 @@ impl DmaFile {
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
-        let stype = source.as_mut().extract_source_type();
+        let stype = source.extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
                 .and_then(|mut buffer| {
@@ -359,7 +359,7 @@ impl DmaFile {
             Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
-        let stype = source.as_mut().extract_source_type();
+        let stype = source.extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
                 .and_then(|mut buffer| {
@@ -442,7 +442,7 @@ impl DmaFile {
 
         let mut source = Reactor::get().statx(self.as_raw_fd(), path);
         enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
-        let stype = source.as_mut().extract_source_type();
+        let stype = source.extract_source_type();
         let stat_buf = match stype {
             SourceType::Statx(_, buf) => buf,
             _ => panic!("Source type is wrong for describe operation"),
