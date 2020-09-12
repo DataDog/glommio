@@ -126,7 +126,7 @@ macro_rules! make_shared_var_mut {
     }
 }
 
-mod async_collections;
+pub mod collections;
 mod dma_file;
 mod error;
 mod executor;
@@ -136,7 +136,6 @@ mod networking;
 mod pollable;
 mod timer;
 
-pub use crate::async_collections::AsyncDeque;
 pub use crate::dma_file::{Directory, DmaFile};
 pub use crate::error::Error;
 pub use crate::executor::{LocalExecutor, QueueNotFoundError, Task, TaskQueueHandle};

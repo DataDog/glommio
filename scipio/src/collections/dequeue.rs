@@ -3,35 +3,35 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::local_semaphore::Semaphore;
+use crate::Semaphore;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::Result;
 
-/// The AsyncDeque is similar to the standard library's VecDeque.
+/// The Deque is an async deque similar to the standard library's VecDeque.
 ///
 /// The main difference is that when one pops from this queue (either
 /// front or back), the queue will not return an option if it is empty,
 /// but rather asynchronously wait for new elements to be produced.
 #[derive(Debug)]
-pub struct AsyncDeque<T> {
+pub struct Deque<T> {
     deque: RefCell<VecDeque<T>>,
     sem: Semaphore,
 }
 
-impl<T> AsyncDeque<T> {
-    /// Creates a new Async Deque
+impl<T> Deque<T> {
+    /// Creates a new async Deque
     ///
     /// # Examples
     ///
     /// ```
-    /// use scipio::AsyncDeque;
+    /// use scipio::collections::Deque;
     ///
-    /// let _ : AsyncDeque<usize> = AsyncDeque::new();
+    /// let _ : Deque<usize> = Deque::new();
     ///
     /// ```
     pub fn new() -> Self {
-        AsyncDeque {
+        Deque {
             deque: RefCell::new(VecDeque::new()),
             sem: Semaphore::new(0),
         }
@@ -43,9 +43,9 @@ impl<T> AsyncDeque<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::AsyncDeque;
+    /// use scipio::collections::Deque;
     ///
-    /// let ad : AsyncDeque<usize> = AsyncDeque::new();
+    /// let ad : Deque<usize> = Deque::new();
     /// ad.close();
     /// ```
     pub fn close(&self) {
@@ -57,13 +57,13 @@ impl<T> AsyncDeque<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::AsyncDeque;
+    /// use scipio::collections::Deque;
     ///
-    /// let _ : AsyncDeque<usize> = AsyncDeque::with_capacity(10);
+    /// let _ : Deque<usize> = Deque::with_capacity(10);
     ///
     /// ```
     pub fn with_capacity(capacity: usize) -> Self {
-        AsyncDeque {
+        Deque {
             deque: RefCell::new(VecDeque::with_capacity(capacity)),
             sem: Semaphore::new(0),
         }
@@ -74,9 +74,9 @@ impl<T> AsyncDeque<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::AsyncDeque;
+    /// use scipio::collections::Deque;
     ///
-    /// let ad : AsyncDeque<usize> = AsyncDeque::with_capacity(10);
+    /// let ad : Deque<usize> = Deque::with_capacity(10);
     /// ad.push_back(1);
     /// assert_eq!(ad.len(), 1);
     /// ```
@@ -88,9 +88,9 @@ impl<T> AsyncDeque<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::AsyncDeque;
+    /// use scipio::collections::Deque;
     ///
-    /// let ad : AsyncDeque<usize> = AsyncDeque::with_capacity(10);
+    /// let ad : Deque<usize> = Deque::with_capacity(10);
     /// ad.push_front(1);
     /// assert_eq!(ad.len(), 1);
     /// ```
@@ -104,9 +104,9 @@ impl<T> AsyncDeque<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::AsyncDeque;
+    /// use scipio::collections::Deque;
     ///
-    /// let ad : AsyncDeque<usize> = AsyncDeque::with_capacity(10);
+    /// let ad : Deque<usize> = Deque::with_capacity(10);
     /// ad.push_back(1);
     /// assert_eq!(ad.len(), 1);
     /// ```
@@ -124,9 +124,10 @@ impl<T> AsyncDeque<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, AsyncDeque};
+    /// use scipio::collections::Deque;
+    /// use scipio::LocalExecutor;
     ///
-    /// let ad : AsyncDeque<usize> = AsyncDeque::with_capacity(10);
+    /// let ad : Deque<usize> = Deque::with_capacity(10);
     ///
     /// let ex = LocalExecutor::new(None).unwrap();
     /// ex.run(async move {
@@ -150,9 +151,10 @@ impl<T> AsyncDeque<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, AsyncDeque};
+    /// use scipio::collections::Deque;
+    /// use scipio::LocalExecutor;
     ///
-    /// let ad : AsyncDeque<usize> = AsyncDeque::with_capacity(10);
+    /// let ad : Deque<usize> = Deque::with_capacity(10);
     ///
     /// let ex = LocalExecutor::new(None).unwrap();
     /// ex.run(async move {

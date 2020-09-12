@@ -875,8 +875,8 @@ impl<T> Task<T> {
     }
 
     /// Returns the [`TaskQueueHandle`] that represents the TaskQueue currently running.
-    /// This can be passed directly into [`local_into`]. This must be run from a task that
-    /// was generated through [`local`] or [`local_into`]
+    /// This can be passed directly into [`Task::local_into`]. This must be run from a task that
+    /// was generated through [`Task::local`] or [`Task::local_into`]
     ///
     /// # Examples
     /// ```
