@@ -145,6 +145,7 @@ pub use crate::networking::*;
 pub use crate::pollable::Async;
 pub use crate::sys::DmaBuffer;
 pub use crate::timer::{Timer, TimerActionOnce, TimerActionRepeat};
+pub use enclose::enclose;
 
 /// Local is an ergonomic way to access the local executor.
 /// The local is executed through a Task type, but the Task type has a type

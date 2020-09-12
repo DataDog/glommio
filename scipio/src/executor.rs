@@ -1038,28 +1038,26 @@ fn task_with_latency_requirements() {
         let nolat_started = Rc::new(RefCell::new(false));
         let lat_status = Rc::new(RefCell::new(false));
 
-        let rust_capture_sucks = move || (nolat_started.clone(), lat_status.clone());
-        let nolat_sucks = rust_capture_sucks.clone();
-
         // Loop until need_preempt is set. It is set to 2ms, but because this is a test
         // and can be running overcommited or in whichever shared infrastructure, we'll
         // allow the timer to fire in up to 1s. If it didn't fire in 1s, that's broken.
         let nolat = local_ex
             .spawn_into(
-                async move {
-                    let (nolat_started, lat_status) = nolat_sucks();
-                    *(nolat_started.borrow_mut()) = true;
+                crate::enclose! { (nolat_started, lat_status)
+                    async move {
+                        *(nolat_started.borrow_mut()) = true;
 
-                    let start = Instant::now();
-                    // Now busy loop and make sure that we yield when we have too.
-                    loop {
-                        if *(lat_status.borrow()) {
-                            break; // Success!
+                        let start = Instant::now();
+                        // Now busy loop and make sure that we yield when we have too.
+                        loop {
+                            if *(lat_status.borrow()) {
+                                break; // Success!
+                            }
+                            if start.elapsed().as_secs() > 1 {
+                                panic!("Never received preempt signal");
+                            }
+                            Local::yield_if_needed().await;
                         }
-                        if start.elapsed().as_secs() > 1 {
-                            panic!("Never received preempt signal");
-                        }
-                        Local::yield_if_needed().await;
                     }
                 },
                 not_latency,
@@ -1068,17 +1066,18 @@ fn task_with_latency_requirements() {
 
         let lat = local_ex
             .spawn_into(
-                async move {
-                    let (nolat_started, lat_status) = rust_capture_sucks();
-                    // In case we are executed first, yield to the the other task
-                    loop {
-                        if *(nolat_started.borrow()) == false {
-                            Local::later().await;
-                        } else {
-                            break;
+                crate::enclose! { (nolat_started, lat_status)
+                    async move {
+                        // In case we are executed first, yield to the the other task
+                        loop {
+                            if *(nolat_started.borrow()) == false {
+                                Local::later().await;
+                            } else {
+                                break;
+                            }
                         }
+                        *(lat_status.borrow_mut()) = true;
                     }
-                    *(lat_status.borrow_mut()) = true;
                 },
                 latency,
             )
@@ -1129,25 +1128,23 @@ fn task_optimized_for_throughput() {
         let first_started = Rc::new(RefCell::new(false));
         let second_status = Rc::new(RefCell::new(false));
 
-        let rust_capture_sucks = move || (first_started.clone(), second_status.clone());
-        let clone_sucks = rust_capture_sucks.clone();
-
         let first = local_ex
             .spawn_into(
-                async move {
-                    let (first_started, second_status) = clone_sucks();
-                    *(first_started.borrow_mut()) = true;
+                crate::enclose! { (first_started, second_status)
+                    async move {
+                        *(first_started.borrow_mut()) = true;
 
-                    let start = Instant::now();
-                    // Now busy loop and make sure that we yield when we have too.
-                    loop {
-                        if *(second_status.borrow()) {
-                            panic!("I was preempted but should not have been");
+                        let start = Instant::now();
+                        // Now busy loop and make sure that we yield when we have too.
+                        loop {
+                            if *(second_status.borrow()) {
+                                panic!("I was preempted but should not have been");
+                            }
+                            if start.elapsed().as_millis() > 200 {
+                                break;
+                            }
+                            Local::yield_if_needed().await;
                         }
-                        if start.elapsed().as_millis() > 200 {
-                            break;
-                        }
-                        Local::yield_if_needed().await;
                     }
                 },
                 tq1,
@@ -1156,17 +1153,18 @@ fn task_optimized_for_throughput() {
 
         let second = local_ex
             .spawn_into(
-                async move {
-                    let (first_started, second_status) = rust_capture_sucks();
-                    // In case we are executed first, yield to the the other task
-                    loop {
-                        if *(first_started.borrow()) == false {
-                            Local::later().await;
-                        } else {
-                            break;
+                crate::enclose! { (first_started, second_status)
+                    async move {
+                        // In case we are executed first, yield to the the other task
+                        loop {
+                            if *(first_started.borrow()) == false {
+                                Local::later().await;
+                            } else {
+                                break;
+                            }
                         }
+                        *(second_status.borrow_mut()) = true;
                     }
-                    *(second_status.borrow_mut()) = true;
                 },
                 tq2,
             )

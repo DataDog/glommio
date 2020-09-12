@@ -15,3 +15,7 @@ path = "echo.rs"
 [[example]]
 name = "hello_world"
 path = "hello_world.rs"
+
+[[example]]
+name = "ping_pong"
+path = "ping_pong.rs"
