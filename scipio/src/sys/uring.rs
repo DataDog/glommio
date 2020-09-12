@@ -35,7 +35,7 @@ pub(crate) fn add_flag(fd: RawFd, flag: libc::c_int) -> io::Result<()> {
 enum UringOpDescriptor {
     PollAdd(PollFlags),
     PollRemove(*const u8),
-    Cancel(*const u8),
+    Cancel(u64),
     Write(*const u8, usize, u64),
     WriteFixed(*const u8, usize, u64, usize),
     ReadFixed(u64, usize),
@@ -124,10 +124,9 @@ where
                 user_data = 0;
                 sqe.prep_poll_remove(to_remove as u64);
             }
-            UringOpDescriptor::Cancel(_) => {
+            UringOpDescriptor::Cancel(to_remove) => {
                 user_data = 0;
-                println!("Don't yet know how to cancel. NEed to teach iou");
-                //sqe.prep_cancel(to_remove as u64);
+                sqe.prep_cancel(to_remove);
             }
             UringOpDescriptor::Write(ptr, len, pos) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
@@ -216,13 +215,15 @@ where
             return Some(());
         }
 
-        let src = consume_source(value.user_data());
-        let source = mut_source(&src);
+        // Will be None if it was cancelled while in-flight.
+        if let Some(src) = consume_source(value.user_data()) {
+            let source = mut_source(&src);
 
-        if let None = try_process(source) {
-            let mut w = source.wakers.borrow_mut();
-            w.result = Some(value.result());
-            wakers.append(&mut w.waiters);
+            if let None = try_process(source) {
+                let mut w = source.wakers.borrow_mut();
+                w.result = Some(value.result());
+                wakers.append(&mut w.waiters);
+            }
         }
         return Some(());
     }
@@ -245,12 +246,13 @@ impl SourceMap {
 
 thread_local!(static SOURCE_MAP: RefCell<SourceMap> = SourceMap::new());
 
-fn add_source(source: &Source) -> u64 {
+fn add_source(source: &Source, queue: ReactorQueue) -> u64 {
     SOURCE_MAP.with(|x| {
         let mut map = x.borrow_mut();
         let id = map.id;
         map.id += 1;
         map.map.insert(id, source.inner.clone());
+        source.update_reactor_info(id, queue.clone());
         id
     })
 }
@@ -262,11 +264,36 @@ fn peek_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
     })
 }
 
-fn consume_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
+fn consume_source(id: u64) -> Option<Rc<UnsafeCell<InnerSource>>> {
     SOURCE_MAP.with(|x| {
         let mut map = x.borrow_mut();
-        map.map.remove(&id).unwrap().clone()
+        if let Some(source) = map.map.remove(&id).clone() {
+            let mut s = mut_source(&source);
+            s.id = None;
+            s.queue = None;
+            return Some(source);
+        }
+        None
     })
+}
+
+pub(crate) fn cancel_source(id: u64, queue: ReactorQueue) {
+    // This may happen during teardown of the system itself, in which
+    // case the thread local may be gone. That's fine because in that case
+    // the ring is gone
+    SOURCE_MAP
+        .try_with(|x| {
+            let mut map = x.borrow_mut();
+            // This is synchronous so if we were passed an id, it exists.
+            // Otherwise we panic. consume_source is different because it runs
+            // asynchronously when the ring returns. If we don't find and Id here
+            // that means that someone called drop() inside the io_uring poller which
+            // is totally illegal.
+            map.map.remove(&id).unwrap();
+            let mut q = queue.borrow_mut();
+            q.cancel_request(id);
+        })
+        .ok();
 }
 
 #[derive(Debug)]
@@ -284,6 +311,26 @@ impl UringQueueState {
             cancellations: VecDeque::new(),
         }))
     }
+
+    fn cancel_request(&mut self, id: u64) {
+        let mut found = None;
+        for (idx, el) in self.submissions.iter().enumerate() {
+            if el.user_data == id {
+                found = Some(idx);
+                break;
+            }
+        }
+        match found {
+            Some(idx) => {
+                self.submissions.remove(idx);
+            }
+            None => self.cancellations.push_back(UringDescriptor {
+                args: UringOpDescriptor::Cancel(id),
+                fd: -1,
+                user_data: 0,
+            }),
+        }
+    }
 }
 
 trait UringCommon {
@@ -294,7 +341,7 @@ trait UringCommon {
     fn name(&self) -> &'static str;
 
     fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
-        let id = add_source(source);
+        let id = add_source(source, self.submission_queue().clone());
 
         let q = self.submission_queue();
         let mut queue = q.borrow_mut();
@@ -489,7 +536,7 @@ impl SleepableRing {
             _ => panic!("Unexpected source type when linking rings"),
         }
 
-        let new_id = add_source(source);
+        let new_id = add_source(source, self.submission_queue.clone());
         let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
         source.update_source_type(SourceType::Timeout(Some(new_id)));
 
@@ -518,7 +565,7 @@ impl SleepableRing {
 
                     let op = UringDescriptor {
                         fd: link.raw(),
-                        user_data: add_source(link),
+                        user_data: add_source(link, self.submission_queue.clone()),
                         args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                     };
                     fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
@@ -778,17 +825,6 @@ impl Reactor {
     pub(crate) fn insert(&self, fd: RawFd) -> io::Result<()> {
         add_flag(fd, libc::O_NONBLOCK)
     }
-
-    /*
-    pub(crate) fn cancel_io(&self, source : &Source) {
-        let source_ptr = source as *const Source;
-        let op = match source.source_type {
-            sys::SourceType::PollableFd => UringOpDescriptor::PollRemove(source_ptr as _),
-            _ => UringOpDescriptor::Cancel(source_ptr as _),
-        };
-        self.add_to_submission_queue(source, op);
-    }
-    */
 
     // We want to go to sleep but we can only go to sleep in one of the rings,
     // as we only have one thread. There are more than one sleepable rings, so

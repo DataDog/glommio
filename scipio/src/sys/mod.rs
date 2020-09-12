@@ -155,6 +155,10 @@ pub struct InnerSource {
     pub(crate) source_type: SourceType,
 
     io_requirements: IoRequirements,
+
+    id: Option<u64>,
+
+    queue: Option<ReactorQueue>,
 }
 
 #[derive(Debug)]
@@ -171,6 +175,8 @@ impl Source {
                 wakers: RefCell::new(Wakers::new()),
                 source_type,
                 io_requirements: ioreq,
+                id: None,
+                queue: None,
             })),
         }
     }
@@ -189,6 +195,15 @@ pub(crate) fn mut_source(source: &Rc<UnsafeCell<InnerSource>>) -> &mut InnerSour
 impl Source {
     fn inner(&self) -> &mut InnerSource {
         mut_source(&self.inner)
+    }
+
+    pub(crate) fn update_reactor_info(&self, id: u64, queue: ReactorQueue) {
+        self.inner().id = Some(id);
+        self.inner().queue = Some(queue);
+    }
+
+    pub(crate) fn consume_id(&self) -> Option<u64> {
+        self.inner().id.take()
     }
 
     pub(crate) fn latency_req(&self) -> Latency {
@@ -218,13 +233,9 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        let w = self.wakers().borrow_mut();
-        if !w.waiters.is_empty() {
-            panic!("Attempting to release a source with pending waiters!");
-            // This cancellation will be problematic, because
-            // the operation may still be in-flight. If it returns
-            // later it will point to garbage memory.
-            //    crate::parking::Reactor::get().cancel_io(self);
+        if let Some(id) = self.consume_id() {
+            let queue = self.inner().queue.take();
+            crate::sys::uring::cancel_source(id, queue.unwrap());
         }
     }
 }
