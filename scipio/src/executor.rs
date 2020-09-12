@@ -842,7 +842,8 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Timer, Task};
+    /// use scipio::{LocalExecutor, Task};
+    /// use scipio::timer::Timer;
     /// use futures_lite::future;
     ///
     /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
@@ -1176,7 +1177,7 @@ fn task_optimized_for_throughput() {
 
 #[test]
 fn test_detach() {
-    use crate::Timer;
+    use crate::timer::Timer;
 
     let ex = LocalExecutor::new(None).expect("failed to create local executor");
 

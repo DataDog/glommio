@@ -17,7 +17,8 @@
 //! Connect to `example.com:80`, or time out after 10 seconds.
 //!
 //! ```
-//! use scipio::{Async, Timer, LocalExecutor};
+//! use scipio::{Async, LocalExecutor};
+//! use scipio::timer::Timer;
 //! use futures_lite::{future::FutureExt, io};
 //!
 //! use std::net::{TcpStream, ToSocketAddrs};
@@ -134,7 +135,7 @@ mod local_semaphore;
 mod multitask;
 mod networking;
 mod pollable;
-mod timer;
+pub mod timer;
 
 pub use crate::dma_file::{Directory, DmaFile};
 pub use crate::error::Error;
