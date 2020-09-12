@@ -688,7 +688,7 @@ mod test {
                 *(exec1.borrow_mut()) = 1;
             });
 
-            Task::<()>::later().await;
+            Local::later().await;
             assert_eq!(*(exec2.borrow()), 1);
         });
     }
@@ -795,7 +795,7 @@ mod test {
             });
             // Force this to go into the task queue to make the test more
             // realistic
-            Task::<()>::later().await;
+            Local::later().await;
             action.cancel().await;
 
             Timer::new(Duration::from_millis(100)).await;

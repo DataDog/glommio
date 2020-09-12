@@ -45,6 +45,7 @@ use scoped_tls::scoped_thread_local;
 use crate::multitask;
 use crate::parking;
 use crate::task::{self, waker_fn::waker_fn};
+use crate::Local;
 use crate::Reactor;
 use crate::{IoRequirements, Latency};
 
@@ -771,7 +772,7 @@ impl<T> Task<T> {
     #[inline]
     pub async fn yield_if_needed() {
         if Reactor::need_preempt() {
-            Task::<()>::later().await;
+            Local::later().await;
         }
     }
 
@@ -1001,8 +1002,6 @@ fn invalid_task_queue() {
 
 #[test]
 fn ten_yielding_queues() {
-    use futures::future::join_all;
-
     let local_ex = LocalExecutor::new(None).unwrap();
 
     // 0 -> no one
@@ -1016,53 +1015,49 @@ fn ten_yielding_queues() {
             joins.push(Task::local(async move {
                 for _ in 0..10_000 {
                     let mut last = exec.borrow_mut();
-                    assert!(id != *last);
+                    assert_ne!(id, *last);
                     *last = id;
                     drop(last);
-                    Task::<()>::later().await;
+                    Local::later().await;
                 }
             }));
         }
-        join_all(joins).await;
+        futures::future::join_all(joins).await;
     });
 }
 
 #[test]
 fn task_with_latency_requirements() {
-    use futures::join;
-
     let local_ex = LocalExecutor::new(None).unwrap();
 
     local_ex.run(async {
-        let not_latency = Task::<()>::create_task_queue(1, Latency::NotImportant, "test");
+        let not_latency = Local::create_task_queue(1, Latency::NotImportant, "test");
         let latency =
-            Task::<()>::create_task_queue(1, Latency::Matters(Duration::from_millis(2)), "testlat");
+            Local::create_task_queue(1, Latency::Matters(Duration::from_millis(2)), "testlat");
 
         let nolat_started = Rc::new(RefCell::new(false));
         let lat_status = Rc::new(RefCell::new(false));
-
-        let rust_capture_sucks = move || (nolat_started.clone(), lat_status.clone());
-        let nolat_sucks = rust_capture_sucks.clone();
 
         // Loop until need_preempt is set. It is set to 2ms, but because this is a test
         // and can be running overcommited or in whichever shared infrastructure, we'll
         // allow the timer to fire in up to 1s. If it didn't fire in 1s, that's broken.
         let nolat = local_ex
             .spawn_into(
-                async move {
-                    let (nolat_started, lat_status) = nolat_sucks();
-                    *(nolat_started.borrow_mut()) = true;
+                crate::enclose! { (nolat_started, lat_status)
+                    async move {
+                        *(nolat_started.borrow_mut()) = true;
 
-                    let start = Instant::now();
-                    // Now busy loop and make sure that we yield when we have too.
-                    loop {
-                        if *(lat_status.borrow()) {
-                            break; // Success!
+                        let start = Instant::now();
+                        // Now busy loop and make sure that we yield when we have too.
+                        loop {
+                            if *(lat_status.borrow()) {
+                                break; // Success!
+                            }
+                            if start.elapsed().as_secs() > 1 {
+                                panic!("Never received preempt signal");
+                            }
+                            Local::yield_if_needed().await;
                         }
-                        if start.elapsed().as_secs() > 1 {
-                            panic!("Never received preempt signal");
-                        }
-                        Task::<()>::yield_if_needed().await;
                     }
                 },
                 not_latency,
@@ -1071,31 +1066,29 @@ fn task_with_latency_requirements() {
 
         let lat = local_ex
             .spawn_into(
-                async move {
-                    let (nolat_started, lat_status) = rust_capture_sucks();
-                    // In case we are executed first, yield to the the other task
-                    loop {
-                        if *(nolat_started.borrow()) == false {
-                            Task::<()>::later().await;
-                        } else {
-                            break;
+                crate::enclose! { (nolat_started, lat_status)
+                    async move {
+                        // In case we are executed first, yield to the the other task
+                        loop {
+                            if *(nolat_started.borrow()) == false {
+                                Local::later().await;
+                            } else {
+                                break;
+                            }
                         }
+                        *(lat_status.borrow_mut()) = true;
                     }
-                    *(lat_status.borrow_mut()) = true;
                 },
                 latency,
             )
             .unwrap();
 
-        join!(nolat, lat);
+        futures::join!(nolat, lat);
     });
 }
 
 #[test]
 fn current_task_queue_matches() {
-    use crate::Local;
-    use futures::join;
-
     let local_ex = LocalExecutor::new(None).unwrap();
     local_ex.run(async {
         let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test1");
@@ -1120,42 +1113,38 @@ fn current_task_queue_matches() {
             tq2,
         )
         .unwrap();
-        join!(j0, j1, j2);
+        futures::join!(j0, j1, j2);
     })
 }
 
 #[test]
 fn task_optimized_for_throughput() {
-    use futures::join;
-
     let local_ex = LocalExecutor::new(None).unwrap();
 
     local_ex.run(async {
-        let tq1 = Task::<()>::create_task_queue(1, Latency::NotImportant, "test");
-        let tq2 = Task::<()>::create_task_queue(1, Latency::NotImportant, "testlat");
+        let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test");
+        let tq2 = Local::create_task_queue(1, Latency::NotImportant, "testlat");
 
         let first_started = Rc::new(RefCell::new(false));
         let second_status = Rc::new(RefCell::new(false));
 
-        let rust_capture_sucks = move || (first_started.clone(), second_status.clone());
-        let clone_sucks = rust_capture_sucks.clone();
-
         let first = local_ex
             .spawn_into(
-                async move {
-                    let (first_started, second_status) = clone_sucks();
-                    *(first_started.borrow_mut()) = true;
+                crate::enclose! { (first_started, second_status)
+                    async move {
+                        *(first_started.borrow_mut()) = true;
 
-                    let start = Instant::now();
-                    // Now busy loop and make sure that we yield when we have too.
-                    loop {
-                        if *(second_status.borrow()) {
-                            panic!("I was preempted but should not have been");
+                        let start = Instant::now();
+                        // Now busy loop and make sure that we yield when we have too.
+                        loop {
+                            if *(second_status.borrow()) {
+                                panic!("I was preempted but should not have been");
+                            }
+                            if start.elapsed().as_millis() > 200 {
+                                break;
+                            }
+                            Local::yield_if_needed().await;
                         }
-                        if start.elapsed().as_millis() > 200 {
-                            break;
-                        }
-                        Task::<()>::yield_if_needed().await;
                     }
                 },
                 tq1,
@@ -1164,23 +1153,24 @@ fn task_optimized_for_throughput() {
 
         let second = local_ex
             .spawn_into(
-                async move {
-                    let (first_started, second_status) = rust_capture_sucks();
-                    // In case we are executed first, yield to the the other task
-                    loop {
-                        if *(first_started.borrow()) == false {
-                            Task::<()>::later().await;
-                        } else {
-                            break;
+                crate::enclose! { (first_started, second_status)
+                    async move {
+                        // In case we are executed first, yield to the the other task
+                        loop {
+                            if *(first_started.borrow()) == false {
+                                Local::later().await;
+                            } else {
+                                break;
+                            }
                         }
+                        *(second_status.borrow_mut()) = true;
                     }
-                    *(second_status.borrow_mut()) = true;
                 },
                 tq2,
             )
             .unwrap();
 
-        join!(first, second);
+        futures::join!(first, second);
     });
 }
 
@@ -1193,12 +1183,12 @@ fn test_detach() {
     ex.spawn(async {
         loop {
             //   println!("I'm a background task looping forever.");
-            Task::<()>::later().await;
+            Local::later().await;
         }
     })
     .detach();
 
     ex.run(async {
-        Timer::new(std::time::Duration::from_micros(100)).await;
+        Timer::new(Duration::from_micros(100)).await;
     });
 }

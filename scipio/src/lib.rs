@@ -51,7 +51,6 @@ pub mod parking;
 mod sys;
 pub mod task;
 
-mod executor;
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
@@ -130,6 +129,7 @@ macro_rules! make_shared_var_mut {
 mod async_collections;
 mod dma_file;
 mod error;
+mod executor;
 mod local_semaphore;
 mod multitask;
 mod networking;
@@ -145,6 +145,7 @@ pub use crate::networking::*;
 pub use crate::pollable::Async;
 pub use crate::sys::DmaBuffer;
 pub use crate::timer::{Timer, TimerActionOnce, TimerActionRepeat};
+pub use enclose::enclose;
 
 /// Local is an ergonomic way to access the local executor.
 /// The local is executed through a Task type, but the Task type has a type
