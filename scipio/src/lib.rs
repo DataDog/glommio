@@ -17,7 +17,8 @@
 //! Connect to `example.com:80`, or time out after 10 seconds.
 //!
 //! ```
-//! use scipio::{Async, Timer, LocalExecutor};
+//! use scipio::{Async, LocalExecutor};
+//! use scipio::timer::Timer;
 //! use futures_lite::{future::FutureExt, io};
 //!
 //! use std::net::{TcpStream, ToSocketAddrs};
@@ -126,23 +127,22 @@ macro_rules! make_shared_var_mut {
     }
 }
 
-mod async_collections;
+pub mod collections;
 mod dma_file;
 mod error;
 mod executor;
-mod local_semaphore;
 mod multitask;
 mod networking;
 mod pollable;
-mod timer;
+mod semaphore;
+pub mod timer;
 
-pub use crate::async_collections::AsyncDeque;
 pub use crate::dma_file::{Directory, DmaFile};
 pub use crate::error::Error;
 pub use crate::executor::{LocalExecutor, QueueNotFoundError, Task, TaskQueueHandle};
-pub use crate::local_semaphore::Semaphore;
 pub use crate::networking::*;
 pub use crate::pollable::Async;
+pub use crate::semaphore::Semaphore;
 pub use crate::sys::DmaBuffer;
 pub use crate::timer::{Timer, TimerActionOnce, TimerActionRepeat};
 pub use enclose::enclose;
