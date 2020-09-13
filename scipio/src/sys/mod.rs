@@ -4,16 +4,15 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::Latency;
-use std::cell::RefCell;
+use std::cell::{RefCell, UnsafeCell};
 use std::ffi::CString;
 use std::io;
-use std::marker::PhantomPinned;
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::Path;
-use std::pin::Pin;
+use std::rc::Rc;
 use std::task::Waker;
 
 macro_rules! syscall {
@@ -121,7 +120,7 @@ pub(crate) enum SourceType {
     Close,
     LinkRings(LinkStatus),
     Statx(CString, Box<RefCell<libc::statx>>),
-    Timeout(bool),
+    Timeout(Option<u64>),
     Invalid,
 }
 
@@ -156,64 +155,64 @@ pub struct InnerSource {
     pub(crate) source_type: SourceType,
 
     io_requirements: IoRequirements,
-
-    _pin: PhantomPinned,
 }
 
 #[derive(Debug)]
 pub struct Source {
-    pub(crate) inner: Pin<Box<InnerSource>>,
+    pub(crate) inner: Rc<UnsafeCell<InnerSource>>,
 }
 
 impl Source {
     /// Registers an I/O source in the reactor.
     pub(crate) fn new(ioreq: IoRequirements, raw: RawFd, source_type: SourceType) -> Source {
         Source {
-            inner: Box::pin(InnerSource {
-                _pin: PhantomPinned,
+            inner: Rc::new(UnsafeCell::new(InnerSource {
                 raw,
                 wakers: RefCell::new(Wakers::new()),
                 source_type,
                 io_requirements: ioreq,
-            }),
+            })),
         }
     }
 }
 
+impl InnerSource {
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        std::mem::replace(&mut self.source_type, source_type)
+    }
+}
+
+pub(crate) fn mut_source(source: &Rc<UnsafeCell<InnerSource>>) -> &mut InnerSource {
+    unsafe { &mut *source.get() }
+}
+
 impl Source {
+    fn inner(&self) -> &mut InnerSource {
+        mut_source(&self.inner)
+    }
+
     pub(crate) fn latency_req(&self) -> Latency {
-        self.inner.io_requirements.latency_req
+        self.inner().io_requirements.latency_req
     }
 
     pub(crate) fn source_type<'a>(&'a self) -> &'a SourceType {
-        &self.inner.source_type
+        &self.inner().source_type
     }
 
     pub(crate) fn raw(&self) -> RawFd {
-        self.inner.raw
+        self.inner().raw
     }
 
     pub(crate) fn wakers(&self) -> &RefCell<Wakers> {
-        &self.inner.wakers
+        &self.inner().wakers
     }
 
-    pub(crate) fn as_ptr(&self) -> *const InnerSource {
-        self.inner.as_ref().get_ref() as *const InnerSource
-    }
-
-    pub(crate) fn update_source_type(&mut self, source_type: SourceType) {
-        unsafe {
-            let source = self.inner.as_mut().get_unchecked_mut();
-            source.source_type = source_type;
-        }
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        self.inner().update_source_type(source_type)
     }
 
     pub(crate) fn extract_source_type(&mut self) -> SourceType {
-        unsafe {
-            let source = self.inner.as_mut().get_unchecked_mut();
-            let invalid = SourceType::Invalid;
-            std::mem::replace(&mut source.source_type, invalid)
-        }
+        self.inner().update_source_type(SourceType::Invalid)
     }
 }
 

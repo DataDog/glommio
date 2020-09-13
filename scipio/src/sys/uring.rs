@@ -5,18 +5,19 @@
 //
 use nix::poll::PollFlags;
 use rlimit::Resource;
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::cell::{RefCell, UnsafeCell};
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::io;
 use std::io::{Error, ErrorKind};
 use std::os::unix::io::RawFd;
+use std::rc::Rc;
 use std::task::Waker;
 use std::time::Duration;
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::{mut_source, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
@@ -45,7 +46,7 @@ enum UringOpDescriptor {
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
     Timeout(u64),
-    TimeoutRemove(*const InnerSource),
+    TimeoutRemove(u64),
 }
 
 #[derive(Debug)]
@@ -180,7 +181,9 @@ where
 
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
                 sqe.prep_read(op.fd, buf.as_mut_bytes(), pos);
-                let mut source = user_data_as_src(op.user_data);
+                let src = peek_source(op.user_data);
+                let mut source = mut_source(&src);
+
                 if let SourceType::DmaRead(pollable, _) = source.source_type {
                     source.source_type = SourceType::DmaRead(pollable, Some(buf));
                 } else {
@@ -199,6 +202,73 @@ where
     sqe.set_user_data(user_data);
 }
 
+fn process_one_event<F>(
+    cqe: Option<iou::CompletionQueueEvent>,
+    try_process: F,
+    wakers: &mut Vec<Waker>,
+) -> Option<()>
+where
+    F: FnOnce(&mut InnerSource) -> Option<()>,
+{
+    if let Some(value) = cqe {
+        // No user data is POLL_REMOVE or CANCEL, we won't process.
+        if value.user_data() == 0 {
+            return Some(());
+        }
+
+        let src = consume_source(value.user_data());
+        let source = mut_source(&src);
+
+        if let None = try_process(source) {
+            let mut w = source.wakers.borrow_mut();
+            w.result = Some(value.result());
+            wakers.append(&mut w.waiters);
+        }
+        return Some(());
+    }
+    None
+}
+
+struct SourceMap {
+    id: u64,
+    map: HashMap<u64, Rc<UnsafeCell<InnerSource>>>,
+}
+
+impl SourceMap {
+    fn new() -> RefCell<Self> {
+        RefCell::new(Self {
+            id: 0,
+            map: HashMap::new(),
+        })
+    }
+}
+
+thread_local!(static SOURCE_MAP: RefCell<SourceMap> = SourceMap::new());
+
+fn add_source(source: &Source) -> u64 {
+    SOURCE_MAP.with(|x| {
+        let mut map = x.borrow_mut();
+        let id = map.id;
+        map.id += 1;
+        map.map.insert(id, source.inner.clone());
+        id
+    })
+}
+
+fn peek_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
+    SOURCE_MAP.with(|x| {
+        let map = x.borrow_mut();
+        map.map.get(&id).unwrap().clone()
+    })
+}
+
+fn consume_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
+    SOURCE_MAP.with(|x| {
+        let mut map = x.borrow_mut();
+        map.map.remove(&id).unwrap().clone()
+    })
+}
+
 trait UringCommon {
     fn submission_queue(&mut self) -> &mut VecDeque<UringDescriptor>;
     fn submit_sqes(&mut self) -> io::Result<usize>;
@@ -207,10 +277,12 @@ trait UringCommon {
     fn name(&self) -> &'static str;
 
     fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
+        let id = add_source(source);
+
         self.submission_queue().push_back(UringDescriptor {
             args: descriptor,
             fd: source.raw(),
-            user_data: source.as_ptr() as _,
+            user_data: id,
         });
     }
 
@@ -354,14 +426,12 @@ impl SleepableRing {
         wakers: &mut Vec<Waker>,
         d: Duration,
     ) -> io::Result<()> {
-        let src = source.as_ptr() as *const InnerSource;
-
         match source.source_type() {
-            SourceType::Timeout(false) => {} // not armed, do nothing
-            SourceType::Timeout(true) => {
+            SourceType::Timeout(None) => {} // not armed, do nothing
+            SourceType::Timeout(Some(source_id)) => {
                 // armed, need to cancel first
-                let op_remove = UringOpDescriptor::TimeoutRemove(src);
-                source.update_source_type(SourceType::Timeout(false));
+                let op_remove = UringOpDescriptor::TimeoutRemove(*source_id);
+                source.update_source_type(SourceType::Timeout(None));
 
                 self.submission_queue().push_front(UringDescriptor {
                     args: op_remove,
@@ -373,8 +443,9 @@ impl SleepableRing {
             _ => panic!("Unexpected source type when linking rings"),
         }
 
+        let new_id = add_source(source);
         let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
-        source.update_source_type(SourceType::Timeout(true));
+        source.update_source_type(SourceType::Timeout(Some(new_id)));
 
         // This assumes SQEs will be processed in the order they are
         // seen. Because remove does not do anything asynchronously
@@ -382,7 +453,7 @@ impl SleepableRing {
         self.submission_queue().push_front(UringDescriptor {
             args: op,
             fd: -1,
-            user_data: src as _,
+            user_data: new_id,
         });
         // No need to submit, the next ring enter will submit for us. Because
         // we just flushed and we got put in front of the queue we should get a SQE.
@@ -399,7 +470,7 @@ impl SleepableRing {
 
                     let op = UringDescriptor {
                         fd: link.raw(),
-                        user_data: link.as_ptr() as *const InnerSource as u64,
+                        user_data: add_source(link),
                         args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                     };
                     fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
@@ -410,39 +481,6 @@ impl SleepableRing {
 
         self.ring.submit_sqes_and_wait(1)
     }
-}
-
-fn user_data_as_src(user_data: u64) -> &'static mut InnerSource {
-    unsafe {
-        let s = user_data as *mut InnerSource;
-        &mut *s
-    }
-}
-
-fn process_one_event<F>(
-    cqe: Option<iou::CompletionQueueEvent>,
-    try_process: F,
-    wakers: &mut Vec<Waker>,
-) -> Option<()>
-where
-    F: FnOnce(&mut InnerSource) -> Option<()>,
-{
-    if let Some(value) = cqe {
-        // No user data is POLL_REMOVE or CANCEL, we won't process.
-        if value.user_data() == 0 {
-            return Some(());
-        }
-
-        let source = user_data_as_src(value.user_data());
-
-        if let None = try_process(source) {
-            let mut w = source.wakers.borrow_mut();
-            w.result = Some(value.result());
-            wakers.append(&mut w.waiters);
-        }
-        return Some(());
-    }
-    None
 }
 
 impl UringCommon for SleepableRing {
@@ -469,14 +507,14 @@ impl UringCommon for SleepableRing {
                 SourceType::LinkRings(LinkStatus::Freestanding) => {
                     panic!("Impossible to have an event firing like this");
                 }
-                SourceType::Timeout(true) => {
-                    source.source_type = SourceType::Timeout(false);
+                SourceType::Timeout(Some(_)) => {
+                    source.source_type = SourceType::Timeout(None);
                     Some(())
                 }
                 // This is actually possible: when the request is cancelled
                 // the original source does complete, and the cancellation
                 // would have marked us as false. Just ignore it.
-                SourceType::Timeout(false) => None,
+                SourceType::Timeout(None) => None,
                 _ => None,
             },
             wakers,
@@ -502,7 +540,9 @@ pub struct Reactor {
     main_ring: RefCell<SleepableRing>,
     latency_ring: RefCell<SleepableRing>,
     poll_ring: RefCell<PollRing>,
+
     link_rings_src: RefCell<Source>,
+
     timeout_src: RefCell<Source>,
 }
 
@@ -600,21 +640,20 @@ impl Reactor {
         let main_ring = SleepableRing::new(128, "main")?;
         let latency_ring = SleepableRing::new(128, "latency")?;
         let link_fd = latency_ring.ring_fd();
+        let link_rings_src = Source::new(
+            IoRequirements::default(),
+            link_fd,
+            SourceType::LinkRings(LinkStatus::Freestanding),
+        );
+
+        let timeout_src = Source::new(IoRequirements::default(), -1, SourceType::Timeout(None));
 
         Ok(Reactor {
             main_ring: RefCell::new(main_ring),
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(PollRing::new(128)?),
-            link_rings_src: RefCell::new(Source::new(
-                IoRequirements::default(),
-                link_fd,
-                SourceType::LinkRings(LinkStatus::Freestanding),
-            )),
-            timeout_src: RefCell::new(Source::new(
-                IoRequirements::default(),
-                -1,
-                SourceType::Timeout(false),
-            )),
+            link_rings_src: RefCell::new(link_rings_src),
+            timeout_src: RefCell::new(timeout_src),
         })
     }
 
