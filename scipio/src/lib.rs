@@ -139,6 +139,7 @@ mod networking;
 mod pollable;
 mod read_result;
 mod semaphore;
+mod shared;
 pub mod timer;
 
 pub use crate::dma_file::{Directory, DmaFile};
@@ -152,6 +153,7 @@ pub use crate::networking::*;
 pub use crate::pollable::Async;
 pub use crate::read_result::ReadResult;
 pub use crate::semaphore::Semaphore;
+pub use crate::shared::{Shared, WeakShared};
 pub use crate::sys::DmaBuffer;
 pub use enclose::enclose;
 pub use scopeguard::defer;

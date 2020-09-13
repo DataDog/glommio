@@ -27,3 +27,7 @@ path = "defer.rs"
 [[example]]
 name = "cooperative_preempt"
 path = "cooperative_preempt.rs"
+
+[[example]]
+name = "shared"
+path = "shared.rs"
