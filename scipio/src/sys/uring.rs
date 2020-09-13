@@ -269,31 +269,67 @@ fn consume_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
     })
 }
 
+#[derive(Debug)]
+pub(crate) struct UringQueueState {
+    submissions: VecDeque<UringDescriptor>,
+    cancellations: VecDeque<UringDescriptor>,
+}
+
+pub(crate) type ReactorQueue = Rc<RefCell<UringQueueState>>;
+
+impl UringQueueState {
+    fn with_capacity(cap: usize) -> ReactorQueue {
+        Rc::new(RefCell::new(UringQueueState {
+            submissions: VecDeque::with_capacity(cap),
+            cancellations: VecDeque::new(),
+        }))
+    }
+}
+
 trait UringCommon {
-    fn submission_queue(&mut self) -> &mut VecDeque<UringDescriptor>;
+    fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
-    fn submit_one_event(&mut self) -> Option<()>;
+    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()>;
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
     fn name(&self) -> &'static str;
 
     fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
         let id = add_source(source);
 
-        self.submission_queue().push_back(UringDescriptor {
+        let q = self.submission_queue();
+        let mut queue = q.borrow_mut();
+        queue.submissions.push_back(UringDescriptor {
             args: descriptor,
             fd: source.raw(),
             user_data: id,
         });
     }
 
-    fn consume_submission_queue(&mut self) -> io::Result<usize> {
+    fn consume_sqe_queue(&mut self, queue: &mut VecDeque<UringDescriptor>) -> io::Result<usize> {
+        let mut sub = 0;
         loop {
-            if let None = self.submit_one_event() {
+            if let None = self.submit_one_event(queue) {
                 break;
             }
+            sub += 1;
         }
 
-        self.submit_sqes()
+        if sub > 0 {
+            return self.submit_sqes();
+        }
+        Ok(0)
+    }
+
+    fn consume_cancellation_queue(&mut self) -> io::Result<usize> {
+        let q = self.submission_queue();
+        let mut queue = q.borrow_mut();
+        self.consume_sqe_queue(&mut queue.cancellations)
+    }
+
+    fn consume_submission_queue(&mut self) -> io::Result<usize> {
+        let q = self.submission_queue();
+        let mut queue = q.borrow_mut();
+        self.consume_sqe_queue(&mut queue.submissions)
     }
 
     fn consume_completion_queue(&mut self, wakers: &mut Vec<Waker>) -> usize {
@@ -306,11 +342,35 @@ trait UringCommon {
         }
         completed
     }
+
+    // It is important to process cancellations as soon as we see them,
+    // which is why they go into a separate queue. The reason is that
+    // cancellations can be racy if they are left to their own devices.
+    //
+    // Imagine that you have a write request to fd 3 and wants to cancel it.
+    // But before the cancellation is run fd 3 gets closed and another file
+    // is opened with the same fd.
+    fn flush_cancellations(&mut self, wakers: &mut Vec<Waker>) {
+        let mut cnt = 0;
+        loop {
+            if self.consume_cancellation_queue().is_ok() {
+                break;
+            }
+            self.consume_completion_queue(wakers);
+            cnt += 1;
+            if cnt > 1_000_000 {
+                panic!(
+                    "i tried literally a million times but couldn't flush to the {} ring",
+                    self.name()
+                );
+            }
+        }
+    }
 }
 
 struct PollRing {
     ring: iou::IoUring,
-    submission_queue: VecDeque<UringDescriptor>,
+    submission_queue: ReactorQueue,
     submitted: u64,
     completed: u64,
 }
@@ -323,7 +383,7 @@ impl PollRing {
             submitted: 0,
             completed: 0,
             ring,
-            submission_queue: VecDeque::with_capacity(size * 4),
+            submission_queue: UringQueueState::with_capacity(size * 4),
         })
     }
 
@@ -341,8 +401,8 @@ impl UringCommon for PollRing {
         "poll"
     }
 
-    fn submission_queue(&mut self) -> &mut VecDeque<UringDescriptor> {
-        &mut self.submission_queue
+    fn submission_queue(&mut self) -> ReactorQueue {
+        self.submission_queue.clone()
     }
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
@@ -359,15 +419,15 @@ impl UringCommon for PollRing {
         })
     }
 
-    fn submit_one_event(&mut self) -> Option<()> {
-        if self.submission_queue.is_empty() {
+    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()> {
+        if queue.is_empty() {
             return None;
         }
 
         //let buffers = self.buffers.clone();
         if let Some(mut sqe) = self.ring.next_sqe() {
             self.submitted += 1;
-            let op = self.submission_queue.pop_front().unwrap();
+            let op = queue.pop_front().unwrap();
             fill_sqe(&mut sqe, &op, |size| {
                 /* FIXME: uring registered buffers need more work...
                 let b = buffers.clone();
@@ -384,7 +444,7 @@ impl UringCommon for PollRing {
 
 struct SleepableRing {
     ring: iou::IoUring,
-    submission_queue: VecDeque<UringDescriptor>,
+    submission_queue: ReactorQueue,
     name: &'static str,
 }
 
@@ -394,30 +454,13 @@ impl SleepableRing {
         Ok(SleepableRing {
             //     ring: iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?,
             ring: iou::IoUring::new(size as _)?,
-            submission_queue: VecDeque::with_capacity(size * 4),
+            submission_queue: UringQueueState::with_capacity(size * 4),
             name,
         })
     }
 
     fn ring_fd(&self) -> RawFd {
         self.ring.raw().ring_fd
-    }
-
-    fn force_submit(&mut self, wakers: &mut Vec<Waker>) {
-        let mut cnt = 0;
-        loop {
-            if self.consume_submission_queue().is_ok() {
-                break;
-            }
-            self.consume_completion_queue(wakers);
-            cnt += 1;
-            if cnt > 1_000_000 {
-                panic!(
-                    "I tried literally a million times but couldn't flush to the {} ring",
-                    self.name()
-                );
-            }
-        }
     }
 
     pub(crate) fn rearm_preempt_timer(
@@ -433,12 +476,15 @@ impl SleepableRing {
                 let op_remove = UringOpDescriptor::TimeoutRemove(*source_id);
                 source.update_source_type(SourceType::Timeout(None));
 
-                self.submission_queue().push_front(UringDescriptor {
+                let q = self.submission_queue();
+                let mut queue = q.borrow_mut();
+                queue.cancellations.push_front(UringDescriptor {
                     args: op_remove,
                     fd: -1,
                     user_data: 0,
                 });
-                self.force_submit(wakers);
+                drop(queue);
+                self.flush_cancellations(wakers);
             }
             _ => panic!("Unexpected source type when linking rings"),
         }
@@ -450,7 +496,9 @@ impl SleepableRing {
         // This assumes SQEs will be processed in the order they are
         // seen. Because remove does not do anything asynchronously
         // and is processed inline there is no need to link sqes.
-        self.submission_queue().push_front(UringDescriptor {
+        let q = self.submission_queue();
+        let mut queue = q.borrow_mut();
+        queue.submissions.push_front(UringDescriptor {
             args: op,
             fd: -1,
             user_data: new_id,
@@ -488,8 +536,8 @@ impl UringCommon for SleepableRing {
         self.name
     }
 
-    fn submission_queue(&mut self) -> &mut VecDeque<UringDescriptor> {
-        &mut self.submission_queue
+    fn submission_queue(&mut self) -> ReactorQueue {
+        self.submission_queue.clone()
     }
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
@@ -521,13 +569,13 @@ impl UringCommon for SleepableRing {
         )
     }
 
-    fn submit_one_event(&mut self) -> Option<()> {
-        if self.submission_queue.is_empty() {
+    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()> {
+        if queue.is_empty() {
             return None;
         }
 
         if let Some(mut sqe) = self.ring.next_sqe() {
-            let op = self.submission_queue.pop_front().unwrap();
+            let op = queue.pop_front().unwrap();
             fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
             return Some(());
         }
@@ -567,6 +615,13 @@ macro_rules! consume_rings {
             consumed += $ring.consume_completion_queue($output);
         )*
         consumed
+    }}
+}
+macro_rules! flush_cancellations {
+    (into $output:expr; $( $ring:expr ),+ ) => {{
+        $(
+            $ring.flush_cancellations($output);
+        )*
     }}
 }
 
@@ -766,6 +821,7 @@ impl Reactor {
                 false
             }
         };
+        flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
         flush_rings!(main_ring, lat_ring, poll_ring)?;
         should_sleep &= poll_ring.can_sleep();
 
