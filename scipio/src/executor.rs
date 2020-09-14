@@ -17,7 +17,7 @@
 //!
 //! for i in 0..4 {
 //!     std::thread::spawn(move || {
-//!         let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+//!         let local_ex = LocalExecutor::spawn_default();
 //!         local_ex.run(async {
 //!             Timer::new(std::time::Duration::from_millis(100)).await;
 //!             println!("Hello world!");
@@ -293,6 +293,50 @@ impl ExecutorQueues {
     }
 }
 
+/// LocalExecutor factory, which can be used in order to configure the properties of a new
+/// [`LocalExecutor`].
+///
+/// Methods can be chained on it in order to configure it.
+///
+/// The [`spawn`] method will take ownership of the builder and create an [`io::Result`] to the
+/// [`LocalExecutor`] handle with the given configuration.
+///
+/// The [`LocalExecutor::spawn_default`] free function uses a Builder with default configuration and
+/// unwraps its return value.
+///
+/// You may want to use [`spawn`] instead of [`LocalExecutor::spawn_default`], when you want to
+/// recover from a failure to launch a thread, indeed the free function will panic where the Builder
+/// method will return a [`io::Result`].
+///
+/// # Examples
+///
+/// ```
+/// use scipio::LocalExecutorBuilder;
+///
+/// let builder = LocalExecutorBuilder::new();
+/// let ex = builder.spawn().unwrap();
+/// ```
+#[derive(Debug)]
+pub struct LocalExecutorBuilder {}
+
+impl LocalExecutorBuilder {
+    /// Generates the base configuration for spawning a [`LocalExecutor`], from which configuration
+    /// methods can be chained.
+    pub fn new() -> LocalExecutorBuilder {
+        LocalExecutorBuilder {}
+    }
+
+    /// Spawns a new [`LocalExecutor`] by taking ownership of the Builder, and returns an io::Result
+    /// to its JoinHandle.
+    pub fn spawn(&self) -> io::Result<LocalExecutor> {
+        let mut le = LocalExecutor::new();
+        match le.init(None) {
+            Ok(_) => Ok(le),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// Single-threaded executor.
 ///
 /// The executor can only be run on the thread that created it.
@@ -302,7 +346,7 @@ impl ExecutorQueues {
 /// ```
 /// use scipio::LocalExecutor;
 ///
-/// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+/// let local_ex = LocalExecutor::spawn_default();
 ///
 /// local_ex.run(async {
 ///     println!("Hello world!");
@@ -312,13 +356,12 @@ impl ExecutorQueues {
 pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
     parker: parking::Parker,
-    binding: Option<usize>,
     id: usize,
 }
 
 impl LocalExecutor {
-    fn init(&mut self) -> io::Result<()> {
-        if let Some(cpu) = self.binding {
+    fn init(&mut self, binding: Option<usize>) -> io::Result<()> {
+        if let Some(cpu) = binding {
             bind_to_cpu(cpu)?;
         }
 
@@ -336,30 +379,34 @@ impl LocalExecutor {
         Ok(())
     }
 
-    /// Creates a single-threaded executor, optionally bound to a specific CPU
+    /// Spawns a single-threaded executor with default settings on the current thread.
+    ///
+    /// This will create a executor using default parameters of [`LocalExecutorBuilder`], if you
+    /// want to further customize it, use this API instead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if creating the executor fails; use [`LocalExecutorBuilder::spawn`] to recover
+    /// from such errors.
     ///
     /// # Examples
     ///
     /// ```
     /// use scipio::LocalExecutor;
     ///
-    /// // executor is a single thread, but not bound to any particular CPU.
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
-    ///
-    /// // executor is a a single thread, bound to logical CPU 1.
-    /// let bound_ex = LocalExecutor::new(Some(1)).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     /// ```
-    pub fn new(binding: Option<usize>) -> io::Result<LocalExecutor> {
+    pub fn spawn_default() -> LocalExecutor {
+        LocalExecutorBuilder::new().spawn().unwrap()
+    }
+
+    fn new() -> LocalExecutor {
         let p = parking::Parker::new();
-        let mut le = LocalExecutor {
+        LocalExecutor {
             queues: ExecutorQueues::new(),
             parker: p,
-            binding,
             id: EXECUTOR_ID.fetch_add(1, Ordering::Relaxed),
-        };
-
-        le.init()?;
-        Ok(le)
+        }
     }
 
     /// Creates a single-threaded executor, optionally bound to a specific CPU, inside
@@ -400,10 +447,9 @@ impl LocalExecutor {
                 let mut le = LocalExecutor {
                     queues: ExecutorQueues::new(),
                     parker: parking::Parker::new(),
-                    binding,
                     id,
                 };
-                le.init().unwrap();
+                le.init(binding).unwrap();
                 le.run(async move {
                     let task = Task::local(async move {
                         fut_gen().await;
@@ -419,7 +465,7 @@ impl LocalExecutor {
     /// ```
     /// use scipio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     /// println!("My ID: {}", local_ex.id());
     /// ```
     pub fn id(&self) -> usize {
@@ -436,7 +482,7 @@ impl LocalExecutor {
     /// use std::time::Duration;
     /// use scipio::{LocalExecutor, Latency};
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     ///
     /// let task_queue = local_ex.create_task_queue(1000, Latency::Matters(Duration::from_secs(1)), "my_tq");
     /// let task = local_ex.spawn_into(async {
@@ -546,7 +592,7 @@ impl LocalExecutor {
     /// ```
     /// use scipio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     ///
     /// let task = local_ex.spawn(async {
     ///     println!("Hello world");
@@ -572,7 +618,7 @@ impl LocalExecutor {
     /// ```
     /// use scipio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     /// let handle = local_ex.create_task_queue(1000, scipio::Latency::NotImportant, "test_queue");
     ///
     /// let task = local_ex.spawn_into(async {
@@ -649,7 +695,7 @@ impl LocalExecutor {
     /// ```
     /// use scipio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     ///
     /// let task = local_ex.spawn(async { 1 + 2 });
     /// let res = local_ex.run(async { task.await * 2 });
@@ -695,7 +741,7 @@ impl LocalExecutor {
 /// ```
 /// use scipio::{LocalExecutor, Task};
 ///
-/// let ex = LocalExecutor::new(None).expect("failed to create local executor");
+/// let ex = LocalExecutor::spawn_default();
 ///
 /// ex.run(async {
 ///     let task = Task::local(async {
@@ -722,7 +768,7 @@ impl<T> Task<T> {
     /// ```
     /// use scipio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     ///
     /// local_ex.run(async {
     ///     let task = Task::local(async { 1 + 2 });
@@ -788,7 +834,7 @@ impl<T> Task<T> {
     /// ```
     /// use scipio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     /// let handle = local_ex.create_task_queue(1000, scipio::Latency::NotImportant, "test_queue");
     ///
     /// local_ex.spawn_into(async {
@@ -821,7 +867,7 @@ impl<T> Task<T> {
     /// ```
     /// use scipio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let local_ex = LocalExecutor::spawn_default();
     ///
     /// local_ex.run(async {
     ///     println!("my ID: {}", Task::<()>::id());
@@ -847,7 +893,7 @@ impl<T> Task<T> {
     /// use scipio::timer::Timer;
     /// use futures_lite::future;
     ///
-    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let ex = LocalExecutor::spawn_default();
     ///
     /// ex.spawn(async {
     ///     loop {
@@ -920,7 +966,7 @@ impl<T> Task<T> {
     /// use scipio::{LocalExecutor, Task};
     /// use futures_lite::future;
     ///
-    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let ex = LocalExecutor::spawn_default();
     ///
     /// let task = ex.spawn(async {
     ///     loop {
@@ -949,7 +995,7 @@ impl<T> Future for Task<T> {
 #[test]
 fn create_and_destroy_executor() {
     let mut var = Rc::new(RefCell::new(0));
-    let local_ex = LocalExecutor::new(None).unwrap();
+    let local_ex = LocalExecutor::spawn_default();
 
     let varclone = var.clone();
     local_ex.run(async move {
@@ -981,13 +1027,13 @@ fn create_and_bind() {
 #[test]
 #[should_panic]
 fn spawn_without_executor() {
-    let _ = LocalExecutor::new(None).unwrap();
+    let _ = LocalExecutor::spawn_default();
     let _ = Task::local(async move {});
 }
 
 #[test]
 fn invalid_task_queue() {
-    let local_ex = LocalExecutor::new(None).unwrap();
+    let local_ex = LocalExecutor::spawn_default();
     local_ex.run(async {
         let task = Task::local_into(
             async move {
@@ -1004,7 +1050,7 @@ fn invalid_task_queue() {
 
 #[test]
 fn ten_yielding_queues() {
-    let local_ex = LocalExecutor::new(None).unwrap();
+    let local_ex = LocalExecutor::spawn_default();
 
     // 0 -> no one
     // 1 -> t1
@@ -1030,7 +1076,7 @@ fn ten_yielding_queues() {
 
 #[test]
 fn task_with_latency_requirements() {
-    let local_ex = LocalExecutor::new(None).unwrap();
+    let local_ex = LocalExecutor::spawn_default();
 
     local_ex.run(async {
         let not_latency = Local::create_task_queue(1, Latency::NotImportant, "test");
@@ -1091,7 +1137,7 @@ fn task_with_latency_requirements() {
 
 #[test]
 fn current_task_queue_matches() {
-    let local_ex = LocalExecutor::new(None).unwrap();
+    let local_ex = LocalExecutor::spawn_default();
     local_ex.run(async {
         let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test1");
         let tq2 = Local::create_task_queue(1, Latency::NotImportant, "test2");
@@ -1121,7 +1167,7 @@ fn current_task_queue_matches() {
 
 #[test]
 fn task_optimized_for_throughput() {
-    let local_ex = LocalExecutor::new(None).unwrap();
+    let local_ex = LocalExecutor::spawn_default();
 
     local_ex.run(async {
         let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test");
@@ -1180,7 +1226,7 @@ fn task_optimized_for_throughput() {
 fn test_detach() {
     use crate::timer::Timer;
 
-    let ex = LocalExecutor::new(None).expect("failed to create local executor");
+    let ex = LocalExecutor::spawn_default();
 
     ex.spawn(async {
         loop {

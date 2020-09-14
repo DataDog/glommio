@@ -129,7 +129,7 @@ impl<T> Deque<T> {
     ///
     /// let ad : Deque<usize> = Deque::with_capacity(10);
     ///
-    /// let ex = LocalExecutor::new(None).unwrap();
+    /// let ex = LocalExecutor::spawn_default();
     /// ex.run(async move {
     ///     ad.push_front(1);
     ///     ad.push_front(2);
@@ -156,7 +156,7 @@ impl<T> Deque<T> {
     ///
     /// let ad : Deque<usize> = Deque::with_capacity(10);
     ///
-    /// let ex = LocalExecutor::new(None).unwrap();
+    /// let ex = LocalExecutor::spawn_default();
     /// ex.run(async move {
     ///     ad.push_front(1);
     ///     ad.push_front(2);

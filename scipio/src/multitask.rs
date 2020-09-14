@@ -59,7 +59,7 @@ impl<T> Task<T> {
     /// use scipio::LocalExecutor;
     /// use scipio::timer::Timer;
     ///
-    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let ex = LocalExecutor::spawn_default();
     ///
     /// // Spawn a deamon future.
     /// ex.spawn(async {
@@ -91,7 +91,7 @@ impl<T> Task<T> {
     /// use scipio::timer::Timer;
     /// use futures_lite::future::block_on;
     ///
-    /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
+    /// let ex = LocalExecutor::spawn_default();
     ///
     /// let task = ex.spawn(async {
     ///     Timer::new(std::time::Duration::from_millis(100)).await;
