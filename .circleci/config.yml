@@ -83,4 +83,5 @@ workflows:
   unit_tests:
     jobs:
       - cargofmt
+      - cargodoc
       - cargobuild
