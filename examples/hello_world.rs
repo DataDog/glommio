@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use futures::future::join_all;
-use scipio::{Local, LocalExecutor, LocalExecutorBuilder};
+use scipio::{Local, LocalExecutorBuilder};
 use std::io::Result;
 
 async fn hello() {
@@ -26,7 +26,8 @@ fn main() -> Result<()> {
     let ex = LocalExecutorBuilder::new().pin_to_cpu(0).spawn()?;
 
     // Or we can spawn a new thread with an executor inside.
-    let handle = LocalExecutor::spawn_executor("hello", Some(1), || async move {
+    let builder = LocalExecutorBuilder::new().pin_to_cpu(1);
+    let handle = builder.spawn_thread("hello", || async move {
         hello().await;
     })?;
 

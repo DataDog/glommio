@@ -5,7 +5,7 @@
 //
 use futures::future::join_all;
 use futures::io::{copy, AsyncReadExt, AsyncWriteExt};
-use scipio::{Async, Local, LocalExecutor};
+use scipio::{Async, Local, LocalExecutorBuilder};
 use std::io::Result;
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::rc::Rc;
@@ -23,10 +23,12 @@ async fn server(conns: usize) {
     // Not only this will guarantee that we are listening on the port already (so no need
     // for sleep or retry), but it also demonstrates how a more complex application may not
     // necessarily spawn all executors at once running symmetrical code.
-    let client_handle = LocalExecutor::spawn_executor("client", Some(2), move || async move {
-        client(conns).await;
-    })
-    .unwrap();
+    let client_handle = LocalExecutorBuilder::new()
+        .pin_to_cpu(2)
+        .spawn_thread("client", move || async move {
+            client(conns).await;
+        })
+        .unwrap();
 
     let mut servers = vec![];
     for _ in 0..conns {
@@ -79,7 +81,8 @@ fn main() -> Result<()> {
     // Skip CPU0 because that is commonly used to host interrupts. That depends on
     // system configuration and most modern systems will balance it, but that it is
     // still common enough that it is worth excluding it in this benchmark
-    let server_handle = LocalExecutor::spawn_executor("server", Some(1), || async move {
+    let builder = LocalExecutorBuilder::new().pin_to_cpu(1);
+    let server_handle = builder.spawn_thread("server", || async move {
         // If you try `top` during the execution of the first batch, you
         // will see that the CPUs should not be at 100%. A single connection will
         // not be enough to extract all the performance available in the cores.
