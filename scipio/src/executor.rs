@@ -320,19 +320,32 @@ impl ExecutorQueues {
 /// ```
 #[derive(Debug)]
 pub struct LocalExecutorBuilder {
+    // The id of a CPU to bind the current (or yet to be created) thread
     binding: Option<usize>,
+    // A name for the thread-to-be (if any), for identification in panic messages
+    name: String,
 }
 
 impl LocalExecutorBuilder {
     /// Generates the base configuration for spawning a [`LocalExecutor`], from which configuration
     /// methods can be chained.
     pub fn new() -> LocalExecutorBuilder {
-        LocalExecutorBuilder { binding: None }
+        LocalExecutorBuilder {
+            binding: None,
+            name: String::from("unnamed"),
+        }
     }
 
     /// Sets the new executor's affinity to the provided CPU
     pub fn pin_to_cpu(mut self, cpu: usize) -> LocalExecutorBuilder {
         self.binding = Some(cpu);
+        self
+    }
+
+    /// Names the thread-to-be. Currently the name is used for identification
+    /// only in panic messages.
+    pub fn name(mut self, name: String) -> LocalExecutorBuilder {
+        self.name = name;
         self
     }
 
@@ -368,34 +381,34 @@ impl LocalExecutorBuilder {
     /// ```
     /// use scipio::LocalExecutorBuilder;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("myname", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     println!("hello");
     /// }).unwrap();
     ///
     /// handle.join().unwrap();
     /// ```
     #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
-    pub fn spawn<G, F, T>(self, name: &'static str, fut_gen: G) -> io::Result<JoinHandle<()>>
+    pub fn spawn<G, F, T>(self, fut_gen: G) -> io::Result<JoinHandle<()>>
     where
         G: FnOnce() -> F + std::marker::Send + 'static,
         F: Future<Output = T> + 'static,
     {
         let id = EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
-        Builder::new()
-            .name(format!("{}-{}", name, id).to_string())
-            .spawn(move || {
-                let mut le = LocalExecutor::new(id);
-                if let Some(cpu) = self.binding {
-                    le.bind_to_cpu(cpu).unwrap();
-                }
-                le.init().unwrap();
-                le.run(async move {
-                    let task = Task::local(async move {
-                        fut_gen().await;
-                    });
-                    task.await;
-                })
+        let name = format!("{}-{}", self.name, id).to_string();
+
+        Builder::new().name(name).spawn(move || {
+            let mut le = LocalExecutor::new(id);
+            if let Some(cpu) = self.binding {
+                le.bind_to_cpu(cpu).unwrap();
+            }
+            le.init().unwrap();
+            le.run(async move {
+                let task = Task::local(async move {
+                    fut_gen().await;
+                });
+                task.await;
             })
+        })
     }
 }
 
@@ -942,7 +955,7 @@ impl<T> Task<T> {
     /// ```
     /// use scipio::{LocalExecutor, Local, Latency, LocalExecutorBuilder};
     ///
-    /// let ex = LocalExecutorBuilder::new().spawn("example", || async move {
+    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let original_tq = Local::current_task_queue();
     ///     let new_tq = Local::create_task_queue(1000, Latency::NotImportant, "test");
     ///

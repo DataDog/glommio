@@ -198,7 +198,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///         println!("Executed once");
     ///     });
@@ -228,7 +228,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let action = TimerActionOnce::do_in_into(Duration::from_millis(100), async move {
     ///         println!("Executed once");
@@ -277,7 +277,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::{Instant, Duration};
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let when = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
     ///     let action = TimerActionOnce::do_at(when, async move {
     ///         println!("Executed once");
@@ -308,7 +308,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::{Instant, Duration};
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let when = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
     ///     let action = TimerActionOnce::do_at_into(when, async move {
@@ -349,7 +349,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///         println!("Will not execute this");
     ///     });
@@ -378,7 +378,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///         println!("Will not execute this");
     ///     });
@@ -407,7 +407,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///         println!("Execute this in 100ms");
     ///     });
@@ -430,7 +430,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///         println!("hello");
     ///     });
@@ -454,7 +454,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::{Duration, Instant};
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///         println!("hello");
     ///     });
@@ -495,7 +495,7 @@ impl TimerActionRepeat {
     /// use scipio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
     ///     let action = TimerActionRepeat::repeat_into(|| async move {
     ///         println!("Execute this!");
@@ -553,7 +553,7 @@ impl TimerActionRepeat {
     /// use scipio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionRepeat::repeat(|| async move {
     ///         println!("Execute this!");
     ///         Some(Duration::from_millis(100))
@@ -584,7 +584,7 @@ impl TimerActionRepeat {
     /// use scipio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionRepeat::repeat(|| async move {
     ///         Some(Duration::from_millis(100))
     ///     });
@@ -613,7 +613,7 @@ impl TimerActionRepeat {
     /// use scipio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionRepeat::repeat(|| async move {
     ///         Some(Duration::from_millis(100))
     ///     });
@@ -643,7 +643,7 @@ impl TimerActionRepeat {
     /// use scipio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn("test", || async move {
+    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let action = TimerActionRepeat::repeat(|| async move {
     ///         None
     ///     });
