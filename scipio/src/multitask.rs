@@ -87,7 +87,7 @@ impl<T> Task<T> {
     /// ```
     /// use std::thread;
     /// use std::time::Duration;
-    /// use scipio::{LocalExecutor, parking};
+    /// use scipio::LocalExecutor;
     /// use scipio::timer::Timer;
     /// use futures_lite::future::block_on;
     ///

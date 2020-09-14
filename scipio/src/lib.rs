@@ -48,7 +48,7 @@ use crate::parking::Reactor;
 use std::fmt::Debug;
 use std::time::Duration;
 
-pub mod parking;
+mod parking;
 mod sys;
 pub mod task;
 
