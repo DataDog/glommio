@@ -103,6 +103,12 @@ pub(crate) enum PollableStatus {
     NonPollable,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum LinkStatus {
+    Freestanding,
+    Linked,
+}
+
 #[derive(Debug)]
 pub(crate) enum SourceType {
     DmaWrite(PollableStatus),
@@ -112,7 +118,7 @@ pub(crate) enum SourceType {
     FdataSync,
     Fallocate,
     Close,
-    LinkRings(bool),
+    LinkRings(LinkStatus),
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(bool),
     Invalid,
