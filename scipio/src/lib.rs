@@ -24,7 +24,7 @@
 //! use std::net::{TcpStream, ToSocketAddrs};
 //! use std::time::Duration;
 //!
-//! let local_ex = LocalExecutor::new(None).unwrap();
+//! let local_ex = LocalExecutor::spawn_default();
 //! local_ex.run(async {
 //!     let addr = "::80".to_socket_addrs()?.next().unwrap();
 //!
@@ -58,7 +58,7 @@ macro_rules! test_executor {
     use crate::executor::{LocalExecutor, Task};
     use futures::future::join_all;
 
-    let local_ex = LocalExecutor::new(None).unwrap();
+    let local_ex = LocalExecutor::spawn_default();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(
@@ -139,7 +139,9 @@ pub mod timer;
 
 pub use crate::dma_file::{Directory, DmaFile};
 pub use crate::error::Error;
-pub use crate::executor::{LocalExecutor, QueueNotFoundError, Task, TaskQueueHandle};
+pub use crate::executor::{
+    LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
+};
 pub use crate::networking::*;
 pub use crate::pollable::Async;
 pub use crate::semaphore::Semaphore;

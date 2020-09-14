@@ -61,7 +61,7 @@ impl Inner {
 ///     Timer::new(dur).await;
 /// }
 ///
-/// let ex = LocalExecutor::new(None).expect("failed to create local executor");
+/// let ex = LocalExecutor::spawn_default();
 ///
 /// ex.run(async {
 ///     sleep(Duration::from_millis(100)).await;
