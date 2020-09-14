@@ -14,7 +14,7 @@
 //! use scipio::LocalExecutor;
 //!
 //! let ad : Deque<usize> = Deque::with_capacity(10);
-//! let ex = LocalExecutor::spawn_default();
+//! let ex = LocalExecutor::make_default();
 //!
 //! ex.run(async move {
 //!     ad.push_front(1);

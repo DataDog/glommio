@@ -24,7 +24,7 @@
 //! use std::net::{TcpStream, ToSocketAddrs};
 //! use std::time::Duration;
 //!
-//! let local_ex = LocalExecutor::spawn_default();
+//! let local_ex = LocalExecutor::make_default();
 //! local_ex.run(async {
 //!     let addr = "::80".to_socket_addrs()?.next().unwrap();
 //!
@@ -58,7 +58,7 @@ macro_rules! test_executor {
     use crate::executor::{LocalExecutor, Task};
     use futures::future::join_all;
 
-    let local_ex = LocalExecutor::spawn_default();
+    let local_ex = LocalExecutor::make_default();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(

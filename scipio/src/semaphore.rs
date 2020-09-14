@@ -194,7 +194,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(1);
     ///
-    /// let ex = LocalExecutor::spawn_default();
+    /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {
     ///     {
     ///         let permit = sem.acquire_permit(1).await.unwrap();
@@ -221,7 +221,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(1);
     ///
-    /// let ex = LocalExecutor::spawn_default();
+    /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {
     ///     sem.acquire(1).await.unwrap();
     ///     sem.signal(1); // Has to be signaled explicity. Be careful
@@ -252,7 +252,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(0);
     ///
-    /// let ex = LocalExecutor::spawn_default();
+    /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {
     ///     // Note that we can signal to expand to more units than the original capacity had.
     ///     sem.signal(1);
@@ -281,7 +281,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(0);
     ///
-    /// let ex = LocalExecutor::spawn_default();
+    /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {
     ///     // Note that we can signal to expand to more units than the original capacity had.
     ///     sem.close();
