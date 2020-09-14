@@ -17,7 +17,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{PollableStatus, Source, SourceType};
+use crate::sys::{LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
@@ -397,11 +397,11 @@ impl SleepableRing {
 
     fn sleep(&mut self, link: &mut Pin<Box<Source>>) -> io::Result<usize> {
         match link.source_type {
-            SourceType::LinkRings(true) => {} // nothing to do
-            SourceType::LinkRings(false) => {
+            SourceType::LinkRings(LinkStatus::Linked) => {} // nothing to do
+            SourceType::LinkRings(LinkStatus::Freestanding) => {
                 if let Some(mut sqe) = self.ring.next_sqe() {
                     link.as_mut()
-                        .update_source_type(SourceType::LinkRings(true));
+                        .update_source_type(SourceType::LinkRings(LinkStatus::Linked));
 
                     let op = UringDescriptor {
                         fd: link.as_ref().raw,
@@ -464,11 +464,11 @@ impl UringCommon for SleepableRing {
         process_one_event(
             self.ring.peek_for_cqe(),
             |source| match source.source_type {
-                SourceType::LinkRings(true) => {
-                    source.source_type = SourceType::LinkRings(false);
+                SourceType::LinkRings(LinkStatus::Linked) => {
+                    source.source_type = SourceType::LinkRings(LinkStatus::Freestanding);
                     Some(())
                 }
-                SourceType::LinkRings(false) => {
+                SourceType::LinkRings(LinkStatus::Freestanding) => {
                     panic!("Impossible to have an event firing like this");
                 }
                 SourceType::Timeout(true) => {
@@ -610,7 +610,7 @@ impl Reactor {
             link_rings_src: RefCell::new(Source::new(
                 IoRequirements::default(),
                 link_fd,
-                SourceType::LinkRings(false),
+                SourceType::LinkRings(LinkStatus::Freestanding),
             )),
             timeout_src: RefCell::new(Source::new(
                 IoRequirements::default(),
