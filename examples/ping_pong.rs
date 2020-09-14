@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn main() {
-    let ex = LocalExecutor::spawn_default();
+    let ex = LocalExecutor::make_default();
     let left = Rc::new(RefCell::new(false));
     let right = Rc::new(RefCell::new(false));
 
