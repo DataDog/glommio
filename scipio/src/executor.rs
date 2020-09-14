@@ -12,12 +12,14 @@
 //! Run four single-threaded executors concurrently:
 //!
 //! ```
-//! use scipio::LocalExecutor;
+//! use scipio::{LocalExecutor, LocalExecutorBuilder};
 //! use scipio::timer::Timer;
 //!
 //! for i in 0..4 {
 //!     std::thread::spawn(move || {
-//!         let local_ex = LocalExecutor::spawn_default();
+//!         let builder = LocalExecutorBuilder::new()
+//!                                             .pin_to_cpu(i);
+//!         let local_ex = builder.spawn().expect("failed to spawn local executor");
 //!         local_ex.run(async {
 //!             Timer::new(std::time::Duration::from_millis(100)).await;
 //!             println!("Hello world!");
@@ -317,20 +319,31 @@ impl ExecutorQueues {
 /// let ex = builder.spawn().unwrap();
 /// ```
 #[derive(Debug)]
-pub struct LocalExecutorBuilder {}
+pub struct LocalExecutorBuilder {
+    binding: Option<usize>,
+}
 
 impl LocalExecutorBuilder {
     /// Generates the base configuration for spawning a [`LocalExecutor`], from which configuration
     /// methods can be chained.
     pub fn new() -> LocalExecutorBuilder {
-        LocalExecutorBuilder {}
+        LocalExecutorBuilder { binding: None }
+    }
+
+    /// Sets the new executor's affinity to the provided CPU
+    pub fn pin_to_cpu(mut self, cpu: usize) -> LocalExecutorBuilder {
+        self.binding = Some(cpu);
+        self
     }
 
     /// Spawns a new [`LocalExecutor`] by taking ownership of the Builder, and returns an io::Result
     /// to its JoinHandle.
-    pub fn spawn(&self) -> io::Result<LocalExecutor> {
+    pub fn spawn(self) -> io::Result<LocalExecutor> {
         let mut le = LocalExecutor::new();
-        match le.init(None) {
+        if let Some(cpu) = self.binding {
+            &le.bind_to_cpu(cpu)?;
+        }
+        match le.init() {
             Ok(_) => Ok(le),
             Err(e) => Err(e),
         }
@@ -360,11 +373,11 @@ pub struct LocalExecutor {
 }
 
 impl LocalExecutor {
-    fn init(&mut self, binding: Option<usize>) -> io::Result<()> {
-        if let Some(cpu) = binding {
-            bind_to_cpu(cpu)?;
-        }
+    fn bind_to_cpu(&self, cpu: usize) -> io::Result<()> {
+        bind_to_cpu(cpu)
+    }
 
+    fn init(&mut self) -> io::Result<()> {
         let queues = self.queues.clone();
         let index = 0;
 
@@ -444,12 +457,12 @@ impl LocalExecutor {
         Builder::new()
             .name(format!("{}-{}", name, id).to_string())
             .spawn(move || {
-                let mut le = LocalExecutor {
-                    queues: ExecutorQueues::new(),
-                    parker: parking::Parker::new(),
-                    id,
-                };
-                le.init(binding).unwrap();
+                let mut builder = LocalExecutorBuilder::new();
+                if let Some(cpu) = binding {
+                    builder = builder.pin_to_cpu(cpu);
+                }
+
+                let le = builder.spawn().unwrap();
                 le.run(async move {
                     let task = Task::local(async move {
                         fut_gen().await;
@@ -1012,14 +1025,14 @@ fn create_and_destroy_executor() {
 fn create_fail_to_bind() {
     // If you have a system with 4 billion CPUs let me know and I will
     // update this test.
-    if let Ok(_) = LocalExecutor::new(Some(usize::MAX)) {
+    if let Ok(_) = LocalExecutorBuilder::new().pin_to_cpu(usize::MAX).spawn() {
         panic!("Should have failed");
     }
 }
 
 #[test]
 fn create_and_bind() {
-    if let Err(x) = LocalExecutor::new(Some(0)) {
+    if let Err(x) = LocalExecutorBuilder::new().pin_to_cpu(0).spawn() {
         panic!("got error {:?}", x);
     }
 }
