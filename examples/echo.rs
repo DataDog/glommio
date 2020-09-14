@@ -25,7 +25,8 @@ async fn server(conns: usize) {
     // necessarily spawn all executors at once running symmetrical code.
     let client_handle = LocalExecutorBuilder::new()
         .pin_to_cpu(2)
-        .spawn("client", move || async move {
+        .name(String::from("client"))
+        .spawn(move || async move {
             client(conns).await;
         })
         .unwrap();
@@ -82,7 +83,7 @@ fn main() -> Result<()> {
     // system configuration and most modern systems will balance it, but that it is
     // still common enough that it is worth excluding it in this benchmark
     let builder = LocalExecutorBuilder::new().pin_to_cpu(1);
-    let server_handle = builder.spawn("server", || async move {
+    let server_handle = builder.name(String::from("server")).spawn(|| async move {
         // If you try `top` during the execution of the first batch, you
         // will see that the CPUs should not be at 100%. A single connection will
         // not be enough to extract all the performance available in the cores.
