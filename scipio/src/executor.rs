@@ -296,19 +296,19 @@ impl ExecutorQueues {
 }
 
 /// LocalExecutor factory, which can be used in order to configure the properties of a new
-/// [`LocalExecutor`].
+/// `LocalExecutor`.
 ///
 /// Methods can be chained on it in order to configure it.
 ///
-/// The [`spawn`] method will take ownership of the builder and create an [`io::Result`] to the
-/// [`LocalExecutor`] handle with the given configuration.
+/// The `spawn` method will take ownership of the builder and create an
+/// `io::Result` to the `LocalExecutor` handle with the given configuration.
 ///
-/// The [`LocalExecutor::spawn_default`] free function uses a Builder with default configuration and
+/// The `LocalExecutor::spawn_default` free function uses a Builder with default configuration and
 /// unwraps its return value.
 ///
-/// You may want to use [`spawn`] instead of [`LocalExecutor::spawn_default`], when you want to
-/// recover from a failure to launch a thread, indeed the free function will panic where the Builder
-/// method will return a [`io::Result`].
+/// You may want to use `LocalExecutorBuilder::spawn` instead of `LocalExecutor::spawn_default`,
+/// when you want to recover from a failure to launch a thread, indeed the free function will panic
+/// where the Builder method will return a `io::Result`.
 ///
 /// # Examples
 ///
