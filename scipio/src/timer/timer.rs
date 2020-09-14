@@ -195,7 +195,7 @@ impl<T: 'static> TimerActionOnce<T> {
     ///
     /// ```
     /// use scipio::LocalExecutor;
-    /// use scipio::timer::{TimerAction,TimerActionOnce};
+    /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -225,7 +225,7 @@ impl<T: 'static> TimerActionOnce<T> {
     ///
     /// ```
     /// use scipio::{LocalExecutor, Local, Latency};
-    /// use scipio::timer::{TimerAction,TimerActionOnce};
+    /// use scipio::timer::{TimerActionOnce};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -274,7 +274,7 @@ impl<T: 'static> TimerActionOnce<T> {
     ///
     /// ```
     /// use scipio::LocalExecutor;
-    /// use scipio::timer::{TimerAction, TimerActionOnce};
+    /// use scipio::timer::TimerActionOnce;
     /// use std::time::{Instant, Duration};
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -305,7 +305,7 @@ impl<T: 'static> TimerActionOnce<T> {
     ///
     /// ```
     /// use scipio::{LocalExecutor, Local, Latency};
-    /// use scipio::timer::{TimerAction, TimerActionOnce};
+    /// use scipio::timer::TimerActionOnce;
     /// use std::time::{Instant, Duration};
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -492,7 +492,7 @@ impl TimerActionRepeat {
     ///
     /// ```no_run
     /// use scipio::{LocalExecutor, Latency, Local};
-    /// use scipio::timer::{TimerAction, TimerActionRepeat};
+    /// use scipio::timer::{TimerActionOnce, TimerActionRepeat};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -550,7 +550,7 @@ impl TimerActionRepeat {
     ///
     /// ```no_run
     /// use scipio::LocalExecutor;
-    /// use scipio::timer::{TimerAction, TimerActionRepeat};
+    /// use scipio::timer::{TimerActionOnce, TimerActionRepeat};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -581,7 +581,7 @@ impl TimerActionRepeat {
     ///
     /// ```
     /// use scipio::LocalExecutor;
-    /// use scipio::timer::{TimerAction, TimerActionRepeat};
+    /// use scipio::timer::{TimerActionOnce, TimerActionRepeat};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -610,7 +610,7 @@ impl TimerActionRepeat {
     ///
     /// ```
     /// use scipio::LocalExecutor;
-    /// use scipio::timer::{TimerAction, TimerActionRepeat};
+    /// use scipio::timer::{TimerActionOnce, TimerActionRepeat};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {
@@ -640,7 +640,7 @@ impl TimerActionRepeat {
     ///
     /// ```
     /// use scipio::LocalExecutor;
-    /// use scipio::timer::{TimerAction, TimerActionRepeat};
+    /// use scipio::timer::{TimerActionOnce, TimerActionRepeat};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutor::spawn_executor("test", None, || async move {

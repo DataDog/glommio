@@ -56,7 +56,8 @@ impl<T> Task<T> {
     ///
     /// ```
     /// use std::time::Duration;
-    /// use scipio::{LocalExecutor,Timer};
+    /// use scipio::LocalExecutor;
+    /// use scipio::timer::Timer;
     ///
     /// let ex = LocalExecutor::new(None).expect("failed to create local executor");
     ///
@@ -86,7 +87,8 @@ impl<T> Task<T> {
     /// ```
     /// use std::thread;
     /// use std::time::Duration;
-    /// use scipio::{LocalExecutor, Timer, parking};
+    /// use scipio::{LocalExecutor, parking};
+    /// use scipio::timer::Timer;
     /// use futures_lite::future::block_on;
     ///
     /// let ex = LocalExecutor::new(None).expect("failed to create local executor");

@@ -12,7 +12,8 @@
 //! Run four single-threaded executors concurrently:
 //!
 //! ```
-//! use scipio::{LocalExecutor, Timer};
+//! use scipio::LocalExecutor;
+//! use scipio::timer::Timer;
 //!
 //! for i in 0..4 {
 //!     std::thread::spawn(move || {
