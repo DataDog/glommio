@@ -175,7 +175,7 @@ where
                 sqe.prep_close(op.fd);
             }
             UringOpDescriptor::ReadFixed(pos, len) => {
-                let buf = buffer_allocation(len).expect("Buffer allocation failed");
+                let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
                 //let slabidx = buf.slabidx;
 
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
@@ -219,7 +219,7 @@ where
         if let Some(src) = consume_source(value.user_data()) {
             let source = mut_source(&src);
 
-            if let None = try_process(source) {
+            if try_process(source).is_none() {
                 let mut w = source.wakers.borrow_mut();
                 w.result = Some(value.result());
                 wakers.append(&mut w.waiters);
@@ -267,7 +267,7 @@ fn peek_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
 fn consume_source(id: u64) -> Option<Rc<UnsafeCell<InnerSource>>> {
     SOURCE_MAP.with(|x| {
         let mut map = x.borrow_mut();
-        if let Some(source) = map.map.remove(&id).clone() {
+        if let Some(source) = map.map.remove(&id) {
             let mut s = mut_source(&source);
             s.id = None;
             s.queue = None;
@@ -341,7 +341,7 @@ trait UringCommon {
     fn name(&self) -> &'static str;
 
     fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
-        let id = add_source(source, self.submission_queue().clone());
+        let id = add_source(source, self.submission_queue());
 
         let q = self.submission_queue();
         let mut queue = q.borrow_mut();
@@ -355,7 +355,7 @@ trait UringCommon {
     fn consume_sqe_queue(&mut self, queue: &mut VecDeque<UringDescriptor>) -> io::Result<usize> {
         let mut sub = 0;
         loop {
-            if let None = self.submit_one_event(queue) {
+            if self.submit_one_event(queue).is_none() {
                 break;
             }
             sub += 1;
@@ -382,7 +382,7 @@ trait UringCommon {
     fn consume_completion_queue(&mut self, wakers: &mut Vec<Waker>) -> usize {
         let mut completed: usize = 0;
         loop {
-            if let None = self.consume_one_event(wakers) {
+            if self.consume_one_event(wakers).is_none() {
                 break;
             }
             completed += 1;
@@ -435,7 +435,7 @@ impl PollRing {
     }
 
     fn can_sleep(&self) -> bool {
-        return self.submitted == self.completed;
+        self.submitted == self.completed
     }
 
     pub(crate) fn alloc_dma_buffer(&mut self, size: usize) -> DmaBuffer {
@@ -460,9 +460,9 @@ impl UringCommon for PollRing {
     }
 
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
-        process_one_event(self.ring.peek_for_cqe(), |_| None, wakers).and_then(|x| {
+        process_one_event(self.ring.peek_for_cqe(), |_| None, wakers).map(|x| {
             self.completed += 1;
-            Some(x)
+            x
         })
     }
 
@@ -568,7 +568,7 @@ impl SleepableRing {
                         user_data: add_source(link, self.submission_queue.clone()),
                         args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                     };
-                    fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
+                    fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
                 }
             }
             _ => panic!("Unexpected source type when linking rings"),
@@ -623,7 +623,7 @@ impl UringCommon for SleepableRing {
 
         if let Some(mut sqe) = self.ring.next_sqe() {
             let op = queue.pop_front().unwrap();
-            fill_sqe(&mut sqe, &op, |size| PosixDmaBuffer::new(size));
+            fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
             return Some(());
         }
         None
@@ -865,7 +865,7 @@ impl Reactor {
             consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
         }
         // If we generated any event so far, we can't sleep. Need to handle them.
-        should_sleep &= wakers.len() == 0;
+        should_sleep &= wakers.is_empty();
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.

@@ -308,6 +308,10 @@ impl<T> Task<T> {
     /// This method should only be used with raw pointers returned from [`into_raw`].
     ///
     /// [`into_raw`]: #method.into_raw
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be non-null.
     pub unsafe fn from_raw(raw: *const T) -> Task<T> {
         let offset = Header::offset_tag::<T>();
         let ptr = (raw as *mut u8).sub(offset) as *mut ();

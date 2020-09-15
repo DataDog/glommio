@@ -4,6 +4,6 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 //! scipio::timer is a module that provides timing related primitives.
-mod timer;
+mod timer_impl;
 
-pub use timer::{Timer, TimerActionOnce, TimerActionRepeat};
+pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};

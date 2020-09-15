@@ -57,10 +57,9 @@ impl Parker {
     /// Creates a new parker.
     pub(crate) fn new() -> Parker {
         // Ensure `Reactor` is initialized now to prevent it from being initialized in `Drop`.
-        let parker = Parker {
+        Parker {
             inner: Rc::new(Inner {}),
-        };
-        parker
+        }
     }
 
     /// Blocks until notified and then goes back into unnotified state.
@@ -102,7 +101,7 @@ impl Inner {
         // Process available I/O events.
         let reactor_lock = Reactor::get().lock();
         let _ = reactor_lock.react(timeout);
-        return false;
+        false
     }
 }
 
@@ -282,7 +281,7 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn read_dma<'a>(
+    pub(crate) fn read_dma(
         &self,
         raw: RawFd,
         pos: u64,
@@ -465,7 +464,7 @@ impl Source {
         future::poll_fn(|cx| {
             let mut w = self.wakers().borrow_mut();
 
-            if let Some(_) = w.result.take() {
+            if w.result.take().is_some() {
                 return Poll::Ready(Ok(()));
             }
 
@@ -482,7 +481,7 @@ impl Source {
         future::poll_fn(|cx| {
             let mut w = self.wakers().borrow_mut();
 
-            if let Some(_) = w.result.take() {
+            if w.result.take().is_some() {
                 return Poll::Ready(Ok(()));
             }
 

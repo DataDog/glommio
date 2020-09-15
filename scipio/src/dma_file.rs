@@ -335,9 +335,9 @@ impl DmaFile {
         let stype = source.extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
-                .and_then(|mut buffer| {
+                .map(|mut buffer| {
                     buffer.trim_to_size(read_size);
-                    Some(buffer)
+                    buffer
                 })
                 .ok_or(bad_buffer!(self)),
             _ => Err(bad_buffer!(self)),
@@ -362,10 +362,10 @@ impl DmaFile {
         let stype = source.extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
-                .and_then(|mut buffer| {
+                .map(|mut buffer| {
                     buffer.trim_front(b);
                     buffer.trim_to_size(std::cmp::min(read_size, size));
-                    Some(buffer)
+                    buffer
                 })
                 .ok_or(bad_buffer!(self)),
             _ => Err(bad_buffer!(self)),
@@ -737,7 +737,7 @@ mod test {
 
         let size: usize = 4096;
         file.truncate(size as u64).await.unwrap();
-        let buf = DmaFile::alloc_dma_buffer(size);
+        let mut buf = DmaFile::alloc_dma_buffer(size);
         let bytes = buf.as_mut_bytes();
         bytes[0] = 'x' as u8;
         let mut futs = vec![];
@@ -765,7 +765,7 @@ mod test {
                     let size: usize = 4096;
                     file.truncate(size as u64).await.unwrap();
 
-                    let buf = DmaFile::alloc_dma_buffer(size);
+                    let mut buf = DmaFile::alloc_dma_buffer(size);
                     let bytes = buf.as_mut_bytes();
                     bytes[0] = 'x' as u8;
                     file.write_dma(&buf, 0).await.unwrap();

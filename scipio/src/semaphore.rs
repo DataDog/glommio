@@ -68,12 +68,12 @@ impl State {
     }
 
     fn add_waker(&mut self, id: WaiterId, units: u64, waker: Waker) {
-        self.waiterset.insert(id.0, (units, waker.clone()));
+        self.waiterset.insert(id.0, (units, waker));
         self.list.push_back(id.0);
     }
 
     fn try_acquire(&mut self, units: u64) -> Result<bool> {
-        if self.closed == true {
+        if self.closed {
             return Err(Error::new(ErrorKind::BrokenPipe, "Semaphore Broken"));
         }
 
@@ -81,7 +81,7 @@ impl State {
             self.avail -= units;
             return Ok(true);
         }
-        return Ok(false);
+        Ok(false)
     }
 
     fn close(&mut self) {
@@ -131,10 +131,7 @@ pub struct Permit {
 
 impl Permit {
     fn new(units: u64, sem: Rc<RefCell<State>>) -> Permit {
-        Permit {
-            units,
-            sem: sem.clone(),
-        }
+        Permit { units, sem }
     }
 }
 

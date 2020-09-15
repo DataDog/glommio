@@ -43,7 +43,7 @@ impl PosixDmaBuffer {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.size) }
     }
 
-    pub fn as_mut_bytes(&self) -> &mut [u8] {
+    pub fn as_mut_bytes(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.size) }
     }
 

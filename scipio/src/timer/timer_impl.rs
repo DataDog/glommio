@@ -25,7 +25,7 @@ struct Inner {
 
 impl Inner {
     fn reset(&mut self, dur: Duration) {
-        if let Some(_) = self.waker.as_ref() {
+        if self.waker.as_ref().is_some() {
             // Deregister the timer from the reactor.
             Reactor::get().remove_timer(self.id);
         }
@@ -130,7 +130,7 @@ impl Timer {
 impl Drop for Timer {
     fn drop(&mut self) {
         let mut inner = self.inner.borrow_mut();
-        if let Some(_) = inner.waker.take() {
+        if inner.waker.take().is_some() {
             // Deregister the timer from the reactor.
             Reactor::get().remove_timer(inner.id);
         }
@@ -520,12 +520,8 @@ impl TimerActionRepeat {
 
         let task = Task::local_into(
             async move {
-                loop {
-                    if let Some(period) = action_gen().await {
-                        Timer::from_id(timer_id, period).await;
-                    } else {
-                        break;
-                    }
+                while let Some(period) = action_gen().await {
+                    Timer::from_id(timer_id, period).await;
                 }
             },
             tq,
@@ -533,7 +529,7 @@ impl TimerActionRepeat {
 
         Ok(TimerActionRepeat {
             handle: task.detach(),
-            timer_id: timer_id,
+            timer_id,
         })
     }
 
@@ -655,7 +651,7 @@ impl TimerActionRepeat {
     /// [`TimerActionRepeat`]: struct.TimerActionRepeat
     /// [`Option`]: https://doc.rust-lang.org/std/option/enum.Option.html
     pub async fn join(self) -> Option<()> {
-        self.handle.await.and_then(|_| Some(()))
+        self.handle.await.map(|_| ())
     }
 }
 
