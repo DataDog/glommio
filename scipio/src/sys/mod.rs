@@ -188,11 +188,15 @@ impl InnerSource {
     }
 }
 
+#[allow(clippy::mut_from_ref)]
+// FIXME: This is obviously not great
 pub(crate) fn mut_source(source: &Rc<UnsafeCell<InnerSource>>) -> &mut InnerSource {
     unsafe { &mut *source.get() }
 }
 
 impl Source {
+    #[allow(clippy::mut_from_ref)]
+    // FIXME: This is obviously not great
     fn inner(&self) -> &mut InnerSource {
         mut_source(&self.inner)
     }
