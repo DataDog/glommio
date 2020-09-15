@@ -97,7 +97,7 @@ jobs:
             - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Run linters
-          command: cargo clippy
+          command: cargo clippy -- -D warnings
       - save_cache:
           paths:
             - /usr/local/cargo/registry
