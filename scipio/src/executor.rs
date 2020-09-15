@@ -344,8 +344,8 @@ impl LocalExecutorBuilder {
 
     /// Names the thread-to-be. Currently the name is used for identification
     /// only in panic messages.
-    pub fn name(mut self, name: String) -> LocalExecutorBuilder {
-        self.name = name;
+    pub fn name(mut self, name: &str) -> LocalExecutorBuilder {
+        self.name = String::from(name);
         self
     }
 

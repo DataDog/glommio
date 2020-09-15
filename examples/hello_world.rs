@@ -27,7 +27,7 @@ fn main() -> Result<()> {
 
     // Or we can spawn a new thread with an executor inside.
     let builder = LocalExecutorBuilder::new().pin_to_cpu(1);
-    let handle = builder.name(String::from("hello")).spawn(|| async move {
+    let handle = builder.name("hello").spawn(|| async move {
         hello().await;
     })?;
 
