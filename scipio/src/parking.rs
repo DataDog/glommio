@@ -447,13 +447,11 @@ impl ReactorLock<'_> {
 impl Source {
     pub(crate) async fn collect_rw(&self) -> io::Result<usize> {
         future::poll_fn(|cx| {
-            let mut w = self.wakers().borrow_mut();
-
-            if let Some(result) = w.result.take() {
+            if let Some(result) = self.take_result() {
                 return Poll::Ready(result);
             }
 
-            w.waiters.push(cx.waker().clone());
+            self.add_waiter(cx.waker().clone());
             Poll::Pending
         })
         .await
@@ -462,14 +460,11 @@ impl Source {
     /// Waits until the I/O source is readable.
     pub(crate) async fn readable(&self) -> io::Result<()> {
         future::poll_fn(|cx| {
-            let mut w = self.wakers().borrow_mut();
-
-            if w.result.take().is_some() {
+            if self.take_result().is_some() {
                 return Poll::Ready(Ok(()));
             }
 
-            w.waiters.push(cx.waker().clone());
-            drop(w);
+            self.add_waiter(cx.waker().clone());
             Reactor::get().sys.interest(self, true, false);
             Poll::Pending
         })
@@ -479,14 +474,11 @@ impl Source {
     /// Waits until the I/O source is writable.
     pub(crate) async fn writable(&self) -> io::Result<()> {
         future::poll_fn(|cx| {
-            let mut w = self.wakers().borrow_mut();
-
-            if w.result.take().is_some() {
+            if self.take_result().is_some() {
                 return Poll::Ready(Ok(()));
             }
 
-            w.waiters.push(cx.waker().clone());
-            drop(w);
+            self.add_waiter(cx.waker().clone());
             Reactor::get().sys.interest(self, false, true);
             Poll::Pending
         })

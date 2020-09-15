@@ -3,7 +3,6 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::Latency;
 use std::cell::{RefCell, UnsafeCell};
 use std::ffi::CString;
 use std::io;
@@ -178,68 +177,6 @@ impl Source {
                 id: None,
                 queue: None,
             })),
-        }
-    }
-}
-
-impl InnerSource {
-    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
-        std::mem::replace(&mut self.source_type, source_type)
-    }
-}
-
-#[allow(clippy::mut_from_ref)]
-// FIXME: This is obviously not great
-pub(crate) fn mut_source(source: &Rc<UnsafeCell<InnerSource>>) -> &mut InnerSource {
-    unsafe { &mut *source.get() }
-}
-
-impl Source {
-    #[allow(clippy::mut_from_ref)]
-    // FIXME: This is obviously not great
-    fn inner(&self) -> &mut InnerSource {
-        mut_source(&self.inner)
-    }
-
-    pub(crate) fn update_reactor_info(&self, id: u64, queue: ReactorQueue) {
-        self.inner().id = Some(id);
-        self.inner().queue = Some(queue);
-    }
-
-    pub(crate) fn consume_id(&self) -> Option<u64> {
-        self.inner().id.take()
-    }
-
-    pub(crate) fn latency_req(&self) -> Latency {
-        self.inner().io_requirements.latency_req
-    }
-
-    pub(crate) fn source_type(&self) -> &SourceType {
-        &self.inner().source_type
-    }
-
-    pub(crate) fn raw(&self) -> RawFd {
-        self.inner().raw
-    }
-
-    pub(crate) fn wakers(&self) -> &RefCell<Wakers> {
-        &self.inner().wakers
-    }
-
-    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
-        self.inner().update_source_type(source_type)
-    }
-
-    pub(crate) fn extract_source_type(&mut self) -> SourceType {
-        self.inner().update_source_type(SourceType::Invalid)
-    }
-}
-
-impl Drop for Source {
-    fn drop(&mut self) {
-        if let Some(id) = self.consume_id() {
-            let queue = self.inner().queue.take();
-            crate::sys::uring::cancel_source(id, queue.unwrap());
         }
     }
 }

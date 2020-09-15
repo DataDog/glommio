@@ -17,7 +17,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{mut_source, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
@@ -486,6 +486,80 @@ impl UringCommon for PollRing {
             return Some(());
         }
         None
+    }
+}
+
+impl InnerSource {
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        std::mem::replace(&mut self.source_type, source_type)
+    }
+}
+
+#[allow(clippy::mut_from_ref)]
+// This is similar to the interior mutability pattern but clippy doesn't like it.
+// That's because unlike the usual refcell patterns, we return a mutable reference
+// and the user is free to do whatever it wants with it (as opposed to a scoped RefMut).
+//
+// We don't have too much of a choice because the Source accompanies a request in
+// the io_uring and we'd be dealing with raw pointers anyway. We want to make this as
+// safe as possible but will always have to rely on those weird tricks.
+//
+// This should only really be used within the io_uring code
+fn mut_source(source: &Rc<UnsafeCell<InnerSource>>) -> &mut InnerSource {
+    unsafe { &mut *source.get() }
+}
+
+impl Source {
+    #[allow(clippy::mut_from_ref)]
+    fn inner(&self) -> &mut InnerSource {
+        mut_source(&self.inner)
+    }
+
+    fn update_reactor_info(&self, id: u64, queue: ReactorQueue) {
+        self.inner().id = Some(id);
+        self.inner().queue = Some(queue);
+    }
+
+    fn consume_id(&self) -> Option<u64> {
+        self.inner().id.take()
+    }
+
+    fn latency_req(&self) -> Latency {
+        self.inner().io_requirements.latency_req
+    }
+
+    fn source_type(&self) -> &SourceType {
+        &self.inner().source_type
+    }
+
+    fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        self.inner().update_source_type(source_type)
+    }
+
+    pub(crate) fn extract_source_type(&mut self) -> SourceType {
+        self.inner().update_source_type(SourceType::Invalid)
+    }
+
+    pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
+        let mut w = self.inner().wakers.borrow_mut();
+        w.result.take()
+    }
+    pub(crate) fn add_waiter(&self, waker: Waker) {
+        let mut w = self.inner().wakers.borrow_mut();
+        w.waiters.push(waker);
+    }
+
+    pub(crate) fn raw(&self) -> RawFd {
+        self.inner().raw
+    }
+}
+
+impl Drop for Source {
+    fn drop(&mut self) {
+        if let Some(id) = self.consume_id() {
+            let queue = self.inner().queue.take();
+            crate::sys::uring::cancel_source(id, queue.unwrap());
+        }
     }
 }
 
