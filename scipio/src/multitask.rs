@@ -8,7 +8,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-use crate::task::task;
+use crate::task::task_impl;
 use crate::task::JoinHandle;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -31,7 +31,7 @@ use std::task::{Context, Poll};
 /// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken. When it's
 /// woken up, its schedule function is called, which means the `Runnable` gets pushed into a task
 /// queue in an executor.
-pub type Runnable = task::Task<()>;
+pub type Runnable = task_impl::Task<()>;
 
 /// A spawned future.
 ///
@@ -188,9 +188,9 @@ impl LocalExecutor {
         };
 
         // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
-        let (runnable, handle) = task::spawn_local(future, schedule, ());
+        let (runnable, handle) = task_impl::spawn_local(future, schedule, ());
         runnable.schedule();
-        return Task(Some(handle));
+        Task(Some(handle))
     }
 
     /// Gets one task from the queue, if one exists.

@@ -84,6 +84,22 @@ impl<T> Deque<T> {
         self.deque.borrow().len()
     }
 
+    /// returns true if the queue is empty, false otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::collections::Deque;
+    ///
+    /// let ad : Deque<usize> = Deque::with_capacity(10);
+    /// assert!(ad.is_empty());
+    /// ad.push_back(1);
+    /// assert!(!ad.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// pushes an element to the front of the queue
     /// # Examples
     ///
@@ -167,5 +183,11 @@ impl<T> Deque<T> {
     pub async fn pop_front(&self) -> Result<T> {
         self.sem.acquire(1).await?;
         Ok(self.deque.borrow_mut().pop_front().unwrap())
+    }
+}
+
+impl<T> Default for Deque<T> {
+    fn default() -> Self {
+        Deque::new()
     }
 }

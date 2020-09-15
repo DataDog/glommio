@@ -109,7 +109,7 @@ where
     /// It is assumed that initially only the `Task` reference and the `JoinHandle` exist.
     pub(crate) fn allocate(future: F, schedule: S, tag: T) -> NonNull<()> {
         // Compute the layout of the task for allocation. Abort if the computation fails.
-        let task_layout = abort_on_panic(|| Self::task_layout());
+        let task_layout = abort_on_panic(Self::task_layout);
 
         unsafe {
             // Allocate enough space for the entire task.

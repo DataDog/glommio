@@ -219,7 +219,7 @@ impl TaskQueue {
         self.runtime += delta.as_micros() as u64;
 
         //println!("Ran task for {} us, adding {} of vruntime (shares = {})", delta.as_micros(), delta_scaled, self.shares);
-        return self.vruntime;
+        self.vruntime
     }
 }
 
@@ -275,7 +275,7 @@ impl ExecutorQueues {
                 Latency::Matters(d) => d,
             })
             .min()
-            .unwrap_or(Duration::from_secs(1));
+            .unwrap_or_else(|| Duration::from_secs(1))
     }
     fn maybe_activate(&mut self, index: usize) {
         let queue = self
@@ -394,7 +394,7 @@ impl LocalExecutorBuilder {
         F: Future<Output = T> + 'static,
     {
         let id = EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
-        let name = format!("{}-{}", self.name, id).to_string();
+        let name = format!("{}-{}", self.name, id);
 
         Builder::new().name(name).spawn(move || {
             let mut le = LocalExecutor::new(id);
@@ -409,6 +409,12 @@ impl LocalExecutorBuilder {
                 task.await;
             })
         })
+    }
+}
+
+impl Default for LocalExecutorBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -568,12 +574,11 @@ impl LocalExecutor {
             .borrow()
             .available_executors
             .get(&handle.index)
-            .and_then(|x| Some(x.clone()))
+            .cloned()
     }
 
     fn get_executor(&self, handle: &TaskQueueHandle) -> Option<Rc<multitask::LocalExecutor>> {
-        self.get_queue(handle)
-            .and_then(|x| Some(x.borrow().ex.clone()))
+        self.get_queue(handle).map(|x| x.borrow().ex.clone())
     }
 
     fn current_task_queue(&self) -> TaskQueueHandle {
@@ -596,8 +601,8 @@ impl LocalExecutor {
         shares: usize,
     ) -> Result<(), QueueNotFoundError> {
         self.get_queue(&handle)
-            .and_then(|tq| Some(tq.borrow_mut().set_shares(shares)))
-            .ok_or(QueueNotFoundError::new(handle))
+            .map(|tq| tq.borrow_mut().set_shares(shares))
+            .ok_or_else(|| QueueNotFoundError::new(handle))
     }
 
     /// Gets the number of shares used for a particular TaskQueue
@@ -606,8 +611,8 @@ impl LocalExecutor {
         handle: TaskQueueHandle,
     ) -> Result<usize, QueueNotFoundError> {
         self.get_queue(&handle)
-            .and_then(|tq| Some(tq.borrow().shares))
-            .ok_or(QueueNotFoundError::new(handle))
+            .map(|tq| tq.borrow().shares)
+            .ok_or_else(|| QueueNotFoundError::new(handle))
     }
 
     /// Spawns a task onto the executor.
@@ -629,8 +634,8 @@ impl LocalExecutor {
             .borrow()
             .active_executing
             .as_ref()
-            .and_then(|x| Some(x.borrow().ex.clone()))
-            .or(self.get_executor(&TaskQueueHandle { index: 0 }))
+            .map(|x| x.borrow().ex.clone())
+            .or_else(|| self.get_executor(&TaskQueueHandle { index: 0 }))
             .unwrap();
         Task(ex.spawn(future))
     }
@@ -660,8 +665,8 @@ impl LocalExecutor {
         F: Future<Output = T> + 'static,
     {
         self.get_executor(&handle)
-            .and_then(|ex| Some(Task(ex.spawn(future))))
-            .ok_or(QueueNotFoundError::new(handle))
+            .map(|ex| Task(ex.spawn(future)))
+            .ok_or_else(|| QueueNotFoundError::new(handle))
     }
 
     fn preempt_timer_duration(&self) -> Duration {
