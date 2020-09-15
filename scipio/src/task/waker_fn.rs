@@ -26,6 +26,10 @@ impl<F: Fn() + Send + Sync + 'static> Helper<F> {
         Self::drop_waker,
     );
 
+    #[allow(clippy::redundant_clone)]
+    // Clippy sees this rc.clone() call as redundant. However what we are doing here
+    // is making sure that the waker is alive until a later explicit call to drop_waker
+    // We need to leave this function with the reference count bumped.
     unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
         let rc = ManuallyDrop::new(Rc::from_raw(ptr as *const F));
         mem::forget(rc.clone());
