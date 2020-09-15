@@ -3,16 +3,16 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use std::cell::RefCell;
+use crate::Latency;
+use std::cell::{RefCell, UnsafeCell};
 use std::ffi::CString;
 use std::io;
-use std::marker::PhantomPinned;
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::Path;
-use std::pin::Pin;
+use std::rc::Rc;
 use std::task::Waker;
 
 macro_rules! syscall {
@@ -120,7 +120,7 @@ pub(crate) enum SourceType {
     Close,
     LinkRings(LinkStatus),
     Statx(CString, Box<RefCell<libc::statx>>),
-    Timeout(bool),
+    Timeout(Option<u64>),
     Invalid,
 }
 
@@ -145,7 +145,7 @@ impl Wakers {
 
 /// A registered source of I/O events.
 #[derive(Debug)]
-pub struct Source {
+pub struct InnerSource {
     /// Raw file descriptor on Unix platforms.
     pub(crate) raw: RawFd,
 
@@ -156,55 +156,86 @@ pub struct Source {
 
     io_requirements: IoRequirements,
 
-    _pin: PhantomPinned,
+    id: Option<u64>,
+
+    queue: Option<ReactorQueue>,
+}
+
+#[derive(Debug)]
+pub struct Source {
+    pub(crate) inner: Rc<UnsafeCell<InnerSource>>,
 }
 
 impl Source {
     /// Registers an I/O source in the reactor.
-    pub(crate) fn new(
-        ioreq: IoRequirements,
-        raw: RawFd,
-        source_type: SourceType,
-    ) -> Pin<Box<Source>> {
-        let b = Box::new(Source {
-            _pin: PhantomPinned,
-            raw,
-            wakers: RefCell::new(Wakers::new()),
-            source_type,
-            io_requirements: ioreq,
-        });
-        b.into()
-    }
-
-    pub(crate) fn as_ptr(self: Pin<&Self>) -> *const Self {
-        self.get_ref() as *const Self
-    }
-
-    pub(crate) fn update_source_type(self: Pin<&mut Self>, source_type: SourceType) {
-        unsafe {
-            let source = self.get_unchecked_mut();
-            source.source_type = source_type;
+    pub(crate) fn new(ioreq: IoRequirements, raw: RawFd, source_type: SourceType) -> Source {
+        Source {
+            inner: Rc::new(UnsafeCell::new(InnerSource {
+                raw,
+                wakers: RefCell::new(Wakers::new()),
+                source_type,
+                io_requirements: ioreq,
+                id: None,
+                queue: None,
+            })),
         }
     }
+}
 
-    pub(crate) fn extract_source_type(self: Pin<&mut Self>) -> SourceType {
-        unsafe {
-            let source = self.get_unchecked_mut();
-            let invalid = SourceType::Invalid;
-            std::mem::replace(&mut source.source_type, invalid)
-        }
+impl InnerSource {
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        std::mem::replace(&mut self.source_type, source_type)
+    }
+}
+
+pub(crate) fn mut_source(source: &Rc<UnsafeCell<InnerSource>>) -> &mut InnerSource {
+    unsafe { &mut *source.get() }
+}
+
+impl Source {
+    fn inner(&self) -> &mut InnerSource {
+        mut_source(&self.inner)
+    }
+
+    pub(crate) fn update_reactor_info(&self, id: u64, queue: ReactorQueue) {
+        self.inner().id = Some(id);
+        self.inner().queue = Some(queue);
+    }
+
+    pub(crate) fn consume_id(&self) -> Option<u64> {
+        self.inner().id.take()
+    }
+
+    pub(crate) fn latency_req(&self) -> Latency {
+        self.inner().io_requirements.latency_req
+    }
+
+    pub(crate) fn source_type<'a>(&'a self) -> &'a SourceType {
+        &self.inner().source_type
+    }
+
+    pub(crate) fn raw(&self) -> RawFd {
+        self.inner().raw
+    }
+
+    pub(crate) fn wakers(&self) -> &RefCell<Wakers> {
+        &self.inner().wakers
+    }
+
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        self.inner().update_source_type(source_type)
+    }
+
+    pub(crate) fn extract_source_type(&mut self) -> SourceType {
+        self.inner().update_source_type(SourceType::Invalid)
     }
 }
 
 impl Drop for Source {
     fn drop(&mut self) {
-        let w = self.wakers.get_mut();
-        if !w.waiters.is_empty() {
-            panic!("Attempting to release a source with pending waiters!");
-            // This cancellation will be problematic, because
-            // the operation may still be in-flight. If it returns
-            // later it will point to garbage memory.
-            //    crate::parking::Reactor::get().cancel_io(self);
+        if let Some(id) = self.consume_id() {
+            let queue = self.inner().queue.take();
+            crate::sys::uring::cancel_source(id, queue.unwrap());
         }
     }
 }

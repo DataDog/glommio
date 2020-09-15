@@ -332,7 +332,7 @@ impl DmaFile {
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
-        let stype = source.as_mut().extract_source_type();
+        let stype = source.extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
                 .and_then(|mut buffer| {
@@ -359,7 +359,7 @@ impl DmaFile {
             Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
-        let stype = source.as_mut().extract_source_type();
+        let stype = source.extract_source_type();
         match stype {
             SourceType::DmaRead(_, buffer) => buffer
                 .and_then(|mut buffer| {
@@ -442,7 +442,7 @@ impl DmaFile {
 
         let mut source = Reactor::get().statx(self.as_raw_fd(), path);
         enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
-        let stype = source.as_mut().extract_source_type();
+        let stype = source.extract_source_type();
         let stat_buf = match stype {
             SourceType::Statx(_, buf) => buf,
             _ => panic!("Source type is wrong for describe operation"),
@@ -468,6 +468,7 @@ impl DmaFile {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::Local;
 
     #[derive(Copy, Clone)]
     enum TestDirectoryKind {
@@ -726,5 +727,58 @@ mod test {
         let buf = new_file.read_dma(0, 512).await.expect("failed to read");
         std::assert_eq!(buf.len(), 0);
         new_file.close().await.expect("failed to close file");
+    });
+
+    // Futures not polled. Should be in the submission queue
+    dma_file_test!(cancellation_doest_crash_futures_not_polled, path, _k, {
+        let mut file = DmaFile::create(path.join("testfile"))
+            .await
+            .expect("failed to create file");
+
+        let size: usize = 4096;
+        file.truncate(size as u64).await.unwrap();
+        let buf = DmaFile::alloc_dma_buffer(size);
+        let bytes = buf.as_mut_bytes();
+        bytes[0] = 'x' as u8;
+        let mut futs = vec![];
+        for _ in 0..200 {
+            let f = file.write_dma(&buf, 0);
+            futs.push(f);
+        }
+        let mut all = join_all(futs);
+        let _ = futures::poll!(&mut all);
+        drop(all);
+        file.close().await.unwrap();
+    });
+
+    // Futures polled. Should be a mixture of in the ring and in the in the submission queue
+    dma_file_test!(cancellation_doest_crash_futures_polled, p, _k, {
+        let mut handles = vec![];
+        for i in 0..200 {
+            let path = p.clone();
+            handles.push(
+                Local::local(async move {
+                    let mut path = path.join("testfile");
+                    path.set_extension(i.to_string());
+                    let mut file = DmaFile::create(&path).await.expect("failed to create file");
+
+                    let size: usize = 4096;
+                    file.truncate(size as u64).await.unwrap();
+
+                    let buf = DmaFile::alloc_dma_buffer(size);
+                    let bytes = buf.as_mut_bytes();
+                    bytes[0] = 'x' as u8;
+                    file.write_dma(&buf, 0).await.unwrap();
+                    file.close().await.unwrap();
+                })
+                .detach(),
+            );
+        }
+        for h in &handles {
+            h.cancel();
+        }
+        for h in handles {
+            h.await;
+        }
     });
 }

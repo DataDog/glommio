@@ -18,7 +18,7 @@ concurrent-queue = "1.1.2"
 futures-lite = "0.1.9"
 libc = "0.2.73"
 socket2 = { version = "0.3.12", features = ["pair", "unix"] }
-iou = { git = "https://github.com/glommer/iou", tag = "scipio-2020-09-10" }
+iou = { git = "https://github.com/glommer/iou", tag = "scipio-2020-09-11" }
 uring-sys = { git = "https://github.com/glommer/uring-sys", tag = "scipio-2020-09-10" }
 nix = "0.16.0"
 aligned_alloc = "0.1"

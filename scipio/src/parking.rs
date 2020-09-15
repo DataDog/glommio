@@ -32,7 +32,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::panic::{self, RefUnwindSafe, UnwindSafe};
 use std::path::Path;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{Poll, Waker};
@@ -257,7 +256,7 @@ impl Reactor {
         }
     }
 
-    fn new_source(&self, raw: RawFd, stype: SourceType) -> Pin<Box<Source>> {
+    fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
         let ioreq = self.current_io_requirements.borrow();
         sys::Source::new(*ioreq, raw, stype)
     }
@@ -277,9 +276,9 @@ impl Reactor {
         buf: &DmaBuffer,
         pos: u64,
         pollable: PollableStatus,
-    ) -> Pin<Box<Source>> {
+    ) -> Source {
         let source = self.new_source(raw, SourceType::DmaWrite(pollable));
-        self.sys.write_dma(&source.as_ref(), buf, pos);
+        self.sys.write_dma(&source, buf, pos);
         source
     }
 
@@ -289,15 +288,15 @@ impl Reactor {
         pos: u64,
         size: usize,
         pollable: PollableStatus,
-    ) -> Pin<Box<Source>> {
+    ) -> Source {
         let source = self.new_source(raw, SourceType::DmaRead(pollable, None));
-        self.sys.read_dma(&source.as_ref(), pos, size);
+        self.sys.read_dma(&source, pos, size);
         source
     }
 
-    pub(crate) fn fdatasync(&self, raw: RawFd) -> Pin<Box<Source>> {
+    pub(crate) fn fdatasync(&self, raw: RawFd) -> Source {
         let source = self.new_source(raw, SourceType::FdataSync);
-        self.sys.fdatasync(&source.as_ref());
+        self.sys.fdatasync(&source);
         source
     }
 
@@ -307,19 +306,19 @@ impl Reactor {
         position: u64,
         size: u64,
         flags: libc::c_int,
-    ) -> Pin<Box<Source>> {
+    ) -> Source {
         let source = self.new_source(raw, SourceType::Fallocate);
-        self.sys.fallocate(&source.as_ref(), position, size, flags);
+        self.sys.fallocate(&source, position, size, flags);
         source
     }
 
-    pub(crate) fn close(&self, raw: RawFd) -> Pin<Box<Source>> {
+    pub(crate) fn close(&self, raw: RawFd) -> Source {
         let source = self.new_source(raw, SourceType::Close);
-        self.sys.close(&source.as_ref());
+        self.sys.close(&source);
         source
     }
 
-    pub(crate) fn statx(&self, raw: RawFd, path: &Path) -> Pin<Box<Source>> {
+    pub(crate) fn statx(&self, raw: RawFd, path: &Path) -> Source {
         let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
 
         let statx_buf = unsafe {
@@ -341,15 +340,15 @@ impl Reactor {
         path: &Path,
         flags: libc::c_int,
         mode: libc::c_int,
-    ) -> Pin<Box<Source>> {
+    ) -> Source {
         let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
 
         let source = self.new_source(dir, SourceType::Open(path));
-        self.sys.open_at(&source.as_ref(), flags, mode);
+        self.sys.open_at(&source, flags, mode);
         source
     }
 
-    pub(crate) fn insert_pollable_io(&self, raw: RawFd) -> io::Result<Pin<Box<Source>>> {
+    pub(crate) fn insert_pollable_io(&self, raw: RawFd) -> io::Result<Source> {
         let source = self.new_source(raw, SourceType::PollableFd);
         self.sys.insert(raw)?;
         Ok(source)
@@ -449,7 +448,7 @@ impl ReactorLock<'_> {
 impl Source {
     pub(crate) async fn collect_rw(&self) -> io::Result<usize> {
         future::poll_fn(|cx| {
-            let mut w = self.wakers.borrow_mut();
+            let mut w = self.wakers().borrow_mut();
 
             if let Some(result) = w.result.take() {
                 return Poll::Ready(result);
@@ -464,14 +463,15 @@ impl Source {
     /// Waits until the I/O source is readable.
     pub(crate) async fn readable(&self) -> io::Result<()> {
         future::poll_fn(|cx| {
-            let mut w = self.wakers.borrow_mut();
+            let mut w = self.wakers().borrow_mut();
 
             if let Some(_) = w.result.take() {
                 return Poll::Ready(Ok(()));
             }
 
-            Reactor::get().sys.interest(self, true, false);
             w.waiters.push(cx.waker().clone());
+            drop(w);
+            Reactor::get().sys.interest(self, true, false);
             Poll::Pending
         })
         .await
@@ -480,14 +480,15 @@ impl Source {
     /// Waits until the I/O source is writable.
     pub(crate) async fn writable(&self) -> io::Result<()> {
         future::poll_fn(|cx| {
-            let mut w = self.wakers.borrow_mut();
+            let mut w = self.wakers().borrow_mut();
 
             if let Some(_) = w.result.take() {
                 return Poll::Ready(Ok(()));
             }
 
-            Reactor::get().sys.interest(self, false, true);
             w.waiters.push(cx.waker().clone());
+            drop(w);
+            Reactor::get().sys.interest(self, false, true);
             Poll::Pending
         })
         .await
