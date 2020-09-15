@@ -210,7 +210,7 @@ impl Source {
         self.inner().io_requirements.latency_req
     }
 
-    pub(crate) fn source_type<'a>(&'a self) -> &'a SourceType {
+    pub(crate) fn source_type(&self) -> &SourceType {
         &self.inner().source_type
     }
 

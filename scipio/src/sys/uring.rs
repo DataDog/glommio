@@ -219,7 +219,7 @@ where
         if let Some(src) = consume_source(value.user_data()) {
             let source = mut_source(&src);
 
-            if let None = try_process(source) {
+            if try_process(source).is_none() {
                 let mut w = source.wakers.borrow_mut();
                 w.result = Some(value.result());
                 wakers.append(&mut w.waiters);
@@ -267,7 +267,7 @@ fn peek_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
 fn consume_source(id: u64) -> Option<Rc<UnsafeCell<InnerSource>>> {
     SOURCE_MAP.with(|x| {
         let mut map = x.borrow_mut();
-        if let Some(source) = map.map.remove(&id).clone() {
+        if let Some(source) = map.map.remove(&id) {
             let mut s = mut_source(&source);
             s.id = None;
             s.queue = None;
@@ -341,7 +341,7 @@ trait UringCommon {
     fn name(&self) -> &'static str;
 
     fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
-        let id = add_source(source, self.submission_queue().clone());
+        let id = add_source(source, self.submission_queue());
 
         let q = self.submission_queue();
         let mut queue = q.borrow_mut();
