@@ -210,25 +210,17 @@ impl Drop for LocalExecutor {
 
 /// A cloneable callback function.
 #[derive(Clone)]
-struct Callback(Rc<Box<dyn Fn()>>);
+struct Callback(Rc<dyn Fn()>);
 
 impl Callback {
     fn new(f: impl Fn() + 'static) -> Callback {
-        Callback(Rc::new(Box::new(f)))
+        Callback(Rc::new(f))
     }
 
     fn call(&self) {
         (self.0)();
     }
 }
-
-impl PartialEq for Callback {
-    fn eq(&self, other: &Callback) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for Callback {}
 
 impl fmt::Debug for Callback {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
