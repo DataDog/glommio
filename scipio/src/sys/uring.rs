@@ -412,6 +412,7 @@ trait UringCommon {
                 );
             }
         }
+        self.consume_completion_queue(wakers);
     }
 }
 
@@ -584,12 +585,7 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
-    pub(crate) fn rearm_preempt_timer(
-        &mut self,
-        source: &mut Source,
-        wakers: &mut Vec<Waker>,
-        d: Duration,
-    ) -> io::Result<()> {
+    fn cancel_preempt_timer(&mut self, source: &mut Source) {
         match source.source_type() {
             SourceType::Timeout(None) => {} // not armed, do nothing
             SourceType::Timeout(Some(source_id)) => {
@@ -604,12 +600,12 @@ impl SleepableRing {
                     fd: -1,
                     user_data: 0,
                 });
-                drop(queue);
-                self.flush_cancellations(wakers);
             }
             _ => panic!("Unexpected source type when linking rings"),
         }
+    }
 
+    fn rearm_preempt_timer(&mut self, source: &mut Source, d: Duration) {
         let new_id = add_source(source, self.submission_queue.clone());
         let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
         source.update_source_type(SourceType::Timeout(Some(new_id)));
@@ -627,7 +623,6 @@ impl SleepableRing {
         // No need to submit, the next ring enter will submit for us. Because
         // we just flushed and we got put in front of the queue we should get a SQE.
         // Still it would be nice to verify if we did.
-        Ok(())
     }
 
     fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
@@ -927,7 +922,9 @@ impl Reactor {
             None => true,
             Some(dur) => {
                 let mut src = self.timeout_src.borrow_mut();
-                lat_ring.rearm_preempt_timer(&mut src, wakers, dur)?;
+                lat_ring.cancel_preempt_timer(&mut src);
+                flush_cancellations!(into wakers; lat_ring);
+                lat_ring.rearm_preempt_timer(&mut src, dur);
                 false
             }
         };
@@ -940,15 +937,29 @@ impl Reactor {
         }
         // If we generated any event so far, we can't sleep. Need to handle them.
         should_sleep &= wakers.is_empty();
+
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = timer_expiration {
                 let mut src = self.timeout_src.borrow_mut();
-                lat_ring.rearm_preempt_timer(&mut src, wakers, dur)?;
-                flush_rings!(lat_ring)?;
+                lat_ring.cancel_preempt_timer(&mut src);
+                flush_cancellations!(into wakers; lat_ring);
+                // Although we keep the SQE queue separate for cancellations
+                // and submission the CQE queue is a single one. So when we
+                // flushed cancellations it is possible that we generated an
+                // event. (cancellations don't generate events)
+                //
+                // If we did, bail now.
+                should_sleep &= wakers.is_empty();
+                if should_sleep {
+                    lat_ring.rearm_preempt_timer(&mut src, dur);
+                    flush_rings!(lat_ring)?;
+                }
             }
-            self.link_rings_and_sleep(&mut main_ring)?;
+            if should_sleep {
+                self.link_rings_and_sleep(&mut main_ring)?;
+            }
         }
 
         consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
