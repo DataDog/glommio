@@ -3,11 +3,10 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::error::Error;
+use crate::error::ErrorEnhancer;
 use crate::parking::Reactor;
 use crate::sys;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
-use crate::Result;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -18,12 +17,14 @@ macro_rules! enhanced_try {
         match $expr {
             Ok(val) => Ok(val),
             Err(inner) => {
-                return Err(Error {
+                let enhanced: io::Error = ErrorEnhancer {
                     inner,
                     op: $op,
                     path: $path.and_then(|x| Some(x.to_path_buf())),
                     fd: $fd,
-                })
+                }
+                .into();
+                Err(enhanced)
             }
         }
     }};
@@ -39,7 +40,7 @@ macro_rules! enhanced_try {
 
 macro_rules! path_required {
     ($obj:expr, $op:expr) => {{
-        $obj.path.as_ref().ok_or(Error {
+        $obj.path.as_ref().ok_or(ErrorEnhancer {
             inner: io::Error::new(
                 io::ErrorKind::InvalidData,
                 "operation requires a valid path",
@@ -53,12 +54,14 @@ macro_rules! path_required {
 
 macro_rules! bad_buffer {
     ($obj:expr) => {{
-        Error {
+        let enhanced: io::Error = ErrorEnhancer {
             inner: io::Error::from_raw_os_error(5),
             op: "processing read buffer",
             path: $obj.path.clone(),
             fd: Some($obj.as_raw_fd()),
         }
+        .into();
+        enhanced
     }};
 }
 
@@ -88,7 +91,7 @@ impl Directory {
     ///
     /// The new object has a different file descriptor and has to be
     /// closed separately.
-    pub fn try_clone(&self) -> Result<Directory> {
+    pub fn try_clone(&self) -> io::Result<Directory> {
         let fd = enhanced_try!(
             sys::duplicate_file(self.file.as_raw_fd()),
             "Cloning directory",
@@ -101,7 +104,7 @@ impl Directory {
     }
 
     /// Synchronously open this directory.
-    pub fn sync_open<P: AsRef<Path>>(path: P) -> Result<Directory> {
+    pub fn sync_open<P: AsRef<Path>>(path: P) -> io::Result<Directory> {
         let path = path.as_ref().to_owned();
         let flags = libc::O_CLOEXEC | libc::O_DIRECTORY;
         let fd = enhanced_try!(
@@ -117,7 +120,7 @@ impl Directory {
     }
 
     /// Asynchronously open the directory at path
-    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Directory> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<Directory> {
         let path = path.as_ref().to_owned();
         let flags = libc::O_DIRECTORY | libc::O_CLOEXEC;
         let source = Reactor::get().open_at(-1, &path, flags, 0o755);
@@ -134,7 +137,7 @@ impl Directory {
     }
 
     /// Similar to create() in the standard library, but returns a DMA file
-    pub fn sync_create<P: AsRef<Path>>(path: P) -> Result<Directory> {
+    pub fn sync_create<P: AsRef<Path>>(path: P) -> io::Result<Directory> {
         let path = path.as_ref().to_owned();
         enhanced_try!(
             match std::fs::create_dir(&path) {
@@ -154,7 +157,7 @@ impl Directory {
     }
 
     /// Returns an iterator to the contents of this directory
-    pub fn sync_read_dir(&self) -> Result<std::fs::ReadDir> {
+    pub fn sync_read_dir(&self) -> io::Result<std::fs::ReadDir> {
         let path = path_required!(self, "read directory")?;
         enhanced_try!(std::fs::read_dir(path), "Reading a directory", self)
     }
@@ -286,7 +289,7 @@ impl DmaFile {
     }
 
     /// Similar to create() in the standard library, but returns a DMA file
-    pub async fn create<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
+    pub async fn create<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
         // FIXME: because we use the poll ring, we really only support xfs and ext4 for this.
         // We should check and maybe do something different in that case.
         let path = path.as_ref().to_owned();
@@ -302,7 +305,7 @@ impl DmaFile {
     }
 
     /// Similar to open() in the standard library, but returns a DMA file
-    pub async fn open<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
         let path = path.as_ref().to_owned();
 
         // try to open the file with O_DIRECT if the underlying media supports it
@@ -320,7 +323,7 @@ impl DmaFile {
     /// for Direct I/O. In most platforms that means 4096 bytes. There is no
     /// write_dma_aligned, since a non aligned write would require a
     /// read-modify-write.
-    pub async fn write_dma(&self, buf: &DmaBuffer, pos: u64) -> Result<usize> {
+    pub async fn write_dma(&self, buf: &DmaBuffer, pos: u64) -> io::Result<usize> {
         let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
         enhanced_try!(source.collect_rw().await, "Writing", self)
     }
@@ -329,7 +332,7 @@ impl DmaFile {
     ///
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
-    pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
+    pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> io::Result<DmaBuffer> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
         let stype = source.extract_source_type();
@@ -350,7 +353,7 @@ impl DmaFile {
     /// API will internally convert the positions and sizes to match, at a cost.
     ///
     /// If you can guarantee proper alignment, prefer read_dma_aligned instead
-    pub async fn read_dma(&self, pos: u64, size: usize) -> Result<DmaBuffer> {
+    pub async fn read_dma(&self, pos: u64, size: usize) -> io::Result<DmaBuffer> {
         let eff_pos = self.align_down(pos);
         let b = (pos - eff_pos) as usize;
 
@@ -373,14 +376,14 @@ impl DmaFile {
     }
 
     /// Issues fdatasync into the underlying file.
-    pub async fn fdatasync(&self) -> Result<()> {
+    pub async fn fdatasync(&self) -> io::Result<()> {
         let source = Reactor::get().fdatasync(self.as_raw_fd());
         enhanced_try!(source.collect_rw().await, "Syncing", self)?;
         Ok(())
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as the size argument
-    pub async fn pre_allocate(&self, size: u64) -> Result<()> {
+    pub async fn pre_allocate(&self, size: u64) -> io::Result<()> {
         let flags = libc::FALLOC_FL_ZERO_RANGE;
         let source = Reactor::get().fallocate(self.as_raw_fd(), 0, size, flags);
         enhanced_try!(source.collect_rw().await, "Pre-allocate space", self)?;
@@ -404,7 +407,7 @@ impl DmaFile {
     /// Truncates a file to the specified size.
     ///
     /// Warning: synchronous operation, will block the reactor
-    pub async fn truncate(&self, size: u64) -> Result<()> {
+    pub async fn truncate(&self, size: u64) -> io::Result<()> {
         enhanced_try!(
             sys::truncate_file(self.as_raw_fd(), size),
             "Truncating",
@@ -415,7 +418,7 @@ impl DmaFile {
     /// rename an existing file.
     ///
     /// Warning: synchronous operation, will block the reactor
-    pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
+    pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
         let new_path = new_path.as_ref().to_owned();
         let old_path = path_required!(self, "rename")?;
 
@@ -427,7 +430,7 @@ impl DmaFile {
     /// remove an existing file given its name
     ///
     /// Warning: synchronous operation, will block the reactor
-    pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
+    pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
         enhanced_try!(
             sys::remove_file(path.as_ref()),
             "Removing",
@@ -437,7 +440,7 @@ impl DmaFile {
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall
-    async fn statx(&self) -> Result<libc::statx> {
+    async fn statx(&self) -> io::Result<libc::statx> {
         let path = path_required!(self, "stat")?;
 
         let mut source = Reactor::get().statx(self.as_raw_fd(), path);
@@ -451,13 +454,13 @@ impl DmaFile {
     }
 
     /// Returns the size of a file, in bytes
-    pub async fn file_size(&self) -> Result<u64> {
+    pub async fn file_size(&self) -> io::Result<u64> {
         let st = self.statx().await?;
         Ok(st.stx_size)
     }
 
     /// Closes this DMA file.
-    pub async fn close(&mut self) -> Result<()> {
+    pub async fn close(&mut self) -> io::Result<()> {
         let source = Reactor::get().close(self.as_raw_fd());
         enhanced_try!(source.collect_rw().await, "Closing", self)?;
         self.file = unsafe { std::fs::File::from_raw_fd(-1) };
