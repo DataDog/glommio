@@ -43,6 +43,8 @@ extern crate nix;
 extern crate alloc;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use(defer)]
+extern crate scopeguard;
 
 use crate::parking::Reactor;
 use std::fmt::Debug;
@@ -146,6 +148,7 @@ pub use crate::pollable::Async;
 pub use crate::semaphore::Semaphore;
 pub use crate::sys::DmaBuffer;
 pub use enclose::enclose;
+pub use scopeguard::defer;
 
 /// Local is an ergonomic way to access the local executor.
 /// The local is executed through a Task type, but the Task type has a type

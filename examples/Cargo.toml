@@ -19,3 +19,7 @@ path = "hello_world.rs"
 [[example]]
 name = "ping_pong"
 path = "ping_pong.rs"
+
+[[example]]
+name = "defer"
+path = "defer.rs"
