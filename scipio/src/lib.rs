@@ -138,7 +138,6 @@ mod semaphore;
 pub mod timer;
 
 pub use crate::dma_file::{Directory, DmaFile};
-pub use crate::error::Error;
 pub use crate::executor::{
     LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
 };
@@ -199,7 +198,3 @@ impl IoRequirements {
         }
     }
 }
-
-/// Represents a wrapper around io::Result that packs more
-/// information about the file being accessed.
-pub type Result<T> = std::result::Result<T, Error>;
