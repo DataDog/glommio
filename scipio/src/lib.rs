@@ -133,6 +133,7 @@ pub mod collections;
 mod dma_file;
 mod error;
 mod executor;
+mod file_stream;
 mod multitask;
 mod networking;
 mod pollable;
@@ -142,6 +143,9 @@ pub mod timer;
 pub use crate::dma_file::{Directory, DmaFile};
 pub use crate::executor::{
     LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
+};
+pub use crate::file_stream::{
+    ReadResult, StreamReader, StreamReaderBuilder
 };
 pub use crate::networking::*;
 pub use crate::pollable::Async;
