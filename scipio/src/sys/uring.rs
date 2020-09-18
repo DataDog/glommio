@@ -336,6 +336,7 @@ impl UringQueueState {
 trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
+    fn needs_kernel_enter(&self, submitted: usize) -> bool;
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()>;
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
     fn name(&self) -> &'static str;
@@ -361,7 +362,7 @@ trait UringCommon {
             sub += 1;
         }
 
-        if sub > 0 {
+        if self.needs_kernel_enter(sub) {
             return self.submit_sqes();
         }
         Ok(0)
@@ -447,6 +448,14 @@ impl PollRing {
 impl UringCommon for PollRing {
     fn name(&self) -> &'static str {
         "poll"
+    }
+
+    fn needs_kernel_enter(&self, _submitted: usize) -> bool {
+        // if we submitted anything, we will have the submission count
+        // differing from the completion count and can_sleep will be false.
+        //
+        // So only need to check for that.
+        !self.can_sleep()
     }
 
     fn submission_queue(&mut self) -> ReactorQueue {
@@ -650,6 +659,10 @@ impl SleepableRing {
 impl UringCommon for SleepableRing {
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn needs_kernel_enter(&self, submitted: usize) -> bool {
+        submitted > 0
     }
 
     fn submission_queue(&mut self) -> ReactorQueue {
