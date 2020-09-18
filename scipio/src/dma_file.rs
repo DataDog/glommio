@@ -506,6 +506,11 @@ mod test {
                 let mut dir = PathBuf::from(path);
                 std::assert!(dir.exists());
 
+                if std::env::temp_dir() == dir {
+                    dir.push("storage_media");
+                    std::fs::create_dir_all(&dir).unwrap();
+                }
+
                 dir.push(test_name);
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).unwrap();
