@@ -17,6 +17,20 @@ pub struct PosixDmaBuffer {
     size: usize,
 }
 
+// Adapted from stdlib's source code, simplified because we only ever need u8.
+fn is_nonoverlapping(src: *const u8, dst: *const u8, size: usize) -> bool {
+    let src_usize = src as usize;
+    let dst_usize = dst as usize;
+    let diff = if src_usize > dst_usize {
+        src_usize - dst_usize
+    } else {
+        dst_usize - src_usize
+    };
+    // If the absolute distance between the ptrs is at least as big as the size of the buffer,
+    // they do not overlap.
+    diff >= size
+}
+
 impl PosixDmaBuffer {
     pub fn new(size: usize) -> Option<PosixDmaBuffer> {
         let data: *mut u8;
@@ -57,6 +71,30 @@ impl PosixDmaBuffer {
 
     pub fn as_ptr(&self) -> *const u8 {
         unsafe { self.data.add(self.trim) }
+    }
+
+    pub fn copy_to_slice(&self, offset: usize, dst: &mut [u8]) -> usize {
+        if offset > self.size {
+            return 0;
+        }
+        let len = std::cmp::min(dst.len(), self.size - offset);
+
+        let dst_ptr = dst.as_mut_ptr() as *mut u8;
+        assert_eq!(is_nonoverlapping(self.as_ptr(), dst_ptr, len), true);
+        unsafe { std::ptr::copy_nonoverlapping(self.as_ptr().add(offset), dst_ptr, len) }
+        len
+    }
+
+    pub fn copy_from_slice(&self, offset: usize, src: &[u8]) -> usize {
+        if offset > self.size {
+            return 0;
+        }
+        let len = std::cmp::min(src.len(), self.size - offset);
+
+        let src_ptr = src.as_ptr() as *const u8;
+        assert_eq!(is_nonoverlapping(src_ptr, self.as_ptr(), len), true);
+        unsafe { std::ptr::copy_nonoverlapping(src_ptr, self.as_mut_ptr().add(offset), len) }
+        len
     }
 
     pub fn memset(&self, value: u8) {

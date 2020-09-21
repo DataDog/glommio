@@ -65,11 +65,11 @@ macro_rules! bad_buffer {
     }};
 }
 
-fn align_up(v: u64, align: u64) -> u64 {
+pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
 }
 
-fn align_down(v: u64, align: u64) -> u64 {
+pub(crate) fn align_down(v: u64, align: u64) -> u64 {
     v & !(align - 1)
 }
 
@@ -469,19 +469,19 @@ impl DmaFile {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use super::*;
     use crate::Local;
 
     #[derive(Copy, Clone)]
-    enum TestDirectoryKind {
+    pub(crate) enum TestDirectoryKind {
         TempFs,
         StorageMedia,
     }
 
-    struct TestDirectory {
-        path: PathBuf,
-        kind: TestDirectoryKind,
+    pub(crate) struct TestDirectory {
+        pub(crate) path: PathBuf,
+        pub(crate) kind: TestDirectoryKind,
     }
 
     impl Drop for TestDirectory {
@@ -491,7 +491,7 @@ mod test {
     }
 
     #[cfg(test)]
-    fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
+    pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
         let mut vec = Vec::new();
 
         // Scipio currently only supports NVMe-backed volumes formatted with XFS or EXT4.
