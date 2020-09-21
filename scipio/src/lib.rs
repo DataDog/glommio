@@ -145,7 +145,7 @@ pub use crate::executor::{
     LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
 };
 pub use crate::file_stream::{
-    ReadResult, StreamReader, StreamReaderBuilder
+    ReadResult, StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
 };
 pub use crate::networking::*;
 pub use crate::pollable::Async;

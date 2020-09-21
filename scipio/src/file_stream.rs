@@ -9,11 +9,11 @@ use crate::task;
 use crate::{DmaFile, Local};
 use core::task::Waker;
 use futures::future::join_all;
-use futures::io::AsyncRead;
+use futures::io::{AsyncRead, AsyncWrite};
 use futures::task::{Context, Poll};
 use futures_lite::Future;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -617,12 +617,356 @@ impl Future for PrepareBuffer {
     }
 }
 
+#[derive(Debug)]
+/// Builds a StreamWriter, allowing linear access to a Direct I/O [`DmaFile`]
+///
+/// [`DmaFile`]: struct.DmaFile.html
+pub struct StreamWriterBuilder {
+    buffer_size: usize,
+    write_behind: usize,
+    flush_on_close: bool,
+    file: Rc<DmaFile>,
+}
+
+impl StreamWriterBuilder {
+    /// Creates a new StreamWriterBuilder, given a [`DmaFile`]
+    ///
+    /// Various properties can be set by using its `with` methods.
+    ///
+    /// A [`StreamWriter`] can later be constructed from it by
+    /// calling [`build`]
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("myfile.txt").await.unwrap();
+    ///     let _reader = StreamWriterBuilder::new(file).build();
+    /// });
+    /// ```
+    /// [`DmaFile`]: struct.DmaFile.html
+    /// [`StreamWriter`]: struct.StreamWriter.html
+    /// [`build`]: #method.build
+    #[must_use = "The builder must be built to be useful"]
+    pub fn new(file: DmaFile) -> StreamWriterBuilder {
+        StreamWriterBuilder {
+            buffer_size: 128 << 10,
+            write_behind: 1,
+            flush_on_close: true,
+            file: Rc::new(file),
+        }
+    }
+
+    /// Define the number of write-behind buffers that will be used by the [`StreamWriter`]
+    ///
+    /// Higher write-behind numbers mean more parallelism but also more memory usage. As
+    /// long as there is still write-behind buffers available writing to this [`StreamWriter`] will
+    /// not block.
+    ///
+    /// [`StreamWriter`]: struct.StreamWriter.html
+    pub fn with_write_behind(mut self, write_behind: usize) -> Self {
+        self.write_behind = std::cmp::max(write_behind, 1);
+        self
+    }
+
+    /// Does not issue a sync operation when closing the file. This is dangerous and in most cases
+    /// may lead to data loss.
+    pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
+        self.flush_on_close = !flush_disabled;
+        self
+    }
+
+    /// Define the buffer size that will be used by the [`StreamWriter`]
+    ///
+    /// [`StreamWriter`]: struct.StreamWriter.html
+    pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
+        let buffer_size = std::cmp::max(buffer_size, 1);
+        self.buffer_size = self.file.align_up(buffer_size as _) as usize;
+        self
+    }
+
+    /// Builds a [`StreamWriter`] with the properties defined by this [`StreamWriterBuilder`]
+    ///
+    /// [`StreamWriter`]: struct.StreamWriter.html
+    /// [`StreamWriterBuilder`]: struct.StreamWriterBuilder.html
+    pub fn build(self) -> StreamWriter {
+        StreamWriter::new(self)
+    }
+}
+
+#[derive(Debug)]
+enum FileStatus {
+    Open,    // Open, can be closed.
+    Closing, // We are closing it.
+    Closed,  // It was closed, but the poll
+}
+
+#[derive(Debug)]
+struct StreamWriterState {
+    buffer_size: usize,
+    waker: Option<Waker>,
+    file_status: FileStatus,
+    error: Option<io::Error>,
+    pending: Vec<task::JoinHandle<(), ()>>,
+    buffer_queue: VecDeque<Rc<DmaBuffer>>,
+    file_pos: u64,
+    buffer_pos: usize,
+    write_behind: usize,
+    flush_on_close: bool,
+}
+
+impl StreamWriterState {
+    fn add_waker(&mut self, waker: Waker) {
+        // Linear file stream, not supposed to have parallel writers!!
+        assert!(self.waker.is_none());
+        self.waker = Some(waker);
+    }
+
+    fn initiate_close(&mut self, waker: Waker, state: Rc<RefCell<Self>>, mut file: Rc<DmaFile>) {
+        let final_pos = self.file_pos();
+        let must_truncate = final_pos != self.file_pos;
+
+        if self.buffer_pos > 0 {
+            let buffer = self.buffer_queue.pop_front();
+            self.flush_one_buffer(buffer.unwrap(), state.clone(), file.clone());
+            if must_truncate {
+                // flush will have adjusted that, we will fix.
+                self.file_pos = final_pos;
+            }
+        }
+        let mut drainers = std::mem::replace(&mut self.pending, Vec::new());
+        let flush_on_close = self.flush_on_close;
+        self.file_status = FileStatus::Closing;
+        Local::local(async move {
+            defer! {
+                waker.wake();
+            }
+
+            for v in drainers.drain(..) {
+                v.await;
+            }
+            if state.borrow().error.is_some() {
+                return;
+            }
+
+            if flush_on_close {
+                let res = file.fdatasync().await;
+                if collect_error!(state, res) {
+                    return;
+                }
+            }
+
+            if must_truncate {
+                let res = file.truncate(final_pos).await;
+                if collect_error!(state, res) {
+                    return;
+                }
+            }
+
+            close_rc_file!(state, file);
+        })
+        .detach();
+    }
+
+    fn file_pos(&self) -> u64 {
+        self.file_pos + self.buffer_pos as u64
+    }
+
+    fn flush_one_buffer(
+        &mut self,
+        buffer: Rc<DmaBuffer>,
+        state: Rc<RefCell<Self>>,
+        file: Rc<DmaFile>,
+    ) {
+        let file_pos = self.file_pos;
+        self.file_pos += self.buffer_size as u64;
+        self.buffer_pos = 0;
+        self.pending.push(
+            Local::local(async move {
+                let res = file.write_dma(&buffer, file_pos).await;
+                if !collect_error!(state, res) {
+                    let mut state = state.borrow_mut();
+                    state.buffer_queue.push_back(buffer);
+                }
+
+                let mut state = state.borrow_mut();
+                if let Some(waker) = state.waker.take() {
+                    drop(state);
+                    waker.wake();
+                }
+            })
+            .detach(),
+        );
+    }
+}
+
+impl Drop for StreamWriterState {
+    fn drop(&mut self) {
+        for v in self.pending.drain(..) {
+            v.cancel();
+        }
+    }
+}
+
+#[derive(Debug)]
+/// Provides linear access to a [`DmaFile`]. The [`DmaFile`] is a convenient way to
+/// manage a file through Direct I/O, but its interface is conductive to random access,
+/// as a position must always be specified.
+///
+/// Very rarely does one need to issue random writes to a file. Therefore, the [`StreamWriter`] is
+/// likely your go-to API when it comes to writing files.
+///
+/// The [`StreamWriter`] implements [`AsyncWrite`]. Because it is backed by a Direct I/O
+/// file, the flush method has no effect. Closing the file issues a sync so that
+/// the data can be flushed from the internal NVMe caches.
+///
+/// [`DmaFile`]: struct.DmaFile.html
+/// [`StreamReader`]: struct.StreamReader.html
+/// [`get_buffer_aligned`]: struct.StreamReader.html#method.get_buffer_aligned
+/// [`AsyncWrite`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWrite.html
+pub struct StreamWriter {
+    file: Option<Rc<DmaFile>>,
+    state: Rc<RefCell<StreamWriterState>>,
+}
+
+impl StreamWriter {
+    fn new(builder: StreamWriterBuilder) -> StreamWriter {
+        let mut buffer_queue = VecDeque::with_capacity(builder.write_behind);
+        for _ in 0..builder.write_behind {
+            buffer_queue.push_back(Rc::new(DmaFile::alloc_dma_buffer(builder.buffer_size)));
+        }
+
+        let state = StreamWriterState {
+            buffer_size: builder.buffer_size,
+            write_behind: builder.write_behind,
+            flush_on_close: builder.flush_on_close,
+            buffer_queue,
+            waker: None,
+            pending: Vec::new(),
+            error: None,
+            file_status: FileStatus::Open,
+            file_pos: 0,
+            buffer_pos: 0,
+        };
+
+        let state = Rc::new(RefCell::new(state));
+        StreamWriter {
+            file: Some(builder.file),
+            state,
+        }
+    }
+
+    /// Acquires the current position of this [`StreamWriter`].
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    /// use futures::io::AsyncWriteExt;
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("myfile.txt").await.unwrap();
+    ///     let mut writer = StreamWriterBuilder::new(file).build();
+    ///     assert_eq!(writer.current_pos(), 0);
+    ///     writer.write_all(&[0, 1, 2, 3, 4]).await.unwrap();
+    ///     assert_eq!(writer.current_pos(), 5);
+    ///     writer.close().await.unwrap();
+    /// });
+    /// ```
+    ///
+    /// [`StreamWriter`]: struct.StreamWriter.html
+    pub fn current_pos(&self) -> u64 {
+        self.state.borrow().file_pos()
+    }
+}
+
+impl AsyncWrite for StreamWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let mut state = self.state.borrow_mut();
+        if let Some(err) = current_error!(state) {
+            return Poll::Ready(err);
+        }
+
+        let mut written = 0;
+        while written < buf.len() {
+            match state.buffer_queue.pop_front() {
+                None => {
+                    break;
+                }
+                Some(buffer) => {
+                    let size = buf.len();
+                    let space = state.buffer_size - state.buffer_pos;
+                    let writesz = std::cmp::min(space, size - written);
+                    let end = written + writesz;
+                    buffer.copy_from_slice(state.buffer_pos, &buf[written..end]);
+                    written += writesz;
+                    state.buffer_pos += writesz;
+                    if state.buffer_pos == state.buffer_size {
+                        state.flush_one_buffer(
+                            buffer,
+                            self.state.clone(),
+                            self.file.clone().unwrap(),
+                        );
+                    } else {
+                        state.buffer_queue.push_front(buffer);
+                    }
+                }
+            }
+        }
+
+        if written == 0 {
+            state.add_waker(cx.waker().clone());
+            Poll::Pending
+        } else {
+            Poll::Ready(Ok(written))
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let file = self.file.take();
+        let mut state = self.state.borrow_mut();
+        match state.file_status {
+            FileStatus::Open => {
+                state.initiate_close(cx.waker().clone(), self.state.clone(), file.unwrap());
+                Poll::Pending
+            }
+            FileStatus::Closing => {
+                state.file_status = FileStatus::Closed;
+                match current_error!(state) {
+                    Some(err) => Poll::Ready(err),
+                    None => Poll::Ready(Ok(())),
+                }
+            }
+            FileStatus::Closed => {
+                // We do it like this so that the write and read close errors are exactly the same.
+                // The reader uses enhanced errors, so it has a message in the inner attribute of
+                // io::Error
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("{}", io::Error::from_raw_os_error(libc::EBADF)),
+                )))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::dma_file::align_up;
     use crate::dma_file::test::make_test_directories;
-    use futures::AsyncReadExt;
+    use futures::{AsyncReadExt, AsyncWriteExt};
     use std::io::ErrorKind;
 
     macro_rules! file_stream_read_test {
@@ -651,6 +995,23 @@ mod test {
                         new_file.close().await.unwrap();
                         let $file = DmaFile::open(&filename).await.unwrap();
                         let $file_size = $size;
+                        $code
+                    });
+                }
+            }
+        };
+    }
+
+    macro_rules! file_stream_write_test {
+        ( $name:ident, $dir:ident, $kind:ident, $filename:ident, $file:ident, $code:block) => {
+            #[test]
+            fn $name() {
+                for dir in make_test_directories(stringify!($name)) {
+                    let $dir = dir.path.clone();
+                    let $kind = dir.kind;
+                    test_executor!(async move {
+                        let $filename = $dir.join("testfile");
+                        let $file = DmaFile::create(&$filename).await.unwrap();
                         $code
                     });
                 }
@@ -946,5 +1307,131 @@ mod test {
         let mut buf = [0u8; 2000];
         expect_specific_error!(reader.read_exact(&mut buf).await, "\"Bad file descriptor (os error 9)\"");
         reader.close().await.unwrap();
+    });
+
+    file_stream_write_test!(write_all, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file)
+            .with_buffer_size(128 << 10)
+            .build();
+
+        writer.write_all(&[0, 1, 2, 3, 4]).await.unwrap();
+
+        assert_eq!(writer.current_pos(), 5);
+        writer.close().await.unwrap();
+        assert_eq!(writer.current_pos(), 5);
+
+        let rfile = DmaFile::open(&filename).await.unwrap();
+        assert_eq!(rfile.file_size().await.unwrap(), 5);
+
+        let mut reader = StreamReaderBuilder::new(rfile)
+            .with_buffer_size(1024)
+            .build();
+
+        let mut buf = Vec::new();
+        let x = reader.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(x, 5);
+        check_contents!(buf, 0);
+        reader.close().await.unwrap();
+    });
+
+    file_stream_write_test!(write_multibuffer, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file)
+            .with_buffer_size(1024)
+            .with_write_behind(2)
+            .build();
+
+        for i in 0..4096 {
+            assert_eq!(writer.current_pos(), i);
+            writer.write_all(&[i as u8]).await.unwrap();
+        }
+
+        writer.close().await.unwrap();
+
+        let rfile = DmaFile::open(&filename).await.unwrap();
+        assert_eq!(rfile.file_size().await.unwrap(), 4096);
+
+        let mut reader = StreamReaderBuilder::new(rfile)
+            .with_buffer_size(1024)
+            .build();
+
+        let mut buf = [0u8; 4096];
+        reader.read_exact(&mut buf).await.unwrap();
+        check_contents!(buf, 0);
+        reader.close().await.unwrap();
+    });
+
+    file_stream_write_test!(write_close_twice, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file)
+            .with_buffer_size(128 << 10)
+            .build();
+
+        writer.close().await.unwrap();
+        expect_specific_error!(writer.close().await, "\"Bad file descriptor (os error 9)\"");
+    });
+
+    file_stream_write_test!(write_no_write_behind, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file)
+            .with_buffer_size(1024)
+            .with_write_behind(0)
+            .build();
+
+        for i in 0..4096 {
+            assert_eq!(writer.current_pos(), i);
+            writer.write_all(&[i as u8]).await.unwrap();
+        }
+
+        writer.close().await.unwrap();
+
+        let rfile = DmaFile::open(&filename).await.unwrap();
+        assert_eq!(rfile.file_size().await.unwrap(), 4096);
+
+        let mut reader = StreamReaderBuilder::new(rfile)
+            .with_buffer_size(1024)
+            .build();
+
+        let mut buf = [0u8; 4096];
+        reader.read_exact(&mut buf).await.unwrap();
+        check_contents!(buf, 0);
+        reader.close().await.unwrap();
+    });
+
+    file_stream_write_test!(write_zero_buffer, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file).with_buffer_size(0).build();
+
+        for i in 0..4096 {
+            assert_eq!(writer.current_pos(), i);
+            writer.write_all(&[i as u8]).await.unwrap();
+        }
+
+        writer.close().await.unwrap();
+
+        let rfile = DmaFile::open(&filename).await.unwrap();
+        assert_eq!(rfile.file_size().await.unwrap(), 4096);
+
+        let mut reader = StreamReaderBuilder::new(rfile)
+            .with_buffer_size(1024)
+            .build();
+
+        let mut buf = [0u8; 4096];
+        reader.read_exact(&mut buf).await.unwrap();
+        check_contents!(buf, 0);
+        reader.close().await.unwrap();
+    });
+
+    // Unfortunately we don't record the file type so we won't know if it is writeable
+    // or not until we actually try. In this test we'll try on close, when we force a flush
+    file_stream_write_test!(write_with_readable_file, path, _k, filename, _file, {
+        let rfile = DmaFile::open(&filename).await.unwrap();
+
+        let mut writer = StreamWriterBuilder::new(rfile)
+            .with_buffer_size(4096)
+            .build();
+
+        for i in 0..1024 {
+            assert_eq!(writer.current_pos(), i);
+            writer.write_all(&[i as u8]).await.unwrap();
+        }
+
+        expect_specific_error!(writer.close().await, "\"Bad file descriptor (os error 9)\"");
     });
 }
