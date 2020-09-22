@@ -87,6 +87,7 @@ pub(crate) fn sync_open(path: &Path, flags: libc::c_int, mode: libc::c_int) -> i
 }
 
 mod posix_buffers;
+pub(crate) mod sysfs;
 mod uring;
 
 pub use self::posix_buffers::*;
