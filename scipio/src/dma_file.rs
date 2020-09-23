@@ -418,11 +418,24 @@ impl DmaFile {
     /// rename an existing file.
     ///
     /// Warning: synchronous operation, will block the reactor
+    pub async fn rename_file<P: AsRef<Path>>(old_path: P, new_path: P) -> io::Result<()> {
+        let new_path = new_path.as_ref().to_owned();
+        let old_path = old_path.as_ref().to_owned();
+
+        sys::rename_file(&old_path, &new_path)
+    }
+
+    /// rename this file.
+    ///
+    /// Warning: synchronous operation, will block the reactor
     pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
         let new_path = new_path.as_ref().to_owned();
         let old_path = path_required!(self, "rename")?;
-
-        enhanced_try!(sys::rename_file(&old_path, &new_path), "Renaming", self)?;
+        enhanced_try!(
+            Self::rename_file(old_path, &new_path).await,
+            "Renaming",
+            self
+        )?;
         self.path = Some(new_path);
         Ok(())
     }
