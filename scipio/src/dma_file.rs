@@ -6,6 +6,7 @@
 use crate::error::ErrorEnhancer;
 use crate::parking::Reactor;
 use crate::sys;
+use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -275,12 +276,20 @@ impl DmaFile {
             Ok(res) => Ok(res),
         };
 
-        Ok(DmaFile {
+        let mut file = DmaFile {
             file: unsafe { std::fs::File::from_raw_fd(res? as _) },
             path: Some(path.to_path_buf()),
             o_direct_alignment: 4096,
             pollable,
-        })
+        };
+
+        let st = file.statx().await?;
+        let major = st.stx_dev_major;
+        let minor = st.stx_dev_minor;
+        if sysfs::BlockDevice::is_md(major as _, minor as _) {
+            file.pollable = PollableStatus::NonPollable;
+        }
+        Ok(file)
     }
 
     /// Allocates a buffer that is suitable for using to write to this file.
