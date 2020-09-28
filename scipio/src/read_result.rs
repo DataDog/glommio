@@ -1,0 +1,92 @@
+// unless explicitly stated otherwise all files in this repository are licensed under the
+// mit/apache-2.0 license, at your convenience
+//
+// this product includes software developed at datadog (https://www.datadoghq.com/). copyright 2020 datadog, inc.
+//
+use crate::sys::DmaBuffer;
+use std::io;
+use std::rc::Rc;
+
+#[derive(Debug, Clone)]
+/// ReadResult encapsulates a buffer, returned by read operations like [`get_buffer_aligned`] and
+/// [`read_dma`]
+///
+/// [`get_buffer_aligned`]: struct.StreamReader.html#method.get_buffer_aligned
+/// [`read_dma`]: struct.DmaFile.html#method.read_dma
+pub struct ReadResult {
+    buffer: Rc<DmaBuffer>,
+    offset: usize,
+    end: usize,
+}
+
+#[allow(clippy::len_without_is_empty)]
+impl ReadResult {
+    pub(crate) fn from_whole_buffer(buffer: DmaBuffer) -> ReadResult {
+        ReadResult {
+            end: buffer.len(),
+            offset: 0,
+            buffer: Rc::new(buffer),
+        }
+    }
+
+    /// Copies the contents of this [`ReadResult`] into the byte-slice `dst`.
+    ///
+    /// The copy starts at position `offset` into the [`ReadResult`] and copies
+    /// as many bytes as possible until either we don't have more bytes to copy
+    /// or `dst` doesn't have more space to hold them.
+    ///
+    /// [`ReadResult`]: struct.ReadResult.html
+    pub fn copy_to_slice(&self, offset: usize, dst: &mut [u8]) -> usize {
+        let offset = self.offset + offset;
+        self.buffer.copy_to_slice(offset, dst)
+    }
+
+    /// Creates a slice of this ReadResult with the given offset and length.
+    ///
+    /// Returns an [`std::io::Error`] with `[std::io::ErrorKind`] `[InvalidInput`] if
+    /// either offset or offset + len would not fit in the original buffer.
+    ///
+    /// [`std::io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
+    /// [`std::io::ErrorKind`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html
+    /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/struct.ErrorKind.html#variant.InvalidInput
+    pub fn slice(&self, extra_offset: usize, len: usize) -> io::Result<ReadResult> {
+        let offset = self.offset + extra_offset;
+        let end = offset + len;
+
+        if offset > self.buffer.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "offset {} ({} + {}) is more than the length of the buffer",
+                    offset, self.offset, extra_offset
+                ),
+            ));
+        }
+
+        if end > self.buffer.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "length {} would cross past the end of the buffer ({} + {})",
+                    end, offset, len
+                ),
+            ));
+        }
+
+        Ok(ReadResult {
+            buffer: self.buffer.clone(),
+            offset,
+            end,
+        })
+    }
+
+    /// The length of this buffer
+    pub fn len(&self) -> usize {
+        self.end - self.offset
+    }
+
+    /// Allows accessing the contents of this buffer as a byte slice
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buffer.as_bytes()[self.offset..self.end]
+    }
+}

@@ -5,6 +5,7 @@
 //
 use crate::error::ErrorEnhancer;
 use crate::parking::Reactor;
+use crate::read_result::ReadResult;
 use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
@@ -341,11 +342,11 @@ impl DmaFile {
     ///
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
-    pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> io::Result<DmaBuffer> {
+    pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
         let stype = source.extract_source_type();
-        match stype {
+        let buffer = match stype {
             SourceType::DmaRead(_, buffer) => buffer
                 .map(|mut buffer| {
                     buffer.trim_to_size(read_size);
@@ -353,7 +354,8 @@ impl DmaFile {
                 })
                 .ok_or(bad_buffer!(self)),
             _ => Err(bad_buffer!(self)),
-        }
+        }?;
+        Ok(ReadResult::from_whole_buffer(buffer))
     }
 
     /// Reads into buffer in buf from a specific position in the file.
@@ -362,7 +364,7 @@ impl DmaFile {
     /// API will internally convert the positions and sizes to match, at a cost.
     ///
     /// If you can guarantee proper alignment, prefer read_dma_aligned instead
-    pub async fn read_dma(&self, pos: u64, size: usize) -> io::Result<DmaBuffer> {
+    pub async fn read_dma(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
         let eff_pos = self.align_down(pos);
         let b = (pos - eff_pos) as usize;
 
@@ -372,7 +374,7 @@ impl DmaFile {
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
         let stype = source.extract_source_type();
-        match stype {
+        let buffer = match stype {
             SourceType::DmaRead(_, buffer) => buffer
                 .map(|mut buffer| {
                     buffer.trim_front(b);
@@ -381,7 +383,8 @@ impl DmaFile {
                 })
                 .ok_or(bad_buffer!(self)),
             _ => Err(bad_buffer!(self)),
-        }
+        }?;
+        Ok(ReadResult::from_whole_buffer(buffer))
     }
 
     /// Issues fdatasync into the underlying file.

@@ -137,6 +137,7 @@ mod file_stream;
 mod multitask;
 mod networking;
 mod pollable;
+mod read_result;
 mod semaphore;
 pub mod timer;
 
@@ -145,10 +146,11 @@ pub use crate::executor::{
     LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
 };
 pub use crate::file_stream::{
-    ReadResult, StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
+    StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
 };
 pub use crate::networking::*;
 pub use crate::pollable::Async;
+pub use crate::read_result::ReadResult;
 pub use crate::semaphore::Semaphore;
 pub use crate::sys::DmaBuffer;
 pub use enclose::enclose;

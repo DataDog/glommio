@@ -4,6 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::dma_file::align_down;
+use crate::read_result::ReadResult;
 use crate::sys::DmaBuffer;
 use crate::task;
 use crate::{DmaFile, Local};
@@ -128,7 +129,7 @@ struct StreamReaderState {
     wakermap: HashMap<u64, Vec<Waker>>,
     pending: HashMap<u64, task::JoinHandle<(), ()>>,
     error: Option<io::Error>,
-    buffermap: HashMap<u64, Rc<DmaBuffer>>,
+    buffermap: HashMap<u64, ReadResult>,
 }
 
 impl StreamReaderState {
@@ -167,7 +168,7 @@ impl StreamReaderState {
             let mut state = read_state.borrow_mut();
             match buffer {
                 Ok(buf) => {
-                    state.buffermap.insert(buffer_id, Rc::new(buf));
+                    state.buffermap.insert(buffer_id, buf);
                 }
                 Err(x) => {
                     state.error = Some(x);
@@ -523,29 +524,6 @@ impl AsyncRead for StreamReader {
     }
 }
 
-#[derive(Debug)]
-/// ReadResult encapsulates a buffer, returned by [`get_buffer_aligned`]
-///
-/// [`get_buffer_aligned`]: struct.StreamReader.html#method.get_buffer_aligned
-pub struct ReadResult {
-    buffer: Rc<DmaBuffer>,
-    offset: usize,
-    end: usize,
-}
-
-#[allow(clippy::len_without_is_empty)]
-impl ReadResult {
-    /// The length of this buffer
-    pub fn len(&self) -> usize {
-        self.end - self.offset
-    }
-
-    /// Allows accessing the contents of this buffer as a byte slice
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.buffer.as_bytes()[self.offset..self.end]
-    }
-}
-
 // If we had an I/O thread (or if -- one can hope -- uring could do mremap()), we could remap
 // those buffers into a contiguous memory area and provide unaligned access. If we manage to
 // accumulate all mremap from all threads in a single thread (instead of one syscall thread per
@@ -607,11 +585,7 @@ impl Future for PrepareBuffer {
             }
             Some(buffer) => {
                 let len = std::cmp::min(self.len as usize, buffer.len() - offset);
-                Poll::Ready(Ok(ReadResult {
-                    buffer: buffer.clone(),
-                    offset,
-                    end: offset + len,
-                }))
+                Poll::Ready(buffer.slice(offset, len))
             }
         }
     }
