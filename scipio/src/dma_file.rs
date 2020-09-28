@@ -257,7 +257,15 @@ I will close it and turn a leak bug into a performance bug. Please investigate",
 }
 
 impl DmaFile {
-    /// Returns true if the files represent the same file on the underlying device.
+    /// Returns true if the DmaFiles represent the same file on the underlying device.
+    ///
+    /// Files are considered to be the same if they live in the same file system and
+    /// have the same Linux inode. Note that based on this rule a symlink is *not*
+    /// considered to be the same file.
+    ///
+    /// Files will be considered to be the same if:
+    /// * A file is opened multiple times (different file descriptors, but same file!)
+    /// * they are hard links.
     ///
     /// # Examples
     ///
