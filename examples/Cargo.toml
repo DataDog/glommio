@@ -23,3 +23,7 @@ path = "ping_pong.rs"
 [[example]]
 name = "defer"
 path = "defer.rs"
+
+[[example]]
+name = "cooperative_preempt"
+path = "cooperative_preempt.rs"

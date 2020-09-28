@@ -844,6 +844,33 @@ impl<T> Task<T> {
         y.await;
     }
 
+    /// checks if this task has ran for too long and need to be preempted. This is useful for
+    /// situations where we can't call .await, for instance, if a [`RefMut`] is held. If this
+    /// tests true, then the user is responsible for making any preparations necessary for
+    /// calling .await and doing it themselves.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use scipio::{LocalExecutorBuilder, Local};
+    ///
+    /// let ex = LocalExecutorBuilder::new().spawn(|| async {
+    ///     loop {
+    ///         if Local::need_preempt() {
+    ///             break;
+    ///         }
+    ///     }
+    /// }).unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`RefMut`]: https://doc.rust-lang.org/std/cell/struct.RefMut.html
+    #[inline]
+    pub fn need_preempt() -> bool {
+        Reactor::need_preempt()
+    }
+
     /// Conditionally yields the current task, moving it back to the end of its queue, if the task
     /// has run for too long
     #[inline]
