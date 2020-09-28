@@ -8,7 +8,6 @@ use crate::parking::Reactor;
 use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
-use std::hash::{Hash, Hasher};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -215,20 +214,6 @@ impl AsRawFd for DmaFile {
     }
 }
 
-impl PartialEq for DmaFile {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_raw_fd() == other.as_raw_fd()
-    }
-}
-
-impl Eq for DmaFile {}
-
-impl Hash for DmaFile {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_raw_fd().hash(state);
-    }
-}
-
 impl Default for DmaFile {
     fn default() -> Self {
         DmaFile {
@@ -271,13 +256,14 @@ impl DmaFile {
     ///
     /// ```no_run
     /// use scipio::{LocalExecutor, DmaFile};
+    /// use std::os::unix::io::AsRawFd;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let mut wfile = DmaFile::create("myfile.txt").await.unwrap();
     ///     let mut rfile = DmaFile::open("myfile.txt").await.unwrap();
     ///     // Different objects (OS file descriptors), so they will be different...
-    ///     assert!(wfile != rfile);
+    ///     assert_ne!(wfile.as_raw_fd(), rfile.as_raw_fd());
     ///     // However they represent the same object.
     ///     assert!(wfile.is_same(&rfile));
     ///     wfile.close().await;
@@ -857,7 +843,7 @@ pub(crate) mod test {
         let mut rfile = DmaFile::open(path.join("testfile")).await.unwrap();
         let mut wfile_other = DmaFile::create(path.join("testfile_other")).await.unwrap();
 
-        assert!(wfile != rfile);
+        assert_ne!(wfile.as_raw_fd(), rfile.as_raw_fd());
         assert!(wfile.is_same(&rfile));
         assert!(!wfile.is_same(&wfile_other));
 
