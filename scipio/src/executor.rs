@@ -1270,3 +1270,44 @@ fn test_detach() {
         Timer::new(Duration::from_micros(100)).await;
     });
 }
+
+/// As far as impl From<libc::timeval> for Duration is not allowed.
+#[cfg(test)]
+fn from_timeval(v: libc::timeval) -> Duration {
+    Duration::from_secs(v.tv_sec as u64) + Duration::from_micros(v.tv_usec as u64)
+}
+
+#[cfg(test)]
+fn getrusage() -> libc::rusage {
+    use core::mem::MaybeUninit;
+    let mut s0 = MaybeUninit::<libc::rusage>::uninit();
+    let err = unsafe { libc::getrusage(libc::RUSAGE_THREAD, s0.as_mut_ptr()) };
+    if err != 0 {
+        panic!("getrusage error = {}", err);
+    }
+    unsafe { s0.assume_init() }
+}
+
+#[cfg(test)]
+fn getrusage_utime() -> Duration {
+    from_timeval(getrusage().ru_utime)
+}
+
+#[test]
+fn test_no_spin() {
+    use crate::timer;
+
+    let ex = LocalExecutor::make_default();
+    let task_queue = ex.create_task_queue(1000,
+                                                Latency::Matters(Duration::from_millis(10)), "my_tq");
+    let start = getrusage_utime();
+    let task = ex.spawn_into(async {
+        timer::sleep(Duration::from_secs(1)).await
+    }, task_queue).expect("failed to spawn task");
+    ex.run(async { task.await });
+
+    assert!(
+        getrusage_utime() - start < Duration::from_millis(1),
+        "expected user time on LE is less than 1 millisecond"
+    );
+}

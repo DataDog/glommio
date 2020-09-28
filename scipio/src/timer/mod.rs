@@ -7,3 +7,20 @@
 mod timer_impl;
 
 pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
+
+/// Sleep for some time.
+///
+/// ```
+/// use scipio::LocalExecutor;
+/// use scipio::timer::sleep;
+/// use std::time::Duration;
+///
+/// let ex = LocalExecutor::make_default();
+///
+/// ex.run(async {
+///     sleep(Duration::from_millis(100)).await;
+/// });
+/// ```
+pub async fn sleep(wait: std::time::Duration) {
+    Timer::new(wait).await;
+}
