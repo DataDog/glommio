@@ -13,6 +13,7 @@ use futures::io::{AsyncRead, AsyncWrite};
 use futures::task::{Context, Poll};
 use futures_lite::Future;
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
@@ -713,6 +714,11 @@ struct StreamWriterState {
     pending: Vec<task::JoinHandle<(), ()>>,
     buffer_queue: VecDeque<Rc<DmaBuffer>>,
     file_pos: u64,
+    // this is so we track the last flushed pos. Buffers may return
+    // out of order, so we can't report them as flushed_pos yet. Store for
+    // later.
+    out_of_order_write_returns: Vec<u64>,
+    flushed_pos: u64,
     buffer_pos: usize,
     write_behind: usize,
     flush_on_close: bool,
@@ -767,12 +773,37 @@ impl StreamWriterState {
             }
 
             close_rc_file!(state, file);
+
+            let mut state = state.borrow_mut();
+            state.flushed_pos = final_pos;
+            drop(state);
         })
         .detach();
     }
 
     fn file_pos(&self) -> u64 {
         self.file_pos + self.buffer_pos as u64
+    }
+
+    fn flushed_pos(&self) -> u64 {
+        self.flushed_pos
+    }
+
+    fn adjust_flushed_pos(&mut self, just_written: u64) {
+        self.out_of_order_write_returns.push(just_written);
+        self.out_of_order_write_returns.sort_by_key(|x| Reverse(*x));
+        while let Some(x) = self.out_of_order_write_returns.last() {
+            if *x == self.flushed_pos {
+                self.flushed_pos += self.buffer_size as u64;
+                self.out_of_order_write_returns.pop();
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn current_pending(&mut self) -> Vec<task::JoinHandle<(), ()>> {
+        std::mem::replace(&mut self.pending, Vec::new())
     }
 
     fn flush_one_buffer(
@@ -793,6 +824,7 @@ impl StreamWriterState {
                 }
 
                 let mut state = state.borrow_mut();
+                state.adjust_flushed_pos(file_pos);
                 if let Some(waker) = state.waker.take() {
                     drop(state);
                     waker.wake();
@@ -850,6 +882,8 @@ impl StreamWriter {
             file_status: FileStatus::Open,
             file_pos: 0,
             buffer_pos: 0,
+            flushed_pos: 0,
+            out_of_order_write_returns: Vec::new(),
         };
 
         let state = Rc::new(RefCell::new(state));
@@ -880,6 +914,91 @@ impl StreamWriter {
     /// [`StreamWriter`]: struct.StreamWriter.html
     pub fn current_pos(&self) -> u64 {
         self.state.borrow().file_pos()
+    }
+
+    /// Acquires the current position of this [`StreamWriter`] that is flushed to the underlying
+    /// media.
+    ///
+    /// Warning: the position reported by this API is not restart or crash safe. You need to call
+    /// [`sync`] for that. Although the StreamWriter uses Direct I/O, modern storage devices have
+    /// their own caches and may still lose data that sits on those caches upon a restart until
+    /// [`sync`] is called (Note that [`close`] implies a sync).
+    ///
+    /// However within the same session, new readers trying to read from any position before what
+    /// we return in this method will be guaranteed to read the data we just wrote.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    /// use futures::io::AsyncWriteExt;
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("myfile.txt").await.unwrap();
+    ///     let mut writer = StreamWriterBuilder::new(file).build();
+    ///     assert_eq!(writer.current_pos(), 0);
+    ///     writer.write_all(&[0, 1, 2, 3, 4]).await.unwrap();
+    ///     assert_eq!(writer.current_pos(), 5);
+    ///     // The write above is not enough to cause a flush
+    ///     assert_eq!(writer.current_flushed_pos(), 0);
+    ///     writer.close().await.unwrap();
+    ///     // Close implies a forced-flush and a sync.
+    ///     assert_eq!(writer.current_flushed_pos(), 5);
+    /// });
+    /// ```
+    ///
+    /// [`StreamWriter`]: struct.StreamWriter.html
+    /// [`sync`]: struct.StreamWriter.html#method.sync
+    /// [`close`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWriteExt.html#method.close
+    pub fn current_flushed_pos(&self) -> u64 {
+        self.state.borrow().flushed_pos()
+    }
+
+    /// Waits for all currently in-flight buffers to return and be safely stored in the underlying
+    /// storage
+    ///
+    /// Note that the current buffer being written to is not flushed, as it may not be properly
+    /// aligned. Buffers that are currently in-flight will be waited on, and a sync operation
+    /// will be issued by the operating system.
+    ///
+    /// Returns the flushed position of the file at the time the sync started.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    /// use futures::io::AsyncWriteExt;
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("myfile.txt").await.unwrap();
+    ///        let mut writer = StreamWriterBuilder::new(file)
+    ///             .with_buffer_size(4096)
+    ///             .with_write_behind(2)
+    ///             .build();
+    ///        let buffer = [0u8; 5000];
+    ///     writer.write_all(&buffer).await.unwrap();
+    ///     // with 5000 bytes written into a 4096-byte buffer a flush
+    ///     // has certainly started. But if very likely didn't finish right
+    ///     // away. It will not be reflected on current_flushed_pos(), but a
+    ///     // sync() will wait on it.
+    ///     assert_eq!(writer.current_flushed_pos(), 0);
+    ///     assert_eq!(writer.sync().await.unwrap(), 4096);
+    ///     writer.close().await.unwrap();
+    /// });
+    /// ```
+    pub async fn sync(&self) -> io::Result<u64> {
+        let mut state = self.state.borrow_mut();
+        let mut pending = state.current_pending();
+        let file_pos_at_sync_time = state.file_pos;
+        drop(state);
+
+        for v in pending.drain(..) {
+            v.await;
+        }
+
+        let file = self.file.clone().unwrap();
+        file.fdatasync().await?;
+        Ok(file_pos_at_sync_time)
     }
 }
 
@@ -966,8 +1085,10 @@ mod test {
     use super::*;
     use crate::dma_file::align_up;
     use crate::dma_file::test::make_test_directories;
+    use crate::timer::Timer;
     use futures::{AsyncReadExt, AsyncWriteExt};
     use std::io::ErrorKind;
+    use std::time::Duration;
 
     macro_rules! file_stream_read_test {
         ( $name:ident, $dir:ident, $kind:ident, $file:ident, $file_size:ident: $size:tt, $code:block) => {
@@ -1433,5 +1554,55 @@ mod test {
         }
 
         expect_specific_error!(writer.close().await, "\"Bad file descriptor (os error 9)\"");
+    });
+
+    file_stream_write_test!(flushed_position_small_buffer, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file)
+            .with_buffer_size(4096)
+            .build();
+
+        assert_eq!(writer.current_pos(), 0);
+        writer.write_all(&[0, 1, 2, 3, 4]).await.unwrap();
+        assert_eq!(writer.current_pos(), 5);
+        // The write above is not enough to cause a flush
+        assert_eq!(writer.current_flushed_pos(), 0);
+        writer.close().await.unwrap();
+        // Close implies a forced-flush and a sync.
+        assert_eq!(writer.current_flushed_pos(), 5);
+    });
+
+    file_stream_write_test!(flushed_position_big_buffer, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file)
+            .with_buffer_size(4096)
+            .with_write_behind(2)
+            .build();
+
+        assert_eq!(writer.current_pos(), 0);
+        let buffer = [0u8; 5000];
+        writer.write_all(&buffer).await.unwrap();
+
+        assert_eq!(writer.current_flushed_pos(), 0);
+        Timer::new(Duration::from_secs(1)).await;
+        assert_eq!(writer.current_flushed_pos(), 4096);
+
+        writer.close().await.unwrap();
+        assert_eq!(writer.current_flushed_pos(), 5000);
+    });
+
+    file_stream_write_test!(sync_and_close, path, _k, filename, file, {
+        let mut writer = StreamWriterBuilder::new(file)
+            .with_buffer_size(4096)
+            .with_write_behind(2)
+            .build();
+
+        assert_eq!(writer.current_pos(), 0);
+        let buffer = [0u8; 5000];
+        writer.write_all(&buffer).await.unwrap();
+        assert_eq!(writer.sync().await.unwrap(), 4096);
+        // write more
+        writer.write_all(&buffer).await.unwrap();
+        writer.close().await.unwrap();
+
+        assert_eq!(writer.current_flushed_pos(), 10000);
     });
 }
