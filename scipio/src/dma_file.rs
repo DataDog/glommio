@@ -191,6 +191,9 @@ pub struct DmaFile {
     path: Option<PathBuf>,
     o_direct_alignment: u64,
     pollable: PollableStatus,
+    inode: u64,
+    dev_major: u32,
+    dev_minor: u32,
 }
 
 impl DmaFile {
@@ -233,6 +236,9 @@ impl Default for DmaFile {
             path: None,
             o_direct_alignment: 4096,
             pollable: PollableStatus::Pollable,
+            inode: 0,
+            dev_major: 0,
+            dev_minor: 0,
         }
     }
 }
@@ -251,6 +257,31 @@ I will close it and turn a leak bug into a performance bug. Please investigate",
 }
 
 impl DmaFile {
+    /// Returns true if the files represent the same file on the underlying device.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use scipio::{LocalExecutor, DmaFile};
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
+    ///     let mut wfile = DmaFile::create("myfile.txt").await.unwrap();
+    ///     let mut rfile = DmaFile::open("myfile.txt").await.unwrap();
+    ///     // Different objects (OS file descriptors), so they will be different...
+    ///     assert!(wfile != rfile);
+    ///     // However they represent the same object.
+    ///     assert!(wfile.is_same(&rfile));
+    ///     wfile.close().await;
+    ///     rfile.close().await;
+    /// });
+    /// ```
+    pub fn is_same(&self, other: &DmaFile) -> bool {
+        self.inode == other.inode
+            && self.dev_major == other.dev_major
+            && self.dev_minor == other.dev_minor
+    }
+
     async fn open_at(
         dir: RawFd,
         path: &Path,
@@ -281,6 +312,9 @@ impl DmaFile {
             path: Some(path.to_path_buf()),
             o_direct_alignment: 4096,
             pollable,
+            inode: 0,
+            dev_major: 0,
+            dev_minor: 0,
         };
 
         let st = file.statx().await?;
@@ -289,6 +323,9 @@ impl DmaFile {
         if sysfs::BlockDevice::is_md(major as _, minor as _) {
             file.pollable = PollableStatus::NonPollable;
         }
+        file.inode = st.stx_ino;
+        file.dev_major = st.stx_dev_major;
+        file.dev_minor = st.stx_dev_minor;
         Ok(file)
     }
 
@@ -805,5 +842,19 @@ pub(crate) mod test {
         for h in handles {
             h.await;
         }
+    });
+
+    dma_file_test!(is_same_file, path, _k, {
+        let mut wfile = DmaFile::create(path.join("testfile")).await.unwrap();
+        let mut rfile = DmaFile::open(path.join("testfile")).await.unwrap();
+        let mut wfile_other = DmaFile::create(path.join("testfile_other")).await.unwrap();
+
+        assert!(wfile != rfile);
+        assert!(wfile.is_same(&rfile));
+        assert!(!wfile.is_same(&wfile_other));
+
+        wfile.close().await.unwrap();
+        wfile_other.close().await.unwrap();
+        rfile.close().await.unwrap();
     });
 }
