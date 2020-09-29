@@ -4,8 +4,8 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::error::ErrorEnhancer;
+use crate::io::read_result::ReadResult;
 use crate::parking::Reactor;
-use crate::read_result::ReadResult;
 use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
@@ -256,7 +256,8 @@ impl DmaFile {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::{LocalExecutor, DmaFile};
+    /// use scipio::LocalExecutor;
+    /// use scipio::io::DmaFile;
     /// use std::os::unix::io::AsRawFd;
     ///
     /// let ex = LocalExecutor::make_default();
