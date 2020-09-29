@@ -251,6 +251,7 @@ struct ExecutorQueues {
     executor_index: usize,
     last_vruntime: u64,
     preempt_timer_duration: Duration,
+    spin_before_park: Option<Duration>,
 }
 
 impl ExecutorQueues {
@@ -263,6 +264,7 @@ impl ExecutorQueues {
             executor_index: 1, // 0 is the default
             last_vruntime: 0,
             preempt_timer_duration: Duration::from_secs(1),
+            spin_before_park: None,
         }))
     }
 
@@ -322,7 +324,9 @@ impl ExecutorQueues {
 pub struct LocalExecutorBuilder {
     // The id of a CPU to bind the current (or yet to be created) thread
     binding: Option<usize>,
-    // A name for the thread-to-be (if any), for identification in panic messages
+    /// Spin for duration before parking a reactor
+    spin_before_park: Option<Duration>,
+    /// A name for the thread-to-be (if any), for identification in panic messages
     name: String,
 }
 
@@ -332,6 +336,7 @@ impl LocalExecutorBuilder {
     pub fn new() -> LocalExecutorBuilder {
         LocalExecutorBuilder {
             binding: None,
+            spin_before_park: None,
             name: String::from("unnamed"),
         }
     }
@@ -339,6 +344,12 @@ impl LocalExecutorBuilder {
     /// Sets the new executor's affinity to the provided CPU
     pub fn pin_to_cpu(mut self, cpu: usize) -> LocalExecutorBuilder {
         self.binding = Some(cpu);
+        self
+    }
+
+    /// Spin for duration before parking a reactor
+    pub fn spin_before_park(mut self, spin: Duration) -> LocalExecutorBuilder {
+        self.spin_before_park = Some(spin);
         self
     }
 
@@ -362,6 +373,7 @@ impl LocalExecutorBuilder {
         let mut le = LocalExecutor::new(EXECUTOR_ID.fetch_add(1, Ordering::Relaxed));
         if let Some(cpu) = self.binding {
             le.bind_to_cpu(cpu)?;
+            le.queues.borrow_mut().spin_before_park = self.spin_before_park;
         }
         match le.init() {
             Ok(_) => Ok(le),
@@ -673,6 +685,10 @@ impl LocalExecutor {
         self.queues.borrow().preempt_timer_duration
     }
 
+    fn spin_before_park(&self) -> Option<Duration> {
+        self.queues.borrow().spin_before_park
+    }
+
     fn run_one_task_queue(&self) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
@@ -738,6 +754,10 @@ impl LocalExecutor {
         let waker = waker_fn(|| {});
         let cx = &mut Context::from_waker(&waker);
 
+        let spin_before_park = self.spin_before_park().unwrap_or_default();
+        let spin = spin_before_park.as_nanos() > 0;
+        let mut spin_since: Option<Instant> = None;
+
         LOCAL_EX.set(self, || loop {
             if let Poll::Ready(t) = future.as_mut().poll(cx) {
                 break t;
@@ -751,7 +771,21 @@ impl LocalExecutor {
             let duration = self.preempt_timer_duration();
             self.parker.poll_io(duration);
             if !self.run_one_task_queue() {
+                if spin {
+                    if let Some(t) = spin_since {
+                        if t.elapsed() < spin_before_park {
+                            continue;
+                        }
+                        spin_since = None
+                    } else {
+                        spin_since = Some(Instant::now());
+                        continue;
+                    }
+                }
+
                 self.parker.park();
+            } else {
+                spin_since = None
             }
         })
     }
@@ -1269,4 +1303,78 @@ fn test_detach() {
     ex.run(async {
         Timer::new(Duration::from_micros(100)).await;
     });
+}
+
+/// As far as impl From<libc::timeval> for Duration is not allowed.
+#[cfg(test)]
+fn from_timeval(v: libc::timeval) -> Duration {
+    Duration::from_secs(v.tv_sec as u64) + Duration::from_micros(v.tv_usec as u64)
+}
+
+#[cfg(test)]
+fn getrusage() -> libc::rusage {
+    use core::mem::MaybeUninit;
+    let mut s0 = MaybeUninit::<libc::rusage>::uninit();
+    let err = unsafe { libc::getrusage(libc::RUSAGE_THREAD, s0.as_mut_ptr()) };
+    if err != 0 {
+        panic!("getrusage error = {}", err);
+    }
+    unsafe { s0.assume_init() }
+}
+
+#[cfg(test)]
+fn getrusage_utime() -> Duration {
+    from_timeval(getrusage().ru_utime)
+}
+
+#[test]
+fn test_no_spin() {
+    use crate::timer;
+
+    let ex = LocalExecutor::make_default();
+    let task_queue =
+        ex.create_task_queue(1000, Latency::Matters(Duration::from_millis(10)), "my_tq");
+    let start = getrusage_utime();
+    let task = ex
+        .spawn_into(
+            async { timer::sleep(Duration::from_secs(1)).await },
+            task_queue,
+        )
+        .expect("failed to spawn task");
+    ex.run(async { task.await });
+
+    assert!(
+        getrusage_utime() - start < Duration::from_millis(1),
+        "expected user time on LE is less than 1 millisecond"
+    );
+}
+
+#[test]
+fn test_spin() {
+    use crate::timer;
+
+    let dur = Duration::from_secs(1);
+    let ex0 = LocalExecutorBuilder::new().make().unwrap();
+    let ex0_ru_start = getrusage_utime();
+    ex0.run(async { timer::sleep(dur).await });
+    let ex0_ru_finish = getrusage_utime();
+
+    let ex = LocalExecutorBuilder::new()
+        .pin_to_cpu(0)
+        .spin_before_park(Duration::from_millis(10))
+        .make()
+        .unwrap();
+    let ex_ru_start = getrusage_utime();
+    let task = ex.spawn(async move { timer::sleep(dur).await });
+    ex.run(async { task.await });
+    let ex_ru_finish = getrusage_utime();
+
+    assert!(
+        ex0_ru_finish - ex0_ru_start < Duration::from_millis(1),
+        "expected user time on LE0 is less than 1 millisecond"
+    );
+    assert!(
+        ex_ru_finish - ex_ru_start >= Duration::from_millis(1),
+        "expected user time on LE is much greater than 1 millisecond"
+    );
 }
