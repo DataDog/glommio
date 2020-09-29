@@ -3,11 +3,12 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::dma_file::align_down;
-use crate::read_result::ReadResult;
+use crate::io::dma_file::align_down;
+use crate::io::read_result::ReadResult;
+use crate::io::DmaFile;
 use crate::sys::DmaBuffer;
 use crate::task;
-use crate::{DmaFile, Local};
+use crate::Local;
 use core::task::Waker;
 use futures::future::join_all;
 use futures::io::{AsyncRead, AsyncWrite};
@@ -50,7 +51,8 @@ impl StreamReaderBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::{DmaFile, StreamReaderBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -314,7 +316,8 @@ impl StreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::{DmaFile, StreamReaderBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -376,7 +379,8 @@ impl StreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::{DmaFile, StreamReaderBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -413,7 +417,8 @@ impl StreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::{DmaFile, StreamReaderBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -448,7 +453,8 @@ impl StreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::{DmaFile, StreamReaderBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -614,7 +620,8 @@ impl StreamWriterBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -871,7 +878,8 @@ impl StreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -903,7 +911,8 @@ impl StreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -939,7 +948,8 @@ impl StreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::{DmaFile, StreamWriterBuilder, LocalExecutor};
+    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -1057,8 +1067,8 @@ impl AsyncWrite for StreamWriter {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::dma_file::align_up;
-    use crate::dma_file::test::make_test_directories;
+    use crate::io::dma_file::align_up;
+    use crate::io::dma_file::test::make_test_directories;
     use crate::timer::Timer;
     use futures::{AsyncReadExt, AsyncWriteExt};
     use std::io::ErrorKind;

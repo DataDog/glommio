@@ -130,27 +130,20 @@ macro_rules! make_shared_var_mut {
 }
 
 pub mod collections;
-mod dma_file;
 mod error;
 mod executor;
-mod file_stream;
+pub mod io;
 mod multitask;
 mod networking;
 mod pollable;
-mod read_result;
 mod semaphore;
 pub mod timer;
 
-pub use crate::dma_file::{Directory, DmaFile};
 pub use crate::executor::{
     LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
 };
-pub use crate::file_stream::{
-    StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
-};
 pub use crate::networking::*;
 pub use crate::pollable::Async;
-pub use crate::read_result::ReadResult;
 pub use crate::semaphore::Semaphore;
 pub use crate::sys::DmaBuffer;
 pub use enclose::enclose;
