@@ -29,3 +29,4 @@ mod read_result;
 pub use self::dma_file::{Directory, DmaFile};
 pub use self::file_stream::{StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder};
 pub use self::read_result::ReadResult;
+pub use crate::sys::DmaBuffer;
