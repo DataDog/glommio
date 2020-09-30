@@ -22,6 +22,59 @@
 //! every call is expected to reach the media. Especially for random I/O, this can be very
 //! detrimental without a user-provided cache. This means that those entities are better
 //! used in conjunction with your own cache.
+macro_rules! enhanced_try {
+    ($expr:expr, $op:expr, $path:expr, $fd:expr) => {{
+        match $expr {
+            Ok(val) => Ok(val),
+            Err(inner) => {
+                let enhanced: std::io::Error = crate::error::ErrorEnhancer {
+                    inner,
+                    op: $op,
+                    path: $path.and_then(|x| Some(x.to_path_buf())),
+                    fd: $fd,
+                }
+                .into();
+                Err(enhanced)
+            }
+        }
+    }};
+    ($expr:expr, $op:expr, $obj:expr) => {{
+        enhanced_try!(
+            $expr,
+            $op,
+            $obj.path.as_ref().and_then(|x| Some(x.as_path())),
+            Some($obj.as_raw_fd())
+        )
+    }};
+}
+
+macro_rules! path_required {
+    ($obj:expr, $op:expr) => {{
+        $obj.path.as_ref().ok_or(crate::error::ErrorEnhancer {
+            inner: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "operation requires a valid path",
+            ),
+            op: $op,
+            path: None,
+            fd: Some($obj.as_raw_fd()),
+        })
+    }};
+}
+
+macro_rules! bad_buffer {
+    ($obj:expr) => {{
+        let enhanced: std::io::Error = crate::error::ErrorEnhancer {
+            inner: std::io::Error::from_raw_os_error(5),
+            op: "processing read buffer",
+            path: $obj.path.clone(),
+            fd: Some($obj.as_raw_fd()),
+        }
+        .into();
+        enhanced
+    }};
+}
+
 mod dma_file;
 mod file_stream;
 mod read_result;

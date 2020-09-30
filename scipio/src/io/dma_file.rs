@@ -3,7 +3,6 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::error::ErrorEnhancer;
 use crate::io::read_result::ReadResult;
 use crate::parking::Reactor;
 use crate::sys;
@@ -12,59 +11,6 @@ use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
-
-macro_rules! enhanced_try {
-    ($expr:expr, $op:expr, $path:expr, $fd:expr) => {{
-        match $expr {
-            Ok(val) => Ok(val),
-            Err(inner) => {
-                let enhanced: io::Error = ErrorEnhancer {
-                    inner,
-                    op: $op,
-                    path: $path.and_then(|x| Some(x.to_path_buf())),
-                    fd: $fd,
-                }
-                .into();
-                Err(enhanced)
-            }
-        }
-    }};
-    ($expr:expr, $op:expr, $obj:expr) => {{
-        enhanced_try!(
-            $expr,
-            $op,
-            $obj.path.as_ref().and_then(|x| Some(x.as_path())),
-            Some($obj.as_raw_fd())
-        )
-    }};
-}
-
-macro_rules! path_required {
-    ($obj:expr, $op:expr) => {{
-        $obj.path.as_ref().ok_or(ErrorEnhancer {
-            inner: io::Error::new(
-                io::ErrorKind::InvalidData,
-                "operation requires a valid path",
-            ),
-            op: $op,
-            path: None,
-            fd: Some($obj.as_raw_fd()),
-        })
-    }};
-}
-
-macro_rules! bad_buffer {
-    ($obj:expr) => {{
-        let enhanced: io::Error = ErrorEnhancer {
-            inner: io::Error::from_raw_os_error(5),
-            op: "processing read buffer",
-            path: $obj.path.clone(),
-            fd: Some($obj.as_raw_fd()),
-        }
-        .into();
-        enhanced
-    }};
-}
 
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
