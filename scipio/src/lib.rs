@@ -145,7 +145,6 @@ pub use crate::executor::{
 pub use crate::networking::*;
 pub use crate::pollable::Async;
 pub use crate::semaphore::Semaphore;
-pub use crate::sys::DmaBuffer;
 pub use enclose::enclose;
 pub use scopeguard::defer;
 
