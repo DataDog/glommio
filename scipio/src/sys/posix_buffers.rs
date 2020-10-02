@@ -33,7 +33,7 @@ fn is_nonoverlapping(src: *const u8, dst: *const u8, size: usize) -> bool {
 }
 
 impl PosixDmaBuffer {
-    pub fn new(size: usize) -> Option<PosixDmaBuffer> {
+    pub(crate) fn new(size: usize) -> Option<PosixDmaBuffer> {
         let data: *mut u8;
         data = aligned_alloc(size, 4 << 10) as *mut u8;
         if data.is_null() {
@@ -46,12 +46,12 @@ impl PosixDmaBuffer {
         })
     }
 
-    pub fn trim_to_size(&mut self, newsize: usize) {
+    pub(crate) fn trim_to_size(&mut self, newsize: usize) {
         assert!(newsize <= self.size);
         self.size = newsize;
     }
 
-    pub fn trim_front(&mut self, trim: usize) {
+    pub(crate) fn trim_front(&mut self, trim: usize) {
         assert!(trim <= self.size);
         self.trim += trim;
         self.size -= trim;
