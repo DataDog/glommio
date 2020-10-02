@@ -1089,7 +1089,7 @@ mod test {
                         if $size > 0 {
                             let bufsz = align_up($size, 4096);
                             let mut buf = DmaBuffer::new(bufsz as _).unwrap();
-                            for (v, x) in buf.as_mut_bytes().iter_mut().enumerate() {
+                            for (v, x) in buf.as_bytes_mut().iter_mut().enumerate() {
                                 *x = v as u8;
                             }
                             new_file.write_dma(&buf, 0).await.unwrap();

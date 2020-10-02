@@ -179,7 +179,7 @@ where
                 //let slabidx = buf.slabidx;
 
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
-                sqe.prep_read(op.fd, buf.as_mut_bytes(), pos);
+                sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
                 let src = peek_source(op.user_data);
                 let mut source = mut_source(&src);
 
