@@ -127,7 +127,7 @@ impl<T> Deque<T> {
     /// assert_eq!(ad.len(), 1);
     /// ```
     pub fn push_back(&self, el: T) {
-        self.deque.borrow_mut().push_front(el);
+        self.deque.borrow_mut().push_back(el);
         self.sem.signal(1);
     }
 
