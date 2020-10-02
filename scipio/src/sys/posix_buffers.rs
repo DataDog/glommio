@@ -8,11 +8,13 @@
 // but in the near future they can be coming from memory-areas
 // that are pre-registered for I/O uring.
 
+use std::ptr;
+
 use aligned_alloc::{aligned_alloc, aligned_free};
 
 #[derive(Debug)]
 pub struct PosixDmaBuffer {
-    data: *mut u8,
+    data: ptr::NonNull<u8>,
     // Invariant: trim + size are at most one byte past the original allocation.
     trim: usize,
     size: usize,
@@ -34,11 +36,8 @@ fn is_nonoverlapping(src: *const u8, dst: *const u8, size: usize) -> bool {
 
 impl PosixDmaBuffer {
     pub(crate) fn new(size: usize) -> Option<PosixDmaBuffer> {
-        let data: *mut u8;
-        data = aligned_alloc(size, 4 << 10) as *mut u8;
-        if data.is_null() {
-            return None;
-        }
+        let data = aligned_alloc(size, 4 << 10) as *mut u8;
+        let data = ptr::NonNull::new(data)?;
         Some(PosixDmaBuffer {
             data,
             size,
@@ -70,11 +69,11 @@ impl PosixDmaBuffer {
     }
 
     pub fn as_mut_ptr(&self) -> *mut u8 {
-        unsafe { self.data.add(self.trim) }
+        unsafe { self.data.as_ptr().add(self.trim) }
     }
 
     pub fn as_ptr(&self) -> *const u8 {
-        unsafe { self.data.add(self.trim) }
+        unsafe { self.data.as_ptr().add(self.trim) }
     }
 
     pub fn copy_to_slice(&self, offset: usize, dst: &mut [u8]) -> usize {
@@ -108,10 +107,8 @@ impl PosixDmaBuffer {
 
 impl Drop for PosixDmaBuffer {
     fn drop(&mut self) {
-        if !self.data.is_null() {
-            unsafe {
-                aligned_free(self.data as *mut ());
-            }
+        unsafe {
+            aligned_free(self.data.as_ptr() as *mut ());
         }
     }
 }
