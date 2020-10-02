@@ -13,6 +13,7 @@ use aligned_alloc::{aligned_alloc, aligned_free};
 #[derive(Debug)]
 pub struct PosixDmaBuffer {
     data: *mut u8,
+    // Invariant: trim + size are at most one byte past the original allocation.
     trim: usize,
     size: usize,
 }
@@ -46,11 +47,14 @@ impl PosixDmaBuffer {
     }
 
     pub fn trim_to_size(&mut self, newsize: usize) {
+        assert!(newsize <= self.size);
         self.size = newsize;
     }
 
     pub fn trim_front(&mut self, trim: usize) {
-        self.trim = trim;
+        assert!(trim <= self.size);
+        self.trim += trim;
+        self.size -= trim;
     }
 
     pub fn as_bytes(&self) -> &[u8] {
