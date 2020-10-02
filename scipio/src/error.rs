@@ -7,7 +7,7 @@ use std::fmt;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 
-/// Augments an io::Error with more information about what was happening
+/// Augments an `io::Error` with more information about what was happening
 /// and to which file when the error ocurred.
 pub(crate) struct ErrorEnhancer {
     pub(crate) inner: std::io::Error,
@@ -25,11 +25,11 @@ impl fmt::Debug for ErrorEnhancer {
 impl fmt::Display for ErrorEnhancer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}, op: {}", self.inner, self.op)?;
-        if let Some(path) = &self.path.as_ref().and_then(|x| x.to_str()) {
-            write!(f, " path {}", path)?;
+        if let Some(path) = &self.path {
+            write!(f, " path {}", path.display())?;
         }
 
-        if let Some(fd) = &self.fd {
+        if let Some(fd) = self.fd {
             write!(f, " with fd {}", fd)?;
         }
         Ok(())
@@ -38,6 +38,6 @@ impl fmt::Display for ErrorEnhancer {
 
 impl From<ErrorEnhancer> for std::io::Error {
     fn from(err: ErrorEnhancer) -> std::io::Error {
-        std::io::Error::new(err.inner.kind(), format!("{}", err.inner))
+        err.inner
     }
 }
