@@ -798,7 +798,7 @@ pub(crate) mod test {
         let size: usize = 4096;
         file.truncate(size as u64).await.unwrap();
         let mut buf = DmaFile::alloc_dma_buffer(size);
-        let bytes = buf.as_mut_bytes();
+        let bytes = buf.as_bytes_mut();
         bytes[0] = 'x' as u8;
         let mut futs = vec![];
         for _ in 0..200 {
@@ -826,7 +826,7 @@ pub(crate) mod test {
                     file.truncate(size as u64).await.unwrap();
 
                     let mut buf = DmaFile::alloc_dma_buffer(size);
-                    let bytes = buf.as_mut_bytes();
+                    let bytes = buf.as_bytes_mut();
                     bytes[0] = 'x' as u8;
                     file.write_dma(&buf, 0).await.unwrap();
                     file.close().await.unwrap();
