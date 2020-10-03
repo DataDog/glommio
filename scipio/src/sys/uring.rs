@@ -313,13 +313,7 @@ impl UringQueueState {
     }
 
     fn cancel_request(&mut self, id: u64) {
-        let mut found = None;
-        for (idx, el) in self.submissions.iter().enumerate() {
-            if el.user_data == id {
-                found = Some(idx);
-                break;
-            }
-        }
+        let found = self.submissions.iter().position(|el| el.user_data == id);
         match found {
             Some(idx) => {
                 self.submissions.remove(idx);
