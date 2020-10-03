@@ -82,8 +82,8 @@ pub(crate) fn duplicate_file(fd: RawFd) -> io::Result<RawFd> {
 }
 
 pub(crate) fn sync_open(path: &Path, flags: libc::c_int, mode: libc::c_int) -> io::Result<RawFd> {
-    let path = path.as_os_str().as_bytes().as_ptr();
-    syscall!(open(path as _, flags, mode))
+    let path = cstr(path)?;
+    syscall!(open(path.as_ptr(), flags, mode))
 }
 
 fn cstr(path: &Path) -> io::Result<CString> {
