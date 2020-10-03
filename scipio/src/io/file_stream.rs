@@ -12,14 +12,14 @@ use crate::Local;
 use core::task::Waker;
 use futures::future::join_all;
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::task::{Context, Poll};
-use futures_lite::Future;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
 use std::vec::Vec;
 
 macro_rules! current_error {
