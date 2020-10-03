@@ -260,13 +260,10 @@ impl Semaphore {
     /// });
     /// ```
     pub fn signal(&self, units: u64) {
-        self.state.borrow_mut().signal(units);
-        loop {
-            if let Some(waiter) = self.state.borrow_mut().try_wake_one() {
-                waiter.wake();
-            } else {
-                return;
-            }
+        let mut state = self.state.borrow_mut();
+        state.signal(units);
+        while let Some(waiter) = state.try_wake_one() {
+            waiter.wake();
         }
     }
 
