@@ -6,7 +6,8 @@
 use futures::prelude::*;
 use futures::task::{Context, Poll, Waker};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::hash_map::{Entry, HashMap};
+use std::collections::VecDeque;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::rc::Rc;
@@ -96,14 +97,16 @@ impl State {
     }
 
     fn try_wake_one(&mut self) -> Option<Waker> {
-        if let Some(id) = self.list.front() {
-            let id = *id;
-            let waiter_ref = self.waiterset.get(&id).unwrap();
-            if waiter_ref.0 <= self.avail {
-                self.list.pop_front();
-                let waiter = self.waiterset.remove(&id).unwrap();
-                return Some(waiter.1);
-            }
+        let id = *self.list.front()?;
+        let waiterset_entry = match self.waiterset.entry(id) {
+            Entry::Occupied(entry) => entry,
+            Entry::Vacant(_) => unreachable!(),
+        };
+        let units = waiterset_entry.get().0;
+        if units <= self.avail {
+            self.list.pop_front();
+            let (_units, waker) = waiterset_entry.remove();
+            return Some(waker);
         }
         None
     }
