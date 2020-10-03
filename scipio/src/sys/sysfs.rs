@@ -48,11 +48,8 @@ macro_rules! block_property {
         DEV_MAP.with(|x| {
             let key = ($major, $minor);
             let mut map = x.borrow_mut();
-            if !map.contains_key(&key) {
-                map.insert(key, BlockDevice::new(key));
-            }
+            let bdev = map.entry(key).or_insert_with(|| BlockDevice::new(key));
 
-            let bdev = map.get(&key).unwrap();
             bdev.$property.clone()
         });
     };
