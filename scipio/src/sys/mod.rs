@@ -59,16 +59,16 @@ pub(crate) fn fs_hint_extentsize(fd: RawFd, size: usize) -> nix::Result<i32> {
 }
 
 pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
-    let path = CString::new(path.as_os_str().as_bytes())?;
-    syscall!(unlink(path.as_c_str().as_ptr()))?;
+    let path = cstr(path)?;
+    syscall!(unlink(path.as_ptr()))?;
     Ok(())
 }
 
 pub(crate) fn rename_file(old_path: &Path, new_path: &Path) -> io::Result<()> {
-    let old = CString::new(old_path.as_os_str().as_bytes())?;
-    let new = CString::new(new_path.as_os_str().as_bytes())?;
+    let old = cstr(old_path)?;
+    let new = cstr(new_path)?;
 
-    syscall!(rename(old.as_c_str().as_ptr(), new.as_c_str().as_ptr()))?;
+    syscall!(rename(old.as_ptr(), new.as_ptr()))?;
     Ok(())
 }
 
@@ -84,6 +84,10 @@ pub(crate) fn duplicate_file(fd: RawFd) -> io::Result<RawFd> {
 pub(crate) fn sync_open(path: &Path, flags: libc::c_int, mode: libc::c_int) -> io::Result<RawFd> {
     let path = path.as_os_str().as_bytes().as_ptr();
     syscall!(open(path as _, flags, mode))
+}
+
+fn cstr(path: &Path) -> io::Result<CString> {
+    Ok(CString::new(path.as_os_str().as_bytes())?)
 }
 
 mod posix_buffers;
