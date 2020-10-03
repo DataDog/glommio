@@ -11,12 +11,12 @@ use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::rc::Rc;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 struct WaiterId(u64);
 
 #[derive(Debug)]
 struct Waiter {
-    id: u64,
+    id: WaiterId,
     units: u64,
     sem_state: Rc<RefCell<State>>,
 }
@@ -30,7 +30,7 @@ impl Future for Waiter {
             Err(x) => Poll::Ready(Err(x)),
             Ok(true) => Poll::Ready(Ok(())),
             Ok(false) => {
-                state.add_waker(WaiterId(self.id), self.units, cx.waker().clone());
+                state.add_waker(self.id, self.units, cx.waker().clone());
                 Poll::Pending
             }
         }
@@ -41,8 +41,8 @@ impl Future for Waiter {
 struct State {
     idgen: u64,
     avail: u64,
-    waiterset: HashMap<u64, (u64, Waker)>,
-    list: VecDeque<u64>,
+    waiterset: HashMap<WaiterId, (u64, Waker)>,
+    list: VecDeque<WaiterId>,
     closed: bool,
 }
 
@@ -68,8 +68,8 @@ impl State {
     }
 
     fn add_waker(&mut self, id: WaiterId, units: u64, waker: Waker) {
-        self.waiterset.insert(id.0, (units, waker));
-        self.list.push_back(id.0);
+        self.waiterset.insert(id, (units, waker));
+        self.list.push_back(id);
     }
 
     fn try_acquire(&mut self, units: u64) -> Result<bool> {
@@ -112,7 +112,7 @@ impl State {
 impl Waiter {
     fn new(id: WaiterId, units: u64, sem_state: Rc<RefCell<State>>) -> Waiter {
         Waiter {
-            id: id.0,
+            id,
             units,
             sem_state,
         }
