@@ -674,7 +674,7 @@ struct StreamWriterState {
     file_status: FileStatus,
     error: Option<io::Error>,
     pending: Vec<task::JoinHandle<(), ()>>,
-    buffer_queue: VecDeque<Rc<DmaBuffer>>,
+    buffer_queue: VecDeque<DmaBuffer>,
     file_pos: u64,
     // this is so we track the last flushed pos. Buffers may return
     // out of order, so we can't report them as flushed_pos yet. Store for
@@ -769,12 +769,7 @@ impl StreamWriterState {
         std::mem::replace(&mut self.pending, Vec::new())
     }
 
-    fn flush_one_buffer(
-        &mut self,
-        buffer: Rc<DmaBuffer>,
-        state: Rc<RefCell<Self>>,
-        file: Rc<DmaFile>,
-    ) {
+    fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let file_pos = self.file_pos;
         self.file_pos += self.buffer_size as u64;
         self.buffer_pos = 0;
@@ -831,7 +826,7 @@ impl StreamWriter {
     fn new(builder: StreamWriterBuilder) -> StreamWriter {
         let mut buffer_queue = VecDeque::with_capacity(builder.write_behind);
         for _ in 0..builder.write_behind {
-            buffer_queue.push_back(Rc::new(DmaFile::alloc_dma_buffer(builder.buffer_size)));
+            buffer_queue.push_back(DmaFile::alloc_dma_buffer(builder.buffer_size));
         }
 
         let state = StreamWriterState {
@@ -985,7 +980,7 @@ impl AsyncWrite for StreamWriter {
                 None => {
                     break;
                 }
-                Some(buffer) => {
+                Some(mut buffer) => {
                     let size = buf.len();
                     let space = state.buffer_size - state.buffer_pos;
                     let writesz = std::cmp::min(space, size - written);
