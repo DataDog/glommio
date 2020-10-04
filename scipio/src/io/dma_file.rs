@@ -726,7 +726,7 @@ pub(crate) mod test {
             .await
             .expect("failed to create file");
 
-        let buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
+        let mut buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
         buf.memset(42);
         new_file.write_dma(&buf, 0).await.expect("failed to write");
         new_file.close().await.expect("failed to close file");
