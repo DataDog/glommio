@@ -12,14 +12,14 @@ use crate::Local;
 use core::task::Waker;
 use futures::future::join_all;
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::task::{Context, Poll};
-use futures_lite::Future;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
 use std::vec::Vec;
 
 macro_rules! current_error {
@@ -1376,21 +1376,20 @@ mod test {
         reader.close().await.unwrap();
     });
 
-    macro_rules! expect_specific_error {
-        ( $op:expr, $err:expr ) => {
-            match $op {
-                Ok(_) => panic!("should have failed"),
-                Err(x) => {
-                    let kind = x.kind();
-                    match kind {
-                        io::ErrorKind::Other => {
-                            assert_eq!($err, format!("{:?}", x.into_inner().unwrap()));
-                        }
-                        _ => panic!("Wrong error"),
+    #[track_caller]
+    fn expect_specific_error<T>(op: Result<T, io::Error>, expected_err: &'static str) {
+        match op {
+            Ok(_) => panic!("should have failed"),
+            Err(err) => {
+                let kind = err.kind();
+                match kind {
+                    io::ErrorKind::Other => {
+                        assert_eq!(expected_err, format!("{:?}", err.into_inner().unwrap()));
                     }
+                    _ => panic!("Wrong error"),
                 }
             }
-        };
+        }
     }
 
     file_stream_read_test!(read_close_twice, path, _k, file, _file_size: 131072, {
@@ -1399,7 +1398,7 @@ mod test {
             .build();
 
         reader.close().await.unwrap();
-        expect_specific_error!(reader.close().await, "\"Bad file descriptor (os error 9)\"");
+        expect_specific_error(reader.close().await, "\"Bad file descriptor (os error 9)\"");
     });
 
     file_stream_read_test!(read_wronly_file, path, _k, _file, _file_size: 131072, {
@@ -1410,7 +1409,7 @@ mod test {
             .build();
 
         let mut buf = [0u8; 2000];
-        expect_specific_error!(reader.read_exact(&mut buf).await, "\"Bad file descriptor (os error 9)\"");
+        expect_specific_error(reader.read_exact(&mut buf).await, "\"Bad file descriptor (os error 9)\"");
         reader.close().await.unwrap();
     });
 
@@ -1471,7 +1470,7 @@ mod test {
             .build();
 
         writer.close().await.unwrap();
-        expect_specific_error!(writer.close().await, "\"Bad file descriptor (os error 9)\"");
+        expect_specific_error(writer.close().await, "\"Bad file descriptor (os error 9)\"");
     });
 
     file_stream_write_test!(write_no_write_behind, path, _k, filename, file, {
@@ -1537,7 +1536,7 @@ mod test {
             writer.write_all(&[i as u8]).await.unwrap();
         }
 
-        expect_specific_error!(writer.close().await, "\"Bad file descriptor (os error 9)\"");
+        expect_specific_error(writer.close().await, "\"Bad file descriptor (os error 9)\"");
     });
 
     file_stream_write_test!(flushed_position_small_buffer, path, _k, filename, file, {

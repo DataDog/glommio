@@ -3,14 +3,14 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use futures::prelude::*;
-use futures::task::{Context, Poll, Waker};
 use std::cell::RefCell;
 use std::collections::hash_map::{Entry, HashMap};
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 struct WaiterId(u64);
