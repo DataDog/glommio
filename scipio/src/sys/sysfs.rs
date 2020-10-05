@@ -48,19 +48,18 @@ macro_rules! block_property {
         DEV_MAP.with(|x| {
             let key = ($major, $minor);
             let mut map = x.borrow_mut();
-            if !map.contains_key(&key) {
-                map.insert(key, BlockDevice::new(key));
-            }
+            let bdev = map.entry(key).or_insert_with(|| BlockDevice::new(key));
 
-            let bdev = map.get(&key).unwrap();
             bdev.$property.clone()
         });
     };
 }
 
-fn read_int<P: AsRef<Path> + std::fmt::Debug>(path: P) -> isize {
-    let data = read_to_string(&path).unwrap_or_else(|_| panic!("reading {:?}", path));
-    let contents = &data.trim_matches('\n');
+fn read_int<P: AsRef<Path>>(path: P) -> isize {
+    let path = path.as_ref();
+    let data =
+        read_to_string(path).unwrap_or_else(|err| panic!("reading {} ({})", path.display(), err));
+    let contents = data.trim_matches('\n');
     contents.parse::<isize>().unwrap()
 }
 
