@@ -8,9 +8,9 @@ use crate::parking::Reactor;
 use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
-use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::{io, rc::Rc};
 
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
@@ -458,6 +458,15 @@ impl DmaFile {
         enhanced_try!(source.collect_rw().await, "Closing", self)?;
         self.file = unsafe { std::fs::File::from_raw_fd(-1) };
         Ok(())
+    }
+    pub(crate) async fn close_rc(this: &mut Rc<DmaFile>) -> io::Result<()> {
+        match Rc::get_mut(this) {
+            None => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("{} references to file still held", Rc::strong_count(&this)),
+            )),
+            Some(file) => file.close().await,
+        }
     }
 }
 

@@ -280,33 +280,13 @@ pub struct StreamReader {
 
 macro_rules! collect_error {
     ( $state:expr, $res:expr ) => {{
-        let mut state = $state.borrow_mut();
         if let Err(x) = $res {
-            state.error = Some(x.into());
+            $state.borrow_mut().error = Some(x.into());
             true
         } else {
             false
         }
     }};
-}
-
-macro_rules! close_rc_file {
-    ( $state:expr, $file:expr ) => {
-        let inner = Rc::get_mut(&mut $file);
-        match inner {
-            None => {
-                let mut state = $state.borrow_mut();
-                state.error = Some(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{} references to file still held", Rc::strong_count(&$file)),
-                ));
-            }
-            Some(f) => {
-                let res = f.close().await;
-                collect_error!($state, res);
-            }
-        }
-    };
 }
 
 impl StreamReader {
@@ -331,7 +311,8 @@ impl StreamReader {
         let handles = state.cancel_all_in_flight();
         drop(state);
         join_all(handles).await;
-        close_rc_file!(self.state, self.file);
+        let res = DmaFile::close_rc(&mut self.file).await;
+        collect_error!(self.state, res);
 
         let mut state = self.state.borrow_mut();
         match state.error.take() {
@@ -753,7 +734,8 @@ impl StreamWriterState {
                 }
             }
 
-            close_rc_file!(state, file);
+            let res = DmaFile::close_rc(&mut file).await;
+            collect_error!(state, res);
 
             let mut state = state.borrow_mut();
             state.flushed_pos = final_pos;
