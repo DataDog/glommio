@@ -8,9 +8,10 @@ use crate::parking::Reactor;
 use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
+use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::{io, rc::Rc};
+use std::rc::Rc;
 
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
@@ -453,19 +454,19 @@ impl DmaFile {
     }
 
     /// Closes this DMA file.
-    pub async fn close(&mut self) -> io::Result<()> {
+    pub async fn close(mut self) -> io::Result<()> {
         let source = Reactor::get().close(self.as_raw_fd());
         enhanced_try!(source.collect_rw().await, "Closing", self)?;
         self.file = unsafe { std::fs::File::from_raw_fd(-1) };
         Ok(())
     }
-    pub(crate) async fn close_rc(this: &mut Rc<DmaFile>) -> io::Result<()> {
-        match Rc::get_mut(this) {
-            None => Err(io::Error::new(
+    pub(crate) async fn close_rc(self: Rc<DmaFile>) -> io::Result<()> {
+        match Rc::try_unwrap(self) {
+            Err(file) => Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("{} references to file still held", Rc::strong_count(&this)),
+                format!("{} references to file still held", Rc::strong_count(&file)),
             )),
-            Some(file) => file.close().await,
+            Ok(file) => file.close().await,
         }
     }
 }
@@ -562,7 +563,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_create_close, path, _k, {
-        let mut new_file = DmaFile::create(path.join("testfile"))
+        let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
         new_file.close().await.expect("failed to close file");
@@ -570,12 +571,12 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_open, path, _k, {
-        let mut new_file = DmaFile::create(path.join("testfile"))
+        let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
         new_file.close().await.expect("failed to close file");
 
-        let mut file = DmaFile::open(path.join("testfile"))
+        let file = DmaFile::open(path.join("testfile"))
             .await
             .expect("failed to open file");
         file.close().await.expect("failed to close file");
@@ -621,7 +622,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_fallocate_alocatee, path, kind, {
-        let mut new_file = DmaFile::create(path.join("testfile"))
+        let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
 
@@ -655,7 +656,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_fallocate_zero, path, _k, {
-        let mut new_file = DmaFile::create(path.join("testfile"))
+        let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
         new_file
@@ -667,7 +668,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_simple_readwrite, path, _k, {
-        let mut new_file = DmaFile::create(path.join("testfile"))
+        let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
 
@@ -676,7 +677,7 @@ pub(crate) mod test {
         new_file.write_dma(&buf, 0).await.expect("failed to write");
         new_file.close().await.expect("failed to close file");
 
-        let mut new_file = DmaFile::open(path.join("testfile"))
+        let new_file = DmaFile::open(path.join("testfile"))
             .await
             .expect("failed to create file");
         let read_buf = new_file.read_dma(0, 500).await.expect("failed to read");
@@ -707,7 +708,7 @@ pub(crate) mod test {
         file.set_permissions(perms)
             .expect("failed to update file permissions");
 
-        let mut new_file = DmaFile::open(path.join("testfile"))
+        let new_file = DmaFile::open(path.join("testfile"))
             .await
             .expect("open failed");
         let buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
@@ -726,7 +727,7 @@ pub(crate) mod test {
     dma_file_test!(file_empty_read, path, _k, {
         std::fs::File::create(path.join("testfile")).expect("failed to create file");
 
-        let mut new_file = DmaFile::open(path.join("testfile"))
+        let new_file = DmaFile::open(path.join("testfile"))
             .await
             .expect("failed to open file");
         let buf = new_file.read_dma(0, 512).await.expect("failed to read");
@@ -736,7 +737,7 @@ pub(crate) mod test {
 
     // Futures not polled. Should be in the submission queue
     dma_file_test!(cancellation_doest_crash_futures_not_polled, path, _k, {
-        let mut file = DmaFile::create(path.join("testfile"))
+        let file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
 
@@ -765,7 +766,7 @@ pub(crate) mod test {
                 Local::local(async move {
                     let mut path = path.join("testfile");
                     path.set_extension(i.to_string());
-                    let mut file = DmaFile::create(&path).await.expect("failed to create file");
+                    let file = DmaFile::create(&path).await.expect("failed to create file");
 
                     let size: usize = 4096;
                     file.truncate(size as u64).await.unwrap();
@@ -788,9 +789,9 @@ pub(crate) mod test {
     });
 
     dma_file_test!(is_same_file, path, _k, {
-        let mut wfile = DmaFile::create(path.join("testfile")).await.unwrap();
-        let mut rfile = DmaFile::open(path.join("testfile")).await.unwrap();
-        let mut wfile_other = DmaFile::create(path.join("testfile_other")).await.unwrap();
+        let wfile = DmaFile::create(path.join("testfile")).await.unwrap();
+        let rfile = DmaFile::open(path.join("testfile")).await.unwrap();
+        let wfile_other = DmaFile::create(path.join("testfile_other")).await.unwrap();
 
         assert_ne!(wfile.as_raw_fd(), rfile.as_raw_fd());
         assert!(wfile.is_same(&rfile));
