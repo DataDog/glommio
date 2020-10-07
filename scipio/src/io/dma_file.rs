@@ -405,16 +405,6 @@ impl DmaFile {
         )
     }
 
-    /// rename an existing file.
-    ///
-    /// Warning: synchronous operation, will block the reactor
-    pub async fn rename_file<P: AsRef<Path>>(old_path: P, new_path: P) -> io::Result<()> {
-        let new_path = new_path.as_ref().to_owned();
-        let old_path = old_path.as_ref().to_owned();
-
-        sys::rename_file(&old_path, &new_path)
-    }
-
     /// rename this file.
     ///
     /// Warning: synchronous operation, will block the reactor
@@ -422,7 +412,7 @@ impl DmaFile {
         let new_path = new_path.as_ref().to_owned();
         let old_path = path_required!(self, "rename")?;
         enhanced_try!(
-            Self::rename_file(old_path, &new_path).await,
+            crate::io::rename_file(old_path, &new_path).await,
             "Renaming",
             self
         )?;
@@ -430,16 +420,16 @@ impl DmaFile {
         Ok(())
     }
 
-    /// remove an existing file given its name
+    /// remove this file
+    ///
+    /// The file does not have to be closed to be removed. Removing removes
+    /// the name from the filesystem but the file will still be accessible for
+    /// as long as it is open.
     ///
     /// Warning: synchronous operation, will block the reactor
-    pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
-        enhanced_try!(
-            sys::remove_file(path.as_ref()),
-            "Removing",
-            Some(path.as_ref()),
-            None
-        )
+    pub async fn remove(&self) -> io::Result<()> {
+        let path = path_required!(self, "remove")?;
+        enhanced_try!(sys::remove_file(path.as_ref()), "Removing", self)
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall

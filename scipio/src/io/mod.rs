@@ -79,6 +79,32 @@ mod dma_file;
 mod file_stream;
 mod read_result;
 
+use crate::sys;
+use std::io;
+use std::path::Path;
+
+/// rename an existing file.
+///
+/// Warning: synchronous operation, will block the reactor
+pub async fn rename_file<P: AsRef<Path>>(old_path: P, new_path: P) -> io::Result<()> {
+    let new_path = new_path.as_ref().to_owned();
+    let old_path = old_path.as_ref().to_owned();
+
+    sys::rename_file(&old_path, &new_path)
+}
+
+/// remove an existing file given its name
+///
+/// Warning: synchronous operation, will block the reactor
+pub async fn remove_file<P: AsRef<Path>>(path: P) -> io::Result<()> {
+    enhanced_try!(
+        sys::remove_file(path.as_ref()),
+        "Removing",
+        Some(path.as_ref()),
+        None
+    )
+}
+
 pub use self::dma_file::{Directory, DmaFile};
 pub use self::file_stream::{StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder};
 pub use self::read_result::ReadResult;
