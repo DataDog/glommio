@@ -3,7 +3,6 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::error::ErrorEnhancer;
 use crate::io::read_result::ReadResult;
 use crate::parking::Reactor;
 use crate::sys;
@@ -12,59 +11,6 @@ use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
-
-macro_rules! enhanced_try {
-    ($expr:expr, $op:expr, $path:expr, $fd:expr) => {{
-        match $expr {
-            Ok(val) => Ok(val),
-            Err(inner) => {
-                let enhanced: io::Error = ErrorEnhancer {
-                    inner,
-                    op: $op,
-                    path: $path.and_then(|x| Some(x.to_path_buf())),
-                    fd: $fd,
-                }
-                .into();
-                Err(enhanced)
-            }
-        }
-    }};
-    ($expr:expr, $op:expr, $obj:expr) => {{
-        enhanced_try!(
-            $expr,
-            $op,
-            $obj.path.as_ref().and_then(|x| Some(x.as_path())),
-            Some($obj.as_raw_fd())
-        )
-    }};
-}
-
-macro_rules! path_required {
-    ($obj:expr, $op:expr) => {{
-        $obj.path.as_ref().ok_or(ErrorEnhancer {
-            inner: io::Error::new(
-                io::ErrorKind::InvalidData,
-                "operation requires a valid path",
-            ),
-            op: $op,
-            path: None,
-            fd: Some($obj.as_raw_fd()),
-        })
-    }};
-}
-
-macro_rules! bad_buffer {
-    ($obj:expr) => {{
-        let enhanced: io::Error = ErrorEnhancer {
-            inner: io::Error::from_raw_os_error(5),
-            op: "processing read buffer",
-            path: $obj.path.clone(),
-            fd: Some($obj.as_raw_fd()),
-        }
-        .into();
-        enhanced
-    }};
-}
 
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
@@ -459,16 +405,6 @@ impl DmaFile {
         )
     }
 
-    /// rename an existing file.
-    ///
-    /// Warning: synchronous operation, will block the reactor
-    pub async fn rename_file<P: AsRef<Path>>(old_path: P, new_path: P) -> io::Result<()> {
-        let new_path = new_path.as_ref().to_owned();
-        let old_path = old_path.as_ref().to_owned();
-
-        sys::rename_file(&old_path, &new_path)
-    }
-
     /// rename this file.
     ///
     /// Warning: synchronous operation, will block the reactor
@@ -476,7 +412,7 @@ impl DmaFile {
         let new_path = new_path.as_ref().to_owned();
         let old_path = path_required!(self, "rename")?;
         enhanced_try!(
-            Self::rename_file(old_path, &new_path).await,
+            crate::io::rename_file(old_path, &new_path).await,
             "Renaming",
             self
         )?;
@@ -484,16 +420,16 @@ impl DmaFile {
         Ok(())
     }
 
-    /// remove an existing file given its name
+    /// remove this file
+    ///
+    /// The file does not have to be closed to be removed. Removing removes
+    /// the name from the filesystem but the file will still be accessible for
+    /// as long as it is open.
     ///
     /// Warning: synchronous operation, will block the reactor
-    pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
-        enhanced_try!(
-            sys::remove_file(path.as_ref()),
-            "Removing",
-            Some(path.as_ref()),
-            None
-        )
+    pub async fn remove(&self) -> io::Result<()> {
+        let path = path_required!(self, "remove")?;
+        enhanced_try!(sys::remove_file(path.as_ref()), "Removing", self)
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall
