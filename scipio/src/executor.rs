@@ -1083,325 +1083,322 @@ impl<T> Future for Task<T> {
     }
 }
 
-#[test]
-fn create_and_destroy_executor() {
-    let mut var = Rc::new(RefCell::new(0));
-    let local_ex = LocalExecutor::make_default();
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::timer::{self, Timer};
+    use core::mem::MaybeUninit;
 
-    let varclone = var.clone();
-    local_ex.run(async move {
-        let mut m = varclone.borrow_mut();
-        *m += 10;
-    });
+    #[test]
+    fn create_and_destroy_executor() {
+        let mut var = Rc::new(RefCell::new(0));
+        let local_ex = LocalExecutor::make_default();
 
-    let v = Rc::get_mut(&mut var).unwrap();
-    let v = v.replace(0);
-    assert_eq!(v, 10);
-}
+        let varclone = var.clone();
+        local_ex.run(async move {
+            let mut m = varclone.borrow_mut();
+            *m += 10;
+        });
 
-#[test]
-fn create_fail_to_bind() {
-    // If you have a system with 4 billion CPUs let me know and I will
-    // update this test.
-    if let Ok(_) = LocalExecutorBuilder::new().pin_to_cpu(usize::MAX).make() {
-        panic!("Should have failed");
+        let v = Rc::get_mut(&mut var).unwrap();
+        let v = v.replace(0);
+        assert_eq!(v, 10);
     }
-}
 
-#[test]
-fn create_and_bind() {
-    if let Err(x) = LocalExecutorBuilder::new().pin_to_cpu(0).make() {
-        panic!("got error {:?}", x);
-    }
-}
-
-#[test]
-#[should_panic]
-fn spawn_without_executor() {
-    let _ = LocalExecutor::make_default();
-    let _ = Task::local(async move {});
-}
-
-#[test]
-fn invalid_task_queue() {
-    let local_ex = LocalExecutor::make_default();
-    local_ex.run(async {
-        let task = Task::local_into(
-            async move {
-                panic!("Should not have executed this");
-            },
-            TaskQueueHandle { index: 1 },
-        );
-
-        if let Ok(_) = task {
+    #[test]
+    fn create_fail_to_bind() {
+        // If you have a system with 4 billion CPUs let me know and I will
+        // update this test.
+        if let Ok(_) = LocalExecutorBuilder::new().pin_to_cpu(usize::MAX).make() {
             panic!("Should have failed");
         }
-    });
-}
+    }
 
-#[test]
-fn ten_yielding_queues() {
-    let local_ex = LocalExecutor::make_default();
-
-    // 0 -> no one
-    // 1 -> t1
-    // 2 -> t2...
-    let executed_last = Rc::new(RefCell::new(0));
-    local_ex.run(async {
-        let mut joins = Vec::with_capacity(10);
-        for id in 1..11 {
-            let exec = executed_last.clone();
-            joins.push(Task::local(async move {
-                for _ in 0..10_000 {
-                    let mut last = exec.borrow_mut();
-                    assert_ne!(id, *last);
-                    *last = id;
-                    drop(last);
-                    Local::later().await;
-                }
-            }));
+    #[test]
+    fn create_and_bind() {
+        if let Err(x) = LocalExecutorBuilder::new().pin_to_cpu(0).make() {
+            panic!("got error {:?}", x);
         }
-        futures::future::join_all(joins).await;
-    });
-}
+    }
 
-#[test]
-fn task_with_latency_requirements() {
-    let local_ex = LocalExecutor::make_default();
+    #[test]
+    #[should_panic]
+    fn spawn_without_executor() {
+        let _ = LocalExecutor::make_default();
+        let _ = Task::local(async move {});
+    }
 
-    local_ex.run(async {
-        let not_latency = Local::create_task_queue(1, Latency::NotImportant, "test");
-        let latency =
-            Local::create_task_queue(1, Latency::Matters(Duration::from_millis(2)), "testlat");
-
-        let nolat_started = Rc::new(RefCell::new(false));
-        let lat_status = Rc::new(RefCell::new(false));
-
-        // Loop until need_preempt is set. It is set to 2ms, but because this is a test
-        // and can be running overcommited or in whichever shared infrastructure, we'll
-        // allow the timer to fire in up to 1s. If it didn't fire in 1s, that's broken.
-        let nolat = local_ex
-            .spawn_into(
-                crate::enclose! { (nolat_started, lat_status)
-                    async move {
-                        *(nolat_started.borrow_mut()) = true;
-
-                        let start = Instant::now();
-                        // Now busy loop and make sure that we yield when we have too.
-                        loop {
-                            if *(lat_status.borrow()) {
-                                break; // Success!
-                            }
-                            if start.elapsed().as_secs() > 1 {
-                                panic!("Never received preempt signal");
-                            }
-                            Local::yield_if_needed().await;
-                        }
-                    }
+    #[test]
+    fn invalid_task_queue() {
+        let local_ex = LocalExecutor::make_default();
+        local_ex.run(async {
+            let task = Task::local_into(
+                async move {
+                    panic!("Should not have executed this");
                 },
-                not_latency,
-            )
-            .unwrap();
+                TaskQueueHandle { index: 1 },
+            );
 
-        let lat = local_ex
-            .spawn_into(
-                crate::enclose! { (nolat_started, lat_status)
-                    async move {
-                        // In case we are executed first, yield to the the other task
-                        loop {
-                            if *(nolat_started.borrow()) == false {
-                                Local::later().await;
-                            } else {
-                                break;
-                            }
-                        }
-                        *(lat_status.borrow_mut()) = true;
-                    }
-                },
-                latency,
-            )
-            .unwrap();
-
-        futures::join!(nolat, lat);
-    });
-}
-
-#[test]
-fn current_task_queue_matches() {
-    let local_ex = LocalExecutor::make_default();
-    local_ex.run(async {
-        let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test1");
-        let tq2 = Local::create_task_queue(1, Latency::NotImportant, "test2");
-
-        let id1 = tq1.index;
-        let id2 = tq2.index;
-        let j0 = Local::local(async {
-            assert_eq!(Local::current_task_queue().index, 0);
+            if let Ok(_) = task {
+                panic!("Should have failed");
+            }
         });
-        let j1 = Local::local_into(
-            async move {
-                assert_eq!(Local::current_task_queue().index, id1);
-            },
-            tq1,
-        )
-        .unwrap();
-        let j2 = Local::local_into(
-            async move {
-                assert_eq!(Local::current_task_queue().index, id2);
-            },
-            tq2,
-        )
-        .unwrap();
-        futures::join!(j0, j1, j2);
-    })
-}
+    }
 
-#[test]
-fn task_optimized_for_throughput() {
-    let local_ex = LocalExecutor::make_default();
+    #[test]
+    fn ten_yielding_queues() {
+        let local_ex = LocalExecutor::make_default();
 
-    local_ex.run(async {
-        let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test");
-        let tq2 = Local::create_task_queue(1, Latency::NotImportant, "testlat");
-
-        let first_started = Rc::new(RefCell::new(false));
-        let second_status = Rc::new(RefCell::new(false));
-
-        let first = local_ex
-            .spawn_into(
-                crate::enclose! { (first_started, second_status)
-                    async move {
-                        *(first_started.borrow_mut()) = true;
-
-                        let start = Instant::now();
-                        // Now busy loop and make sure that we yield when we have too.
-                        loop {
-                            if *(second_status.borrow()) {
-                                panic!("I was preempted but should not have been");
-                            }
-                            if start.elapsed().as_millis() > 200 {
-                                break;
-                            }
-                            Local::yield_if_needed().await;
-                        }
+        // 0 -> no one
+        // 1 -> t1
+        // 2 -> t2...
+        let executed_last = Rc::new(RefCell::new(0));
+        local_ex.run(async {
+            let mut joins = Vec::with_capacity(10);
+            for id in 1..11 {
+                let exec = executed_last.clone();
+                joins.push(Task::local(async move {
+                    for _ in 0..10_000 {
+                        let mut last = exec.borrow_mut();
+                        assert_ne!(id, *last);
+                        *last = id;
+                        drop(last);
+                        Local::later().await;
                     }
+                }));
+            }
+            futures::future::join_all(joins).await;
+        });
+    }
+
+    #[test]
+    fn task_with_latency_requirements() {
+        let local_ex = LocalExecutor::make_default();
+
+        local_ex.run(async {
+            let not_latency = Local::create_task_queue(1, Latency::NotImportant, "test");
+            let latency =
+                Local::create_task_queue(1, Latency::Matters(Duration::from_millis(2)), "testlat");
+
+            let nolat_started = Rc::new(RefCell::new(false));
+            let lat_status = Rc::new(RefCell::new(false));
+
+            // Loop until need_preempt is set. It is set to 2ms, but because this is a test
+            // and can be running overcommited or in whichever shared infrastructure, we'll
+            // allow the timer to fire in up to 1s. If it didn't fire in 1s, that's broken.
+            let nolat = local_ex
+                .spawn_into(
+                    crate::enclose! { (nolat_started, lat_status)
+                        async move {
+                            *(nolat_started.borrow_mut()) = true;
+
+                            let start = Instant::now();
+                            // Now busy loop and make sure that we yield when we have too.
+                            loop {
+                                if *(lat_status.borrow()) {
+                                    break; // Success!
+                                }
+                                if start.elapsed().as_secs() > 1 {
+                                    panic!("Never received preempt signal");
+                                }
+                                Local::yield_if_needed().await;
+                            }
+                        }
+                    },
+                    not_latency,
+                )
+                .unwrap();
+
+            let lat = local_ex
+                .spawn_into(
+                    crate::enclose! { (nolat_started, lat_status)
+                        async move {
+                            // In case we are executed first, yield to the the other task
+                            loop {
+                                if *(nolat_started.borrow()) == false {
+                                    Local::later().await;
+                                } else {
+                                    break;
+                                }
+                            }
+                            *(lat_status.borrow_mut()) = true;
+                        }
+                    },
+                    latency,
+                )
+                .unwrap();
+
+            futures::join!(nolat, lat);
+        });
+    }
+
+    #[test]
+    fn current_task_queue_matches() {
+        let local_ex = LocalExecutor::make_default();
+        local_ex.run(async {
+            let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test1");
+            let tq2 = Local::create_task_queue(1, Latency::NotImportant, "test2");
+
+            let id1 = tq1.index;
+            let id2 = tq2.index;
+            let j0 = Local::local(async {
+                assert_eq!(Local::current_task_queue().index, 0);
+            });
+            let j1 = Local::local_into(
+                async move {
+                    assert_eq!(Local::current_task_queue().index, id1);
                 },
                 tq1,
             )
             .unwrap();
-
-        let second = local_ex
-            .spawn_into(
-                crate::enclose! { (first_started, second_status)
-                    async move {
-                        // In case we are executed first, yield to the the other task
-                        loop {
-                            if *(first_started.borrow()) == false {
-                                Local::later().await;
-                            } else {
-                                break;
-                            }
-                        }
-                        *(second_status.borrow_mut()) = true;
-                    }
+            let j2 = Local::local_into(
+                async move {
+                    assert_eq!(Local::current_task_queue().index, id2);
                 },
                 tq2,
             )
             .unwrap();
-
-        futures::join!(first, second);
-    });
-}
-
-#[test]
-fn test_detach() {
-    use crate::timer::Timer;
-
-    let ex = LocalExecutor::make_default();
-
-    ex.spawn(async {
-        loop {
-            //   println!("I'm a background task looping forever.");
-            Local::later().await;
-        }
-    })
-    .detach();
-
-    ex.run(async {
-        Timer::new(Duration::from_micros(100)).await;
-    });
-}
-
-/// As far as impl From<libc::timeval> for Duration is not allowed.
-#[cfg(test)]
-fn from_timeval(v: libc::timeval) -> Duration {
-    Duration::from_secs(v.tv_sec as u64) + Duration::from_micros(v.tv_usec as u64)
-}
-
-#[cfg(test)]
-fn getrusage() -> libc::rusage {
-    use core::mem::MaybeUninit;
-    let mut s0 = MaybeUninit::<libc::rusage>::uninit();
-    let err = unsafe { libc::getrusage(libc::RUSAGE_THREAD, s0.as_mut_ptr()) };
-    if err != 0 {
-        panic!("getrusage error = {}", err);
+            futures::join!(j0, j1, j2);
+        })
     }
-    unsafe { s0.assume_init() }
-}
 
-#[cfg(test)]
-fn getrusage_utime() -> Duration {
-    from_timeval(getrusage().ru_utime)
-}
+    #[test]
+    fn task_optimized_for_throughput() {
+        let local_ex = LocalExecutor::make_default();
 
-#[test]
-fn test_no_spin() {
-    use crate::timer;
+        local_ex.run(async {
+            let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test");
+            let tq2 = Local::create_task_queue(1, Latency::NotImportant, "testlat");
 
-    let ex = LocalExecutor::make_default();
-    let task_queue =
-        ex.create_task_queue(1000, Latency::Matters(Duration::from_millis(10)), "my_tq");
-    let start = getrusage_utime();
-    let task = ex
-        .spawn_into(
-            async { timer::sleep(Duration::from_secs(1)).await },
-            task_queue,
-        )
-        .expect("failed to spawn task");
-    ex.run(async { task.await });
+            let first_started = Rc::new(RefCell::new(false));
+            let second_status = Rc::new(RefCell::new(false));
 
-    assert!(
-        getrusage_utime() - start < Duration::from_millis(1),
-        "expected user time on LE is less than 1 millisecond"
-    );
-}
+            let first = local_ex
+                .spawn_into(
+                    crate::enclose! { (first_started, second_status)
+                        async move {
+                            *(first_started.borrow_mut()) = true;
 
-#[test]
-fn test_spin() {
-    use crate::timer;
+                            let start = Instant::now();
+                            // Now busy loop and make sure that we yield when we have too.
+                            loop {
+                                if *(second_status.borrow()) {
+                                    panic!("I was preempted but should not have been");
+                                }
+                                if start.elapsed().as_millis() > 200 {
+                                    break;
+                                }
+                                Local::yield_if_needed().await;
+                            }
+                        }
+                    },
+                    tq1,
+                )
+                .unwrap();
 
-    let dur = Duration::from_secs(1);
-    let ex0 = LocalExecutorBuilder::new().make().unwrap();
-    let ex0_ru_start = getrusage_utime();
-    ex0.run(async { timer::sleep(dur).await });
-    let ex0_ru_finish = getrusage_utime();
+            let second = local_ex
+                .spawn_into(
+                    crate::enclose! { (first_started, second_status)
+                        async move {
+                            // In case we are executed first, yield to the the other task
+                            loop {
+                                if *(first_started.borrow()) == false {
+                                    Local::later().await;
+                                } else {
+                                    break;
+                                }
+                            }
+                            *(second_status.borrow_mut()) = true;
+                        }
+                    },
+                    tq2,
+                )
+                .unwrap();
 
-    let ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
-        .spin_before_park(Duration::from_millis(10))
-        .make()
-        .unwrap();
-    let ex_ru_start = getrusage_utime();
-    let task = ex.spawn(async move { timer::sleep(dur).await });
-    ex.run(async { task.await });
-    let ex_ru_finish = getrusage_utime();
+            futures::join!(first, second);
+        });
+    }
 
-    assert!(
-        ex0_ru_finish - ex0_ru_start < Duration::from_millis(1),
-        "expected user time on LE0 is less than 1 millisecond"
-    );
-    assert!(
-        ex_ru_finish - ex_ru_start >= Duration::from_millis(1),
-        "expected user time on LE is much greater than 1 millisecond"
-    );
+    #[test]
+    fn test_detach() {
+        let ex = LocalExecutor::make_default();
+
+        ex.spawn(async {
+            loop {
+                //   println!("I'm a background task looping forever.");
+                Local::later().await;
+            }
+        })
+        .detach();
+
+        ex.run(async {
+            Timer::new(Duration::from_micros(100)).await;
+        });
+    }
+
+    /// As far as impl From<libc::timeval> for Duration is not allowed.
+    fn from_timeval(v: libc::timeval) -> Duration {
+        Duration::from_secs(v.tv_sec as u64) + Duration::from_micros(v.tv_usec as u64)
+    }
+
+    fn getrusage() -> libc::rusage {
+        let mut s0 = MaybeUninit::<libc::rusage>::uninit();
+        let err = unsafe { libc::getrusage(libc::RUSAGE_THREAD, s0.as_mut_ptr()) };
+        if err != 0 {
+            panic!("getrusage error = {}", err);
+        }
+        unsafe { s0.assume_init() }
+    }
+
+    fn getrusage_utime() -> Duration {
+        from_timeval(getrusage().ru_utime)
+    }
+
+    #[test]
+    fn test_no_spin() {
+        let ex = LocalExecutor::make_default();
+        let task_queue =
+            ex.create_task_queue(1000, Latency::Matters(Duration::from_millis(10)), "my_tq");
+        let start = getrusage_utime();
+        let task = ex
+            .spawn_into(
+                async { timer::sleep(Duration::from_secs(1)).await },
+                task_queue,
+            )
+            .expect("failed to spawn task");
+        ex.run(async { task.await });
+
+        assert!(
+            getrusage_utime() - start < Duration::from_millis(1),
+            "expected user time on LE is less than 1 millisecond"
+        );
+    }
+
+    #[test]
+    fn test_spin() {
+        let dur = Duration::from_secs(1);
+        let ex0 = LocalExecutorBuilder::new().make().unwrap();
+        let ex0_ru_start = getrusage_utime();
+        ex0.run(async { timer::sleep(dur).await });
+        let ex0_ru_finish = getrusage_utime();
+
+        let ex = LocalExecutorBuilder::new()
+            .pin_to_cpu(0)
+            .spin_before_park(Duration::from_millis(10))
+            .make()
+            .unwrap();
+        let ex_ru_start = getrusage_utime();
+        let task = ex.spawn(async move { timer::sleep(dur).await });
+        ex.run(async { task.await });
+        let ex_ru_finish = getrusage_utime();
+
+        assert!(
+            ex0_ru_finish - ex0_ru_start < Duration::from_millis(1),
+            "expected user time on LE0 is less than 1 millisecond"
+        );
+        assert!(
+            ex_ru_finish - ex_ru_start >= Duration::from_millis(1),
+            "expected user time on LE is much greater than 1 millisecond"
+        );
+    }
 }
