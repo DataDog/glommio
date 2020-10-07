@@ -212,7 +212,7 @@ impl StreamReaderState {
                 panic!("Buffer not found. But we should only call this function after we verified that all buffers exist");
             }
             Some(buffer) => {
-                len = buffer.copy_to_slice(in_buffer_offset, &mut result[..max_len]);
+                len = buffer.read_at(in_buffer_offset, &mut result[..max_len]);
             }
         }
         len
@@ -985,7 +985,7 @@ impl AsyncWrite for StreamWriter {
                     let space = state.buffer_size - state.buffer_pos;
                     let writesz = std::cmp::min(space, size - written);
                     let end = written + writesz;
-                    buffer.copy_from_slice(state.buffer_pos, &buf[written..end]);
+                    buffer.write_at(state.buffer_pos, &buf[written..end]);
                     written += writesz;
                     state.buffer_pos += writesz;
                     if state.buffer_pos == state.buffer_size {
