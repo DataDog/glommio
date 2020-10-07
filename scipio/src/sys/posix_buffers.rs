@@ -62,25 +62,23 @@ impl PosixDmaBuffer {
         unsafe { self.data.as_ptr().add(self.trim) }
     }
 
-    pub fn copy_to_slice(&self, offset: usize, dst: &mut [u8]) -> usize {
+    pub fn read_at(&self, offset: usize, dst: &mut [u8]) -> usize {
         if offset > self.size {
             return 0;
         }
         let len = std::cmp::min(dst.len(), self.size - offset);
-
-        let dst_ptr = dst.as_mut_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(self.as_ptr().add(offset), dst_ptr, len) }
+        let me = &self.as_bytes()[offset..offset + len];
+        dst[0..len].copy_from_slice(me);
         len
     }
 
-    pub fn copy_from_slice(&mut self, offset: usize, src: &[u8]) -> usize {
+    pub fn write_at(&mut self, offset: usize, src: &[u8]) -> usize {
         if offset > self.size {
             return 0;
         }
         let len = std::cmp::min(src.len(), self.size - offset);
-
-        let src_ptr = src.as_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(src_ptr, self.as_mut_ptr().add(offset), len) }
+        let me = &mut self.as_bytes_mut()[offset..offset + len];
+        me.copy_from_slice(&src[0..len]);
         len
     }
 

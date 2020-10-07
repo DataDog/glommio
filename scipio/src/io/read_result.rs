@@ -36,9 +36,9 @@ impl ReadResult {
     /// or `dst` doesn't have more space to hold them.
     ///
     /// [`ReadResult`]: struct.ReadResult.html
-    pub fn copy_to_slice(&self, offset: usize, dst: &mut [u8]) -> usize {
+    pub fn read_at(&self, offset: usize, dst: &mut [u8]) -> usize {
         let offset = self.offset + offset;
-        self.buffer.copy_to_slice(offset, dst)
+        self.buffer.read_at(offset, dst)
     }
 
     /// Creates a slice of this ReadResult with the given offset and length.
