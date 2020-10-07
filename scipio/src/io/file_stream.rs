@@ -280,33 +280,13 @@ pub struct StreamReader {
 
 macro_rules! collect_error {
     ( $state:expr, $res:expr ) => {{
-        let mut state = $state.borrow_mut();
         if let Err(x) = $res {
-            state.error = Some(x.into());
+            $state.borrow_mut().error = Some(x.into());
             true
         } else {
             false
         }
     }};
-}
-
-macro_rules! close_rc_file {
-    ( $state:expr, $file:expr ) => {
-        let inner = Rc::get_mut(&mut $file);
-        match inner {
-            None => {
-                let mut state = $state.borrow_mut();
-                state.error = Some(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{} references to file still held", Rc::strong_count(&$file)),
-                ));
-            }
-            Some(f) => {
-                let res = f.close().await;
-                collect_error!($state, res);
-            }
-        }
-    };
 }
 
 impl StreamReader {
@@ -326,12 +306,13 @@ impl StreamReader {
     ///     reader.close().await.unwrap();
     /// });
     /// ```
-    pub async fn close(&mut self) -> io::Result<()> {
+    pub async fn close(self) -> io::Result<()> {
         let mut state = self.state.borrow_mut();
         let handles = state.cancel_all_in_flight();
         drop(state);
         join_all(handles).await;
-        close_rc_file!(self.state, self.file);
+        let res = self.file.close_rc().await;
+        collect_error!(self.state, res);
 
         let mut state = self.state.borrow_mut();
         match state.error.take() {
@@ -712,7 +693,7 @@ impl StreamWriterState {
         self.waker = Some(waker);
     }
 
-    fn initiate_close(&mut self, waker: Waker, state: Rc<RefCell<Self>>, mut file: Rc<DmaFile>) {
+    fn initiate_close(&mut self, waker: Waker, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let final_pos = self.file_pos();
         let must_truncate = final_pos != self.file_pos;
 
@@ -753,7 +734,8 @@ impl StreamWriterState {
                 }
             }
 
-            close_rc_file!(state, file);
+            let res = file.close_rc().await;
+            collect_error!(state, res);
 
             let mut state = state.borrow_mut();
             state.flushed_pos = final_pos;
@@ -1083,7 +1065,7 @@ mod test {
                     let $kind = dir.kind;
                     test_executor!(async move {
                         let filename = $dir.join("testfile");
-                        let mut new_file = DmaFile::create(&filename)
+                        let new_file = DmaFile::create(&filename)
                             .await
                             .expect("failed to create file");
                         if $size > 0 {
@@ -1392,15 +1374,6 @@ mod test {
             }
         }
     }
-
-    file_stream_read_test!(read_close_twice, path, _k, file, _file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
-            .with_buffer_size(1024)
-            .build();
-
-        reader.close().await.unwrap();
-        expect_specific_error(reader.close().await, "Bad file descriptor (os error 9)");
-    });
 
     file_stream_read_test!(read_wronly_file, path, _k, _file, _file_size: 131072, {
         let newfile = path.join("wronly_file");
