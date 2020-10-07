@@ -38,6 +38,6 @@ impl fmt::Display for ErrorEnhancer {
 
 impl From<ErrorEnhancer> for std::io::Error {
     fn from(err: ErrorEnhancer) -> std::io::Error {
-        err.inner
+        std::io::Error::new(err.inner.kind(), format!("{}", err.inner))
     }
 }
