@@ -38,6 +38,50 @@ impl fmt::Display for ErrorEnhancer {
 
 impl From<ErrorEnhancer> for std::io::Error {
     fn from(err: ErrorEnhancer) -> std::io::Error {
-        std::io::Error::new(err.inner.kind(), format!("{}", err.inner))
+        std::io::Error::new(err.inner.kind(), format!("{}", err))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn enhance_error() {
+        let inner = io::Error::from_raw_os_error(9);
+        let enhanced = ErrorEnhancer {
+            inner,
+            op: "testing enhancer",
+            path: None,
+            fd: Some(32),
+        };
+        let s = format!("{}", enhanced);
+        assert_eq!(
+            s,
+            "Bad file descriptor (os error 9), op: testing enhancer with fd 32"
+        );
+    }
+
+    fn convert_error() -> io::Result<()> {
+        let inner = io::Error::from_raw_os_error(9);
+        let enhanced = ErrorEnhancer {
+            inner,
+            op: "testing enhancer",
+            path: None,
+            fd: Some(32),
+        };
+        Err(enhanced)?;
+        Ok(())
+    }
+
+    #[test]
+    fn enhance_error_converted() {
+        let io_error = convert_error().unwrap_err();
+        let s = format!("{}", io_error.into_inner().unwrap());
+        assert_eq!(
+            s,
+            "Bad file descriptor (os error 9), op: testing enhancer with fd 32"
+        );
     }
 }
