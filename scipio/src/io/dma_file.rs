@@ -409,14 +409,13 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
-        let new_path = new_path.as_ref().to_owned();
         let old_path = path_required!(self, "rename")?;
         enhanced_try!(
-            crate::io::rename_file(old_path, &new_path).await,
+            crate::io::rename(old_path, &new_path).await,
             "Renaming",
             self
         )?;
-        self.path = Some(new_path);
+        self.path = Some(new_path.as_ref().to_owned());
         Ok(())
     }
 
