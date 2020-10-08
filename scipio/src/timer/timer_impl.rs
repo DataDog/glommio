@@ -224,12 +224,12 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutorBuilder, Local, Latency};
+    /// use scipio::{LocalExecutorBuilder, Local, Latency, Shares};
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
+    ///     let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
     ///     let action = TimerActionOnce::do_in_into(Duration::from_millis(100), async move {
     ///         println!("Executed once");
     ///     }, tq).unwrap();
@@ -304,12 +304,12 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutorBuilder, Local, Latency};
+    /// use scipio::{LocalExecutorBuilder, Local, Latency, Shares};
     /// use scipio::timer::TimerActionOnce;
     /// use std::time::{Instant, Duration};
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
+    ///     let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
     ///     let when = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
     ///     let action = TimerActionOnce::do_at_into(when, async move {
     ///         println!("Executed once");
@@ -491,12 +491,12 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::{LocalExecutorBuilder, Latency, Local};
+    /// use scipio::{LocalExecutorBuilder, Latency, Local, Shares};
     /// use scipio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     let tq = Local::create_task_queue(1, Latency::NotImportant, "test");
+    ///     let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
     ///     let action = TimerActionRepeat::repeat_into(|| async move {
     ///         println!("Execute this!");
     ///         Some(Duration::from_millis(100))

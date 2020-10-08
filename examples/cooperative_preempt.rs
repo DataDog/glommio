@@ -1,5 +1,5 @@
 use futures::join;
-use scipio::{Latency, Local, LocalExecutorBuilder};
+use scipio::{Latency, Local, LocalExecutorBuilder, Shares};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -29,10 +29,16 @@ fn main() {
     // then explicitly yield with later().
     let handle = LocalExecutorBuilder::new()
         .spawn(|| async move {
-            let tq1 =
-                Local::create_task_queue(1, Latency::Matters(Duration::from_millis(10)), "tq1");
-            let tq2 =
-                Local::create_task_queue(1, Latency::Matters(Duration::from_millis(10)), "tq1");
+            let tq1 = Local::create_task_queue(
+                Shares::default(),
+                Latency::Matters(Duration::from_millis(10)),
+                "tq1",
+            );
+            let tq2 = Local::create_task_queue(
+                Shares::default(),
+                Latency::Matters(Duration::from_millis(10)),
+                "tq1",
+            );
             let shared_value = Rc::new(RefCell::new(0u64));
 
             let value = shared_value.clone();

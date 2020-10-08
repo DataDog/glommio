@@ -48,9 +48,8 @@ use scoped_tls::scoped_thread_local;
 use crate::multitask;
 use crate::parking;
 use crate::task::{self, waker_fn::waker_fn};
-use crate::Local;
-use crate::Reactor;
 use crate::{IoRequirements, Latency};
+use crate::{Local, Reactor, Shares};
 
 static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -112,37 +111,18 @@ impl Default for TaskQueueHandle {
     }
 }
 
-impl TaskQueueHandle {
-    /// Sets the number of shares used for a particular TaskQueue
-    pub fn set_task_queue_shares(&self, shares: usize) -> Result<(), QueueNotFoundError> {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.set_task_queue_shares(*self, shares))
-        } else {
-            panic!("`Task::local()` must be called from a `LocalExecutor`")
-        }
-    }
-
-    /// Gets the number of shares used for a particular TaskQueue
-    pub fn get_task_queue_shares(&self) -> Result<usize, QueueNotFoundError> {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.get_task_queue_shares(*self))
-        } else {
-            panic!("`Task::local()` must be called from a `LocalExecutor`")
-        }
-    }
-}
-
 #[derive(Debug)]
 struct TaskQueue {
     ex: Rc<multitask::LocalExecutor>,
     active: bool,
-    shares: usize,
+    shares: Shares,
     reciprocal_shares: u64,
     runtime: u64,
     vruntime: u64,
     io_requirements: IoRequirements,
     name: &'static str,
-    index: usize, // so we can easily produce a handle
+    index: usize,             // so we can easily produce a handle
+    last_adjustment: Instant, // for dynamic shares classes
 }
 
 // Impl a custom order so we use a min-heap
@@ -170,26 +150,25 @@ impl TaskQueue {
     fn new<F>(
         index: usize,
         name: &'static str,
-        shares: usize,
+        shares: Shares,
         ioreq: IoRequirements,
         notify: F,
     ) -> Rc<RefCell<Self>>
     where
         F: Fn() + 'static,
     {
-        let mut tq = TaskQueue {
+        Rc::new(RefCell::new(TaskQueue {
             ex: Rc::new(multitask::LocalExecutor::new(notify)),
             active: false,
-            shares: 0,
-            reciprocal_shares: 0,
+            reciprocal_shares: shares.reciprocal_shares(),
+            shares,
             runtime: 0,
             vruntime: 0,
             io_requirements: ioreq,
             name,
             index,
-        };
-        tq.set_shares(shares);
-        Rc::new(RefCell::new(tq))
+            last_adjustment: Instant::now(),
+        }))
     }
 
     fn is_active(&self) -> bool {
@@ -202,9 +181,13 @@ impl TaskQueue {
         r
     }
 
-    fn set_shares(&mut self, shares: usize) {
-        self.shares = std::cmp::max(shares, 1);
-        self.reciprocal_shares = (1u64 << 22) / (self.shares as u64);
+    fn prepare_to_run(&mut self, now: Instant) {
+        if let Shares::Dynamic(bm) = &self.shares {
+            if now.saturating_duration_since(self.last_adjustment) > bm.adjustment_period() {
+                self.last_adjustment = now;
+                self.reciprocal_shares = self.shares.reciprocal_shares();
+            }
+        }
     }
 
     fn account_vruntime(&mut self, delta: Duration) -> u64 {
@@ -464,10 +447,16 @@ impl LocalExecutor {
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
             0,
-            TaskQueue::new(0, "default", 1000, io_requirements, move || {
-                let mut queues = queues.borrow_mut();
-                queues.maybe_activate(index);
-            }),
+            TaskQueue::new(
+                0,
+                "default",
+                Shares::Static(1000),
+                io_requirements,
+                move || {
+                    let mut queues = queues.borrow_mut();
+                    queues.maybe_activate(index);
+                },
+            ),
         );
         Ok(())
     }
@@ -523,18 +512,18 @@ impl LocalExecutor {
     ///
     /// ```
     /// use std::time::Duration;
-    /// use scipio::{LocalExecutor, Latency};
+    /// use scipio::{LocalExecutor, Latency, Shares};
     ///
     /// let local_ex = LocalExecutor::make_default();
     ///
-    /// let task_queue = local_ex.create_task_queue(1000, Latency::Matters(Duration::from_secs(1)), "my_tq");
+    /// let task_queue = local_ex.create_task_queue(Shares::default(), Latency::Matters(Duration::from_secs(1)), "my_tq");
     /// let task = local_ex.spawn_into(async {
     ///     println!("Hello world");
     /// }, task_queue).expect("failed to spawn task");
     /// ```
     pub fn create_task_queue(
         &self,
-        shares: usize,
+        shares: Shares,
         latency: Latency,
         name: &'static str,
     ) -> TaskQueueHandle {
@@ -606,27 +595,6 @@ impl LocalExecutor {
         }
     }
 
-    /// Sets the number of shares used for a particular TaskQueue
-    pub fn set_task_queue_shares(
-        &self,
-        handle: TaskQueueHandle,
-        shares: usize,
-    ) -> Result<(), QueueNotFoundError> {
-        self.get_queue(&handle)
-            .map(|tq| tq.borrow_mut().set_shares(shares))
-            .ok_or_else(|| QueueNotFoundError::new(handle))
-    }
-
-    /// Gets the number of shares used for a particular TaskQueue
-    pub fn get_task_queue_shares(
-        &self,
-        handle: TaskQueueHandle,
-    ) -> Result<usize, QueueNotFoundError> {
-        self.get_queue(&handle)
-            .map(|tq| tq.borrow().shares)
-            .ok_or_else(|| QueueNotFoundError::new(handle))
-    }
-
     /// Spawns a task onto the executor.
     ///
     /// # Examples
@@ -658,10 +626,10 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutor;
+    /// use scipio::{LocalExecutor, Shares};
     ///
     /// let local_ex = LocalExecutor::make_default();
-    /// let handle = local_ex.create_task_queue(1000, scipio::Latency::NotImportant, "test_queue");
+    /// let handle = local_ex.create_task_queue(Shares::default(), scipio::Latency::NotImportant, "test_queue");
     ///
     /// let task = local_ex.spawn_into(async {
     ///     println!("Hello world");
@@ -698,7 +666,13 @@ impl LocalExecutor {
                 tq.active_executing = Some(queue.clone());
                 drop(tq);
 
-                let time = Instant::now();
+                let time = {
+                    let now = Instant::now();
+                    let mut queue_ref = queue.borrow_mut();
+                    queue_ref.prepare_to_run(now);
+                    now
+                };
+
                 loop {
                     if Reactor::need_preempt() {
                         break;
@@ -923,10 +897,10 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Task};
+    /// use scipio::{LocalExecutor, Task, Shares};
     ///
     /// let local_ex = LocalExecutor::make_default();
-    /// let handle = local_ex.create_task_queue(1000, scipio::Latency::NotImportant, "test_queue");
+    /// let handle = local_ex.create_task_queue(Shares::default(), scipio::Latency::NotImportant, "test_queue");
     ///
     /// local_ex.spawn_into(async {
     ///     let task = Task::local(async { 1 + 2 });
@@ -1002,7 +976,7 @@ impl<T> Task<T> {
 
     /// Creates a new task queue, with a given latency hint and the provided name
     pub fn create_task_queue(
-        shares: usize,
+        shares: Shares,
         latency: Latency,
         name: &'static str,
     ) -> TaskQueueHandle {
@@ -1019,11 +993,11 @@ impl<T> Task<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{LocalExecutor, Local, Latency, LocalExecutorBuilder};
+    /// use scipio::{LocalExecutor, Local, Latency, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let original_tq = Local::current_task_queue();
-    ///     let new_tq = Local::create_task_queue(1000, Latency::NotImportant, "test");
+    ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
     ///
     ///     let task = Local::local_into(async move {
     ///         Local::local_into(async move {
@@ -1087,7 +1061,10 @@ impl<T> Future for Task<T> {
 mod test {
     use super::*;
     use crate::timer::{self, Timer};
+    use crate::{enclose, SharesManager};
     use core::mem::MaybeUninit;
+    use futures::join;
+    use std::cell::Cell;
 
     #[test]
     fn create_and_destroy_executor() {
@@ -1176,9 +1153,13 @@ mod test {
         let local_ex = LocalExecutor::make_default();
 
         local_ex.run(async {
-            let not_latency = Local::create_task_queue(1, Latency::NotImportant, "test");
-            let latency =
-                Local::create_task_queue(1, Latency::Matters(Duration::from_millis(2)), "testlat");
+            let not_latency =
+                Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+            let latency = Local::create_task_queue(
+                Shares::default(),
+                Latency::Matters(Duration::from_millis(2)),
+                "testlat",
+            );
 
             let nolat_started = Rc::new(RefCell::new(false));
             let lat_status = Rc::new(RefCell::new(false));
@@ -1236,8 +1217,8 @@ mod test {
     fn current_task_queue_matches() {
         let local_ex = LocalExecutor::make_default();
         local_ex.run(async {
-            let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test1");
-            let tq2 = Local::create_task_queue(1, Latency::NotImportant, "test2");
+            let tq1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test1");
+            let tq2 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test2");
 
             let id1 = tq1.index;
             let id2 = tq2.index;
@@ -1267,8 +1248,8 @@ mod test {
         let local_ex = LocalExecutor::make_default();
 
         local_ex.run(async {
-            let tq1 = Local::create_task_queue(1, Latency::NotImportant, "test");
-            let tq2 = Local::create_task_queue(1, Latency::NotImportant, "testlat");
+            let tq1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+            let tq2 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "testlat");
 
             let first_started = Rc::new(RefCell::new(false));
             let second_status = Rc::new(RefCell::new(false));
@@ -1357,8 +1338,11 @@ mod test {
     #[test]
     fn test_no_spin() {
         let ex = LocalExecutor::make_default();
-        let task_queue =
-            ex.create_task_queue(1000, Latency::Matters(Duration::from_millis(10)), "my_tq");
+        let task_queue = ex.create_task_queue(
+            Shares::default(),
+            Latency::Matters(Duration::from_millis(10)),
+            "my_tq",
+        );
         let start = getrusage_utime();
         let task = ex
             .spawn_into(
@@ -1400,5 +1384,188 @@ mod test {
             ex_ru_finish - ex_ru_start >= Duration::from_millis(1),
             "expected user time on LE is much greater than 1 millisecond"
         );
+    }
+
+    // Spin for 200us and then yield. How many shares we have should control how many quantas
+    // we manage to execute.
+    async fn work_quanta() {
+        let now = Instant::now();
+        while now.elapsed().as_micros() < 200 {}
+        Local::later().await;
+    }
+
+    macro_rules! test_static_shares {
+        ( $s1:expr, $s2:expr, $work:block ) => {
+            let local_ex = LocalExecutor::make_default();
+
+            local_ex.run(async {
+                // Run a latency queue, otherwise a queue will run for too long uninterrupted
+                // and we'd have to run this test for a very long time for things to equalize.
+                let tq1 = Local::create_task_queue(
+                    Shares::Static($s1),
+                    Latency::Matters(Duration::from_millis(1)),
+                    "test_1",
+                );
+                let tq2 = Local::create_task_queue(
+                    Shares::Static($s2),
+                    Latency::Matters(Duration::from_millis(1)),
+                    "test_2",
+                );
+
+                let tq1_count = Rc::new(Cell::new(0));
+                let tq2_count = Rc::new(Cell::new(0));
+                let now = Instant::now();
+
+                let t1 = Local::local_into(
+                    enclose! { (tq1_count, now) async move {
+                        while now.elapsed().as_secs() < 5 {
+                            $work;
+                            tq1_count.replace(tq1_count.get() + 1);
+                        }
+                    }},
+                    tq1,
+                )
+                .unwrap();
+
+                let t2 = Local::local_into(
+                    enclose! { (tq2_count, now ) async move {
+                        while now.elapsed().as_secs() < 5 {
+                            $work;
+                            tq2_count.replace(tq2_count.get() + 1);
+                        }
+                    }},
+                    tq2,
+                )
+                .unwrap();
+
+                join!(t1, t2);
+
+                let expected_ratio = $s2 as f64 / (($s2 + $s1) as f64);
+                let actual_ratio =
+                    tq2_count.get() as f64 / ((tq1_count.get() + tq2_count.get()) as f64);
+
+                // Be gentle: we don't know if we're running against other threads, under which
+                // conditions, etc
+                assert!((expected_ratio - actual_ratio).abs() < 0.01);
+            });
+        };
+    }
+
+    #[test]
+    fn test_shares_high_disparity_fat_task() {
+        test_static_shares!(1000, 10, { work_quanta().await });
+    }
+
+    #[test]
+    fn test_shares_high_disparity_thin_task() {
+        test_static_shares!(1000, 10, { Local::later().await });
+    }
+
+    #[test]
+    fn test_shares_low_disparity_fat_task() {
+        test_static_shares!(1000, 1000, { work_quanta().await });
+    }
+
+    #[test]
+    fn test_shares_low_disparity_thin_task() {
+        test_static_shares!(1000, 1000, { Local::later().await });
+    }
+
+    struct DynamicSharesTest {
+        shares: Cell<usize>,
+    }
+
+    impl DynamicSharesTest {
+        fn new() -> Rc<Self> {
+            Rc::new(Self {
+                shares: Cell::new(0),
+            })
+        }
+        fn tick(&self, millis: u64) {
+            self.shares.replace((millis / 4) as usize);
+        }
+    }
+
+    impl SharesManager for DynamicSharesTest {
+        fn shares(&self) -> usize {
+            self.shares.get()
+        }
+
+        fn adjustment_period(&self) -> Duration {
+            Duration::from_millis(1)
+        }
+    }
+
+    #[test]
+    fn test_dynamic_shares() {
+        let local_ex = LocalExecutor::make_default();
+
+        local_ex.run(async {
+            let bm = DynamicSharesTest::new();
+            // Reference task queue.
+            let tq1 = Local::create_task_queue(
+                Shares::Static(1000),
+                Latency::Matters(Duration::from_millis(1)),
+                "test_1",
+            );
+            let tq2 = Local::create_task_queue(
+                Shares::Dynamic(bm.clone()),
+                Latency::Matters(Duration::from_millis(1)),
+                "test_2",
+            );
+
+            let tq1_count = Rc::new(RefCell::new(vec![0, 0, 0, 0, 0]));
+            let tq2_count = Rc::new(RefCell::new(vec![0, 0, 0, 0, 0]));
+            let now = Instant::now();
+
+            let t1 = Local::local_into(
+                enclose! { (tq1_count, now) async move {
+                    loop {
+                        let secs = now.elapsed().as_secs();
+                        if secs >= 4 {
+                            break;
+                        }
+                        (*tq1_count.borrow_mut())[secs as usize / 2] += 1;
+                        Local::later().await;
+                    }
+                }},
+                tq1,
+            )
+            .unwrap();
+
+            let t2 = Local::local_into(
+                enclose! { (tq2_count, now, bm) async move {
+                    loop {
+                        let elapsed = now.elapsed();
+                        let secs = elapsed.as_secs();
+                        if secs >= 4 {
+                            break;
+                        }
+                        bm.tick(elapsed.as_millis() as u64);
+                        (*tq2_count.borrow_mut())[secs as usize / 2] += 1;
+                        Local::later().await;
+                    }
+                }},
+                tq2,
+            )
+            .unwrap();
+
+            join!(t1, t2);
+            // Keep this very simple because every new processor, every load condition, will yield
+            // different results. All we want to validate is: for a large part of the first two
+            // seconds shares were very low, we should have received very low ratio. On the second
+            // half we should have accumulated much more. Real numbers are likely much higher than
+            // the targets, but those targets are safe.
+            let expected = vec![(0.0001, 0.01), (0.5, 0.9)];
+            let ratios: Vec<f64> = tq1_count
+                .borrow()
+                .iter()
+                .zip(tq2_count.borrow().iter())
+                .map(|(x, y)| *y as f64 / *x as f64)
+                .collect();
+            for (r, (min, max)) in ratios.iter().zip(expected.iter()) {
+                assert!(r > min && r < max);
+            }
+        });
     }
 }
