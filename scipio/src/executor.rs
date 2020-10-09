@@ -123,6 +123,7 @@ struct TaskQueue {
     name: &'static str,
     index: usize,             // so we can easily produce a handle
     last_adjustment: Instant, // for dynamic shares classes
+    yielded: bool,
 }
 
 // Impl a custom order so we use a min-heap
@@ -168,6 +169,7 @@ impl TaskQueue {
             name,
             index,
             last_adjustment: Instant::now(),
+            yielded: false,
         }))
     }
 
@@ -181,7 +183,12 @@ impl TaskQueue {
         r
     }
 
+    fn yielded(&self) -> bool {
+        self.yielded
+    }
+
     fn prepare_to_run(&mut self, now: Instant) {
+        self.yielded = false;
         if let Shares::Dynamic(bm) = &self.shares {
             if now.saturating_duration_since(self.last_adjustment) > bm.adjustment_period() {
                 self.last_adjustment = now;
@@ -590,6 +597,12 @@ impl LocalExecutor {
         }
     }
 
+    fn mark_me_for_yield(&self) {
+        let queues = self.queues.borrow();
+        let mut me = queues.active_executing.as_ref().unwrap().borrow_mut();
+        me.yielded = true;
+    }
+
     /// Spawns a task onto the executor.
     ///
     /// # Examples
@@ -655,7 +668,6 @@ impl LocalExecutor {
     fn run_one_task_queue(&self) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
-
         match candidate {
             Some(queue) => {
                 tq.active_executing = Some(queue.clone());
@@ -669,10 +681,11 @@ impl LocalExecutor {
                 };
 
                 loop {
-                    if Reactor::need_preempt() {
+                    let mut queue_ref = queue.borrow_mut();
+                    if Reactor::need_preempt() || queue_ref.yielded() {
                         break;
                     }
-                    let mut queue_ref = queue.borrow_mut();
+
                     if let Some(r) = queue_ref.get_task() {
                         Reactor::get().inform_io_requirements(queue_ref.io_requirements);
                         drop(queue_ref);
@@ -832,6 +845,12 @@ impl<T> Task<T> {
     /// It is not possible to yield futures that are not spawn'd, as they don't have a task
     /// associated with them.
     pub async fn later() {
+        if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| local_ex.mark_me_for_yield())
+        } else {
+            panic!("`Task::local()` must be called from a `LocalExecutor`")
+        }
+
         struct Yield {
             done: Option<()>,
         }
@@ -1065,6 +1084,7 @@ impl<T> Future for Task<T> {
 mod test {
     use super::*;
     use crate::timer::{self, Timer};
+    use crate::Semaphore;
     use crate::{enclose, SharesManager};
     use core::mem::MaybeUninit;
     use futures::join;
@@ -1396,6 +1416,76 @@ mod test {
         let now = Instant::now();
         while now.elapsed().as_micros() < 200 {}
         Local::later().await;
+    }
+
+    async fn do_ping_pong_work(last: Rc<Cell<usize>>, counter: Rc<Cell<usize>>, me: usize) {
+        if last.get() == me {
+            counter.replace(counter.get() + 1);
+        } else {
+            counter.replace(1);
+        }
+        assert!(counter.get() < 10);
+        last.replace(me);
+        work_quanta().await;
+    }
+
+    #[test]
+    fn test_ping_pong_yield() {
+        test_executor!(async move {
+            let tq1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test1");
+            let tq2 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test2");
+
+            // We want to test that when we yield, we give other queues the chance to run.
+            // However this is not automatic: the scheduler still pick the queue with least
+            // vruntime which could be us. It should not be us if we are ping ponging, but it
+            // *could* be us if we were disturbed by some other task. This may happen often
+            // if the reactor is not pinned especially if we are running multiple tests in
+            // parallel.
+            //
+            // We employ two strategies to make this test robust:
+            // 1. Instead of just ping ponging we issue a work quanta cpu busy loop every time.
+            //    We'll run for a couple of microseconds instead of nanoseconds and therefore
+            //    be less subject to random noise
+            // 2. We tolerate if we run a couple of times in a row. In the broken version of this
+            //    test we ran *all 100 iterations* at once, so it's totally fine if we run a
+            //    couple.
+            let counter = Rc::new(Cell::new(0));
+            let last = Rc::new(Cell::new(0));
+            let sem = Rc::new(Semaphore::new(0));
+
+            let j1 = Local::local_into(
+                enclose! {(last, counter, sem) async move {
+                    let mut v = Vec::new();
+                    for _ in 0..100 {
+                        sem.acquire(1).await.unwrap();
+                        v.push(Local::local(enclose!{(last, counter) async move {
+                            do_ping_pong_work(last, counter, 0).await;
+                        }}).detach());
+                    }
+                    join_all(v).await;
+                }},
+                tq1,
+            )
+            .unwrap();
+
+            let j2 = Local::local_into(
+                enclose! {(last, counter, sem) async move {
+                    let mut v = Vec::new();
+                    for _ in 0..100 {
+                        sem.acquire(1).await.unwrap();
+                        v.push(Local::local(enclose!{(last, counter) async move {
+                            do_ping_pong_work(last, counter, 1).await;
+                        }}).detach());
+                    }
+                    join_all(v).await;
+                }},
+                tq2,
+            )
+            .unwrap();
+
+            sem.signal(200);
+            futures::join!(j1, j2);
+        });
     }
 
     macro_rules! test_static_shares {
