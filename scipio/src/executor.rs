@@ -246,7 +246,7 @@ impl ExecutorQueues {
             default_executor: TaskQueueHandle::default(),
             executor_index: 1, // 0 is the default
             last_vruntime: 0,
-            preempt_timer_duration: Duration::from_secs(1),
+            preempt_timer_duration: Duration::from_millis(100),
             spin_before_park: None,
         }))
     }
@@ -256,7 +256,7 @@ impl ExecutorQueues {
             .active_executors
             .iter()
             .map(|tq| match tq.borrow().io_requirements.latency_req {
-                Latency::NotImportant => Duration::from_secs(1),
+                Latency::NotImportant => Duration::from_millis(100),
                 Latency::Matters(d) => d,
             })
             .min()
@@ -1266,7 +1266,7 @@ mod test {
                                 if *(second_status.borrow()) {
                                     panic!("I was preempted but should not have been");
                                 }
-                                if start.elapsed().as_millis() > 200 {
+                                if start.elapsed().as_millis() >= 99 {
                                     break;
                                 }
                                 Local::yield_if_needed().await;
