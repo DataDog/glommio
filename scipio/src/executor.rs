@@ -190,19 +190,14 @@ impl TaskQueue {
         }
     }
 
-    fn account_vruntime(&mut self, delta: Duration) -> u64 {
-        // Overflow shouldn't happen but if it does (in case a task gets stalled), account as 0
-        // otherwise it will never run again.
-        let delta_scaled = self
-            .reciprocal_shares
-            .checked_mul(delta.as_micros() as u64)
-            .unwrap_or(0)
-            >> 12;
-        self.vruntime += delta_scaled;
-        self.runtime += delta.as_micros() as u64;
-
-        //println!("Ran task for {} us, adding {} of vruntime (shares = {})", delta.as_micros(), delta_scaled, self.shares);
-        self.vruntime
+    fn account_vruntime(&mut self, delta: Duration) -> Option<u64> {
+        let delta_scaled = (self.reciprocal_shares * (delta.as_nanos() as u64)) >> 12;
+        self.runtime += delta.as_nanos() as u64;
+        let vruntime = self.vruntime.checked_add(delta_scaled);
+        if let Some(x) = vruntime {
+            self.vruntime = x;
+        }
+        vruntime
     }
 }
 
@@ -695,7 +690,16 @@ impl LocalExecutor {
 
                 let mut tq = self.queues.borrow_mut();
                 tq.active_executing = None;
-                tq.last_vruntime = last_vruntime;
+                tq.last_vruntime = match last_vruntime {
+                    Some(x) => x,
+                    None => {
+                        for queue in tq.available_executors.values() {
+                            let mut q = queue.borrow_mut();
+                            q.vruntime = 0;
+                        }
+                        0
+                    }
+                };
 
                 if need_repush {
                     tq.active_executors.push(queue);
