@@ -1446,7 +1446,7 @@ mod test {
 
                 // Be gentle: we don't know if we're running against other threads, under which
                 // conditions, etc
-                assert!((expected_ratio - actual_ratio).abs() < 0.01);
+                assert!((expected_ratio - actual_ratio).abs() < 0.1);
             });
         };
     }
@@ -1482,7 +1482,7 @@ mod test {
             })
         }
         fn tick(&self, millis: u64) {
-            self.shares.replace((millis / 4) as usize);
+            self.shares.replace((millis / 2) as usize);
         }
     }
 
@@ -1514,18 +1514,18 @@ mod test {
                 "test_2",
             );
 
-            let tq1_count = Rc::new(RefCell::new(vec![0, 0, 0, 0, 0]));
-            let tq2_count = Rc::new(RefCell::new(vec![0, 0, 0, 0, 0]));
+            let tq1_count = Rc::new(RefCell::new(vec![0, 0]));
+            let tq2_count = Rc::new(RefCell::new(vec![0, 0]));
             let now = Instant::now();
 
             let t1 = Local::local_into(
                 enclose! { (tq1_count, now) async move {
                     loop {
                         let secs = now.elapsed().as_secs();
-                        if secs >= 4 {
+                        if secs >= 2 {
                             break;
                         }
-                        (*tq1_count.borrow_mut())[secs as usize / 2] += 1;
+                        (*tq1_count.borrow_mut())[secs as usize] += 1;
                         Local::later().await;
                     }
                 }},
@@ -1538,11 +1538,11 @@ mod test {
                     loop {
                         let elapsed = now.elapsed();
                         let secs = elapsed.as_secs();
-                        if secs >= 4 {
+                        if secs >= 2 {
                             break;
                         }
                         bm.tick(elapsed.as_millis() as u64);
-                        (*tq2_count.borrow_mut())[secs as usize / 2] += 1;
+                        (*tq2_count.borrow_mut())[secs as usize] += 1;
                         Local::later().await;
                     }
                 }},
@@ -1556,16 +1556,15 @@ mod test {
             // seconds shares were very low, we should have received very low ratio. On the second
             // half we should have accumulated much more. Real numbers are likely much higher than
             // the targets, but those targets are safe.
-            let expected = vec![(0.0001, 0.01), (0.5, 0.9)];
             let ratios: Vec<f64> = tq1_count
                 .borrow()
                 .iter()
                 .zip(tq2_count.borrow().iter())
                 .map(|(x, y)| *y as f64 / *x as f64)
                 .collect();
-            for (r, (min, max)) in ratios.iter().zip(expected.iter()) {
-                assert!(r > min && r < max);
-            }
+            assert!(ratios[1] > ratios[0]);
+            assert!(ratios[0] < 0.25);
+            assert!(ratios[1] > 0.50);
         });
     }
 }
