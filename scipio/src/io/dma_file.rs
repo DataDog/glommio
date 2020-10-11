@@ -9,6 +9,7 @@ use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use std::io;
+use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -121,7 +122,10 @@ impl Directory {
     pub async fn close(&mut self) -> io::Result<()> {
         let source = Reactor::get().close(self.as_raw_fd());
         source.collect_rw().await?;
-        self.file = unsafe { std::fs::File::from_raw_fd(-1) };
+        // Suppress drop to avoid closing `self.file` twice, but manually drop
+        // all heap-allocated data.
+        let mut this = ManuallyDrop::new(self);
+        this.path.take();
         Ok(())
     }
 }
@@ -162,30 +166,14 @@ impl AsRawFd for DmaFile {
     }
 }
 
-impl Default for DmaFile {
-    fn default() -> Self {
-        DmaFile {
-            file: unsafe { std::fs::File::from_raw_fd(-1) },
-            path: None,
-            o_direct_alignment: 4096,
-            pollable: PollableStatus::Pollable,
-            inode: 0,
-            dev_major: 0,
-            dev_minor: 0,
-        }
-    }
-}
-
 impl Drop for DmaFile {
     fn drop(&mut self) {
-        if self.as_raw_fd() != -1 {
-            eprintln!(
-                "DmaFile dropped while still active. Should have been async closed ({:?} / fd {})
+        eprintln!(
+            "DmaFile dropped while still active. Should have been async closed ({:?} / fd {})
 I will close it and turn a leak bug into a performance bug. Please investigate",
-                self.path,
-                self.as_raw_fd()
-            );
-        }
+            self.path,
+            self.as_raw_fd()
+        );
     }
 }
 
@@ -453,10 +441,14 @@ impl DmaFile {
     }
 
     /// Closes this DMA file.
-    pub async fn close(mut self) -> io::Result<()> {
+    pub async fn close(self) -> io::Result<()> {
         let source = Reactor::get().close(self.as_raw_fd());
-        enhanced_try!(source.collect_rw().await, "Closing", self)?;
-        self.file = unsafe { std::fs::File::from_raw_fd(-1) };
+        let res = source.collect_rw().await;
+        // Suppress drop to avoid closing `self.file` twice, but manually drop
+        // all heap-allocated data.
+        let mut this = ManuallyDrop::new(self);
+        this.path.take();
+        enhanced_try!(res, "Closing", this)?;
         Ok(())
     }
     pub(crate) async fn close_rc(self: Rc<DmaFile>) -> io::Result<()> {
