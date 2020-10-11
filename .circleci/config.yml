@@ -28,31 +28,6 @@ jobs:
             - target/debug/deps
           key: v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
 
-  cargofmt:
-    docker:
-      - image: circleci/rust:1.46.0
-    steps:
-      - checkout
-      - run:
-          name: Version information
-          command: rustc --version; cargo --version; rustup --version
-      - run:
-          name: Calculate dependencies
-          command: cargo generate-lockfile
-      - restore_cache:
-          keys:
-            - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-      - run:
-          name: Check formatting
-          command: cargo fmt --all -- --check
-      - save_cache:
-          paths:
-            - /usr/local/cargo/registry
-            - target/debug/.fingerprint
-            - target/debug/build
-            - target/debug/deps
-          key: v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-
   cargodoc:
     docker:
       - image: circleci/rust:1.46.0
@@ -110,7 +85,6 @@ workflows:
   version: 2
   unit_tests:
     jobs:
-      - cargofmt
       - cargoclippy
       - cargobuild
       - cargodoc
