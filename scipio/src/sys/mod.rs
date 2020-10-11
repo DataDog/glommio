@@ -195,7 +195,7 @@ pub struct InnerSource {
 
     io_requirements: IoRequirements,
 
-    id: Option<u64>,
+    id: Option<SourceId>,
 
     queue: Option<ReactorQueue>,
 }

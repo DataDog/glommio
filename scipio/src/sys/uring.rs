@@ -6,7 +6,7 @@
 use nix::poll::PollFlags;
 use rlimit::Resource;
 use std::cell::{RefCell, UnsafeCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::io;
 use std::io::{Error, ErrorKind};
@@ -15,11 +15,14 @@ use std::rc::Rc;
 use std::task::Waker;
 use std::time::Duration;
 
+use crate::free_list::{FreeList, Idx};
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType, TimeSpec64};
+use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
+
+use super::TimeSpec64;
 
 type DmaBuffer = PosixDmaBuffer;
 
@@ -174,7 +177,7 @@ where
 
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
                 sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-                let src = peek_source(op.user_data);
+                let src = peek_source(from_user_data(op.user_data));
                 let mut source = mut_source(&src);
 
                 if let SourceType::DmaRead(pollable, _) = source.source_type {
@@ -209,7 +212,7 @@ where
             return Some(());
         }
 
-        let src = consume_source(value.user_data());
+        let src = consume_source(from_user_data(value.user_data()));
 
         let result = value.result();
         let was_cancelled =
@@ -229,44 +232,33 @@ where
     None
 }
 
-struct SourceMap {
-    id: u64,
-    map: HashMap<u64, Rc<UnsafeCell<InnerSource>>>,
+type SourceMap = FreeList<Rc<UnsafeCell<InnerSource>>>;
+pub(crate) type SourceId = Idx<Rc<UnsafeCell<InnerSource>>>;
+fn from_user_data(user_data: u64) -> SourceId {
+    SourceId::from_raw((user_data - 1) as usize)
+}
+fn to_user_data(id: SourceId) -> u64 {
+    id.to_raw() as u64 + 1
 }
 
-impl SourceMap {
-    fn new() -> RefCell<Self> {
-        RefCell::new(Self {
-            id: 1,
-            map: HashMap::new(),
-        })
-    }
-}
+thread_local!(static SOURCE_MAP: RefCell<SourceMap> = Default::default());
 
-thread_local!(static SOURCE_MAP: RefCell<SourceMap> = SourceMap::new());
-
-fn add_source(source: &Source, queue: ReactorQueue) -> u64 {
+fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
     SOURCE_MAP.with(|x| {
-        let mut map = x.borrow_mut();
-        let id = map.id;
-        map.id += 1;
-        map.map.insert(id, source.inner.clone());
+        let item = source.inner.clone();
+        let id = x.borrow_mut().alloc(item);
         source.update_reactor_info(id, queue.clone());
         id
     })
 }
 
-fn peek_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
-    SOURCE_MAP.with(|x| {
-        let map = x.borrow_mut();
-        map.map.get(&id).unwrap().clone()
-    })
+fn peek_source(id: SourceId) -> Rc<UnsafeCell<InnerSource>> {
+    SOURCE_MAP.with(|x| Rc::clone(&x.borrow()[id]))
 }
 
-fn consume_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
+fn consume_source(id: SourceId) -> Rc<UnsafeCell<InnerSource>> {
     SOURCE_MAP.with(|x| {
-        let mut map = x.borrow_mut();
-        let source = map.map.remove(&id).unwrap();
+        let source = x.borrow_mut().dealloc(id);
         let mut s = mut_source(&source);
         s.id = None;
         s.queue = None;
@@ -274,7 +266,7 @@ fn consume_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
     })
 }
 
-pub(crate) fn cancel_source(id: u64, queue: ReactorQueue) {
+pub(crate) fn cancel_source(id: SourceId, queue: ReactorQueue) {
     queue.borrow_mut().cancel_request(id);
 }
 
@@ -294,8 +286,11 @@ impl UringQueueState {
         }))
     }
 
-    fn cancel_request(&mut self, id: u64) {
-        let found = self.submissions.iter().position(|el| el.user_data == id);
+    fn cancel_request(&mut self, id: SourceId) {
+        let found = self
+            .submissions
+            .iter()
+            .position(|el| el.user_data == to_user_data(id));
         match found {
             Some(idx) => {
                 self.submissions.remove(idx);
@@ -308,7 +303,7 @@ impl UringQueueState {
             // now, so we delay `consume_source` until we consume the
             // corresponding event from the completion queue.
             None => self.cancellations.push_back(UringDescriptor {
-                args: UringOpDescriptor::Cancel(id),
+                args: UringOpDescriptor::Cancel(to_user_data(id)),
                 fd: -1,
                 user_data: 0,
             }),
@@ -332,7 +327,7 @@ trait UringCommon {
         queue.submissions.push_back(UringDescriptor {
             args: descriptor,
             fd: source.raw(),
-            user_data: id,
+            user_data: to_user_data(id),
         });
     }
 
@@ -508,12 +503,12 @@ impl Source {
         mut_source(&self.inner)
     }
 
-    fn update_reactor_info(&self, id: u64, queue: ReactorQueue) {
+    fn update_reactor_info(&self, id: SourceId, queue: ReactorQueue) {
         self.inner().id = Some(id);
         self.inner().queue = Some(queue);
     }
 
-    fn consume_id(&self) -> Option<u64> {
+    fn consume_id(&self) -> Option<SourceId> {
         self.inner().id.take()
     }
 
@@ -599,7 +594,10 @@ impl SleepableRing {
 
     fn rearm_preempt_timer(&mut self, source: &mut Source, d: Duration) {
         let new_id = add_source(source, self.submission_queue.clone());
-        source.update_source_type(SourceType::Timeout(Some(new_id), TimeSpec64::from(d)));
+        source.update_source_type(SourceType::Timeout(
+            Some(to_user_data(new_id)),
+            TimeSpec64::from(d),
+        ));
         let op = match source.source_type() {
             SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
             _ => unreachable!(),
@@ -613,7 +611,7 @@ impl SleepableRing {
         queue.submissions.push_front(UringDescriptor {
             args: op,
             fd: -1,
-            user_data: new_id,
+            user_data: to_user_data(new_id),
         });
         // No need to submit, the next ring enter will submit for us. Because
         // we just flushed and we got put in front of the queue we should get a SQE.
@@ -629,7 +627,7 @@ impl SleepableRing {
 
                     let op = UringDescriptor {
                         fd: link.raw(),
-                        user_data: add_source(link, self.submission_queue.clone()),
+                        user_data: to_user_data(add_source(link, self.submission_queue.clone())),
                         args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                     };
                     fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
