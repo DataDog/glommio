@@ -58,7 +58,9 @@ impl Parker {
     pub(crate) fn new() -> Parker {
         // Ensure `Reactor` is initialized now to prevent it from being initialized in `Drop`.
         Parker {
-            inner: Rc::new(Inner {}),
+            inner: Rc::new(Inner {
+                wakers: RefCell::new(Vec::new()),
+            }),
         }
     }
 
@@ -93,17 +95,23 @@ impl fmt::Debug for Parker {
     }
 }
 
-struct Inner {}
+struct Inner {
+    wakers: RefCell<Vec<Waker>>,
+}
 
 impl Inner {
     /// If the timeout is zero, then there is no need to actually block.
     /// Process available I/O events.
     fn poll(&self, timeout: Option<Duration>) {
-        let _ = Reactor::get().lock().react(timeout, false);
+        let _ = Reactor::get()
+            .lock()
+            .react(self.wakers.borrow_mut().as_mut(), timeout, false);
     }
 
     fn park(&self, spin: Option<Duration>) {
-        let _ = Reactor::get().lock().react(spin, true);
+        let _ = Reactor::get()
+            .lock()
+            .react(self.wakers.borrow_mut().as_mut(), spin, true);
     }
 }
 
@@ -406,30 +414,29 @@ struct ReactorLock<'a> {
 
 impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
-    fn react(self, timeout: Option<Duration>, spin: bool) -> io::Result<()> {
-        // FIXME: there must be a way to avoid this allocation
-        // Indeed it just showed in a profiler. We can cap the number of
-        // cqes produced, but this is used for timers as well. Need to
-        // be more careful, but doable.
-        let mut wakers = Vec::new();
-
+    fn react(
+        self,
+        wakers: &mut Vec<Waker>,
+        timeout: Option<Duration>,
+        spin: bool,
+    ) -> io::Result<()> {
         // Process ready timers.
-        let next_timer = self.reactor.process_timers(&mut wakers);
+        let next_timer = self.reactor.process_timers(wakers);
 
         // Block on I/O events.
         let ores = if spin {
-            self.reactor.sys.wait(&mut wakers, next_timer, timeout)
+            self.reactor.sys.wait(wakers, next_timer, timeout)
         } else {
             match timeout {
-                Some(preempt) => self.reactor.sys.step(&mut wakers, preempt),
-                None => self.reactor.sys.wait(&mut wakers, next_timer, None),
+                Some(preempt) => self.reactor.sys.step(wakers, preempt),
+                None => self.reactor.sys.wait(wakers, next_timer, None),
             }
         };
 
         let res = match ores {
             // We slept, so don't wait for the next loop to process timers
             Ok(true) => {
-                self.reactor.process_timers(&mut wakers);
+                self.reactor.process_timers(wakers);
                 Ok(())
             }
 
@@ -444,8 +451,9 @@ impl ReactorLock<'_> {
         };
 
         // Wake up ready tasks.
-        for waker in wakers {
+        while !wakers.is_empty() {
             // Don't let a panicking waker blow everything up.
+            let waker = wakers.pop().unwrap();
             let _ = panic::catch_unwind(|| waker.wake());
         }
 
