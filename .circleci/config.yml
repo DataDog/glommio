@@ -3,7 +3,7 @@
 version: 2
 
 jobs:
-  cargobuild:
+  cargotest:
     docker:
       - image: circleci/rust:1.46.0
     steps:
@@ -20,6 +20,10 @@ jobs:
       - run:
           name: Build all targets
           command: cargo build --all --all-targets
+      - run:
+          name: Run the tests
+          # CI machine has a pretty old kernel, so run only tidy tests
+          command: cargo test --test tidy
       - save_cache:
           paths:
             - /usr/local/cargo/registry
@@ -86,5 +90,5 @@ workflows:
   unit_tests:
     jobs:
       - cargoclippy
-      - cargobuild
+      - cargotest
       - cargodoc
