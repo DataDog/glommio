@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::error::ErrorEnhancer;
 use crate::io::read_result::ReadResult;
 use crate::parking::Reactor;
 use crate::sys;
@@ -100,7 +101,7 @@ impl Directory {
 
     /// Returns an iterator to the contents of this directory
     pub fn sync_read_dir(&self) -> io::Result<std::fs::ReadDir> {
-        let path = path_required!(self.file, "read directory")?;
+        let path = self.file.path_required("read directory")?;
         enhanced_try!(std::fs::read_dir(path), "Reading a directory", self.file)
     }
 
@@ -371,7 +372,7 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
-        let old_path = path_required!(self.file, "rename")?;
+        let old_path = self.file.path_required("rename")?;
         enhanced_try!(
             crate::io::rename(old_path, &new_path).await,
             "Renaming",
@@ -389,13 +390,13 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn remove(&self) -> io::Result<()> {
-        let path = path_required!(self.file, "remove")?;
-        enhanced_try!(sys::remove_file(path.as_ref()), "Removing", self.file)
+        let path = self.file.path_required("remove")?;
+        enhanced_try!(sys::remove_file(path), "Removing", self.file)
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall
     async fn statx(&self) -> io::Result<libc::statx> {
-        let path = path_required!(self.file, "stat")?;
+        let path = self.file.path_required("stat")?;
 
         let mut source = Reactor::get().statx(self.as_raw_fd(), path);
         enhanced_try!(
@@ -488,6 +489,21 @@ impl ScipioFile {
     fn with_path(mut self, path: Option<PathBuf>) -> ScipioFile {
         self.path = path;
         self
+    }
+
+    fn path_required(&self, op: &'static str) -> io::Result<&Path> {
+        self.path.as_deref().ok_or_else(|| {
+            ErrorEnhancer {
+                inner: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "operation requires a valid path",
+                ),
+                op,
+                path: None,
+                fd: Some(self.as_raw_fd()),
+            }
+            .into()
+        })
     }
 }
 
