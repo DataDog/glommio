@@ -48,20 +48,6 @@ macro_rules! enhanced_try {
     }};
 }
 
-macro_rules! path_required {
-    ($obj:expr, $op:expr) => {{
-        $obj.path.as_ref().ok_or(crate::error::ErrorEnhancer {
-            inner: std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "operation requires a valid path",
-            ),
-            op: $op,
-            path: None,
-            fd: Some($obj.as_raw_fd()),
-        })
-    }};
-}
-
 macro_rules! bad_buffer {
     ($obj:expr) => {{
         let enhanced: std::io::Error = crate::error::ErrorEnhancer {

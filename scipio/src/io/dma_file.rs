@@ -3,13 +3,14 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::error::ErrorEnhancer;
 use crate::io::read_result::ReadResult;
 use crate::parking::Reactor;
 use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use std::io;
-use std::mem::ManuallyDrop;
+use std::mem;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -25,8 +26,7 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 #[derive(Debug)]
 /// A directory representation where asynchronous operations can be issued
 pub struct Directory {
-    file: std::fs::File,
-    path: Option<PathBuf>,
+    file: ScipioFile,
 }
 
 impl AsRawFd for Directory {
@@ -44,12 +44,10 @@ impl Directory {
         let fd = enhanced_try!(
             sys::duplicate_file(self.file.as_raw_fd()),
             "Cloning directory",
-            self
+            self.file
         )?;
-        Ok(Directory {
-            file: unsafe { std::fs::File::from_raw_fd(fd as _) },
-            path: self.path.clone(),
-        })
+        let file = unsafe { ScipioFile::from_raw_fd(fd as _) }.with_path(self.file.path.clone());
+        Ok(Directory { file })
     }
 
     /// Synchronously open this directory.
@@ -62,10 +60,8 @@ impl Directory {
             Some(&path),
             None
         )?;
-        Ok(Directory {
-            file: unsafe { std::fs::File::from_raw_fd(fd as _) },
-            path: Some(path),
-        })
+        let file = unsafe { ScipioFile::from_raw_fd(fd as _) }.with_path(Some(path));
+        Ok(Directory { file })
     }
 
     /// Asynchronously open the directory at path
@@ -79,10 +75,8 @@ impl Directory {
             Some(&path),
             None
         )?;
-        Ok(Directory {
-            file: unsafe { std::fs::File::from_raw_fd(fd as _) },
-            path: Some(path),
-        })
+        let file = unsafe { ScipioFile::from_raw_fd(fd as _) }.with_path(Some(path));
+        Ok(Directory { file })
     }
 
     /// Similar to create() in the standard library, but returns a DMA file
@@ -107,8 +101,8 @@ impl Directory {
 
     /// Returns an iterator to the contents of this directory
     pub fn sync_read_dir(&self) -> io::Result<std::fs::ReadDir> {
-        let path = path_required!(self, "read directory")?;
-        enhanced_try!(std::fs::read_dir(path), "Reading a directory", self)
+        let path = self.file.path_required("read directory")?;
+        enhanced_try!(std::fs::read_dir(path), "Reading a directory", self.file)
     }
 
     /// Issues fdatasync into the underlying file.
@@ -119,14 +113,8 @@ impl Directory {
     }
 
     /// Closes this DMA file.
-    pub async fn close(&mut self) -> io::Result<()> {
-        let source = Reactor::get().close(self.as_raw_fd());
-        source.collect_rw().await?;
-        // Suppress drop to avoid closing `self.file` twice, but manually drop
-        // all heap-allocated data.
-        let mut this = ManuallyDrop::new(self);
-        this.path.take();
-        Ok(())
+    pub async fn close(self) -> io::Result<()> {
+        self.file.close().await
     }
 }
 
@@ -135,11 +123,7 @@ impl Directory {
 /// All access uses Direct I/O, and all operations including
 /// open and close are asynchronous.
 pub struct DmaFile {
-    file: std::fs::File,
-    // A file can appear in many paths, through renaming and linking.
-    // If we do that, each path should have its own object. This is to
-    // facilitate error displaying.
-    path: Option<PathBuf>,
+    file: ScipioFile,
     o_direct_alignment: u64,
     pollable: PollableStatus,
     inode: u64,
@@ -163,17 +147,6 @@ impl DmaFile {
 impl AsRawFd for DmaFile {
     fn as_raw_fd(&self) -> RawFd {
         self.file.as_raw_fd()
-    }
-}
-
-impl Drop for DmaFile {
-    fn drop(&mut self) {
-        eprintln!(
-            "DmaFile dropped while still active. Should have been async closed ({:?} / fd {})
-I will close it and turn a leak bug into a performance bug. Please investigate",
-            self.path,
-            self.as_raw_fd()
-        );
     }
 }
 
@@ -238,9 +211,10 @@ impl DmaFile {
             Ok(res) => Ok(res),
         };
 
+        let file =
+            unsafe { ScipioFile::from_raw_fd(res? as _) }.with_path(Some(path.to_path_buf()));
         let mut file = DmaFile {
-            file: unsafe { std::fs::File::from_raw_fd(res? as _) },
-            path: Some(path.to_path_buf()),
+            file,
             o_direct_alignment: 4096,
             pollable,
             inode: 0,
@@ -283,13 +257,13 @@ impl DmaFile {
 
     /// Similar to open() in the standard library, but returns a DMA file
     pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
-        let path = path.as_ref().to_owned();
+        let path = path.as_ref();
 
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags = libc::O_DIRECT | libc::O_CLOEXEC | libc::O_RDONLY;
-        let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
+        let res = DmaFile::open_at(-1 as _, path, flags, 0o644).await;
 
-        let mut f = enhanced_try!(res, "Opening", Some(&path), None)?;
+        let mut f = enhanced_try!(res, "Opening", Some(path), None)?;
         f.o_direct_alignment = 512;
         Ok(f)
     }
@@ -302,7 +276,7 @@ impl DmaFile {
     /// read-modify-write.
     pub async fn write_dma(&self, buf: &DmaBuffer, pos: u64) -> io::Result<usize> {
         let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
-        enhanced_try!(source.collect_rw().await, "Writing", self)
+        enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
     /// Reads from a specific position in the file and returns the buffer.
@@ -311,7 +285,7 @@ impl DmaFile {
     /// that means 512 bytes.
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
         let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
-        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
+        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let stype = source.extract_source_type();
         let buffer = match stype {
             SourceType::DmaRead(_, buffer) => buffer
@@ -319,8 +293,8 @@ impl DmaFile {
                     buffer.trim_to_size(read_size);
                     buffer
                 })
-                .ok_or(bad_buffer!(self)),
-            _ => Err(bad_buffer!(self)),
+                .ok_or(bad_buffer!(self.file)),
+            _ => Err(bad_buffer!(self.file)),
         }?;
         Ok(ReadResult::from_whole_buffer(buffer))
     }
@@ -339,7 +313,7 @@ impl DmaFile {
         let mut source =
             Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
-        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self)?;
+        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let stype = source.extract_source_type();
         let buffer = match stype {
             SourceType::DmaRead(_, buffer) => buffer
@@ -348,8 +322,8 @@ impl DmaFile {
                     buffer.trim_to_size(std::cmp::min(read_size, size));
                     buffer
                 })
-                .ok_or(bad_buffer!(self)),
-            _ => Err(bad_buffer!(self)),
+                .ok_or(bad_buffer!(self.file)),
+            _ => Err(bad_buffer!(self.file)),
         }?;
         Ok(ReadResult::from_whole_buffer(buffer))
     }
@@ -357,7 +331,7 @@ impl DmaFile {
     /// Issues fdatasync into the underlying file.
     pub async fn fdatasync(&self) -> io::Result<()> {
         let source = Reactor::get().fdatasync(self.as_raw_fd());
-        enhanced_try!(source.collect_rw().await, "Syncing", self)?;
+        enhanced_try!(source.collect_rw().await, "Syncing", self.file)?;
         Ok(())
     }
 
@@ -365,7 +339,7 @@ impl DmaFile {
     pub async fn pre_allocate(&self, size: u64) -> io::Result<()> {
         let flags = libc::FALLOC_FL_ZERO_RANGE;
         let source = Reactor::get().fallocate(self.as_raw_fd(), 0, size, flags);
-        enhanced_try!(source.collect_rw().await, "Pre-allocate space", self)?;
+        enhanced_try!(source.collect_rw().await, "Pre-allocate space", self.file)?;
         Ok(())
     }
 
@@ -390,7 +364,7 @@ impl DmaFile {
         enhanced_try!(
             sys::truncate_file(self.as_raw_fd(), size),
             "Truncating",
-            self
+            self.file
         )
     }
 
@@ -398,13 +372,13 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
-        let old_path = path_required!(self, "rename")?;
+        let old_path = self.file.path_required("rename")?;
         enhanced_try!(
             crate::io::rename(old_path, &new_path).await,
             "Renaming",
-            self
+            self.file
         )?;
-        self.path = Some(new_path.as_ref().to_owned());
+        self.file.path = Some(new_path.as_ref().to_owned());
         Ok(())
     }
 
@@ -416,16 +390,20 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn remove(&self) -> io::Result<()> {
-        let path = path_required!(self, "remove")?;
-        enhanced_try!(sys::remove_file(path.as_ref()), "Removing", self)
+        let path = self.file.path_required("remove")?;
+        enhanced_try!(sys::remove_file(path), "Removing", self.file)
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall
     async fn statx(&self) -> io::Result<libc::statx> {
-        let path = path_required!(self, "stat")?;
+        let path = self.file.path_required("stat")?;
 
         let mut source = Reactor::get().statx(self.as_raw_fd(), path);
-        enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
+        enhanced_try!(
+            source.collect_rw().await,
+            "getting file metadata",
+            self.file
+        )?;
         let stype = source.extract_source_type();
         let stat_buf = match stype {
             SourceType::Statx(_, buf) => buf,
@@ -442,15 +420,9 @@ impl DmaFile {
 
     /// Closes this DMA file.
     pub async fn close(self) -> io::Result<()> {
-        let source = Reactor::get().close(self.as_raw_fd());
-        let res = source.collect_rw().await;
-        // Suppress drop to avoid closing `self.file` twice, but manually drop
-        // all heap-allocated data.
-        let mut this = ManuallyDrop::new(self);
-        this.path.take();
-        enhanced_try!(res, "Closing", this)?;
-        Ok(())
+        self.file.close().await
     }
+
     pub(crate) async fn close_rc(self: Rc<DmaFile>) -> io::Result<()> {
         match Rc::try_unwrap(self) {
             Err(file) => Err(io::Error::new(
@@ -459,6 +431,79 @@ impl DmaFile {
             )),
             Ok(file) => file.close().await,
         }
+    }
+}
+
+/// A wrapper over `std::fs::File` which carries a path (for better error
+/// messages) and prints a warning if closed synchronously.
+#[derive(Debug)]
+struct ScipioFile {
+    file: std::fs::File,
+    // A file can appear in many paths, through renaming and linking.
+    // If we do that, each path should have its own object. This is to
+    // facilitate error displaying.
+    path: Option<PathBuf>,
+}
+
+impl Drop for ScipioFile {
+    fn drop(&mut self) {
+        eprintln!(
+            "File dropped while still active. Should have been async closed ({:?} / fd {})
+I will close it and turn a leak bug into a performance bug. Please investigate",
+            self.path,
+            self.as_raw_fd()
+        );
+    }
+}
+
+impl AsRawFd for ScipioFile {
+    fn as_raw_fd(&self) -> RawFd {
+        self.file.as_raw_fd()
+    }
+}
+
+impl FromRawFd for ScipioFile {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        ScipioFile {
+            file: std::fs::File::from_raw_fd(fd),
+            path: None,
+        }
+    }
+}
+
+impl ScipioFile {
+    async fn close(mut self) -> io::Result<()> {
+        // Destruct `self` into components skipping Drop.
+        let (fd, path) = {
+            let fd = self.as_raw_fd();
+            let path = self.path.take();
+            mem::forget(self);
+            (fd, path)
+        };
+
+        let source = Reactor::get().close(fd);
+        enhanced_try!(source.collect_rw().await, "Closing", path, Some(fd))?;
+        Ok(())
+    }
+
+    fn with_path(mut self, path: Option<PathBuf>) -> ScipioFile {
+        self.path = path;
+        self
+    }
+
+    fn path_required(&self, op: &'static str) -> io::Result<&Path> {
+        self.path.as_deref().ok_or_else(|| {
+            ErrorEnhancer {
+                inner: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "operation requires a valid path",
+                ),
+                op,
+                path: None,
+                fd: Some(self.as_raw_fd()),
+            }
+            .into()
+        })
     }
 }
 
