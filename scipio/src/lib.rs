@@ -131,6 +131,7 @@ macro_rules! make_shared_var_mut {
 }
 
 pub mod channels;
+pub mod controllers;
 mod error;
 mod executor;
 pub mod io;
