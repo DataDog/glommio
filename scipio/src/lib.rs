@@ -141,7 +141,8 @@ mod shares;
 pub mod timer;
 
 pub use crate::executor::{
-    LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
+    ExecutorStats, LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
+    TaskQueueStats,
 };
 pub use crate::networking::*;
 pub use crate::pollable::Async;
