@@ -120,7 +120,7 @@ struct TaskQueue {
     runtime: u64,
     vruntime: u64,
     io_requirements: IoRequirements,
-    name: &'static str,
+    name: String,
     index: usize,             // so we can easily produce a handle
     last_adjustment: Instant, // for dynamic shares classes
     yielded: bool,
@@ -148,15 +148,16 @@ impl PartialEq for TaskQueue {
 impl Eq for TaskQueue {}
 
 impl TaskQueue {
-    fn new<F>(
+    fn new<F, S>(
         index: usize,
-        name: &'static str,
+        name: S,
         shares: Shares,
         ioreq: IoRequirements,
         notify: F,
     ) -> Rc<RefCell<Self>>
     where
         F: Fn() + 'static,
+        S: Into<String>,
     {
         Rc::new(RefCell::new(TaskQueue {
             ex: Rc::new(multitask::LocalExecutor::new(notify)),
@@ -166,7 +167,7 @@ impl TaskQueue {
             runtime: 0,
             vruntime: 0,
             io_requirements: ioreq,
-            name,
+            name: name.into(),
             index,
             last_adjustment: Instant::now(),
             yielded: false,
@@ -523,12 +524,10 @@ impl LocalExecutor {
     ///     println!("Hello world");
     /// }, task_queue).expect("failed to spawn task");
     /// ```
-    pub fn create_task_queue(
-        &self,
-        shares: Shares,
-        latency: Latency,
-        name: &'static str,
-    ) -> TaskQueueHandle {
+    pub fn create_task_queue<S>(&self, shares: Shares, latency: Latency, name: S) -> TaskQueueHandle
+    where
+        S: Into<String>,
+    {
         let queues = self.queues.clone();
         let index = {
             let mut ex = queues.borrow_mut();
@@ -998,11 +997,7 @@ impl<T> Task<T> {
     }
 
     /// Creates a new task queue, with a given latency hint and the provided name
-    pub fn create_task_queue(
-        shares: Shares,
-        latency: Latency,
-        name: &'static str,
-    ) -> TaskQueueHandle {
+    pub fn create_task_queue(shares: Shares, latency: Latency, name: &str) -> TaskQueueHandle {
         if LOCAL_EX.is_set() {
             LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
         } else {
