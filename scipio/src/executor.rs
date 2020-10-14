@@ -116,14 +116,12 @@ struct TaskQueue {
     ex: Rc<multitask::LocalExecutor>,
     active: bool,
     shares: Shares,
-    reciprocal_shares: u64,
-    runtime: u64,
     vruntime: u64,
     io_requirements: IoRequirements,
     name: String,
-    index: usize,             // so we can easily produce a handle
     last_adjustment: Instant, // for dynamic shares classes
     yielded: bool,
+    stats: TaskQueueStats,
 }
 
 // Impl a custom order so we use a min-heap
@@ -162,13 +160,11 @@ impl TaskQueue {
         Rc::new(RefCell::new(TaskQueue {
             ex: Rc::new(multitask::LocalExecutor::new(notify)),
             active: false,
-            reciprocal_shares: shares.reciprocal_shares(),
+            stats: TaskQueueStats::new(index, shares.reciprocal_shares()),
             shares,
-            runtime: 0,
             vruntime: 0,
             io_requirements: ioreq,
             name: name.into(),
-            index,
             last_adjustment: Instant::now(),
             yielded: false,
         }))
@@ -193,14 +189,15 @@ impl TaskQueue {
         if let Shares::Dynamic(bm) = &self.shares {
             if now.saturating_duration_since(self.last_adjustment) > bm.adjustment_period() {
                 self.last_adjustment = now;
-                self.reciprocal_shares = self.shares.reciprocal_shares();
+                self.stats.reciprocal_shares = self.shares.reciprocal_shares();
             }
         }
     }
 
     fn account_vruntime(&mut self, delta: Duration) -> Option<u64> {
-        let delta_scaled = (self.reciprocal_shares * (delta.as_nanos() as u64)) >> 12;
-        self.runtime += delta.as_nanos() as u64;
+        let delta_scaled = (self.stats.reciprocal_shares * (delta.as_nanos() as u64)) >> 12;
+        self.stats.runtime += delta;
+        self.stats.queue_selected += 1;
         let vruntime = self.vruntime.checked_add(delta_scaled);
         if let Some(x) = vruntime {
             self.vruntime = x;
@@ -228,6 +225,95 @@ fn bind_to_cpu(cpu: usize) -> io::Result<()> {
     to_io_error!(nix::sched::sched_setaffinity(pid, &cpuset))
 }
 
+// Dealing with references would imply getting an Rc, RefCells, and all of that
+// Stats should be copied unfrequently, and if you have enough stats to fill a Kb of data from a
+// single source, maybe you should rethink your life choices.
+#[derive(Debug, Copy, Clone)]
+/// Allows information about the current state of this executor to be consumed by applications.
+pub struct ExecutorStats {
+    total_runtime: Duration,
+    scheduler_runs: u64,
+    tasks_executed: u64,
+}
+
+impl ExecutorStats {
+    fn new() -> Self {
+        Self {
+            total_runtime: Duration::from_nanos(0),
+            scheduler_runs: 0,
+            tasks_executed: 0,
+        }
+    }
+
+    /// The total amount of runtime in this executor so far.
+    ///
+    /// This is especially important for spinning executors, since the amount of CPU time
+    /// you will see in the operating system will be a far cry from the CPU time it actually
+    /// spent executing. Sleeping or Spinning are not accounted here
+    pub fn total_runtime(&self) -> Duration {
+        self.total_runtime
+    }
+
+    /// Returns the amount of times the scheduler loop was called. Scipio scheduler selects a task
+    /// queue to run and runs many tasks in that task queue. This number corresponds to the amount
+    /// of times was called upon to select a new queue.
+    pub fn scheduler_runs(&self) -> u64 {
+        self.scheduler_runs
+    }
+
+    /// Returns the amount of tasks executed in the system, over all queues.
+    pub fn tasks_executed(&self) -> u64 {
+        self.tasks_executed
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+/// Allows information about the current state of a particular task queue to be consumed
+/// by applications.
+pub struct TaskQueueStats {
+    index: usize, // so we can easily produce a handle
+    reciprocal_shares: u64,
+    queue_selected: u64,
+    runtime: Duration,
+}
+
+impl TaskQueueStats {
+    fn new(index: usize, reciprocal_shares: u64) -> Self {
+        Self {
+            index,
+            reciprocal_shares,
+            runtime: Duration::from_nanos(0),
+            queue_selected: 0,
+        }
+    }
+
+    /// Returns a numeric ID that uniquely identifies this Task queue
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns the current number of shares in this task queue.
+    ///
+    /// If the task queue is configured to use static shares this will never change.
+    /// If the task queue is configured to use dynamic shares, this returns a sample
+    /// of the shares values the last time the scheduler ran.
+    pub fn current_shares(&self) -> usize {
+        ((1u64 << 22) / self.reciprocal_shares) as usize
+    }
+
+    /// Returns the accumulated runtime this task queue had received since the beginning
+    /// of its execution
+    pub fn runtime(&self) -> Duration {
+        self.runtime
+    }
+
+    /// Returns the number of times this queue was selected to be executed. In conjunction with the
+    /// runtime, you can extract an average of the amount of time this queue tends to runs for
+    pub fn queue_selected(&self) -> u64 {
+        self.queue_selected
+    }
+}
+
 #[derive(Debug)]
 struct ExecutorQueues {
     active_executors: BinaryHeap<Rc<RefCell<TaskQueue>>>,
@@ -238,6 +324,7 @@ struct ExecutorQueues {
     last_vruntime: u64,
     preempt_timer_duration: Duration,
     spin_before_park: Option<Duration>,
+    stats: ExecutorStats,
 }
 
 impl ExecutorQueues {
@@ -251,6 +338,7 @@ impl ExecutorQueues {
             last_vruntime: 0,
             preempt_timer_duration: Duration::from_millis(100),
             spin_before_park: None,
+            stats: ExecutorStats::new(),
         }))
     }
 
@@ -592,6 +680,7 @@ impl LocalExecutor {
                 .as_ref()
                 .unwrap()
                 .borrow()
+                .stats
                 .index,
         }
     }
@@ -667,6 +756,8 @@ impl LocalExecutor {
     fn run_one_task_queue(&self) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
+        tq.stats.scheduler_runs += 1;
+
         match candidate {
             Some(queue) => {
                 tq.active_executing = Some(queue.clone());
@@ -679,6 +770,7 @@ impl LocalExecutor {
                     now
                 };
 
+                let mut tasks_executed_this_loop = 0;
                 loop {
                     let mut queue_ref = queue.borrow_mut();
                     if Reactor::need_preempt() || queue_ref.yielded() {
@@ -689,19 +781,25 @@ impl LocalExecutor {
                         Reactor::get().inform_io_requirements(queue_ref.io_requirements);
                         drop(queue_ref);
                         r.run();
+                        tasks_executed_this_loop += 1;
                     } else {
                         break;
                     }
                 }
 
+                let runtime = time.elapsed();
+
                 let (need_repush, last_vruntime) = {
                     let mut state = queue.borrow_mut();
-                    let last_vruntime = state.account_vruntime(time.elapsed());
+                    let last_vruntime = state.account_vruntime(runtime);
                     (state.is_active(), last_vruntime)
                 };
 
                 let mut tq = self.queues.borrow_mut();
                 tq.active_executing = None;
+                tq.stats.total_runtime += runtime;
+                tq.stats.tasks_executed += tasks_executed_this_loop;
+
                 tq.last_vruntime = match last_vruntime {
                     Some(x) => x,
                     None => {
@@ -1030,6 +1128,95 @@ impl<T> Task<T> {
     pub fn current_task_queue() -> TaskQueueHandle {
         if LOCAL_EX.is_set() {
             LOCAL_EX.with(|local_ex| local_ex.current_task_queue())
+        } else {
+            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
+        }
+    }
+
+    /// Returns a [`Result`] with its `Ok` value wrapping a [`TaskQueueStats`] or
+    /// [`QueueNotFoundError`] if there is no task queue with this handle
+    ///
+    /// # Examples
+    /// ```
+    /// use scipio::{Local, Latency, LocalExecutorBuilder, Shares};
+    ///
+    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
+    ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///     println!("Stats for test: {:?}", Local::task_queue_stats(new_tq).unwrap());
+    /// }).unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`ExecutorStats`]: struct.ExecutorStats.html
+    /// [`QueueNotFoundError`]: struct.QueueNotFoundError.html
+    /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
+    pub fn task_queue_stats(handle: TaskQueueHandle) -> Result<TaskQueueStats, QueueNotFoundError> {
+        if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| match local_ex.get_queue(&handle) {
+                Some(x) => Ok(x.borrow().stats),
+                None => Err(QueueNotFoundError::new(handle)),
+            })
+        } else {
+            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
+        }
+    }
+
+    /// Returns a collection of [`TaskQueueStats`] with information about all task queues
+    /// in the system
+    ///
+    /// The collection can be anything that implements [`Extend`] and it is initially passed
+    /// by the user so they can control how allocations are done.
+    ///
+    /// # Examples
+    /// ```
+    /// use scipio::{Local, Latency, LocalExecutorBuilder, Shares};
+    ///
+    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
+    ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///     let v = Vec::new();
+    ///     println!("Stats for all queues: {:?}", Local::all_task_queue_stats(v));
+    /// }).unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`ExecutorStats`]: struct.ExecutorStats.html
+    /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
+    /// [`Extend`]: https://doc.rust-lang.org/std/iter/trait.Extend.html
+    pub fn all_task_queue_stats<V>(mut output: V) -> V
+    where
+        V: Extend<TaskQueueStats>,
+    {
+        if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| {
+                let tq = local_ex.queues.borrow();
+                output.extend(tq.available_executors.values().map(|x| x.borrow().stats));
+                output
+            })
+        } else {
+            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
+        }
+    }
+
+    /// Returns a [`ExecutorStats`] struct with information about this Executor
+    ///
+    /// # Examples:
+    ///
+    /// ```
+    /// use scipio::{Local, LocalExecutorBuilder};
+    ///
+    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
+    ///     println!("Stats for executor: {:?}", Local::executor_stats());
+    /// }).unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`ExecutorStats`]: struct.ExecutorStats.html
+    pub fn executor_stats() -> ExecutorStats {
+        if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| local_ex.queues.borrow().stats)
         } else {
             panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
         }
