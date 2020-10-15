@@ -209,13 +209,18 @@ where
             return Some(());
         }
 
-        // Will be None if it was cancelled while in-flight.
-        if let Some(src) = consume_source(value.user_data()) {
+        let src = consume_source(value.user_data());
+
+        let result = value.result();
+        let was_cancelled =
+            matches!(&result, Err(err) if err.raw_os_error() == Some(libc::ECANCELED));
+
+        if !was_cancelled {
             let source = mut_source(&src);
 
             if try_process(source).is_none() {
                 let mut w = source.wakers.borrow_mut();
-                w.result = Some(value.result());
+                w.result = Some(result);
                 wakers.append(&mut w.waiters);
             }
         }
@@ -232,7 +237,7 @@ struct SourceMap {
 impl SourceMap {
     fn new() -> RefCell<Self> {
         RefCell::new(Self {
-            id: 0,
+            id: 1,
             map: HashMap::new(),
         })
     }
@@ -258,36 +263,19 @@ fn peek_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
     })
 }
 
-fn consume_source(id: u64) -> Option<Rc<UnsafeCell<InnerSource>>> {
+fn consume_source(id: u64) -> Rc<UnsafeCell<InnerSource>> {
     SOURCE_MAP.with(|x| {
         let mut map = x.borrow_mut();
-        if let Some(source) = map.map.remove(&id) {
-            let mut s = mut_source(&source);
-            s.id = None;
-            s.queue = None;
-            return Some(source);
-        }
-        None
+        let source = map.map.remove(&id).unwrap();
+        let mut s = mut_source(&source);
+        s.id = None;
+        s.queue = None;
+        source
     })
 }
 
 pub(crate) fn cancel_source(id: u64, queue: ReactorQueue) {
-    // This may happen during teardown of the system itself, in which
-    // case the thread local may be gone. That's fine because in that case
-    // the ring is gone
-    SOURCE_MAP
-        .try_with(|x| {
-            let mut map = x.borrow_mut();
-            // This is synchronous so if we were passed an id, it exists.
-            // Otherwise we panic. consume_source is different because it runs
-            // asynchronously when the ring returns. If we don't find and Id here
-            // that means that someone called drop() inside the io_uring poller which
-            // is totally illegal.
-            map.map.remove(&id).unwrap();
-            let mut q = queue.borrow_mut();
-            q.cancel_request(id);
-        })
-        .ok();
+    queue.borrow_mut().cancel_request(id);
 }
 
 #[derive(Debug)]
@@ -311,7 +299,14 @@ impl UringQueueState {
         match found {
             Some(idx) => {
                 self.submissions.remove(idx);
+                // We never submitted the request, so it's safe to consume
+                // source here -- kernel didn't see our buffers.
+                consume_source(id);
             }
+            // We are cancelling this request, but it is already submitted.
+            // This means that the kernel might be using the buffers right
+            // now, so we delay `consume_source` until we consume the
+            // corresponding event from the completion queue.
             None => self.cancellations.push_back(UringDescriptor {
                 args: UringOpDescriptor::Cancel(id),
                 fd: -1,
@@ -1015,11 +1010,14 @@ mod tests {
             (source, op)
         }
 
+        let (fast, op) = timeout_source(50);
+        queue_standard_request!(reactor, &fast, op);
+
         let (slow, op) = timeout_source(150);
         queue_standard_request!(reactor, &slow, op);
 
-        let (fast, op) = timeout_source(50);
-        queue_standard_request!(reactor, &fast, op);
+        let (lethargic, op) = timeout_source(300);
+        queue_standard_request!(reactor, &lethargic, op);
 
         let start = Instant::now();
         let mut wakers = Vec::new();
@@ -1027,9 +1025,11 @@ mod tests {
         let elapsed_ms = start.elapsed().as_millis();
         assert!(50 <= elapsed_ms && elapsed_ms < 100);
 
+        drop(slow); // Cancel this one.
+
         let mut wakers = Vec::new();
         reactor.wait(&mut wakers, None, None).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
-        assert!(150 <= elapsed_ms && elapsed_ms < 200);
+        assert!(300 <= elapsed_ms && elapsed_ms < 350);
     }
 }
