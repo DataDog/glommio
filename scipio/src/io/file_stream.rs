@@ -1121,6 +1121,7 @@ mod test {
             }
             _ => panic!("unexpected success"),
         }
+        reader.close().await.unwrap();
     });
 
     file_stream_read_test!(read_exact_zero_buffer, path, _k, file, _file_size: 131072, {
@@ -1165,6 +1166,7 @@ mod test {
         reader.skip(1000);
         reader.read_exact(&mut buf).await.unwrap();
         check_contents!(buf, 1000);
+        reader.close().await.unwrap();
     });
 
     file_stream_read_test!(read_exact_late_start, path, _k, file, file_size: 131072, {
