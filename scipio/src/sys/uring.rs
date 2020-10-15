@@ -759,13 +759,13 @@ macro_rules! flush_rings {
 }
 
 macro_rules! queue_request_into_ring {
-    ($ring:expr, $source:ident, $op:expr) => {{
+    ($ring:expr, $source:expr, $op:expr) => {{
         $ring.borrow_mut().add_to_submission_queue($source, $op)
     }};
 }
 
 macro_rules! queue_storage_io_request {
-    ($self:expr, $source:ident, $op:expr) => {{
+    ($self:expr, $source:expr, $op:expr) => {{
         let pollable = match $source.source_type() {
             SourceType::DmaRead(p, _) => p,
             SourceType::DmaWrite(p) => p,
@@ -779,7 +779,7 @@ macro_rules! queue_storage_io_request {
 }
 
 macro_rules! queue_standard_request {
-    ($self:expr, $source:ident, $op:expr) => {{
+    ($self:expr, $source:expr, $op:expr) => {{
         match $source.latency_req() {
             Latency::NotImportant => queue_request_into_ring!($self.main_ring, $source, $op),
             Latency::Matters(_) => queue_request_into_ring!($self.latency_ring, $source, $op),
