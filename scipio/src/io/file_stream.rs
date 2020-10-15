@@ -10,8 +10,8 @@ use crate::sys::DmaBuffer;
 use crate::task;
 use crate::Local;
 use core::task::Waker;
-use futures::future::join_all;
-use futures::io::{AsyncRead, AsyncWrite};
+use futures_lite::io::{AsyncRead, AsyncWrite};
+use futures_lite::stream::{self, StreamExt};
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
@@ -310,7 +310,9 @@ impl StreamReader {
         let mut state = self.state.borrow_mut();
         let handles = state.cancel_all_in_flight();
         drop(state);
-        join_all(handles).await;
+        let to_cancel = handles.len();
+        let cancelled = stream::iter(handles).then(|f| f).count().await;
+        assert_eq!(to_cancel, cancelled);
         let res = self.file.close_rc().await;
         collect_error!(self.state, res);
 
