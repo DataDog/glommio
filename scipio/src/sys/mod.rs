@@ -5,7 +5,6 @@
 //
 use std::cell::{RefCell, UnsafeCell};
 use std::ffi::CString;
-use std::io;
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::ffi::OsStrExt;
@@ -13,6 +12,8 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
 use std::task::Waker;
+use std::time::Duration;
+use std::{fmt, io};
 
 macro_rules! syscall {
     ($fn:ident $args:tt) => {{
@@ -124,8 +125,42 @@ pub(crate) enum SourceType {
     Close,
     LinkRings(LinkStatus),
     Statx(CString, Box<RefCell<libc::statx>>),
-    Timeout(Option<u64>),
+    Timeout(Option<u64>, TimeSpec64),
     Invalid,
+}
+
+pub(crate) struct TimeSpec64 {
+    raw: uring_sys::__kernel_timespec,
+}
+
+impl Default for TimeSpec64 {
+    fn default() -> TimeSpec64 {
+        TimeSpec64::from(Duration::default())
+    }
+}
+
+impl fmt::Debug for TimeSpec64 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let duration = Duration::from(self);
+        fmt::Debug::fmt(&duration, f)
+    }
+}
+
+impl From<&'_ TimeSpec64> for Duration {
+    fn from(ts: &TimeSpec64) -> Self {
+        Duration::new(ts.raw.tv_sec as u64, ts.raw.tv_nsec as u32)
+    }
+}
+
+impl From<Duration> for TimeSpec64 {
+    fn from(dur: Duration) -> Self {
+        TimeSpec64 {
+            raw: uring_sys::__kernel_timespec {
+                tv_sec: dur.as_secs() as i64,
+                tv_nsec: dur.subsec_nanos() as libc::c_longlong,
+            },
+        }
+    }
 }
 
 /// Tasks interested in events on a source.

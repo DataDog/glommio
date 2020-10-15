@@ -7,7 +7,6 @@ use nix::poll::PollFlags;
 use rlimit::Resource;
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::{HashMap, VecDeque};
-use std::convert::TryInto;
 use std::ffi::CStr;
 use std::io;
 use std::io::{Error, ErrorKind};
@@ -17,7 +16,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType, TimeSpec64};
 use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
@@ -45,7 +44,7 @@ enum UringOpDescriptor {
     FDataSync,
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
-    Timeout(u64),
+    Timeout(*const uring_sys::__kernel_timespec),
     TimeoutRemove(u64),
 }
 
@@ -160,13 +159,8 @@ where
                 let path = CStr::from_ptr(path as _);
                 sqe.prep_statx(-1, path, flags, mode, &mut *statx_buf);
             }
-            UringOpDescriptor::Timeout(micros) => {
-                let d = Duration::from_micros(micros);
-                let timeout: _ = uring_sys::__kernel_timespec {
-                    tv_sec: d.as_secs() as _,
-                    tv_nsec: d.subsec_nanos() as _,
-                };
-                sqe.prep_timeout(&timeout);
+            UringOpDescriptor::Timeout(timespec) => {
+                sqe.prep_timeout(&*timespec);
             }
             UringOpDescriptor::TimeoutRemove(timer) => {
                 sqe.prep_timeout_remove(timer as _);
@@ -590,11 +584,11 @@ impl SleepableRing {
 
     fn cancel_preempt_timer(&mut self, source: &mut Source) {
         match source.source_type() {
-            SourceType::Timeout(None) => {} // not armed, do nothing
-            SourceType::Timeout(Some(source_id)) => {
+            SourceType::Timeout(None, _) => {} // not armed, do nothing
+            SourceType::Timeout(Some(source_id), _) => {
                 // armed, need to cancel first
                 let op_remove = UringOpDescriptor::TimeoutRemove(*source_id);
-                source.update_source_type(SourceType::Timeout(None));
+                source.update_source_type(SourceType::Timeout(None, TimeSpec64::default()));
 
                 let q = self.submission_queue();
                 let mut queue = q.borrow_mut();
@@ -610,8 +604,11 @@ impl SleepableRing {
 
     fn rearm_preempt_timer(&mut self, source: &mut Source, d: Duration) {
         let new_id = add_source(source, self.submission_queue.clone());
-        let op = UringOpDescriptor::Timeout(d.as_micros().try_into().unwrap());
-        source.update_source_type(SourceType::Timeout(Some(new_id)));
+        source.update_source_type(SourceType::Timeout(Some(new_id), TimeSpec64::from(d)));
+        let op = match source.source_type() {
+            SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+            _ => unreachable!(),
+        };
 
         // This assumes SQEs will be processed in the order they are
         // seen. Because remove does not do anything asynchronously
@@ -670,22 +667,22 @@ impl UringCommon for SleepableRing {
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
         process_one_event(
             self.ring.peek_for_cqe(),
-            |source| match source.source_type {
-                SourceType::LinkRings(LinkStatus::Linked) => {
-                    source.source_type = SourceType::LinkRings(LinkStatus::Freestanding);
+            |source| match &mut source.source_type {
+                SourceType::LinkRings(status @ LinkStatus::Linked) => {
+                    *status = LinkStatus::Freestanding;
                     Some(())
                 }
                 SourceType::LinkRings(LinkStatus::Freestanding) => {
                     panic!("Impossible to have an event firing like this");
                 }
-                SourceType::Timeout(Some(_)) => {
-                    source.source_type = SourceType::Timeout(None);
+                SourceType::Timeout(id @ Some(_), _) => {
+                    *id = None;
                     Some(())
                 }
                 // This is actually possible: when the request is cancelled
                 // the original source does complete, and the cancellation
                 // would have marked us as false. Just ignore it.
-                SourceType::Timeout(None) => None,
+                SourceType::Timeout(None, _) => None,
                 _ => None,
             },
             wakers,
@@ -824,7 +821,11 @@ impl Reactor {
             SourceType::LinkRings(LinkStatus::Freestanding),
         );
 
-        let timeout_src = Source::new(IoRequirements::default(), -1, SourceType::Timeout(None));
+        let timeout_src = Source::new(
+            IoRequirements::default(),
+            -1,
+            SourceType::Timeout(None, TimeSpec64::default()),
+        );
 
         Ok(Reactor {
             main_ring: RefCell::new(main_ring),
@@ -989,4 +990,46 @@ impl Reactor {
 
 impl Drop for Reactor {
     fn drop(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+
+    #[test]
+    fn timeout_smoke_test() {
+        let reactor = Reactor::new().unwrap();
+
+        fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
+            let source = Source::new(
+                IoRequirements::default(),
+                -1,
+                SourceType::Timeout(None, TimeSpec64::from(Duration::from_millis(millis))),
+            );
+            let op = match &mut_source(&source.inner).source_type {
+                SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+                _ => unreachable!(),
+            };
+            (source, op)
+        }
+
+        let (slow, op) = timeout_source(150);
+        queue_standard_request!(reactor, &slow, op);
+
+        let (fast, op) = timeout_source(50);
+        queue_standard_request!(reactor, &fast, op);
+
+        let start = Instant::now();
+        let mut wakers = Vec::new();
+        reactor.wait(&mut wakers, None, None).unwrap();
+        let elapsed_ms = start.elapsed().as_millis();
+        assert!(50 <= elapsed_ms && elapsed_ms < 100);
+
+        let mut wakers = Vec::new();
+        reactor.wait(&mut wakers, None, None).unwrap();
+        let elapsed_ms = start.elapsed().as_millis();
+        assert!(150 <= elapsed_ms && elapsed_ms < 200);
+    }
 }
