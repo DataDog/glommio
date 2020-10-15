@@ -237,7 +237,7 @@ struct SourceMap {
 impl SourceMap {
     fn new() -> RefCell<Self> {
         RefCell::new(Self {
-            id: 0,
+            id: 1,
             map: HashMap::new(),
         })
     }
