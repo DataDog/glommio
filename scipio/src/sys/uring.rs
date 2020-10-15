@@ -1010,11 +1010,14 @@ mod tests {
             (source, op)
         }
 
+        let (fast, op) = timeout_source(50);
+        queue_standard_request!(reactor, &fast, op);
+
         let (slow, op) = timeout_source(150);
         queue_standard_request!(reactor, &slow, op);
 
-        let (fast, op) = timeout_source(50);
-        queue_standard_request!(reactor, &fast, op);
+        let (lethargic, op) = timeout_source(300);
+        queue_standard_request!(reactor, &lethargic, op);
 
         let start = Instant::now();
         let mut wakers = Vec::new();
@@ -1022,9 +1025,11 @@ mod tests {
         let elapsed_ms = start.elapsed().as_millis();
         assert!(50 <= elapsed_ms && elapsed_ms < 100);
 
+        drop(slow); // Cancel this one.
+
         let mut wakers = Vec::new();
         reactor.wait(&mut wakers, None, None).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
-        assert!(150 <= elapsed_ms && elapsed_ms < 200);
+        assert!(300 <= elapsed_ms && elapsed_ms < 350);
     }
 }
