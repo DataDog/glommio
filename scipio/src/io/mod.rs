@@ -62,20 +62,20 @@
 //! [`DmaFile`] is targeted at random Direct I/O. Reads from and writes to it
 //! expect a position.
 //!
-//! [`StreamWriter`] and [`StreamReader`] perform sequential I/O and their
+//! [`DmaStreamWriter`] and [`DmaStreamReader`] perform sequential I/O and their
 //! interface is a lot closer to other mainstream rust interfaces in std::fs.
 //!
 //! However, despite being sequential, I/O for the two Stream structs are parallel:
-//! [`StreamWriter`] exposes a setting for write-behind, meaning that it will keep
+//! [`DmaStreamWriter`] exposes a setting for write-behind, meaning that it will keep
 //! accepting writes to its internal buffers even with older writes are still in-flight.
-//! In turn, [`StreamReader`] exposes a setting for read-ahead meaning it will initiate
+//! In turn, [`DmaStreamReader`] exposes a setting for read-ahead meaning it will initiate
 //! I/O for positions you will read into the future sooner.
 //!
 //! [`BufferedFile`]: struct.BufferedFile.html
 //! [`DmaFile`]: struct.DmaFile.html
 //! [`DmaBuffer`]: type.DmaBuffer.html
-//! [`StreamWriter`]: struct.StreamWriter.html
-//! [`StreamReader`]: struct.StreamReader.html
+//! [`DmaStreamWriter`]: struct.DmaStreamWriter.html
+//! [`DmaStreamReader`]: struct.DmaStreamReader.html
 //! [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/io/trait.AsyncReadExt.html
 //! [`AsyncWriteExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/io/trait.AsyncReadExt.html
 macro_rules! enhanced_try {
@@ -107,7 +107,7 @@ macro_rules! enhanced_try {
 mod buffered_file;
 mod directory;
 mod dma_file;
-mod file_stream;
+mod dma_file_stream;
 mod read_result;
 mod scipio_file;
 
@@ -137,6 +137,8 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
 pub use self::buffered_file::BufferedFile;
 pub use self::directory::Directory;
 pub use self::dma_file::DmaFile;
-pub use self::file_stream::{StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder};
+pub use self::dma_file_stream::{
+    DmaStreamReader, DmaStreamReaderBuilder, DmaStreamWriter, DmaStreamWriterBuilder,
+};
 pub use self::read_result::ReadResult;
 pub use crate::sys::DmaBuffer;
