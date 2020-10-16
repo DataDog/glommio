@@ -23,6 +23,9 @@ pub(crate) struct ScipioFile {
     // If we do that, each path should have its own object. This is to
     // facilitate error displaying.
     pub(crate) path: Option<PathBuf>,
+    pub(crate) inode: u64,
+    pub(crate) dev_major: u32,
+    pub(crate) dev_minor: u32,
 }
 
 impl Drop for ScipioFile {
@@ -47,11 +50,44 @@ impl FromRawFd for ScipioFile {
         ScipioFile {
             file: std::fs::File::from_raw_fd(fd),
             path: None,
+            inode: 0,
+            dev_major: 0,
+            dev_minor: 0,
         }
     }
 }
 
 impl ScipioFile {
+    pub(crate) async fn open_at(
+        dir: RawFd,
+        path: &Path,
+        flags: libc::c_int,
+        mode: libc::c_int,
+    ) -> io::Result<ScipioFile> {
+        let source = Reactor::get().open_at(dir, path, flags, mode);
+        let fd = source.collect_rw().await?;
+
+        let mut file = ScipioFile {
+            file: unsafe { std::fs::File::from_raw_fd(fd as _) },
+            path: Some(path.to_owned()),
+            inode: 0,
+            dev_major: 0,
+            dev_minor: 0,
+        };
+
+        let st = file.statx().await?;
+        file.inode = st.stx_ino;
+        file.dev_major = st.stx_dev_major;
+        file.dev_minor = st.stx_dev_minor;
+        Ok(file)
+    }
+
+    pub(crate) fn is_same(&self, other: &ScipioFile) -> bool {
+        self.inode == other.inode
+            && self.dev_major == other.dev_major
+            && self.dev_minor == other.dev_minor
+    }
+
     pub(crate) async fn close(mut self) -> io::Result<()> {
         // Destruct `self` into components skipping Drop.
         let (fd, path) = {

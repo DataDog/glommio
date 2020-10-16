@@ -9,7 +9,7 @@ use crate::parking::Reactor;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use std::io;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -29,9 +29,6 @@ pub struct DmaFile {
     file: ScipioFile,
     o_direct_alignment: u64,
     pollable: PollableStatus,
-    inode: u64,
-    dev_major: u32,
-    dev_minor: u32,
 }
 
 impl DmaFile {
@@ -84,9 +81,7 @@ impl DmaFile {
     /// });
     /// ```
     pub fn is_same(&self, other: &DmaFile) -> bool {
-        self.inode == other.inode
-            && self.dev_major == other.dev_major
-            && self.dev_minor == other.dev_minor
+        self.file.is_same(&other.file)
     }
 
     async fn open_at(
@@ -96,45 +91,30 @@ impl DmaFile {
         mode: libc::c_int,
     ) -> io::Result<DmaFile> {
         let mut pollable = PollableStatus::Pollable;
-        let mut source = Reactor::get().open_at(dir, path, flags, mode);
-        let mut res = source.collect_rw().await;
+        let res = ScipioFile::open_at(dir, path, flags, mode).await;
 
-        res = match res {
+        let file = match res {
             Err(os_err) => {
                 // if we failed to open the file with a recoverable error,
                 // open again without O_DIRECT
                 if os_err.raw_os_error().unwrap() == libc::EINVAL {
                     pollable = PollableStatus::NonPollable;
-                    source = Reactor::get().open_at(dir, path, flags & !libc::O_DIRECT, mode);
-                    source.collect_rw().await
+                    ScipioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
                 } else {
                     Err(os_err)
                 }
             }
             Ok(res) => Ok(res),
-        };
+        }?;
 
-        let file =
-            unsafe { ScipioFile::from_raw_fd(res? as _) }.with_path(Some(path.to_path_buf()));
-        let mut file = DmaFile {
+        if sysfs::BlockDevice::is_md(file.dev_major as _, file.dev_minor as _) {
+            pollable = PollableStatus::NonPollable;
+        }
+        Ok(DmaFile {
             file,
             o_direct_alignment: 4096,
             pollable,
-            inode: 0,
-            dev_major: 0,
-            dev_minor: 0,
-        };
-
-        let st = file.file.statx().await?;
-        let major = st.stx_dev_major;
-        let minor = st.stx_dev_minor;
-        if sysfs::BlockDevice::is_md(major as _, minor as _) {
-            file.pollable = PollableStatus::NonPollable;
-        }
-        file.inode = st.stx_ino;
-        file.dev_major = st.stx_dev_major;
-        file.dev_minor = st.stx_dev_minor;
-        Ok(file)
+        })
     }
 
     /// Allocates a buffer that is suitable for using to write to this file.
@@ -144,29 +124,23 @@ impl DmaFile {
 
     /// Similar to create() in the standard library, but returns a DMA file
     pub async fn create<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
-        // FIXME: because we use the poll ring, we really only support xfs and ext4 for this.
-        // We should check and maybe do something different in that case.
-        let path = path.as_ref().to_owned();
-
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags =
             libc::O_DIRECT | libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
-        let res = DmaFile::open_at(-1 as _, &path, flags, 0o644).await;
+        let res = DmaFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await;
 
-        let mut f = enhanced_try!(res, "Creating", Some(&path), None)?;
+        let mut f = enhanced_try!(res, "Creating", Some(path.as_ref()), None)?;
         f.o_direct_alignment = 4096;
         Ok(f)
     }
 
     /// Similar to open() in the standard library, but returns a DMA file
     pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
-        let path = path.as_ref();
-
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags = libc::O_DIRECT | libc::O_CLOEXEC | libc::O_RDONLY;
-        let res = DmaFile::open_at(-1 as _, path, flags, 0o644).await;
+        let res = DmaFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await;
 
-        let mut f = enhanced_try!(res, "Opening", Some(path), None)?;
+        let mut f = enhanced_try!(res, "Opening", Some(path.as_ref()), None)?;
         f.o_direct_alignment = 512;
         Ok(f)
     }
