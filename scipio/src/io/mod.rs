@@ -61,6 +61,7 @@ macro_rules! bad_buffer {
     }};
 }
 
+mod directory;
 mod dma_file;
 mod file_stream;
 mod read_result;
@@ -89,7 +90,8 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
     )
 }
 
-pub use self::dma_file::{Directory, DmaFile};
+pub use self::directory::Directory;
+pub use self::dma_file::DmaFile;
 pub use self::file_stream::{StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder};
 pub use self::read_result::ReadResult;
 pub use crate::sys::DmaBuffer;
