@@ -64,6 +64,7 @@ macro_rules! bad_buffer {
 mod dma_file;
 mod file_stream;
 mod read_result;
+mod scipio_file;
 
 use crate::sys;
 use std::io;

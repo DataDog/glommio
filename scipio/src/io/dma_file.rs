@@ -3,16 +3,15 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::error::ErrorEnhancer;
 use crate::io::read_result::ReadResult;
+use crate::io::scipio_file::ScipioFile;
 use crate::parking::Reactor;
 use crate::sys;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus, SourceType};
 use std::io;
-use std::mem;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
@@ -222,7 +221,7 @@ impl DmaFile {
             dev_minor: 0,
         };
 
-        let st = file.statx().await?;
+        let st = file.file.statx().await?;
         let major = st.stx_dev_major;
         let minor = st.stx_dev_minor;
         if sysfs::BlockDevice::is_md(major as _, minor as _) {
@@ -357,17 +356,12 @@ impl DmaFile {
 
     /// Issues fdatasync into the underlying file.
     pub async fn fdatasync(&self) -> io::Result<()> {
-        let source = Reactor::get().fdatasync(self.as_raw_fd());
-        enhanced_try!(source.collect_rw().await, "Syncing", self.file)?;
-        Ok(())
+        self.file.fdatasync().await
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as the size argument
     pub async fn pre_allocate(&self, size: u64) -> io::Result<()> {
-        let flags = libc::FALLOC_FL_ZERO_RANGE;
-        let source = Reactor::get().fallocate(self.as_raw_fd(), 0, size, flags);
-        enhanced_try!(source.collect_rw().await, "Pre-allocate space", self.file)?;
-        Ok(())
+        self.file.pre_allocate(size).await
     }
 
     /// Allocating blocks at the filesystem level turns asynchronous writes into threaded
@@ -381,32 +375,21 @@ impl DmaFile {
     /// It is important not to set the extent size too big. Writes can fail otherwise if the
     /// extent can't be allocated
     pub async fn hint_extent_size(&self, size: usize) -> nix::Result<i32> {
-        sys::fs_hint_extentsize(self.as_raw_fd(), size)
+        self.file.hint_extent_size(size).await
     }
 
     /// Truncates a file to the specified size.
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn truncate(&self, size: u64) -> io::Result<()> {
-        enhanced_try!(
-            sys::truncate_file(self.as_raw_fd(), size),
-            "Truncating",
-            self.file
-        )
+        self.file.truncate(size).await
     }
 
     /// rename this file.
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
-        let old_path = self.file.path_required("rename")?;
-        enhanced_try!(
-            crate::io::rename(old_path, &new_path).await,
-            "Renaming",
-            self.file
-        )?;
-        self.file.path = Some(new_path.as_ref().to_owned());
-        Ok(())
+        self.file.rename(new_path).await
     }
 
     /// remove this file
@@ -417,32 +400,12 @@ impl DmaFile {
     ///
     /// Warning: synchronous operation, will block the reactor
     pub async fn remove(&self) -> io::Result<()> {
-        let path = self.file.path_required("remove")?;
-        enhanced_try!(sys::remove_file(path), "Removing", self.file)
-    }
-
-    // Retrieve file metadata, backed by the statx(2) syscall
-    async fn statx(&self) -> io::Result<libc::statx> {
-        let path = self.file.path_required("stat")?;
-
-        let source = Reactor::get().statx(self.as_raw_fd(), path);
-        enhanced_try!(
-            source.collect_rw().await,
-            "getting file metadata",
-            self.file
-        )?;
-        let stype = source.extract_source_type();
-        let stat_buf = match stype {
-            SourceType::Statx(_, buf) => buf,
-            _ => panic!("Source type is wrong for describe operation"),
-        };
-        Ok(stat_buf.into_inner())
+        self.file.remove().await
     }
 
     /// Returns the size of a file, in bytes
     pub async fn file_size(&self) -> io::Result<u64> {
-        let st = self.statx().await?;
-        Ok(st.stx_size)
+        self.file.file_size().await
     }
 
     /// Closes this DMA file.
@@ -461,83 +424,11 @@ impl DmaFile {
     }
 }
 
-/// A wrapper over `std::fs::File` which carries a path (for better error
-/// messages) and prints a warning if closed synchronously.
-#[derive(Debug)]
-struct ScipioFile {
-    file: std::fs::File,
-    // A file can appear in many paths, through renaming and linking.
-    // If we do that, each path should have its own object. This is to
-    // facilitate error displaying.
-    path: Option<PathBuf>,
-}
-
-impl Drop for ScipioFile {
-    fn drop(&mut self) {
-        eprintln!(
-            "File dropped while still active. Should have been async closed ({:?} / fd {})
-I will close it and turn a leak bug into a performance bug. Please investigate",
-            self.path,
-            self.as_raw_fd()
-        );
-    }
-}
-
-impl AsRawFd for ScipioFile {
-    fn as_raw_fd(&self) -> RawFd {
-        self.file.as_raw_fd()
-    }
-}
-
-impl FromRawFd for ScipioFile {
-    unsafe fn from_raw_fd(fd: RawFd) -> Self {
-        ScipioFile {
-            file: std::fs::File::from_raw_fd(fd),
-            path: None,
-        }
-    }
-}
-
-impl ScipioFile {
-    async fn close(mut self) -> io::Result<()> {
-        // Destruct `self` into components skipping Drop.
-        let (fd, path) = {
-            let fd = self.as_raw_fd();
-            let path = self.path.take();
-            mem::forget(self);
-            (fd, path)
-        };
-
-        let source = Reactor::get().close(fd);
-        enhanced_try!(source.collect_rw().await, "Closing", path, Some(fd))?;
-        Ok(())
-    }
-
-    fn with_path(mut self, path: Option<PathBuf>) -> ScipioFile {
-        self.path = path;
-        self
-    }
-
-    fn path_required(&self, op: &'static str) -> io::Result<&Path> {
-        self.path.as_deref().ok_or_else(|| {
-            ErrorEnhancer {
-                inner: std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "operation requires a valid path",
-                ),
-                op,
-                path: None,
-                fd: Some(self.as_raw_fd()),
-            }
-            .into()
-        })
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
     use crate::Local;
+    use std::path::PathBuf;
 
     #[derive(Copy, Clone)]
     pub(crate) enum TestDirectoryKind {
