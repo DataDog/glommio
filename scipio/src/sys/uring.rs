@@ -643,20 +643,29 @@ impl SleepableRing {
 }
 
 impl UringCommon for SleepableRing {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn needs_kernel_enter(&self, submitted: usize) -> bool {
-        submitted > 0
-    }
-
     fn submission_queue(&mut self) -> ReactorQueue {
         self.submission_queue.clone()
     }
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
         self.ring.submit_sqes()
+    }
+
+    fn needs_kernel_enter(&self, submitted: usize) -> bool {
+        submitted > 0
+    }
+
+    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()> {
+        if queue.is_empty() {
+            return None;
+        }
+
+        if let Some(mut sqe) = self.ring.next_sqe() {
+            let op = queue.pop_front().unwrap();
+            fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
+            return Some(());
+        }
+        None
     }
 
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
@@ -684,17 +693,8 @@ impl UringCommon for SleepableRing {
         )
     }
 
-    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()> {
-        if queue.is_empty() {
-            return None;
-        }
-
-        if let Some(mut sqe) = self.ring.next_sqe() {
-            let op = queue.pop_front().unwrap();
-            fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
-            return Some(());
-        }
-        None
+    fn name(&self) -> &'static str {
+        self.name
     }
 }
 
