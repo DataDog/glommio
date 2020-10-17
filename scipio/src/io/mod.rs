@@ -137,7 +137,7 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
 
 pub use self::buffered_file::BufferedFile;
 pub use self::buffered_file_stream::{
-    StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
+    stdin, StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
 };
 pub use self::directory::Directory;
 pub use self::dma_file::DmaFile;

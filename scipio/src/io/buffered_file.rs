@@ -7,7 +7,7 @@
 use crate::io::scipio_file::ScipioFile;
 use crate::parking::Reactor;
 use std::io;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 
 /// Constructs a file that is backed by the operating system page cache
@@ -19,6 +19,14 @@ pub struct BufferedFile {
 impl AsRawFd for BufferedFile {
     fn as_raw_fd(&self) -> RawFd {
         self.file.as_raw_fd()
+    }
+}
+
+impl FromRawFd for BufferedFile {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        BufferedFile {
+            file: ScipioFile::from_raw_fd(fd),
+        }
     }
 }
 

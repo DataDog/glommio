@@ -35,6 +35,44 @@ pin_project! {
     }
 }
 
+pin_project! {
+    #[derive(Debug)]
+    /// Standard input accessor. This implements [`AsyncRead`] and [`AsyncBufRead`]
+    ///
+    /// [`AsyncRead`]: https://docs.rs/futures/0.3.6/futures/io/trait.AsyncRead.html
+    /// [`AsyncBufRead`]: https://docs.rs/futures/0.3.6/futures/io/trait.AsyncBufRead.html
+    pub struct Stdin {
+        source: Option<Source>,
+        buffer: Buffer,
+    }
+}
+
+/// Allows asynchronous read access to the standard input
+///
+/// # Examples
+///
+/// ```no_run
+/// use scipio::io::stdin;
+/// use scipio::LocalExecutor;
+/// use futures_lite::AsyncBufReadExt;
+///
+/// let ex = LocalExecutor::make_default();
+/// ex.run(async {
+///     let mut sin = stdin();
+///     loop {
+///         let mut buf = String::new();
+///         sin.read_line(&mut buf).await.unwrap();
+///         println!("you just typed {}", buf);
+///     }
+/// });
+/// ```
+pub fn stdin() -> Stdin {
+    Stdin {
+        source: None,
+        buffer: Buffer::new(128),
+    }
+}
+
 #[derive(Debug)]
 /// Provides linear write access to a [`BufferedFile`].     
 ///
@@ -472,6 +510,62 @@ impl AsyncWrite for StreamWriter {
     #[allow(unreachable_code)]
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         panic!("Should never be called");
+    }
+}
+
+impl AsyncRead for Stdin {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let buffer = futures_lite::ready!(self.as_mut().poll_fill_buf(cx))?;
+        let bytes_read = std::cmp::min(buffer.len(), buf.len());
+        buf[0..bytes_read].copy_from_slice(&buffer[0..bytes_read]);
+        self.consume(bytes_read);
+        Poll::Ready(Ok(bytes_read))
+    }
+}
+
+impl AsyncBufRead for Stdin {
+    fn poll_fill_buf<'a>(
+        mut self: Pin<&'a mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<&'a [u8]>> {
+        match self.source.take() {
+            Some(mut source) => {
+                let res = source.take_result().unwrap();
+                match res {
+                    Err(x) => Poll::Ready(Err(x)),
+                    Ok(sz) => {
+                        let mut buf = source.extract_buffer();
+                        buf.truncate(sz);
+                        self.buffer.replace_buffer(buf);
+                        let this = self.project();
+                        Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
+                    }
+                }
+            }
+            None => {
+                if self.buffer.remaining_unconsumed_bytes() > 0 {
+                    let this = self.project();
+                    Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
+                } else {
+                    let source = Reactor::get().read_buffered(
+                        libc::STDIN_FILENO,
+                        0,
+                        self.buffer.max_buffer_size,
+                    );
+                    source.add_waiter(cx.waker().clone());
+                    self.source = Some(source);
+                    Poll::Pending
+                }
+            }
+        }
+    }
+
+    fn consume(mut self: Pin<&mut Self>, amt: usize) {
+        self.buffer.consume(amt);
     }
 }
 
