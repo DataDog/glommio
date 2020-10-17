@@ -173,6 +173,10 @@ impl BufferedFile {
     pub async fn close(self) -> io::Result<()> {
         self.file.close().await
     }
+
+    pub(crate) fn path(&self) -> &Path {
+        self.file.path.as_ref().unwrap().as_path()
+    }
 }
 
 #[cfg(test)]

@@ -105,6 +105,7 @@ macro_rules! enhanced_try {
 }
 
 mod buffered_file;
+mod buffered_file_stream;
 mod directory;
 mod dma_file;
 mod dma_file_stream;
@@ -135,6 +136,9 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
 }
 
 pub use self::buffered_file::BufferedFile;
+pub use self::buffered_file_stream::{
+    StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
+};
 pub use self::directory::Directory;
 pub use self::dma_file::DmaFile;
 pub use self::dma_file_stream::{

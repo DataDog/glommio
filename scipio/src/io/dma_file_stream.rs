@@ -1469,7 +1469,9 @@ mod test {
     });
 
     file_stream_write_test!(write_zero_buffer, path, _k, filename, file, {
-        let mut writer = DmaStreamWriterBuilder::new(file).with_buffer_size(0).build();
+        let mut writer = DmaStreamWriterBuilder::new(file)
+            .with_buffer_size(0)
+            .build();
 
         for i in 0..4096 {
             assert_eq!(writer.current_pos(), i);
