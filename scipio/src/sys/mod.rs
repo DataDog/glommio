@@ -4,6 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use std::cell::{Cell, RefCell};
+use std::convert::TryFrom;
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, TcpStream};
@@ -137,6 +138,17 @@ pub(crate) enum SourceType {
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(Option<u64>, TimeSpec64),
     Invalid,
+}
+
+impl TryFrom<SourceType> for libc::statx {
+    type Error = io::Error;
+
+    fn try_from(value: SourceType) -> Result<Self, Self::Error> {
+        match value {
+            SourceType::Statx(_, buf) => Ok(buf.into_inner()),
+            _ => Err(io::Error::new(io::ErrorKind::Other, "Wrong source Type!")),
+        }
+    }
 }
 
 pub(crate) struct TimeSpec64 {

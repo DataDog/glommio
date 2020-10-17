@@ -6,7 +6,7 @@
 use crate::error::ErrorEnhancer;
 use crate::parking::Reactor;
 use crate::sys;
-use crate::sys::SourceType;
+use std::convert::TryInto;
 use std::io;
 use std::mem;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -170,11 +170,7 @@ impl ScipioFile {
         let source = Reactor::get().statx(self.as_raw_fd(), path);
         enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
         let stype = source.extract_source_type();
-        let stat_buf = match stype {
-            SourceType::Statx(_, buf) => buf,
-            _ => panic!("Source type is wrong for describe operation"),
-        };
-        Ok(stat_buf.into_inner())
+        stype.try_into()
     }
 
     pub(crate) async fn file_size(&self) -> io::Result<u64> {
