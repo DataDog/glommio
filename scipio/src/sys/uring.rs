@@ -13,7 +13,7 @@ use std::io::{Error, ErrorKind};
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
 use std::task::Waker;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::sys::posix_buffers::PosixDmaBuffer;
 use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType, TimeSpec64};
@@ -915,6 +915,7 @@ impl Reactor {
         &self,
         wakers: &mut Vec<Waker>,
         preempt: Option<Duration>,
+        spin: Option<Duration>,
     ) -> io::Result<bool> {
         let mut poll_ring = self.poll_ring.borrow_mut();
         let mut main_ring = self.main_ring.borrow_mut();
@@ -950,9 +951,21 @@ impl Reactor {
                     flush_rings!(lat_ring)?;
                 }
             }
-            if should_sleep {
-                self.link_rings_and_sleep(&mut main_ring)?;
+        }
+
+        if should_sleep {
+            if let Some(dur) = spin {
+                let start = Instant::now();
+                while start.elapsed() < dur {
+                    consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
+
+                    if !wakers.is_empty() {
+                        return Ok(true);
+                    }
+                }
             }
+
+            self.link_rings_and_sleep(&mut main_ring)?;
         }
 
         consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
@@ -1036,14 +1049,14 @@ mod tests {
 
         let start = Instant::now();
         let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None).unwrap();
+        reactor.wait(&mut wakers, None, None).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(50 <= elapsed_ms && elapsed_ms < 100);
 
         drop(slow); // Cancel this one.
 
         let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None).unwrap();
+        reactor.wait(&mut wakers, None, None).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(300 <= elapsed_ms && elapsed_ms < 350);
     }

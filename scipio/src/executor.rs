@@ -842,10 +842,6 @@ impl LocalExecutor {
         let waker = waker_fn(|| {});
         let cx = &mut Context::from_waker(&waker);
 
-        let spin_before_park = self.spin_before_park().unwrap_or_default();
-        let spin = spin_before_park.as_nanos() > 0;
-        let mut spin_since: Option<Instant> = None;
-
         LOCAL_EX.set(self, || loop {
             if let Poll::Ready(t) = future.as_mut().poll(cx) {
                 break t;
@@ -856,24 +852,9 @@ impl LocalExecutor {
             // requests that are latency sensitive we want them out of the
             // ring ASAP (before we run the task queues). We will also use
             // the opportunity to install the timer.
-            let duration = self.preempt_timer_duration();
-            self.parker.poll_io(duration);
+            self.parker.poll_io(self.preempt_timer_duration());
             if !self.run_one_task_queue() {
-                if spin {
-                    if let Some(t) = spin_since {
-                        if t.elapsed() < spin_before_park {
-                            continue;
-                        }
-                        spin_since = None
-                    } else {
-                        spin_since = Some(Instant::now());
-                        continue;
-                    }
-                }
-
-                self.parker.park();
-            } else {
-                spin_since = None
+                self.parker.park(self.spin_before_park());
             }
         })
     }

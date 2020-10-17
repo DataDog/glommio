@@ -63,8 +63,8 @@ impl Parker {
     }
 
     /// Blocks until notified and then goes back into unnotified state.
-    pub(crate) fn park(&self) {
-        self.inner.park(None);
+    pub(crate) fn park(&self, spin: Option<Duration>) {
+        self.inner.park(spin);
     }
 
     /// Performs non-sleepable pool and install a preempt timeout into the
@@ -73,7 +73,7 @@ impl Parker {
     /// will be able to check if the timer has elapsed and yield the CPU if that
     /// is the case.
     pub(crate) fn poll_io(&self, timeout: Duration) {
-        self.inner.park(Some(timeout));
+        self.inner.poll(Some(timeout));
     }
 }
 
@@ -96,12 +96,14 @@ impl fmt::Debug for Parker {
 struct Inner {}
 
 impl Inner {
-    fn park(&self, timeout: Option<Duration>) -> bool {
-        // If the timeout is zero, then there is no need to actually block.
-        // Process available I/O events.
-        let reactor_lock = Reactor::get().lock();
-        let _ = reactor_lock.react(timeout);
-        false
+    /// If the timeout is zero, then there is no need to actually block.
+    /// Process available I/O events.
+    fn poll(&self, timeout: Option<Duration>) {
+        let _ = Reactor::get().lock().react(timeout, false);
+    }
+
+    fn park(&self, spin: Option<Duration>) {
+        let _ = Reactor::get().lock().react(spin, true);
     }
 }
 
@@ -404,7 +406,7 @@ struct ReactorLock<'a> {
 
 impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
-    fn react(self, timeout: Option<Duration>) -> io::Result<()> {
+    fn react(self, timeout: Option<Duration>, spin: bool) -> io::Result<()> {
         // FIXME: there must be a way to avoid this allocation
         // Indeed it just showed in a profiler. We can cap the number of
         // cqes produced, but this is used for timers as well. Need to
@@ -415,9 +417,13 @@ impl ReactorLock<'_> {
         let next_timer = self.reactor.process_timers(&mut wakers);
 
         // Block on I/O events.
-        let ores = match timeout {
-            Some(preempt) => self.reactor.sys.step(&mut wakers, preempt),
-            None => self.reactor.sys.wait(&mut wakers, next_timer),
+        let ores = if spin {
+            self.reactor.sys.wait(&mut wakers, next_timer, timeout)
+        } else {
+            match timeout {
+                Some(preempt) => self.reactor.sys.step(&mut wakers, preempt),
+                None => self.reactor.sys.wait(&mut wakers, next_timer, None),
+            }
         };
 
         let res = match ores {
