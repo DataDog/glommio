@@ -415,7 +415,12 @@ impl ReactorLock<'_> {
         let next_timer = self.reactor.process_timers(&mut wakers);
 
         // Block on I/O events.
-        let res = match self.reactor.sys.wait(&mut wakers, timeout, next_timer) {
+        let ores = match timeout {
+            Some(preempt) => self.reactor.sys.step(&mut wakers, preempt),
+            None => self.reactor.sys.wait(&mut wakers, next_timer),
+        };
+
+        let res = match ores {
             // We slept, so don't wait for the next loop to process timers
             Ok(true) => {
                 self.reactor.process_timers(&mut wakers);

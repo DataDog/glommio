@@ -914,23 +914,13 @@ impl Reactor {
     pub(crate) fn wait(
         &self,
         wakers: &mut Vec<Waker>,
-        timeout: Option<Duration>,
-        timer_expiration: Option<Duration>,
+        preempt: Option<Duration>,
     ) -> io::Result<bool> {
         let mut poll_ring = self.poll_ring.borrow_mut();
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        let mut should_sleep = match timeout {
-            None => true,
-            Some(dur) => {
-                let mut src = self.timeout_src.borrow_mut();
-                lat_ring.cancel_preempt_timer(&mut src);
-                flush_cancellations!(into wakers; lat_ring);
-                lat_ring.rearm_preempt_timer(&mut src, dur);
-                false
-            }
-        };
+        let mut should_sleep = true;
         flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
         flush_rings!(main_ring, lat_ring, poll_ring)?;
         should_sleep &= poll_ring.can_sleep();
@@ -944,7 +934,7 @@ impl Reactor {
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
-            if let Some(dur) = timer_expiration {
+            if let Some(dur) = preempt {
                 let mut src = self.timeout_src.borrow_mut();
                 lat_ring.cancel_preempt_timer(&mut src);
                 flush_cancellations!(into wakers; lat_ring);
@@ -974,6 +964,31 @@ impl Reactor {
         // need_preempt() should be false at this point. As soon as the next event
         // in the preempt ring completes, though, then it will be true.
         Ok(should_sleep)
+    }
+
+    pub(crate) fn step(&self, wakers: &mut Vec<Waker>, preempt: Duration) -> io::Result<bool> {
+        let mut poll_ring = self.poll_ring.borrow_mut();
+        let mut main_ring = self.main_ring.borrow_mut();
+        let mut lat_ring = self.latency_ring.borrow_mut();
+
+        let mut src = self.timeout_src.borrow_mut();
+
+        lat_ring.cancel_preempt_timer(&mut src);
+        flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
+
+        lat_ring.rearm_preempt_timer(&mut src, preempt);
+        flush_rings!(main_ring, lat_ring, poll_ring)?;
+
+        consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
+
+        // A Note about need_preempt:
+        //
+        // If in the last call to consume_rings! some events completed, the tail and
+        // head would have moved to match. So it does not matter that events were
+        // generated after we registered the timer: since we consumed them here,
+        // need_preempt() should be false at this point. As soon as the next event
+        // in the preempt ring completes, though, then it will be true.
+        Ok(false)
     }
 
     pub(crate) fn preempt_pointers(&self) -> (*const u32, *const u32) {
@@ -1021,14 +1036,14 @@ mod tests {
 
         let start = Instant::now();
         let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None, None).unwrap();
+        reactor.wait(&mut wakers, None).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(50 <= elapsed_ms && elapsed_ms < 100);
 
         drop(slow); // Cancel this one.
 
         let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None, None).unwrap();
+        reactor.wait(&mut wakers, None).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(300 <= elapsed_ms && elapsed_ms < 350);
     }
