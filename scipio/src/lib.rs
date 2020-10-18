@@ -50,6 +50,7 @@ use crate::parking::Reactor;
 use std::fmt::Debug;
 use std::time::Duration;
 
+mod free_list;
 mod parking;
 mod sys;
 pub mod task;
