@@ -319,18 +319,6 @@ trait UringCommon {
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
     fn name(&self) -> &'static str;
 
-    fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
-        let id = add_source(source, self.submission_queue());
-
-        let q = self.submission_queue();
-        let mut queue = q.borrow_mut();
-        queue.submissions.push_back(UringDescriptor {
-            args: descriptor,
-            fd: source.raw(),
-            user_data: to_user_data(id),
-        });
-    }
-
     fn consume_sqe_queue(&mut self, queue: &mut VecDeque<UringDescriptor>) -> io::Result<usize> {
         let mut sub = 0;
         loop {
@@ -748,12 +736,6 @@ macro_rules! flush_rings {
     }}
 }
 
-macro_rules! queue_request_into_ring {
-    ($ring:expr, $source:expr, $op:expr) => {{
-        $ring.borrow_mut().add_to_submission_queue($source, $op)
-    }};
-}
-
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
         // Different threads have no business passing files around. Once you have
@@ -958,10 +940,11 @@ impl Reactor {
     }
 
     fn queue_standard_request(&self, source: &Source, op: UringOpDescriptor) {
-        match source.latency_req() {
-            Latency::NotImportant => queue_request_into_ring!(self.main_ring, source, op),
-            Latency::Matters(_) => queue_request_into_ring!(self.latency_ring, source, op),
-        }
+        let ring = match source.latency_req() {
+            Latency::NotImportant => &self.main_ring,
+            Latency::Matters(_) => &self.latency_ring,
+        };
+        queue_request_into_ring(ring, source, op)
     }
 
     fn queue_storage_io_request(&self, source: &Source, op: UringOpDescriptor) {
@@ -970,10 +953,26 @@ impl Reactor {
             _ => panic!("SourceType should declare if it supports poll operations"),
         };
         match pollable {
-            PollableStatus::Pollable => queue_request_into_ring!(self.poll_ring, source, op),
-            PollableStatus::NonPollable => queue_request_into_ring!(self.main_ring, source, op),
+            PollableStatus::Pollable => queue_request_into_ring(&self.poll_ring, source, op),
+            PollableStatus::NonPollable => queue_request_into_ring(&self.main_ring, source, op),
         }
     }
+}
+
+fn queue_request_into_ring(
+    ring: &RefCell<impl UringCommon>,
+    source: &Source,
+    descriptor: UringOpDescriptor,
+) {
+    let q = ring.borrow_mut().submission_queue();
+    let id = add_source(source, Rc::clone(&q));
+
+    let mut queue = q.borrow_mut();
+    queue.submissions.push_back(UringDescriptor {
+        args: descriptor,
+        fd: source.raw(),
+        user_data: to_user_data(id),
+    });
 }
 
 impl Drop for Reactor {
