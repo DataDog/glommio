@@ -70,6 +70,10 @@ jobs:
       - run:
           name: Generate documentation
           command: cargo doc --all-features
+      - run:
+          name: Check documentation links
+          command: pip3 install --user git+https://github.com/linkchecker/linkchecker.git
+          command: linkchecker target/doc/scipio
       - save_cache:
           paths:
             - /usr/local/cargo/registry
