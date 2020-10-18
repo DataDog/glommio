@@ -534,6 +534,7 @@ impl LocalExecutor {
     fn init(&mut self) -> io::Result<()> {
         let queues = self.queues.clone();
         let index = 0;
+        let queues_weak = Rc::downgrade(&queues);
 
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
@@ -544,7 +545,8 @@ impl LocalExecutor {
                 Shares::Static(1000),
                 io_requirements,
                 move || {
-                    let mut queues = queues.borrow_mut();
+                    let q = queues_weak.upgrade().unwrap();
+                    let mut queues = q.borrow_mut();
                     queues.maybe_activate(index);
                 },
             ),
