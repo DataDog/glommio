@@ -768,15 +768,6 @@ macro_rules! queue_storage_io_request {
     }};
 }
 
-macro_rules! queue_standard_request {
-    ($self:expr, $source:expr, $op:expr) => {{
-        match $source.latency_req() {
-            Latency::NotImportant => queue_request_into_ring!($self.main_ring, $source, $op),
-            Latency::Matters(_) => queue_request_into_ring!($self.latency_ring, $source, $op),
-        }
-    }};
-}
-
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
         // Different threads have no business passing files around. Once you have
@@ -843,7 +834,7 @@ impl Reactor {
             flags |= write_flags();
         }
 
-        queue_standard_request!(self, source, UringOpDescriptor::PollAdd(flags));
+        self.queue_standard_request(source, UringOpDescriptor::PollAdd(flags));
     }
 
     pub(crate) fn write_dma(&self, source: &Source, buf: &DmaBuffer, pos: u64) {
@@ -858,17 +849,17 @@ impl Reactor {
     }
 
     pub(crate) fn fdatasync(&self, source: &Source) {
-        queue_standard_request!(self, source, UringOpDescriptor::FDataSync);
+        self.queue_standard_request(source, UringOpDescriptor::FDataSync);
     }
 
     pub(crate) fn fallocate(&self, source: &Source, offset: u64, size: u64, flags: libc::c_int) {
         let op = UringOpDescriptor::Fallocate(offset, size, flags);
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn close(&self, source: &Source) {
         let op = UringOpDescriptor::Close;
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn statx(&self, source: &Source) {
@@ -880,7 +871,7 @@ impl Reactor {
             }
             _ => panic!("Unexpected source for statx operation"),
         };
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::c_int) {
@@ -889,7 +880,7 @@ impl Reactor {
             _ => panic!("Wrong source type!"),
         };
         let op = UringOpDescriptor::Open(pathptr as _, flags, mode as _);
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn insert(&self, fd: RawFd) -> io::Result<()> {
@@ -979,6 +970,13 @@ impl Reactor {
         let cq = &lat_ring.ring.raw_mut().cq;
         (cq.khead, cq.ktail)
     }
+
+    fn queue_standard_request(&self, source: &Source, op: UringOpDescriptor) {
+        match source.latency_req() {
+            Latency::NotImportant => queue_request_into_ring!(self.main_ring, source, op),
+            Latency::Matters(_) => queue_request_into_ring!(self.latency_ring, source, op),
+        }
+    }
 }
 
 impl Drop for Reactor {
@@ -1009,13 +1007,13 @@ mod tests {
         }
 
         let (fast, op) = timeout_source(50);
-        queue_standard_request!(reactor, &fast, op);
+        reactor.queue_standard_request(&fast, op);
 
         let (slow, op) = timeout_source(150);
-        queue_standard_request!(reactor, &slow, op);
+        reactor.queue_standard_request(&slow, op);
 
         let (lethargic, op) = timeout_source(300);
-        queue_standard_request!(reactor, &lethargic, op);
+        reactor.queue_standard_request(&lethargic, op);
 
         let start = Instant::now();
         let mut wakers = Vec::new();
