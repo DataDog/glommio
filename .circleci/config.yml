@@ -59,6 +59,9 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Install linkchecker dependency
+          command: pip3 install --user git+https://github.com/linkchecker/linkchecker.git
+      - run:
           name: Version information
           command: rustc --version; cargo --version; rustup --version
       - run:
@@ -72,7 +75,6 @@ jobs:
           command: cargo doc --all-features
       - run:
           name: Check documentation links
-          command: pip3 install --user git+https://github.com/linkchecker/linkchecker.git
           command: linkchecker target/doc/scipio
       - save_cache:
           paths:
