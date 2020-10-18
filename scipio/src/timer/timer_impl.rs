@@ -67,7 +67,7 @@ impl Inner {
 ///     sleep(Duration::from_millis(100)).await;
 /// });
 /// ```
-/// [`TimerActionOnce`]: struct.TimerActionOnce
+/// [`TimerActionOnce`]: struct.TimerActionOnce.html
 #[derive(Debug)]
 pub struct Timer {
     inner: Rc<RefCell<Inner>>,
@@ -165,7 +165,7 @@ impl Future for Timer {
 /// The TimerActionOnce creates a timer in the background and executes an action
 /// when the timer expires. It also provides a convenient way to cancel a timer.
 ///
-/// [`Timer`]: struct.Timer
+/// [`Timer`]: struct.Timer.html
 #[derive(Debug)]
 pub struct TimerActionOnce<T> {
     handle: JoinHandle<T, ()>,
@@ -175,7 +175,7 @@ pub struct TimerActionOnce<T> {
 /// The TimerActionRepeat struct provides an ergonomic way to fire a repeated action at
 /// specified intervals, without having to fire new [`TimerActionOnce`] events
 ///
-/// [`TimerActionOnce`]: struct.TimerActionOnce
+/// [`TimerActionOnce`]: struct.TimerActionOnce.html
 #[derive(Debug)]
 pub struct TimerActionRepeat {
     handle: JoinHandle<(), ()>,
@@ -207,7 +207,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     pub fn do_in(when: Duration, action: impl Future<Output = T> + 'static) -> TimerActionOnce<T> {
         Self::do_in_into(when, action, Local::current_task_queue()).unwrap()
     }
@@ -238,8 +238,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
-    /// [`TaskQueueHandle`]: struct.TaskQueueHandle
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
+    /// [`TaskQueueHandle`]: ../struct.TaskQueueHandle.html
     pub fn do_in_into(
         when: Duration,
         action: impl Future<Output = T> + 'static,
@@ -287,7 +287,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// handle.join().unwrap();
     /// ```
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     pub fn do_at(when: Instant, action: impl Future<Output = T> + 'static) -> TimerActionOnce<T> {
         Self::do_at_into(when, action, Local::current_task_queue()).unwrap()
     }
@@ -319,8 +319,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// handle.join().unwrap();
     /// ```
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
-    /// [`TaskQueueHandle`]: struct.TaskQueueHandle
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
+    /// [`TaskQueueHandle`]: ../struct.TaskQueueHandle.html
     pub fn do_at_into(
         when: Instant,
         action: impl Future<Output = T> + 'static,
@@ -357,7 +357,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     /// [`destroy`]: struct.TimerActionOnce.html#method.destroy
     pub async fn cancel(self) {
         self.destroy();
@@ -387,7 +387,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     /// [`cancel`]: struct.TimerActionOnce.html#method.cancel
     /// [`join`]: struct.TimerActionOnce.html#method.join
     pub fn destroy(&self) {
@@ -415,7 +415,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     /// [`Option`]: https://doc.rust-lang.org/std/option/enum.Option.html
     pub async fn join(self) -> Option<T> {
         self.handle.await
@@ -438,7 +438,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     pub fn rearm_in(&self, dur: Duration) {
         let mut inner = self.inner.borrow_mut();
@@ -462,7 +462,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionOnce`]: struct.TimerActionOnce
+    /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
     pub fn rearm_at(&self, when: Instant) {
         let now = Instant::now();
@@ -506,8 +506,8 @@ impl TimerActionRepeat {
     /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
-    /// [`TimerActionRepeat`]: struct.TimerActionRepeat
-    /// [`TaskQueueHandle`]: struct.TaskQueueHandle
+    /// [`TimerActionRepeat`]: struct.TimerActionRepeat.html
+    /// [`TaskQueueHandle`]: ../struct.TaskQueueHandle.html
     pub fn repeat_into<G, F>(
         action_gen: G,
         tq: TaskQueueHandle,
@@ -559,7 +559,7 @@ impl TimerActionRepeat {
     /// handle.join().unwrap();
     /// ```
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
-    /// [`TimerActionRepeat`]: struct.TimerActionRepeat
+    /// [`TimerActionRepeat`]: struct.TimerActionRepeat.html
     pub fn repeat<G, F>(action_gen: G) -> TimerActionRepeat
     where
         G: Fn() -> F + 'static,
@@ -588,7 +588,7 @@ impl TimerActionRepeat {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionRepeat`]: struct.TimerActionRepeat
+    /// [`TimerActionRepeat`]: struct.TimerActionRepeat.html
     /// [`destroy`]: struct.TimerActionRepeat.html#method.destroy
     pub async fn cancel(self) {
         self.destroy();
@@ -619,7 +619,7 @@ impl TimerActionRepeat {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionRepeat`]: struct.TimerActionRepeat
+    /// [`TimerActionRepeat`]: struct.TimerActionRepeat.html
     /// [`cancel`]: struct.TimerActionRepeat.html#method.cancel
     /// [`join`]: struct.TimerActionRepeat.html#method.join
     pub fn destroy(&self) {
@@ -648,7 +648,7 @@ impl TimerActionRepeat {
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
-    /// [`TimerActionRepeat`]: struct.TimerActionRepeat
+    /// [`TimerActionRepeat`]: struct.TimerActionRepeat.html
     /// [`Option`]: https://doc.rust-lang.org/std/option/enum.Option.html
     pub async fn join(self) -> Option<()> {
         self.handle.await.map(|_| ())
