@@ -319,18 +319,6 @@ trait UringCommon {
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
     fn name(&self) -> &'static str;
 
-    fn add_to_submission_queue(&mut self, source: &Source, descriptor: UringOpDescriptor) {
-        let id = add_source(source, self.submission_queue());
-
-        let q = self.submission_queue();
-        let mut queue = q.borrow_mut();
-        queue.submissions.push_back(UringDescriptor {
-            args: descriptor,
-            fd: source.raw(),
-            user_data: to_user_data(id),
-        });
-    }
-
     fn consume_sqe_queue(&mut self, queue: &mut VecDeque<UringDescriptor>) -> io::Result<usize> {
         let mut sub = 0;
         loop {
@@ -748,35 +736,6 @@ macro_rules! flush_rings {
     }}
 }
 
-macro_rules! queue_request_into_ring {
-    ($ring:expr, $source:expr, $op:expr) => {{
-        $ring.borrow_mut().add_to_submission_queue($source, $op)
-    }};
-}
-
-macro_rules! queue_storage_io_request {
-    ($self:expr, $source:expr, $op:expr) => {{
-        let pollable = match $source.source_type() {
-            SourceType::DmaRead(p, _) => p,
-            SourceType::DmaWrite(p) => p,
-            _ => panic!("SourceType should declare if it supports poll operations"),
-        };
-        match pollable {
-            PollableStatus::Pollable => queue_request_into_ring!($self.poll_ring, $source, $op),
-            PollableStatus::NonPollable => queue_request_into_ring!($self.main_ring, $source, $op),
-        }
-    }};
-}
-
-macro_rules! queue_standard_request {
-    ($self:expr, $source:expr, $op:expr) => {{
-        match $source.latency_req() {
-            Latency::NotImportant => queue_request_into_ring!($self.main_ring, $source, $op),
-            Latency::Matters(_) => queue_request_into_ring!($self.latency_ring, $source, $op),
-        }
-    }};
-}
-
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
         // Different threads have no business passing files around. Once you have
@@ -843,32 +802,32 @@ impl Reactor {
             flags |= write_flags();
         }
 
-        queue_standard_request!(self, source, UringOpDescriptor::PollAdd(flags));
+        self.queue_standard_request(source, UringOpDescriptor::PollAdd(flags));
     }
 
     pub(crate) fn write_dma(&self, source: &Source, buf: &DmaBuffer, pos: u64) {
         //        let op = UringOpDescriptor::WriteFixed(buf.as_ptr() as *const u8, buf.len(), pos, buf.slabidx);
         let op = UringOpDescriptor::WriteFixed(buf.as_ptr() as *const u8, buf.len(), pos, 0);
-        queue_storage_io_request!(self, source, op);
+        self.queue_storage_io_request(source, op);
     }
 
     pub(crate) fn read_dma(&self, source: &Source, pos: u64, size: usize) {
         let op = UringOpDescriptor::ReadFixed(pos, size);
-        queue_storage_io_request!(self, source, op);
+        self.queue_storage_io_request(source, op);
     }
 
     pub(crate) fn fdatasync(&self, source: &Source) {
-        queue_standard_request!(self, source, UringOpDescriptor::FDataSync);
+        self.queue_standard_request(source, UringOpDescriptor::FDataSync);
     }
 
     pub(crate) fn fallocate(&self, source: &Source, offset: u64, size: u64, flags: libc::c_int) {
         let op = UringOpDescriptor::Fallocate(offset, size, flags);
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn close(&self, source: &Source) {
         let op = UringOpDescriptor::Close;
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn statx(&self, source: &Source) {
@@ -880,7 +839,7 @@ impl Reactor {
             }
             _ => panic!("Unexpected source for statx operation"),
         };
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::c_int) {
@@ -889,7 +848,7 @@ impl Reactor {
             _ => panic!("Wrong source type!"),
         };
         let op = UringOpDescriptor::Open(pathptr as _, flags, mode as _);
-        queue_standard_request!(self, source, op);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn insert(&self, fd: RawFd) -> io::Result<()> {
@@ -979,6 +938,41 @@ impl Reactor {
         let cq = &lat_ring.ring.raw_mut().cq;
         (cq.khead, cq.ktail)
     }
+
+    fn queue_standard_request(&self, source: &Source, op: UringOpDescriptor) {
+        let ring = match source.latency_req() {
+            Latency::NotImportant => &self.main_ring,
+            Latency::Matters(_) => &self.latency_ring,
+        };
+        queue_request_into_ring(ring, source, op)
+    }
+
+    fn queue_storage_io_request(&self, source: &Source, op: UringOpDescriptor) {
+        let pollable = match source.source_type() {
+            SourceType::DmaRead(p, _) | SourceType::DmaWrite(p) => p,
+            _ => panic!("SourceType should declare if it supports poll operations"),
+        };
+        match pollable {
+            PollableStatus::Pollable => queue_request_into_ring(&self.poll_ring, source, op),
+            PollableStatus::NonPollable => queue_request_into_ring(&self.main_ring, source, op),
+        }
+    }
+}
+
+fn queue_request_into_ring(
+    ring: &RefCell<impl UringCommon>,
+    source: &Source,
+    descriptor: UringOpDescriptor,
+) {
+    let q = ring.borrow_mut().submission_queue();
+    let id = add_source(source, Rc::clone(&q));
+
+    let mut queue = q.borrow_mut();
+    queue.submissions.push_back(UringDescriptor {
+        args: descriptor,
+        fd: source.raw(),
+        user_data: to_user_data(id),
+    });
 }
 
 impl Drop for Reactor {
@@ -1009,13 +1003,13 @@ mod tests {
         }
 
         let (fast, op) = timeout_source(50);
-        queue_standard_request!(reactor, &fast, op);
+        reactor.queue_standard_request(&fast, op);
 
         let (slow, op) = timeout_source(150);
-        queue_standard_request!(reactor, &slow, op);
+        reactor.queue_standard_request(&slow, op);
 
         let (lethargic, op) = timeout_source(300);
-        queue_standard_request!(reactor, &lethargic, op);
+        reactor.queue_standard_request(&lethargic, op);
 
         let start = Instant::now();
         let mut wakers = Vec::new();
