@@ -754,20 +754,6 @@ macro_rules! queue_request_into_ring {
     }};
 }
 
-macro_rules! queue_storage_io_request {
-    ($self:expr, $source:expr, $op:expr) => {{
-        let pollable = match $source.source_type() {
-            SourceType::DmaRead(p, _) => p,
-            SourceType::DmaWrite(p) => p,
-            _ => panic!("SourceType should declare if it supports poll operations"),
-        };
-        match pollable {
-            PollableStatus::Pollable => queue_request_into_ring!($self.poll_ring, $source, $op),
-            PollableStatus::NonPollable => queue_request_into_ring!($self.main_ring, $source, $op),
-        }
-    }};
-}
-
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
         // Different threads have no business passing files around. Once you have
@@ -840,12 +826,12 @@ impl Reactor {
     pub(crate) fn write_dma(&self, source: &Source, buf: &DmaBuffer, pos: u64) {
         //        let op = UringOpDescriptor::WriteFixed(buf.as_ptr() as *const u8, buf.len(), pos, buf.slabidx);
         let op = UringOpDescriptor::WriteFixed(buf.as_ptr() as *const u8, buf.len(), pos, 0);
-        queue_storage_io_request!(self, source, op);
+        self.queue_storage_io_request(source, op);
     }
 
     pub(crate) fn read_dma(&self, source: &Source, pos: u64, size: usize) {
         let op = UringOpDescriptor::ReadFixed(pos, size);
-        queue_storage_io_request!(self, source, op);
+        self.queue_storage_io_request(source, op);
     }
 
     pub(crate) fn fdatasync(&self, source: &Source) {
@@ -975,6 +961,17 @@ impl Reactor {
         match source.latency_req() {
             Latency::NotImportant => queue_request_into_ring!(self.main_ring, source, op),
             Latency::Matters(_) => queue_request_into_ring!(self.latency_ring, source, op),
+        }
+    }
+
+    fn queue_storage_io_request(&self, source: &Source, op: UringOpDescriptor) {
+        let pollable = match source.source_type() {
+            SourceType::DmaRead(p, _) | SourceType::DmaWrite(p) => p,
+            _ => panic!("SourceType should declare if it supports poll operations"),
+        };
+        match pollable {
+            PollableStatus::Pollable => queue_request_into_ring!(self.poll_ring, source, op),
+            PollableStatus::NonPollable => queue_request_into_ring!(self.main_ring, source, op),
         }
     }
 }
