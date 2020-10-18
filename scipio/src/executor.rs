@@ -1469,11 +1469,12 @@ mod test {
                             let start = Instant::now();
                             // Now busy loop and make sure that we yield when we have too.
                             loop {
-                                if *(second_status.borrow()) {
-                                    panic!("I was preempted but should not have been");
-                                }
                                 if start.elapsed().as_millis() >= 99 {
                                     break;
+                                }
+
+                                if *(second_status.borrow()) {
+                                    panic!("I was preempted but should not have been");
                                 }
                                 Local::yield_if_needed().await;
                             }
@@ -1592,11 +1593,11 @@ mod test {
         );
     }
 
-    // Spin for 200us and then yield. How many shares we have should control how many quantas
+    // Spin for 2ms and then yield. How many shares we have should control how many quantas
     // we manage to execute.
     async fn work_quanta() {
         let now = Instant::now();
-        while now.elapsed().as_micros() < 200 {}
+        while now.elapsed().as_millis() < 2 {}
         Local::later().await;
     }
 
@@ -1733,18 +1734,8 @@ mod test {
     }
 
     #[test]
-    fn test_shares_high_disparity_thin_task() {
-        test_static_shares!(1000, 10, { Local::later().await });
-    }
-
-    #[test]
     fn test_shares_low_disparity_fat_task() {
         test_static_shares!(1000, 1000, { work_quanta().await });
-    }
-
-    #[test]
-    fn test_shares_low_disparity_thin_task() {
-        test_static_shares!(1000, 1000, { Local::later().await });
     }
 
     struct DynamicSharesTest {
@@ -1758,7 +1749,11 @@ mod test {
             })
         }
         fn tick(&self, millis: u64) {
-            self.shares.replace((millis / 2) as usize);
+            if millis < 1000 {
+                self.shares.replace(1);
+            } else {
+                self.shares.replace(1000);
+            }
         }
     }
 
