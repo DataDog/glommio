@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 use futures_lite::*;
 
 use crate::sys;
-use crate::sys::{DmaBuffer, PollableStatus, Source, SourceType};
+use crate::sys::{DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
 use crate::IoRequirements;
 
 thread_local!(static LOCAL_REACTOR: Reactor = Reactor::new());
@@ -276,8 +276,17 @@ impl Reactor {
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
-        let source = self.new_source(raw, SourceType::Write(pollable, buf));
+        let source = self.new_source(raw, SourceType::Write(pollable, IOBuffer::Dma(buf)));
         self.sys.write_dma(&source, pos);
+        source
+    }
+
+    pub(crate) fn write_buffered(&self, raw: RawFd, buf: Vec<u8>, pos: u64) -> Source {
+        let source = self.new_source(
+            raw,
+            SourceType::Write(PollableStatus::NonPollable, IOBuffer::Buffered(buf)),
+        );
+        self.sys.write_buffered(&source, pos);
         source
     }
 
@@ -290,6 +299,12 @@ impl Reactor {
     ) -> Source {
         let source = self.new_source(raw, SourceType::Read(pollable, None));
         self.sys.read_dma(&source, pos, size);
+        source
+    }
+
+    pub(crate) fn read_buffered(&self, raw: RawFd, pos: u64, size: usize) -> Source {
+        let source = self.new_source(raw, SourceType::Read(PollableStatus::NonPollable, None));
+        self.sys.read_buffered(&source, pos, size);
         source
     }
 

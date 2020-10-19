@@ -4,9 +4,62 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //! scipio::io provides data structures targeted towards File I/O.
 //!
-//! There are two main structs that deal with File I/O:
+//! File I/O in Scipio comes in two kinds: Buffered and Direct I/O.
 //!
-//! [`DmaFile`] is targeted at random I/O, and reads and writes to it
+//! Ideally an application would pick one of them according to its needs and not mix both.
+//! However if you do want to mix both, it is recommended that you do not do so in the same
+//! device: Kernel settings like I/O schedulers and merge settings that are beneficial to one
+//! of them can be detrimental to the others.
+//!
+//! If you absolutely must use both in the same device, avoid issuing both Direct and Buffered
+//! I/O in the same file: at this point you are just trying to drive Linux crazy.
+//!
+//! Buffered I/O
+//! ============
+//!
+//! Buffered I/O will use the operating system page cache. It is ideal for simpler applications
+//! that don't want to deal with caching policies and have I/O performance as a maybe important,
+//! but definitely not crucial part of their performance story.
+//!
+//! Disadvantages of Buffered I/O:
+//!  * Hard to know when resources are really use, which make controlled processes almost
+//!    impossible (the time of write to device is detached from the file write time)
+//!  * More copies than necessary, as the data has to be copied from the device to the page
+//!    cache, from the page cache to the internal file buffers, and in abstract linear
+//!    implementations like [`AsyncWriteExt`] and [`AsyncReadExt`] from user-provided buffers
+//!    to the file internal buffers.
+//!  * Advanced features for io_uring like Non-interrupt mode, registered files, registered
+//!    buffers, will not work with Buffered I/O
+//!  * Read amplification for small random reads, as the OS is bounded by the page size
+//!    (usually 4kB), even though modern NVMe devices are perfectly capable of issuing 512-byte
+//!    I/O.
+//!
+//! The main structure to deal with Buffered I/O is
+//!
+//! [`BufferedFile`] is targeted at random Direct I/O. Reads from and writes to it
+//! expect a position.
+//!
+//! Direct I/O
+//! ==========
+//!
+//! Direct I/O will not use the Operating System page cache and will always touch the device
+//! directly. That will always work very well for stream-based workloads (scanning a file much
+//! larger than memory, writing a buffer that will not be read from in the near future, etc)
+//! but will require a user-provided cache for good random performance.
+//!
+//! There are advantages to using a user-provided cache: Files usually contain serialized objects
+//! and every read have to deserialize them. A user-provided cache can cache the parsed objects,
+//! among others. Still, not all applications can or want to deal with that complexity.
+//!
+//! Disadvantages of Direct I/O:
+//! * I/O needs to be aligned. Both the buffers and the file positions need specific alignments.
+//!   The [`DmaBuffer`] should hide most of that complexity, but you may still end up with heavy
+//!   read amplification if you are not careful.
+//! * Without a user-provided cache, random performance can be bad.
+//!
+//! There are two main structs that deal with File Direct I/O:
+//!
+//! [`DmaFile`] is targeted at random Direct I/O. Reads from and writes to it
 //! expect a position.
 //!
 //! [`StreamWriter`] and [`StreamReader`] perform sequential I/O and their
@@ -18,10 +71,13 @@
 //! In turn, [`StreamReader`] exposes a setting for read-ahead meaning it will initiate
 //! I/O for positions you will read into the future sooner.
 //!
-//! Both random and sequential file classes are implemented on top of Direct I/O meaning
-//! every call is expected to reach the media. Especially for random I/O, this can be very
-//! detrimental without a user-provided cache. This means that those entities are better
-//! used in conjunction with your own cache.
+//! [`BufferedFile`]: struct.BufferedFile.html
+//! [`DmaFile`]: struct.DmaFile.html
+//! [`DmaBuffer`]: type.DmaBuffer.html
+//! [`StreamWriter`]: struct.StreamWriter.html
+//! [`StreamReader`]: struct.StreamReader.html
+//! [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/io/trait.AsyncReadExt.html
+//! [`AsyncWriteExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/io/trait.AsyncReadExt.html
 macro_rules! enhanced_try {
     ($expr:expr, $op:expr, $path:expr, $fd:expr) => {{
         match $expr {
@@ -48,19 +104,7 @@ macro_rules! enhanced_try {
     }};
 }
 
-macro_rules! bad_buffer {
-    ($obj:expr) => {{
-        let enhanced: std::io::Error = crate::error::ErrorEnhancer {
-            inner: std::io::Error::from_raw_os_error(5),
-            op: "processing read buffer",
-            path: $obj.path.clone(),
-            fd: Some($obj.as_raw_fd()),
-        }
-        .into();
-        enhanced
-    }};
-}
-
+mod buffered_file;
 mod directory;
 mod dma_file;
 mod file_stream;
@@ -90,6 +134,7 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
     )
 }
 
+pub use self::buffered_file::BufferedFile;
 pub use self::directory::Directory;
 pub use self::dma_file::DmaFile;
 pub use self::file_stream::{StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder};

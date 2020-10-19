@@ -102,6 +102,16 @@ use crate::IoRequirements;
 /// A buffer that can be used with DmaFile.
 pub type DmaBuffer = PosixDmaBuffer;
 
+#[derive(Debug)]
+pub(crate) enum IOBuffer {
+    Dma(PosixDmaBuffer),
+    Buffered(Vec<u8>),
+}
+
+// You can be NonPollable and Buffered: that is the case for a Direct I/O file
+// dispatched, say, on a RAID array (RAID do not currently support Poll, but it
+// happily supports Direct I/O). So this is a 2 x 2 = 4 Matrix of possibilibies
+// meaning we can't conflate Pollable and the buffer type.
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PollableStatus {
     Pollable,
@@ -116,8 +126,8 @@ pub(crate) enum LinkStatus {
 
 #[derive(Debug)]
 pub(crate) enum SourceType {
-    Write(PollableStatus, DmaBuffer),
-    Read(PollableStatus, Option<DmaBuffer>),
+    Write(PollableStatus, IOBuffer),
+    Read(PollableStatus, Option<IOBuffer>),
     PollableFd,
     Open(CString),
     FdataSync,

@@ -7,7 +7,7 @@ use crate::io::read_result::ReadResult;
 use crate::io::scipio_file::ScipioFile;
 use crate::parking::Reactor;
 use crate::sys::sysfs;
-use crate::sys::{DmaBuffer, PollableStatus, SourceType};
+use crate::sys::{DmaBuffer, PollableStatus};
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
@@ -189,18 +189,10 @@ impl DmaFile {
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
     pub async fn read_at_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
-        let source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
+        let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        let stype = source.extract_source_type();
-        let buffer = match stype {
-            SourceType::Read(_, buffer) => buffer
-                .map(|mut buffer| {
-                    buffer.trim_to_size(read_size);
-                    buffer
-                })
-                .ok_or(bad_buffer!(self.file)),
-            _ => Err(bad_buffer!(self.file)),
-        }?;
+        let mut buffer = source.extract_dma_buffer();
+        buffer.trim_to_size(read_size);
         Ok(ReadResult::from_whole_buffer(buffer))
     }
 
@@ -215,20 +207,13 @@ impl DmaFile {
         let b = (pos - eff_pos) as usize;
 
         let eff_size = self.align_up((size + b) as u64) as usize;
-        let source = Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
+        let mut source =
+            Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        let stype = source.extract_source_type();
-        let buffer = match stype {
-            SourceType::Read(_, buffer) => buffer
-                .map(|mut buffer| {
-                    buffer.trim_front(b);
-                    buffer.trim_to_size(std::cmp::min(read_size, size));
-                    buffer
-                })
-                .ok_or(bad_buffer!(self.file)),
-            _ => Err(bad_buffer!(self.file)),
-        }?;
+        let mut buffer = source.extract_dma_buffer();
+        buffer.trim_front(b);
+        buffer.trim_to_size(std::cmp::min(read_size, size));
         Ok(ReadResult::from_whole_buffer(buffer))
     }
 
@@ -369,7 +354,7 @@ pub(crate) mod test {
         ( $name:ident, $dir:ident, $kind:ident, $code:block) => {
             #[test]
             fn $name() {
-                for dir in make_test_directories(stringify!($name)) {
+                for dir in make_test_directories(&format!("dma-{}", stringify!($name))) {
                     let $dir = dir.path.clone();
                     let $kind = dir.kind;
                     test_executor!(async move { $code });
