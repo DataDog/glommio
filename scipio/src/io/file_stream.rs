@@ -166,7 +166,7 @@ impl StreamReaderState {
             if read_state.borrow().error.is_some() {
                 return;
             }
-            let buffer = file.read_dma_aligned(pos, len as _).await;
+            let buffer = file.read_at_aligned(pos, len as _).await;
 
             let mut state = read_state.borrow_mut();
             match buffer {
@@ -777,7 +777,7 @@ impl StreamWriterState {
         self.buffer_pos = 0;
         self.pending.push(
             Local::local(async move {
-                let res = file.write_dma(buffer, file_pos).await;
+                let res = file.write_at(buffer, file_pos).await;
                 collect_error!(state, res);
 
                 let mut state = state.borrow_mut();
@@ -1067,7 +1067,7 @@ mod test {
                             for (v, x) in buf.as_bytes_mut().iter_mut().enumerate() {
                                 *x = v as u8;
                             }
-                            new_file.write_dma(buf, 0).await.unwrap();
+                            new_file.write_at(buf, 0).await.unwrap();
                             if bufsz != $size {
                                 new_file.truncate($size).await.unwrap();
                             }

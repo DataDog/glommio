@@ -272,7 +272,7 @@ impl DmaFile {
     ///
     /// It is expected that the buffer and the position be properly aligned
     /// for Direct I/O. In most platforms that means 4096 bytes. There is no
-    /// write_dma_aligned, since a non aligned write would require a
+    /// write_at_aligned, since a non aligned write would require a
     /// read-modify-write.
     ///
     /// Buffers should be allocated through [`alloc_dma_buffer`], which guarantees
@@ -295,14 +295,14 @@ impl DmaFile {
     ///     let file = DmaFile::create("test.txt").await.unwrap();
     ///
     ///     let mut buf = DmaFile::alloc_dma_buffer(4096);
-    ///     let res = file.write_dma(buf, 0).await.unwrap();
+    ///     let res = file.write_at(buf, 0).await.unwrap();
     ///     assert!(res <= 4096);
     ///     file.close().await.unwrap();
     /// });
     /// ```
     ///
     /// [`alloc_dma_buffer`]: struct.DmaFile.html#method.alloc_dma_buffer
-    pub async fn write_dma(&self, buf: DmaBuffer, pos: u64) -> io::Result<usize> {
+    pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> io::Result<usize> {
         let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
@@ -311,7 +311,7 @@ impl DmaFile {
     ///
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
-    pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
+    pub async fn read_at_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
         let source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let stype = source.extract_source_type();
@@ -332,8 +332,8 @@ impl DmaFile {
     /// It is not necessary to respect the O_DIRECT alignment of the file, and this
     /// API will internally convert the positions and sizes to match, at a cost.
     ///
-    /// If you can guarantee proper alignment, prefer read_dma_aligned instead
-    pub async fn read_dma(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
+    /// If you can guarantee proper alignment, prefer read_at_aligned instead
+    pub async fn read_at(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
         let eff_pos = self.align_down(pos);
         let b = (pos - eff_pos) as usize;
 
@@ -737,7 +737,7 @@ pub(crate) mod test {
 
         let mut buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
         buf.memset(42);
-        let res = new_file.write_dma(buf, 0).await.expect("failed to write");
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 4096);
 
         new_file.close().await.expect("failed to close file");
@@ -745,14 +745,14 @@ pub(crate) mod test {
         let new_file = DmaFile::open(path.join("testfile"))
             .await
             .expect("failed to create file");
-        let read_buf = new_file.read_dma(0, 500).await.expect("failed to read");
+        let read_buf = new_file.read_at(0, 500).await.expect("failed to read");
         std::assert_eq!(read_buf.len(), 500);
         for i in 0..read_buf.len() {
             std::assert_eq!(read_buf.as_bytes()[i], 42);
         }
 
         let read_buf = new_file
-            .read_dma_aligned(0, 4096)
+            .read_at_aligned(0, 4096)
             .await
             .expect("failed to read");
         std::assert_eq!(read_buf.len(), 4096);
@@ -779,7 +779,7 @@ pub(crate) mod test {
         let buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
 
         new_file
-            .write_dma(buf, 0)
+            .write_at(buf, 0)
             .await
             .expect_err("writes to read-only files should fail");
         new_file
@@ -795,7 +795,7 @@ pub(crate) mod test {
         let new_file = DmaFile::open(path.join("testfile"))
             .await
             .expect("failed to open file");
-        let buf = new_file.read_dma(0, 512).await.expect("failed to read");
+        let buf = new_file.read_at(0, 512).await.expect("failed to read");
         std::assert_eq!(buf.len(), 0);
         new_file.close().await.expect("failed to close file");
     });
@@ -814,7 +814,7 @@ pub(crate) mod test {
             let bytes = buf.as_bytes_mut();
             bytes[0] = 'x' as u8;
 
-            let f = file.write_dma(buf, 0);
+            let f = file.write_at(buf, 0);
             futs.push(f);
         }
         let mut all = join_all(futs);
@@ -840,7 +840,7 @@ pub(crate) mod test {
                     let mut buf = DmaFile::alloc_dma_buffer(size);
                     let bytes = buf.as_bytes_mut();
                     bytes[0] = 'x' as u8;
-                    file.write_dma(buf, 0).await.unwrap();
+                    file.write_at(buf, 0).await.unwrap();
                     file.close().await.unwrap();
                 })
                 .detach(),
