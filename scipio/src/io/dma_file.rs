@@ -274,7 +274,35 @@ impl DmaFile {
     /// for Direct I/O. In most platforms that means 4096 bytes. There is no
     /// write_dma_aligned, since a non aligned write would require a
     /// read-modify-write.
-    pub async fn write_dma(&self, buf: &DmaBuffer, pos: u64) -> io::Result<usize> {
+    ///
+    /// Buffers should be allocated through [`alloc_dma_buffer`], which guarantees
+    /// proper alignment, but alignment on position is still up to the user.
+    ///
+    /// This method acquires ownership of the buffer so the buffer can be kept alive
+    /// while the kernel has it.
+    ///
+    /// Note that it is legal to return fewer bytes than the buffer size. That is the
+    /// situation, for example, when the device runs out of space (See the man page for
+    /// write(2) for details)
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use scipio::LocalExecutor;
+    /// use scipio::io::DmaFile;
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("test.txt").await.unwrap();
+    ///
+    ///     let mut buf = DmaFile::alloc_dma_buffer(4096);
+    ///     let res = file.write_dma(buf, 0).await.unwrap();
+    ///     assert!(res <= 4096);
+    ///     file.close().await.unwrap();
+    /// });
+    /// ```
+    ///
+    /// [`alloc_dma_buffer`]: struct.DmaFile.html#method.alloc_dma_buffer
+    pub async fn write_dma(&self, buf: DmaBuffer, pos: u64) -> io::Result<usize> {
         let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
@@ -288,7 +316,7 @@ impl DmaFile {
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let stype = source.extract_source_type();
         let buffer = match stype {
-            SourceType::DmaRead(_, buffer) => buffer
+            SourceType::Read(_, buffer) => buffer
                 .map(|mut buffer| {
                     buffer.trim_to_size(read_size);
                     buffer
@@ -315,7 +343,7 @@ impl DmaFile {
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let stype = source.extract_source_type();
         let buffer = match stype {
-            SourceType::DmaRead(_, buffer) => buffer
+            SourceType::Read(_, buffer) => buffer
                 .map(|mut buffer| {
                     buffer.trim_front(b);
                     buffer.trim_to_size(std::cmp::min(read_size, size));
@@ -709,7 +737,9 @@ pub(crate) mod test {
 
         let mut buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
         buf.memset(42);
-        new_file.write_dma(&buf, 0).await.expect("failed to write");
+        let res = new_file.write_dma(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 4096);
+
         new_file.close().await.expect("failed to close file");
 
         let new_file = DmaFile::open(path.join("testfile"))
@@ -718,7 +748,7 @@ pub(crate) mod test {
         let read_buf = new_file.read_dma(0, 500).await.expect("failed to read");
         std::assert_eq!(read_buf.len(), 500);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf.as_bytes()[i], buf.as_bytes()[i]);
+            std::assert_eq!(read_buf.as_bytes()[i], 42);
         }
 
         let read_buf = new_file
@@ -727,7 +757,7 @@ pub(crate) mod test {
             .expect("failed to read");
         std::assert_eq!(read_buf.len(), 4096);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf.as_bytes()[i], buf.as_bytes()[i]);
+            std::assert_eq!(read_buf.as_bytes()[i], 42);
         }
 
         new_file.close().await.expect("failed to close file");
@@ -749,7 +779,7 @@ pub(crate) mod test {
         let buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
 
         new_file
-            .write_dma(&buf, 0)
+            .write_dma(buf, 0)
             .await
             .expect_err("writes to read-only files should fail");
         new_file
@@ -778,12 +808,13 @@ pub(crate) mod test {
 
         let size: usize = 4096;
         file.truncate(size as u64).await.unwrap();
-        let mut buf = DmaFile::alloc_dma_buffer(size);
-        let bytes = buf.as_bytes_mut();
-        bytes[0] = 'x' as u8;
         let mut futs = vec![];
         for _ in 0..200 {
-            let f = file.write_dma(&buf, 0);
+            let mut buf = DmaFile::alloc_dma_buffer(size);
+            let bytes = buf.as_bytes_mut();
+            bytes[0] = 'x' as u8;
+
+            let f = file.write_dma(buf, 0);
             futs.push(f);
         }
         let mut all = join_all(futs);
@@ -809,7 +840,7 @@ pub(crate) mod test {
                     let mut buf = DmaFile::alloc_dma_buffer(size);
                     let bytes = buf.as_bytes_mut();
                     bytes[0] = 'x' as u8;
-                    file.write_dma(&buf, 0).await.unwrap();
+                    file.write_dma(buf, 0).await.unwrap();
                     file.close().await.unwrap();
                 })
                 .detach(),

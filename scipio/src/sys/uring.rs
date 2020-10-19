@@ -179,7 +179,7 @@ where
                 sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
                 let src = peek_source(from_user_data(op.user_data));
 
-                if let SourceType::DmaRead(_, slot) = &mut *src.source_type.borrow_mut() {
+                if let SourceType::Read(_, slot) = &mut *src.source_type.borrow_mut() {
                     *slot = Some(buf);
                 } else {
                     panic!("Expected DmaRead source type");
@@ -769,10 +769,14 @@ impl Reactor {
         self.queue_standard_request(source, UringOpDescriptor::PollAdd(flags));
     }
 
-    pub(crate) fn write_dma(&self, source: &Source, buf: &DmaBuffer, pos: u64) {
-        //        let op = UringOpDescriptor::WriteFixed(buf.as_ptr() as *const u8, buf.len(), pos, buf.slabidx);
-        let op = UringOpDescriptor::WriteFixed(buf.as_ptr() as *const u8, buf.len(), pos, 0);
-        self.queue_storage_io_request(source, op);
+    pub(crate) fn write_dma(&self, source: &Source, pos: u64) {
+        match &*source.source_type() {
+            SourceType::Write(_, buf) => {
+                let op = UringOpDescriptor::WriteFixed(buf.as_ptr(), buf.len(), pos, 0);
+                self.queue_storage_io_request(source, op);
+            }
+            x => panic!("Unexpected source type for write: {:?}", x),
+        }
     }
 
     pub(crate) fn read_dma(&self, source: &Source, pos: u64, size: usize) {
@@ -913,7 +917,7 @@ impl Reactor {
 
     fn queue_storage_io_request(&self, source: &Source, op: UringOpDescriptor) {
         let pollable = match &*source.source_type() {
-            SourceType::DmaRead(p, _) | SourceType::DmaWrite(p) => *p,
+            SourceType::Read(p, _) | SourceType::Write(p, _) => *p,
             _ => panic!("SourceType should declare if it supports poll operations"),
         };
         match pollable {
