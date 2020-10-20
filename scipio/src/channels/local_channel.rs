@@ -5,6 +5,7 @@
 //
 use crate::channels::ChannelCapacity;
 use futures_lite::stream::Stream;
+use futures_lite::FutureExt;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::Future;
@@ -207,6 +208,10 @@ struct SendWaiter<T> {
     channel: LocalChannel<T>,
 }
 
+struct RecvWaiter<T> {
+    channel: LocalChannel<T>,
+}
+
 impl<T> Future for SendWaiter<T> {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -220,6 +225,33 @@ impl<T> Future for SendWaiter<T> {
                 .unwrap()
                 .push_back(cx.waker().clone());
             Poll::Pending
+        }
+    }
+}
+
+impl<T> Future for RecvWaiter<T> {
+    type Output = Option<T>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut state = self.channel.state.borrow_mut();
+        match state.channel.pop_front() {
+            Some(item) => {
+                if let Some(w) = state.send_waiters.as_mut().and_then(|x| x.pop_front()) {
+                    drop(state);
+                    w.wake();
+                }
+                Poll::Ready(Some(item))
+            }
+            None => match state.send_waiters.is_some() {
+                true => {
+                    state
+                        .recv_waiters
+                        .as_mut()
+                        .unwrap()
+                        .push_back(cx.waker().clone());
+                    Poll::Pending
+                }
+                false => Poll::Ready(None),
+            },
         }
     }
 }
@@ -378,35 +410,59 @@ impl<T> Stream for LocalReceiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut state = self.channel.state.borrow_mut();
-        match state.channel.pop_front() {
-            Some(item) => {
-                if let Some(w) = state.send_waiters.as_mut().and_then(|x| x.pop_front()) {
-                    drop(state);
-                    w.wake();
-                }
-                Poll::Ready(Some(item))
-            }
-            None => match state.send_waiters.is_some() {
-                true => {
-                    state
-                        .recv_waiters
-                        .as_mut()
-                        .unwrap()
-                        .push_back(cx.waker().clone());
-                    Poll::Pending
-                }
-                false => Poll::Ready(None),
+        let mut waiter = RecvWaiter {
+            channel: LocalChannel {
+                state: self.channel.state.clone(),
             },
-        }
+        };
+        waiter.poll(cx)
+    }
+}
+
+impl<T> LocalReceiver<T> {
+    /// Receives data from this channel
+    ///
+    /// If the sender is no longer available it returns [`None`]. Otherwise block until
+    /// an item is available and returns it wrapped in [`Some`]
+    ///
+    /// Notice that this is also available as a Stream. Whether to consume from a stream
+    /// or `recv` is up to the application. The biggest difference is that [`StreamExt`]'s
+    /// [`next`] method takes a mutable reference to self. If the LocalReceiver is, say,
+    /// behind an [`Rc`] it may be more ergonomic to recv.
+    ///
+    /// # Examples
+    /// ```
+    /// use scipio::{LocalExecutor, Local};
+    /// use scipio::channels::local_channel;
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let (sender, receiver) = local_channel::new_bounded(1);
+    ///     sender.send(0).await.unwrap();
+    ///     let x = receiver.recv().await.unwrap();
+    ///     assert_eq!(x, 0);
+    /// });
+    /// ```
+    ///
+    /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
+    /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
+    /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/stream/index.html
+    /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
+    pub async fn recv(&self) -> Option<T> {
+        let waiter = RecvWaiter {
+            channel: LocalChannel {
+                state: self.channel.state.clone(),
+            },
+        };
+        waiter.await
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::Local;
-    use futures_lite::stream::StreamExt;
+    use crate::{enclose, Local};
+    use futures_lite::stream::{self, StreamExt};
 
     #[test]
     fn producer_consumer() {
@@ -559,6 +615,49 @@ mod test {
             .detach();
             r.await;
             s.await;
+        });
+    }
+
+    #[test]
+    fn non_stream_receiver() {
+        test_executor!(async move {
+            let (sender, receiver) = new_bounded(1);
+
+            let s = Local::local(async move {
+                sender.try_send(0).unwrap();
+                sender.send(0).await.unwrap_err();
+            })
+            .detach();
+
+            let r = Local::local(async move {
+                receiver.recv().await.unwrap();
+                drop(receiver);
+            })
+            .detach();
+            r.await;
+            s.await;
+        });
+    }
+
+    #[test]
+    fn multiple_task_receivers() {
+        test_executor!(async move {
+            let (sender, receiver) = new_bounded(1);
+            let receiver = Rc::new(receiver);
+
+            let mut ret = Vec::new();
+            for _ in 0..10 {
+                ret.push(Local::local(enclose! {(receiver) async move {
+                    receiver.recv().await.unwrap();
+                }}));
+            }
+
+            for _ in 0..10 {
+                sender.send(0).await.unwrap();
+            }
+
+            let recvd = stream::iter(ret).then(|f| f).count().await;
+            assert_eq!(recvd, 10);
         });
     }
 }
