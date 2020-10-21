@@ -4,6 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use std::cell::{Cell, RefCell};
+use std::convert::TryFrom;
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, TcpStream};
@@ -102,6 +103,16 @@ use crate::IoRequirements;
 /// A buffer that can be used with DmaFile.
 pub type DmaBuffer = PosixDmaBuffer;
 
+#[derive(Debug)]
+pub(crate) enum IOBuffer {
+    Dma(PosixDmaBuffer),
+    Buffered(Vec<u8>),
+}
+
+// You can be NonPollable and Buffered: that is the case for a Direct I/O file
+// dispatched, say, on a RAID array (RAID do not currently support Poll, but it
+// happily supports Direct I/O). So this is a 2 x 2 = 4 Matrix of possibilibies
+// meaning we can't conflate Pollable and the buffer type.
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PollableStatus {
     Pollable,
@@ -116,8 +127,8 @@ pub(crate) enum LinkStatus {
 
 #[derive(Debug)]
 pub(crate) enum SourceType {
-    Write(PollableStatus, DmaBuffer),
-    Read(PollableStatus, Option<DmaBuffer>),
+    Write(PollableStatus, IOBuffer),
+    Read(PollableStatus, Option<IOBuffer>),
     PollableFd,
     Open(CString),
     FdataSync,
@@ -127,6 +138,17 @@ pub(crate) enum SourceType {
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(Option<u64>, TimeSpec64),
     Invalid,
+}
+
+impl TryFrom<SourceType> for libc::statx {
+    type Error = io::Error;
+
+    fn try_from(value: SourceType) -> Result<Self, Self::Error> {
+        match value {
+            SourceType::Statx(_, buf) => Ok(buf.into_inner()),
+            _ => Err(io::Error::new(io::ErrorKind::Other, "Wrong source Type!")),
+        }
+    }
 }
 
 pub(crate) struct TimeSpec64 {

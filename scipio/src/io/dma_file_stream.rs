@@ -29,10 +29,10 @@ macro_rules! current_error {
 }
 
 #[derive(Debug, Clone)]
-/// Builds a StreamReader, allowing linear access to a Direct I/O [`DmaFile`]
+/// Builds a DmaStreamReader, allowing linear access to a Direct I/O [`DmaFile`]
 ///
 /// [`DmaFile`]: struct.DmaFile.html
-pub struct StreamReaderBuilder {
+pub struct DmaStreamReaderBuilder {
     start: u64,
     end: u64,
     buffer_size: usize,
@@ -40,32 +40,32 @@ pub struct StreamReaderBuilder {
     file: Rc<DmaFile>,
 }
 
-impl StreamReaderBuilder {
-    /// Creates a new StreamReaderBuilder, given a [`DmaFile`]
+impl DmaStreamReaderBuilder {
+    /// Creates a new DmaStreamReaderBuilder, given a [`DmaFile`]
     ///
     /// Various properties can be set by using its `with` methods.
     ///
-    /// A [`StreamReader`] can later be constructed from it by
+    /// A [`DmaStreamReader`] can later be constructed from it by
     /// calling [`build`]
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
-    ///     let _reader = StreamReaderBuilder::new(file).build();
+    ///     let _reader = DmaStreamReaderBuilder::new(file).build();
     /// });
     /// ```
     /// [`DmaFile`]: struct.DmaFile.html
-    /// [`StreamReader`]: struct.StreamReader.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     /// [`build`]: #method.build
     #[must_use = "The builder must be built to be useful"]
-    pub fn new(file: DmaFile) -> StreamReaderBuilder {
-        StreamReaderBuilder {
+    pub fn new(file: DmaFile) -> DmaStreamReaderBuilder {
+        DmaStreamReaderBuilder {
             start: 0,
             end: u64::MAX,
             buffer_size: 128 << 10,
@@ -76,9 +76,9 @@ impl StreamReaderBuilder {
 
     /// Define a starting position.
     ///
-    /// Reads from the [`StreamReader`] will start from this position
+    /// Reads from the [`DmaStreamReader`] will start from this position
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn with_start_pos(mut self, start: u64) -> Self {
         self.start = start;
         self
@@ -86,45 +86,45 @@ impl StreamReaderBuilder {
 
     /// Define an end position.
     ///
-    /// Reads from the [`StreamReader`] will end at this position even if the file
+    /// Reads from the [`DmaStreamReader`] will end at this position even if the file
     /// is larger.
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn with_end_pos(mut self, end: u64) -> Self {
         self.end = end;
         self
     }
 
-    /// Define the number of read-ahead buffers that will be used by the [`StreamReader`]
+    /// Define the number of read-ahead buffers that will be used by the [`DmaStreamReader`]
     ///
     /// Higher read-ahead numbers mean more parallelism but also more memory usage.
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn with_read_ahead(mut self, read_ahead: usize) -> Self {
         self.read_ahead = read_ahead;
         self
     }
 
-    /// Define the buffer size that will be used by the [`StreamReader`]
+    /// Define the buffer size that will be used by the [`DmaStreamReader`]
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
         let buffer_size = std::cmp::max(buffer_size, 1);
         self.buffer_size = self.file.align_up(buffer_size as _) as usize;
         self
     }
 
-    /// Builds a [`StreamReader`] with the properties defined by this [`StreamReaderBuilder`]
+    /// Builds a [`DmaStreamReader`] with the properties defined by this [`DmaStreamReaderBuilder`]
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
-    /// [`StreamReaderBuilder`]: struct.StreamReaderBuilder.html
-    pub fn build(self) -> StreamReader {
-        StreamReader::new(self)
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
+    /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
+    pub fn build(self) -> DmaStreamReader {
+        DmaStreamReader::new(self)
     }
 }
 
 #[derive(Debug)]
-struct StreamReaderState {
+struct DmaStreamReaderState {
     buffer_read_ahead_current_pos: u64,
     max_pos: u64,
     buffer_size: u64,
@@ -135,7 +135,7 @@ struct StreamReaderState {
     buffermap: HashMap<u64, ReadResult>,
 }
 
-impl StreamReaderState {
+impl DmaStreamReaderState {
     fn discard_buffer(&mut self, id: u64) {
         self.buffermap.remove(&id);
         if let Some(handle) = self.pending.remove(&id) {
@@ -239,7 +239,7 @@ impl StreamReaderState {
     }
 }
 
-impl Drop for StreamReaderState {
+impl Drop for DmaStreamReaderState {
     fn drop(&mut self) {
         for (_k, v) in self.pending.drain() {
             v.cancel();
@@ -256,26 +256,26 @@ impl Drop for StreamReaderState {
 /// is to be read or because we are scanning the whole file, it may be more convenient to use
 /// a linear scan API.
 ///
-/// The [`StreamReader`] implements [`AsyncRead`], which can offer the user with a convenient
+/// The [`DmaStreamReader`] implements [`AsyncRead`], which can offer the user with a convenient
 /// way of issuing reads. However note that this mandates a copy between the Dma Buffer used
 /// to read the file contents and the user-specified buffer.
 ///
-/// To avoid that copy the [`StreamReader`] provides the [`get_buffer_aligned`] method which
+/// To avoid that copy the [`DmaStreamReader`] provides the [`get_buffer_aligned`] method which
 /// exposes the buffer as a byte slice. Different situations will call for different APIs to
 /// be used.
 ///
 /// [`DmaFile`]: struct.DmaFile.html
 /// [`DmaBuffer`]: struct.DmaBuffer.html
-/// [`StreamReader`]: struct.StreamReader.html
-/// [`get_buffer_aligned`]: struct.StreamReader.html#method.get_buffer_aligned
+/// [`DmaStreamReader`]: struct.DmaStreamReader.html
+/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
 /// [`AsyncRead`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncRead.html
-pub struct StreamReader {
+pub struct DmaStreamReader {
     start: u64,
     end: u64,
     current_pos: u64,
     buffer_size: u64,
     file: Rc<DmaFile>,
-    state: Rc<RefCell<StreamReaderState>>,
+    state: Rc<RefCell<DmaStreamReaderState>>,
 }
 
 macro_rules! collect_error {
@@ -289,20 +289,20 @@ macro_rules! collect_error {
     }};
 }
 
-impl StreamReader {
-    /// Closes this [`StreamReader`].
+impl DmaStreamReader {
+    /// Closes this [`DmaStreamReader`].
     ///
-    /// It is illegal to close the [`StreamReader`] more than once.
+    /// It is illegal to close the [`DmaStreamReader`] more than once.
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
-    ///     let mut reader = StreamReaderBuilder::new(file).build();
+    ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
     ///     reader.close().await.unwrap();
     /// });
     /// ```
@@ -323,8 +323,8 @@ impl StreamReader {
         }
     }
 
-    fn new(builder: StreamReaderBuilder) -> StreamReader {
-        let state = StreamReaderState {
+    fn new(builder: DmaStreamReaderBuilder) -> DmaStreamReader {
+        let state = DmaStreamReaderState {
             buffer_read_ahead_current_pos: align_down(builder.start, builder.buffer_size as u64),
             read_ahead: builder.read_ahead,
             max_pos: builder.end,
@@ -343,7 +343,7 @@ impl StreamReader {
             state.replenish_read_ahead(state_rc, builder.file.clone());
         }
 
-        StreamReader {
+        DmaStreamReader {
             file: builder.file,
             start: builder.start,
             end: builder.end,
@@ -353,7 +353,7 @@ impl StreamReader {
         }
     }
 
-    /// Skip reading bytes from this [`StreamReader`].
+    /// Skip reading bytes from this [`DmaStreamReader`].
     ///
     /// The file cursor is advanced by the provided bytes. As this is a linear
     /// access API, once those bytes are skipped they are gone. If you need to
@@ -362,13 +362,13 @@ impl StreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
-    ///     let mut reader = StreamReaderBuilder::new(file).build();
+    ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
     ///     assert_eq!(reader.current_pos(), 0);
     ///     reader.skip(8);
     ///     assert_eq!(reader.current_pos(), 8);
@@ -376,7 +376,7 @@ impl StreamReader {
     /// });
     /// ```
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn skip(&mut self, bytes: u64) {
         let mut state = self.state.borrow_mut();
         let buffer_id = state.buffer_id(self.current_pos);
@@ -396,17 +396,17 @@ impl StreamReader {
         state.replenish_read_ahead(self.state.clone(), self.file.clone());
     }
 
-    /// Acquires the current position of this [`StreamReader`].
+    /// Acquires the current position of this [`DmaStreamReader`].
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
-    ///     let mut reader = StreamReaderBuilder::new(file).build();
+    ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
     ///     assert_eq!(reader.current_pos(), 0);
     ///     reader.skip(8);
     ///     assert_eq!(reader.current_pos(), 8);
@@ -414,7 +414,7 @@ impl StreamReader {
     /// });
     /// ```
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn current_pos(&self) -> u64 {
         self.current_pos
     }
@@ -423,7 +423,7 @@ impl StreamReader {
     ///
     /// In order to use this API, one must guarantee that reading the specified length may cross
     /// into a different buffer.  Users of this API are expected to be aware of their buffer size
-    /// (selectable in the [`StreamReaderBuilder`]) and act accordingly.
+    /// (selectable in the [`DmaStreamReaderBuilder`]) and act accordingly.
     ///
     /// The buffer is also not released until the returned [`ReadResult`] goes out of scope. So
     /// if you plan to keep this alive for a long time this is probably the wrong API.
@@ -436,13 +436,13 @@ impl StreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamReaderBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
-    ///     let mut reader = StreamReaderBuilder::new(file).build();
+    ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
     ///     assert_eq!(reader.current_pos(), 0);
     ///     let result = reader.get_buffer_aligned(512).await.unwrap();
     ///     assert_eq!(result.len(), 512);
@@ -451,8 +451,8 @@ impl StreamReader {
     /// });
     /// ```
     ///
-    /// [`StreamReader`]: struct.StreamReader.html
-    /// [`StreamReaderBuilder`]: struct.StreamReaderBuilder.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
+    /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
     /// [`AsyncReadExt`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncReadExt.html
     /// [`ReadResult`]: struct.ReadResult.html
     pub async fn get_buffer_aligned(&mut self, len: u64) -> io::Result<ReadResult> {
@@ -469,7 +469,7 @@ impl StreamReader {
     }
 }
 
-impl AsyncRead for StreamReader {
+impl AsyncRead for DmaStreamReader {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -523,7 +523,7 @@ impl AsyncRead for StreamReader {
 // None of that is for now.
 #[derive(Debug)]
 pub struct PrepareBuffer {
-    state: Rc<RefCell<StreamReaderState>>,
+    state: Rc<RefCell<DmaStreamReaderState>>,
     file: Rc<DmaFile>,
     pos: u64,
     len: u64,
@@ -532,7 +532,7 @@ pub struct PrepareBuffer {
 
 impl PrepareBuffer {
     fn new(
-        state: Rc<RefCell<StreamReaderState>>,
+        state: Rc<RefCell<DmaStreamReaderState>>,
         file: Rc<DmaFile>,
         pos: u64,
         len: u64,
@@ -582,42 +582,42 @@ impl Future for PrepareBuffer {
 }
 
 #[derive(Debug)]
-/// Builds a StreamWriter, allowing linear access to a Direct I/O [`DmaFile`]
+/// Builds a DmaStreamWriter, allowing linear access to a Direct I/O [`DmaFile`]
 ///
 /// [`DmaFile`]: struct.DmaFile.html
-pub struct StreamWriterBuilder {
+pub struct DmaStreamWriterBuilder {
     buffer_size: usize,
     write_behind: usize,
     flush_on_close: bool,
     file: Rc<DmaFile>,
 }
 
-impl StreamWriterBuilder {
-    /// Creates a new StreamWriterBuilder, given a [`DmaFile`]
+impl DmaStreamWriterBuilder {
+    /// Creates a new DmaStreamWriterBuilder, given a [`DmaFile`]
     ///
     /// Various properties can be set by using its `with` methods.
     ///
-    /// A [`StreamWriter`] can later be constructed from it by
+    /// A [`DmaStreamWriter`] can later be constructed from it by
     /// calling [`build`]
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
     /// use scipio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
-    ///     let _reader = StreamWriterBuilder::new(file).build();
+    ///     let _reader = DmaStreamWriterBuilder::new(file).build();
     /// });
     /// ```
     /// [`DmaFile`]: struct.DmaFile.html
-    /// [`StreamWriter`]: struct.StreamWriter.html
+    /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
     /// [`build`]: #method.build
     #[must_use = "The builder must be built to be useful"]
-    pub fn new(file: DmaFile) -> StreamWriterBuilder {
-        StreamWriterBuilder {
+    pub fn new(file: DmaFile) -> DmaStreamWriterBuilder {
+        DmaStreamWriterBuilder {
             buffer_size: 128 << 10,
             write_behind: 1,
             flush_on_close: true,
@@ -625,13 +625,13 @@ impl StreamWriterBuilder {
         }
     }
 
-    /// Define the number of write-behind buffers that will be used by the [`StreamWriter`]
+    /// Define the number of write-behind buffers that will be used by the [`DmaStreamWriter`]
     ///
     /// Higher write-behind numbers mean more parallelism but also more memory usage. As
-    /// long as there is still write-behind buffers available writing to this [`StreamWriter`] will
+    /// long as there is still write-behind buffers available writing to this [`DmaStreamWriter`] will
     /// not block.
     ///
-    /// [`StreamWriter`]: struct.StreamWriter.html
+    /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
     pub fn with_write_behind(mut self, write_behind: usize) -> Self {
         self.write_behind = std::cmp::max(write_behind, 1);
         self
@@ -644,21 +644,21 @@ impl StreamWriterBuilder {
         self
     }
 
-    /// Define the buffer size that will be used by the [`StreamWriter`]
+    /// Define the buffer size that will be used by the [`DmaStreamWriter`]
     ///
-    /// [`StreamWriter`]: struct.StreamWriter.html
+    /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
     pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
         let buffer_size = std::cmp::max(buffer_size, 1);
         self.buffer_size = self.file.align_up(buffer_size as _) as usize;
         self
     }
 
-    /// Builds a [`StreamWriter`] with the properties defined by this [`StreamWriterBuilder`]
+    /// Builds a [`DmaStreamWriter`] with the properties defined by this [`DmaStreamWriterBuilder`]
     ///
-    /// [`StreamWriter`]: struct.StreamWriter.html
-    /// [`StreamWriterBuilder`]: struct.StreamWriterBuilder.html
-    pub fn build(self) -> StreamWriter {
-        StreamWriter::new(self)
+    /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
+    /// [`DmaStreamWriterBuilder`]: struct.DmaStreamWriterBuilder.html
+    pub fn build(self) -> DmaStreamWriter {
+        DmaStreamWriter::new(self)
     }
 }
 
@@ -670,7 +670,7 @@ enum FileStatus {
 }
 
 #[derive(Debug)]
-struct StreamWriterState {
+struct DmaStreamWriterState {
     buffer_size: usize,
     waker: Option<Waker>,
     file_status: FileStatus,
@@ -688,7 +688,7 @@ struct StreamWriterState {
     flush_on_close: bool,
 }
 
-impl StreamWriterState {
+impl DmaStreamWriterState {
     fn add_waker(&mut self, waker: Waker) {
         // Linear file stream, not supposed to have parallel writers!!
         assert!(self.waker.is_none());
@@ -792,7 +792,7 @@ impl StreamWriterState {
     }
 }
 
-impl Drop for StreamWriterState {
+impl Drop for DmaStreamWriterState {
     fn drop(&mut self) {
         for v in self.pending.drain(..) {
             v.cancel();
@@ -805,25 +805,25 @@ impl Drop for StreamWriterState {
 /// manage a file through Direct I/O, but its interface is conductive to random access,
 /// as a position must always be specified.
 ///
-/// Very rarely does one need to issue random writes to a file. Therefore, the [`StreamWriter`] is
+/// Very rarely does one need to issue random writes to a file. Therefore, the [`DmaStreamWriter`] is
 /// likely your go-to API when it comes to writing files.
 ///
-/// The [`StreamWriter`] implements [`AsyncWrite`]. Because it is backed by a Direct I/O
+/// The [`DmaStreamWriter`] implements [`AsyncWrite`]. Because it is backed by a Direct I/O
 /// file, the flush method has no effect. Closing the file issues a sync so that
 /// the data can be flushed from the internal NVMe caches.
 ///
 /// [`DmaFile`]: struct.DmaFile.html
-/// [`StreamReader`]: struct.StreamReader.html
-/// [`get_buffer_aligned`]: struct.StreamReader.html#method.get_buffer_aligned
+/// [`DmaStreamReader`]: struct.DmaStreamReader.html
+/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
 /// [`AsyncWrite`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWrite.html
-pub struct StreamWriter {
+pub struct DmaStreamWriter {
     file: Option<Rc<DmaFile>>,
-    state: Rc<RefCell<StreamWriterState>>,
+    state: Rc<RefCell<DmaStreamWriterState>>,
 }
 
-impl StreamWriter {
-    fn new(builder: StreamWriterBuilder) -> StreamWriter {
-        let state = StreamWriterState {
+impl DmaStreamWriter {
+    fn new(builder: DmaStreamWriterBuilder) -> DmaStreamWriter {
+        let state = DmaStreamWriterState {
             buffer_size: builder.buffer_size,
             write_behind: builder.write_behind,
             flush_on_close: builder.flush_on_close,
@@ -839,24 +839,24 @@ impl StreamWriter {
         };
 
         let state = Rc::new(RefCell::new(state));
-        StreamWriter {
+        DmaStreamWriter {
             file: Some(builder.file),
             state,
         }
     }
 
-    /// Acquires the current position of this [`StreamWriter`].
+    /// Acquires the current position of this [`DmaStreamWriter`].
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
     /// use scipio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
-    ///     let mut writer = StreamWriterBuilder::new(file).build();
+    ///     let mut writer = DmaStreamWriterBuilder::new(file).build();
     ///     assert_eq!(writer.current_pos(), 0);
     ///     writer.write_all(&[0, 1, 2, 3, 4]).await.unwrap();
     ///     assert_eq!(writer.current_pos(), 5);
@@ -864,16 +864,16 @@ impl StreamWriter {
     /// });
     /// ```
     ///
-    /// [`StreamWriter`]: struct.StreamWriter.html
+    /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
     pub fn current_pos(&self) -> u64 {
         self.state.borrow().file_pos()
     }
 
-    /// Acquires the current position of this [`StreamWriter`] that is flushed to the underlying
+    /// Acquires the current position of this [`DmaStreamWriter`] that is flushed to the underlying
     /// media.
     ///
     /// Warning: the position reported by this API is not restart or crash safe. You need to call
-    /// [`sync`] for that. Although the StreamWriter uses Direct I/O, modern storage devices have
+    /// [`sync`] for that. Although the DmaStreamWriter uses Direct I/O, modern storage devices have
     /// their own caches and may still lose data that sits on those caches upon a restart until
     /// [`sync`] is called (Note that [`close`] implies a sync).
     ///
@@ -882,14 +882,14 @@ impl StreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
     /// use scipio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
-    ///     let mut writer = StreamWriterBuilder::new(file).build();
+    ///     let mut writer = DmaStreamWriterBuilder::new(file).build();
     ///     assert_eq!(writer.current_pos(), 0);
     ///     writer.write_all(&[0, 1, 2, 3, 4]).await.unwrap();
     ///     assert_eq!(writer.current_pos(), 5);
@@ -901,8 +901,8 @@ impl StreamWriter {
     /// });
     /// ```
     ///
-    /// [`StreamWriter`]: struct.StreamWriter.html
-    /// [`sync`]: struct.StreamWriter.html#method.sync
+    /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
+    /// [`sync`]: struct.DmaStreamWriter.html#method.sync
     /// [`close`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWriteExt.html#method.close
     pub fn current_flushed_pos(&self) -> u64 {
         self.state.borrow().flushed_pos()
@@ -919,14 +919,14 @@ impl StreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, StreamWriterBuilder};
+    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
     /// use scipio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
-    ///        let mut writer = StreamWriterBuilder::new(file)
+    ///        let mut writer = DmaStreamWriterBuilder::new(file)
     ///             .with_buffer_size(4096)
     ///             .with_write_behind(2)
     ///             .build();
@@ -957,7 +957,7 @@ impl StreamWriter {
     }
 }
 
-impl AsyncWrite for StreamWriter {
+impl AsyncWrite for DmaStreamWriter {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -1108,7 +1108,7 @@ mod test {
     }
 
     file_stream_read_test!(read_exact_empty_file, path, _k, file, _file_size: 0, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .build();
 
         let mut buf = [0u8; 128];
@@ -1123,7 +1123,7 @@ mod test {
     });
 
     file_stream_read_test!(read_exact_zero_buffer, path, _k, file, _file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(0)
             .build();
 
@@ -1134,7 +1134,7 @@ mod test {
     });
 
     file_stream_read_test!(read_exact_single_buffer, path, _k, file, _file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(64 << 10)
             .build();
 
@@ -1145,7 +1145,7 @@ mod test {
     });
 
     file_stream_read_test!(read_exact_crosses_buffer, path, _k, file, _file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(1 << 10)
             .build();
 
@@ -1156,7 +1156,7 @@ mod test {
     });
 
     file_stream_read_test!(read_exact_skip, path, _k, file, _file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(1 << 10)
             .build();
 
@@ -1168,7 +1168,7 @@ mod test {
     });
 
     file_stream_read_test!(read_exact_late_start, path, _k, file, file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_start_pos(file_size - 100)
             .with_buffer_size(1 << 10)
             .build();
@@ -1186,7 +1186,7 @@ mod test {
     });
 
     file_stream_read_test!(read_exact_early_eof, path, _k, file, _file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_end_pos(100)
             .with_buffer_size(1 << 10)
             .build();
@@ -1205,7 +1205,7 @@ mod test {
 
     // note the size is 128k + 2bytes
     file_stream_read_test!(read_exact_unaligned_file_size, path, _k, file, file_size: 131074, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(1 << 10)
             .build();
 
@@ -1217,7 +1217,7 @@ mod test {
     });
 
     file_stream_read_test!(read_to_end_no_read_ahead, path, _k, file, file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(4096)
             .with_read_ahead(0)
             .build();
@@ -1230,7 +1230,7 @@ mod test {
     });
 
     file_stream_read_test!(read_to_end_of_empty_file, path, _k, file, _file_size: 0, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .build();
 
         let mut buf = Vec::new();
@@ -1240,7 +1240,7 @@ mod test {
     });
 
     file_stream_read_test!(read_to_end_single_buffer, path, _k, file, file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(file_size)
             .build();
 
@@ -1252,7 +1252,7 @@ mod test {
     });
 
     file_stream_read_test!(read_to_end_buffer_crossing, path, _k, file, file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(1024)
             .build();
 
@@ -1264,7 +1264,7 @@ mod test {
     });
 
     file_stream_read_test!(read_to_end_buffer_crossing_read_ahead, path, _k, file, file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(4096)
             .with_read_ahead(64)
             .build();
@@ -1277,7 +1277,7 @@ mod test {
     });
 
     file_stream_read_test!(read_to_end_after_skip, path, _k, file, file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(4096)
             .with_read_ahead(2)
             .build();
@@ -1291,7 +1291,7 @@ mod test {
     });
 
     file_stream_read_test!(read_simple, path, _k, file, file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .build();
 
         let mut buf = [0u8; 4096];
@@ -1309,7 +1309,7 @@ mod test {
 
     // note the size is 128k + 2 bytes
     file_stream_read_test!(read_get_buffer_aligned, path, _k, file, _file_size: 131074, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(1024)
             .build();
 
@@ -1337,7 +1337,7 @@ mod test {
     });
 
     file_stream_read_test!(read_mixed_api, path, _k, file, _file_size: 131072, {
-        let mut reader = StreamReaderBuilder::new(file)
+        let mut reader = DmaStreamReaderBuilder::new(file)
             .with_buffer_size(1024)
             .build();
 
@@ -1373,7 +1373,7 @@ mod test {
     file_stream_read_test!(read_wronly_file, path, _k, _file, _file_size: 131072, {
         let newfile = path.join("wronly_file");
         let rfile = DmaFile::create(&newfile).await.unwrap();
-        let mut reader = StreamReaderBuilder::new(rfile)
+        let mut reader = DmaStreamReaderBuilder::new(rfile)
             .with_buffer_size(1024)
             .build();
 
@@ -1383,7 +1383,7 @@ mod test {
     });
 
     file_stream_write_test!(write_all, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file)
+        let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(128 << 10)
             .build();
 
@@ -1396,7 +1396,7 @@ mod test {
         let rfile = DmaFile::open(&filename).await.unwrap();
         assert_eq!(rfile.file_size().await.unwrap(), 5);
 
-        let mut reader = StreamReaderBuilder::new(rfile)
+        let mut reader = DmaStreamReaderBuilder::new(rfile)
             .with_buffer_size(1024)
             .build();
 
@@ -1408,7 +1408,7 @@ mod test {
     });
 
     file_stream_write_test!(write_multibuffer, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file)
+        let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(1024)
             .with_write_behind(2)
             .build();
@@ -1423,7 +1423,7 @@ mod test {
         let rfile = DmaFile::open(&filename).await.unwrap();
         assert_eq!(rfile.file_size().await.unwrap(), 4096);
 
-        let mut reader = StreamReaderBuilder::new(rfile)
+        let mut reader = DmaStreamReaderBuilder::new(rfile)
             .with_buffer_size(1024)
             .build();
 
@@ -1434,7 +1434,7 @@ mod test {
     });
 
     file_stream_write_test!(write_close_twice, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file)
+        let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(128 << 10)
             .build();
 
@@ -1443,7 +1443,7 @@ mod test {
     });
 
     file_stream_write_test!(write_no_write_behind, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file)
+        let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(1024)
             .with_write_behind(0)
             .build();
@@ -1458,7 +1458,7 @@ mod test {
         let rfile = DmaFile::open(&filename).await.unwrap();
         assert_eq!(rfile.file_size().await.unwrap(), 4096);
 
-        let mut reader = StreamReaderBuilder::new(rfile)
+        let mut reader = DmaStreamReaderBuilder::new(rfile)
             .with_buffer_size(1024)
             .build();
 
@@ -1469,7 +1469,9 @@ mod test {
     });
 
     file_stream_write_test!(write_zero_buffer, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file).with_buffer_size(0).build();
+        let mut writer = DmaStreamWriterBuilder::new(file)
+            .with_buffer_size(0)
+            .build();
 
         for i in 0..4096 {
             assert_eq!(writer.current_pos(), i);
@@ -1481,7 +1483,7 @@ mod test {
         let rfile = DmaFile::open(&filename).await.unwrap();
         assert_eq!(rfile.file_size().await.unwrap(), 4096);
 
-        let mut reader = StreamReaderBuilder::new(rfile)
+        let mut reader = DmaStreamReaderBuilder::new(rfile)
             .with_buffer_size(1024)
             .build();
 
@@ -1496,7 +1498,7 @@ mod test {
     file_stream_write_test!(write_with_readable_file, path, _k, filename, _file, {
         let rfile = DmaFile::open(&filename).await.unwrap();
 
-        let mut writer = StreamWriterBuilder::new(rfile)
+        let mut writer = DmaStreamWriterBuilder::new(rfile)
             .with_buffer_size(4096)
             .build();
 
@@ -1509,7 +1511,7 @@ mod test {
     });
 
     file_stream_write_test!(flushed_position_small_buffer, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file)
+        let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(4096)
             .build();
 
@@ -1524,7 +1526,7 @@ mod test {
     });
 
     file_stream_write_test!(flushed_position_big_buffer, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file)
+        let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(4096)
             .with_write_behind(2)
             .build();
@@ -1542,7 +1544,7 @@ mod test {
     });
 
     file_stream_write_test!(sync_and_close, path, _k, filename, file, {
-        let mut writer = StreamWriterBuilder::new(file)
+        let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(4096)
             .with_write_behind(2)
             .build();

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use crate::free_list::{FreeList, Idx};
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{InnerSource, LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::{IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
@@ -41,7 +41,7 @@ enum UringOpDescriptor {
     Write(*const u8, usize, u64),
     WriteFixed(*const u8, usize, u64, usize),
     ReadFixed(u64, usize),
-    Read(*mut u8, usize, u64),
+    Read(u64, usize),
     Open(*const u8, libc::c_int, u32),
     Close,
     FDataSync,
@@ -134,9 +134,18 @@ where
                 let buf = std::slice::from_raw_parts(ptr, len);
                 sqe.prep_write(op.fd, buf, pos);
             }
-            UringOpDescriptor::Read(ptr, len, pos) => {
-                let buf = std::slice::from_raw_parts_mut(ptr, len);
-                sqe.prep_read(op.fd, buf, pos);
+            UringOpDescriptor::Read(pos, len) => {
+                let mut buf = vec![0; len];
+                sqe.prep_read(op.fd, &mut buf, pos);
+
+                let src = peek_source(from_user_data(op.user_data));
+                if let SourceType::Read(PollableStatus::NonPollable, slot) =
+                    &mut *src.source_type.borrow_mut()
+                {
+                    *slot = Some(IOBuffer::Buffered(buf));
+                } else {
+                    panic!("Expected Read source type");
+                };
             }
             UringOpDescriptor::Open(path, flags, mode) => {
                 let path = CStr::from_ptr(path as _);
@@ -180,7 +189,7 @@ where
                 let src = peek_source(from_user_data(op.user_data));
 
                 if let SourceType::Read(_, slot) = &mut *src.source_type.borrow_mut() {
-                    *slot = Some(buf);
+                    *slot = Some(IOBuffer::Dma(buf));
                 } else {
                     panic!("Expected DmaRead source type");
                 };
@@ -480,6 +489,24 @@ impl Source {
         self.inner.update_source_type(SourceType::Invalid)
     }
 
+    pub(crate) fn extract_dma_buffer(&mut self) -> DmaBuffer {
+        let stype = self.extract_source_type();
+        match stype {
+            SourceType::Read(_, Some(IOBuffer::Dma(buffer))) => buffer,
+            SourceType::Write(_, IOBuffer::Dma(buffer)) => buffer,
+            x => panic!("Could not extract buffer. Source: {:?}", x),
+        }
+    }
+
+    pub(crate) fn extract_buffer(&mut self) -> Vec<u8> {
+        let stype = self.extract_source_type();
+        match stype {
+            SourceType::Read(_, Some(IOBuffer::Buffered(buffer))) => buffer,
+            SourceType::Write(_, IOBuffer::Buffered(buffer)) => buffer,
+            x => panic!("Could not extract buffer. Source: {:?}", x),
+        }
+    }
+
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
         let mut w = self.inner.wakers.borrow_mut();
         w.result.take()
@@ -771,9 +798,19 @@ impl Reactor {
 
     pub(crate) fn write_dma(&self, source: &Source, pos: u64) {
         match &*source.source_type() {
-            SourceType::Write(_, buf) => {
+            SourceType::Write(_, IOBuffer::Dma(buf)) => {
                 let op = UringOpDescriptor::WriteFixed(buf.as_ptr(), buf.len(), pos, 0);
                 self.queue_storage_io_request(source, op);
+            }
+            x => panic!("Unexpected source type for write: {:?}", x),
+        }
+    }
+
+    pub(crate) fn write_buffered(&self, source: &Source, pos: u64) {
+        match &*source.source_type() {
+            SourceType::Write(PollableStatus::NonPollable, IOBuffer::Buffered(buf)) => {
+                let op = UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos);
+                self.queue_standard_request(source, op);
             }
             x => panic!("Unexpected source type for write: {:?}", x),
         }
@@ -782,6 +819,11 @@ impl Reactor {
     pub(crate) fn read_dma(&self, source: &Source, pos: u64, size: usize) {
         let op = UringOpDescriptor::ReadFixed(pos, size);
         self.queue_storage_io_request(source, op);
+    }
+
+    pub(crate) fn read_buffered(&self, source: &Source, pos: u64, size: usize) {
+        let op = UringOpDescriptor::Read(pos, size);
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn fdatasync(&self, source: &Source) {
