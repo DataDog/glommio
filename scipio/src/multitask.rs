@@ -179,10 +179,11 @@ impl LocalExecutor {
     /// Spawns a thread-local future onto this executor.
     pub(crate) fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let callback = self.callback.clone();
-        let queue = self.local_queue.clone();
+        let queue_weak = Rc::downgrade(&self.local_queue);
 
         // The function that schedules a runnable task when it gets woken up.
         let schedule = move |runnable: Runnable| {
+            let queue = queue_weak.upgrade().unwrap();
             queue.push(runnable);
             callback.call();
         };
