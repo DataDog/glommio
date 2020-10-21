@@ -4,11 +4,11 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::channels::ChannelCapacity;
+use futures_lite::future;
 use futures_lite::stream::Stream;
 use futures_lite::FutureExt;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -204,58 +204,6 @@ pub fn new_bounded<T>(size: usize) -> (LocalSender<T>, LocalReceiver<T>) {
     LocalChannel::new(ChannelCapacity::Bounded(size))
 }
 
-struct SendWaiter<T> {
-    channel: LocalChannel<T>,
-}
-
-struct RecvWaiter<T> {
-    channel: LocalChannel<T>,
-}
-
-impl<T> Future for SendWaiter<T> {
-    type Output = ();
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if !self.channel.is_full() {
-            Poll::Ready(())
-        } else {
-            let mut state = self.channel.state.borrow_mut();
-            state
-                .send_waiters
-                .as_mut()
-                .unwrap()
-                .push_back(cx.waker().clone());
-            Poll::Pending
-        }
-    }
-}
-
-impl<T> Future for RecvWaiter<T> {
-    type Output = Option<T>;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.channel.state.borrow_mut();
-        match state.channel.pop_front() {
-            Some(item) => {
-                if let Some(w) = state.send_waiters.as_mut().and_then(|x| x.pop_front()) {
-                    drop(state);
-                    w.wake();
-                }
-                Poll::Ready(Some(item))
-            }
-            None => match state.send_waiters.is_some() {
-                true => {
-                    state
-                        .recv_waiters
-                        .as_mut()
-                        .unwrap()
-                        .push_back(cx.waker().clone());
-                    Poll::Pending
-                }
-                false => Poll::Ready(None),
-            },
-        }
-    }
-}
-
 #[allow(clippy::len_without_is_empty)]
 impl<T> LocalSender<T> {
     /// Sends data into this channel.
@@ -314,11 +262,7 @@ impl<T> LocalSender<T> {
         if !self.is_full() {
             self.try_send(item)
         } else {
-            let waiter = SendWaiter {
-                channel: LocalChannel {
-                    state: self.channel.state.clone(),
-                },
-            };
+            let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
             waiter.await;
             self.try_send(item)
         }
@@ -367,6 +311,20 @@ impl<T> LocalSender<T> {
         let state = self.channel.state.borrow();
         state.channel.len()
     }
+
+    fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
+        if !self.channel.is_full() {
+            Poll::Ready(())
+        } else {
+            let mut state = self.channel.state.borrow_mut();
+            state
+                .send_waiters
+                .as_mut()
+                .unwrap()
+                .push_back(cx.waker().clone());
+            Poll::Pending
+        }
+    }
 }
 
 impl<T> Drop for LocalSender<T> {
@@ -410,11 +368,7 @@ impl<T> Stream for LocalReceiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut waiter = RecvWaiter {
-            channel: LocalChannel {
-                state: self.channel.state.clone(),
-            },
-        };
+        let mut waiter = future::poll_fn(|cx| self.recv_one(cx));
         waiter.poll(cx)
     }
 }
@@ -449,12 +403,32 @@ impl<T> LocalReceiver<T> {
     /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/stream/index.html
     /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
     pub async fn recv(&self) -> Option<T> {
-        let waiter = RecvWaiter {
-            channel: LocalChannel {
-                state: self.channel.state.clone(),
-            },
-        };
+        let waiter = future::poll_fn(|cx| self.recv_one(cx));
         waiter.await
+    }
+
+    fn recv_one(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let mut state = self.channel.state.borrow_mut();
+        match state.channel.pop_front() {
+            Some(item) => {
+                if let Some(w) = state.send_waiters.as_mut().and_then(|x| x.pop_front()) {
+                    drop(state);
+                    w.wake();
+                }
+                Poll::Ready(Some(item))
+            }
+            None => match state.send_waiters.is_some() {
+                true => {
+                    state
+                        .recv_waiters
+                        .as_mut()
+                        .unwrap()
+                        .push_back(cx.waker().clone());
+                    Poll::Pending
+                }
+                false => Poll::Ready(None),
+            },
+        }
     }
 }
 
