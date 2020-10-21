@@ -532,9 +532,8 @@ impl LocalExecutor {
     }
 
     fn init(&mut self) -> io::Result<()> {
-        let queues = self.queues.clone();
         let index = 0;
-        let queues_weak = Rc::downgrade(&queues);
+        let queues_weak = Rc::downgrade(&self.queues);
 
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
@@ -618,16 +617,17 @@ impl LocalExecutor {
     where
         S: Into<String>,
     {
-        let queues = self.queues.clone();
         let index = {
-            let mut ex = queues.borrow_mut();
+            let mut ex = self.queues.borrow_mut();
             let index = ex.executor_index;
             ex.executor_index += 1;
             index
         };
 
+        let queues_weak = Rc::downgrade(&self.queues);
         let io_requirements = IoRequirements::new(latency, index);
         let tq = TaskQueue::new(index, name, shares, io_requirements, move || {
+            let queues = queues_weak.upgrade().unwrap();
             let mut queues = queues.borrow_mut();
             queues.maybe_activate(index);
         });
@@ -1562,8 +1562,8 @@ mod test {
         ex.run(async { task.await });
 
         assert!(
-            getrusage_utime() - start < Duration::from_millis(1),
-            "expected user time on LE is less than 1 millisecond"
+            getrusage_utime() - start < Duration::from_millis(2),
+            "expected user time on LE is less than 2 millisecond"
         );
     }
 
@@ -1577,7 +1577,7 @@ mod test {
 
         let ex = LocalExecutorBuilder::new()
             .pin_to_cpu(0)
-            .spin_before_park(Duration::from_millis(10))
+            .spin_before_park(Duration::from_millis(100))
             .make()
             .unwrap();
         let ex_ru_start = getrusage_utime();
@@ -1586,12 +1586,14 @@ mod test {
         let ex_ru_finish = getrusage_utime();
 
         assert!(
-            ex0_ru_finish - ex0_ru_start < Duration::from_millis(1),
-            "expected user time on LE0 is less than 1 millisecond"
+            ex0_ru_finish - ex0_ru_start < Duration::from_millis(10),
+            "expected user time on LE0 is less than 10 millisecond"
         );
+        // 100 ms may have passed without us running for 100ms in case
+        // there are other threads. Need to be a bit more relaxed
         assert!(
-            ex_ru_finish - ex_ru_start >= Duration::from_millis(1),
-            "expected user time on LE is much greater than 1 millisecond"
+            ex_ru_finish - ex_ru_start >= Duration::from_millis(50),
+            "expected user time on LE is much greater than 50 millisecond"
         );
     }
 
