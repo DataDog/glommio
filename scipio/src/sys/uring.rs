@@ -5,7 +5,7 @@
 //
 use nix::poll::PollFlags;
 use rlimit::Resource;
-use std::cell::{RefCell, UnsafeCell};
+use std::cell::{Ref, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::io;
@@ -22,7 +22,7 @@ use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
 
-use super::TimeSpec64;
+use super::{EnqueuedSource, TimeSpec64};
 
 type DmaBuffer = PosixDmaBuffer;
 
@@ -178,13 +178,12 @@ where
                 //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
                 sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
                 let src = peek_source(from_user_data(op.user_data));
-                let mut source = mut_source(&src);
 
-                if let SourceType::DmaRead(pollable, _) = source.source_type {
-                    source.source_type = SourceType::DmaRead(pollable, Some(buf));
+                if let SourceType::DmaRead(_, slot) = &mut *src.source_type.borrow_mut() {
+                    *slot = Some(buf);
                 } else {
                     panic!("Expected DmaRead source type");
-                }
+                };
             }
 
             UringOpDescriptor::WriteFixed(ptr, len, pos, _) => {
@@ -204,7 +203,7 @@ fn process_one_event<F>(
     wakers: &mut Vec<Waker>,
 ) -> Option<()>
 where
-    F: FnOnce(&mut InnerSource) -> Option<()>,
+    F: FnOnce(&InnerSource) -> Option<()>,
 {
     if let Some(value) = cqe {
         // No user data is POLL_REMOVE or CANCEL, we won't process.
@@ -218,22 +217,18 @@ where
         let was_cancelled =
             matches!(&result, Err(err) if err.raw_os_error() == Some(libc::ECANCELED));
 
-        if !was_cancelled {
-            let source = mut_source(&src);
-
-            if try_process(source).is_none() {
-                let mut w = source.wakers.borrow_mut();
-                w.result = Some(result);
-                wakers.append(&mut w.waiters);
-            }
+        if !was_cancelled && try_process(&*src).is_none() {
+            let mut w = src.wakers.borrow_mut();
+            w.result = Some(result);
+            wakers.append(&mut w.waiters);
         }
         return Some(());
     }
     None
 }
 
-type SourceMap = FreeList<Rc<UnsafeCell<InnerSource>>>;
-pub(crate) type SourceId = Idx<Rc<UnsafeCell<InnerSource>>>;
+type SourceMap = FreeList<Rc<InnerSource>>;
+pub(crate) type SourceId = Idx<Rc<InnerSource>>;
 fn from_user_data(user_data: u64) -> SourceId {
     SourceId::from_raw((user_data - 1) as usize)
 }
@@ -247,27 +242,24 @@ fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
     SOURCE_MAP.with(|x| {
         let item = source.inner.clone();
         let id = x.borrow_mut().alloc(item);
-        source.update_reactor_info(id, queue.clone());
+        source.inner.enqueued.set(Some(EnqueuedSource {
+            id,
+            queue: queue.clone(),
+        }));
         id
     })
 }
 
-fn peek_source(id: SourceId) -> Rc<UnsafeCell<InnerSource>> {
+fn peek_source(id: SourceId) -> Rc<InnerSource> {
     SOURCE_MAP.with(|x| Rc::clone(&x.borrow()[id]))
 }
 
-fn consume_source(id: SourceId) -> Rc<UnsafeCell<InnerSource>> {
+fn consume_source(id: SourceId) -> Rc<InnerSource> {
     SOURCE_MAP.with(|x| {
         let source = x.borrow_mut().dealloc(id);
-        let mut s = mut_source(&source);
-        s.id = None;
-        s.queue = None;
+        source.enqueued.set(None);
         source
     })
-}
-
-pub(crate) fn cancel_source(id: SourceId, queue: ReactorQueue) {
-    queue.borrow_mut().cancel_request(id);
 }
 
 #[derive(Debug)]
@@ -466,75 +458,46 @@ impl UringCommon for PollRing {
 }
 
 impl InnerSource {
-    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
-        std::mem::replace(&mut self.source_type, source_type)
+    pub(crate) fn update_source_type(&self, source_type: SourceType) -> SourceType {
+        std::mem::replace(&mut *self.source_type.borrow_mut(), source_type)
     }
-}
-
-#[allow(clippy::mut_from_ref)]
-// This is similar to the interior mutability pattern but clippy doesn't like it.
-// That's because unlike the usual refcell patterns, we return a mutable reference
-// and the user is free to do whatever it wants with it (as opposed to a scoped RefMut).
-//
-// We don't have too much of a choice because the Source accompanies a request in
-// the io_uring and we'd be dealing with raw pointers anyway. We want to make this as
-// safe as possible but will always have to rely on those weird tricks.
-//
-// This should only really be used within the io_uring code
-fn mut_source(source: &Rc<UnsafeCell<InnerSource>>) -> &mut InnerSource {
-    unsafe { &mut *source.get() }
 }
 
 impl Source {
-    #[allow(clippy::mut_from_ref)]
-    fn inner(&self) -> &mut InnerSource {
-        mut_source(&self.inner)
-    }
-
-    fn update_reactor_info(&self, id: SourceId, queue: ReactorQueue) {
-        self.inner().id = Some(id);
-        self.inner().queue = Some(queue);
-    }
-
-    fn consume_id(&self) -> Option<SourceId> {
-        self.inner().id.take()
-    }
-
     fn latency_req(&self) -> Latency {
-        self.inner().io_requirements.latency_req
+        self.inner.io_requirements.latency_req
     }
 
-    fn source_type(&self) -> &SourceType {
-        &self.inner().source_type
+    fn source_type(&self) -> Ref<'_, SourceType> {
+        self.inner.source_type.borrow()
     }
 
-    fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
-        self.inner().update_source_type(source_type)
+    fn update_source_type(&self, source_type: SourceType) -> SourceType {
+        self.inner.update_source_type(source_type)
     }
 
-    pub(crate) fn extract_source_type(&mut self) -> SourceType {
-        self.inner().update_source_type(SourceType::Invalid)
+    pub(crate) fn extract_source_type(&self) -> SourceType {
+        self.inner.update_source_type(SourceType::Invalid)
     }
 
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
-        let mut w = self.inner().wakers.borrow_mut();
+        let mut w = self.inner.wakers.borrow_mut();
         w.result.take()
     }
     pub(crate) fn add_waiter(&self, waker: Waker) {
-        let mut w = self.inner().wakers.borrow_mut();
+        let mut w = self.inner.wakers.borrow_mut();
         w.waiters.push(waker);
     }
 
     pub(crate) fn raw(&self) -> RawFd {
-        self.inner().raw
+        self.inner.raw
     }
 }
 
 impl Drop for Source {
     fn drop(&mut self) {
-        if let Some(id) = self.consume_id() {
-            let queue = self.inner().queue.take();
-            crate::sys::uring::cancel_source(id, queue.unwrap());
+        if let Some(EnqueuedSource { id, queue }) = self.inner.enqueued.take() {
+            queue.borrow_mut().cancel_request(id);
         }
     }
 }
@@ -561,23 +524,22 @@ impl SleepableRing {
     }
 
     fn cancel_preempt_timer(&mut self, source: &mut Source) {
-        match source.source_type() {
-            SourceType::Timeout(None, _) => {} // not armed, do nothing
-            SourceType::Timeout(Some(source_id), _) => {
-                // armed, need to cancel first
-                let op_remove = UringOpDescriptor::TimeoutRemove(*source_id);
-                source.update_source_type(SourceType::Timeout(None, TimeSpec64::default()));
-
-                let q = self.submission_queue();
-                let mut queue = q.borrow_mut();
-                queue.cancellations.push_front(UringDescriptor {
-                    args: op_remove,
-                    fd: -1,
-                    user_data: 0,
-                });
-            }
+        let source_id = match &*source.source_type() {
+            SourceType::Timeout(None, _) => return, // not armed, do nothing
+            SourceType::Timeout(Some(source_id), _) => *source_id,
             _ => panic!("Unexpected source type when linking rings"),
-        }
+        };
+        // armed, need to cancel first
+        let op_remove = UringOpDescriptor::TimeoutRemove(source_id);
+        source.update_source_type(SourceType::Timeout(None, TimeSpec64::default()));
+
+        let q = self.submission_queue();
+        let mut queue = q.borrow_mut();
+        queue.cancellations.push_front(UringDescriptor {
+            args: op_remove,
+            fd: -1,
+            user_data: 0,
+        });
     }
 
     fn rearm_preempt_timer(&mut self, source: &mut Source, d: Duration) {
@@ -586,7 +548,7 @@ impl SleepableRing {
             Some(to_user_data(new_id)),
             TimeSpec64::from(d),
         ));
-        let op = match source.source_type() {
+        let op = match &*source.source_type() {
             SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
             _ => unreachable!(),
         };
@@ -607,21 +569,23 @@ impl SleepableRing {
     }
 
     fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
-        match link.source_type() {
-            SourceType::LinkRings(LinkStatus::Linked) => {} // nothing to do
-            SourceType::LinkRings(LinkStatus::Freestanding) => {
-                if let Some(mut sqe) = self.ring.next_sqe() {
-                    link.update_source_type(SourceType::LinkRings(LinkStatus::Linked));
-
-                    let op = UringDescriptor {
-                        fd: link.raw(),
-                        user_data: to_user_data(add_source(link, self.submission_queue.clone())),
-                        args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
-                    };
-                    fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
-                }
-            }
+        let is_freestanding = match &*link.source_type() {
+            SourceType::LinkRings(LinkStatus::Linked) => false, // nothing to do
+            SourceType::LinkRings(LinkStatus::Freestanding) => true,
             _ => panic!("Unexpected source type when linking rings"),
+        };
+
+        if is_freestanding {
+            if let Some(mut sqe) = self.ring.next_sqe() {
+                link.update_source_type(SourceType::LinkRings(LinkStatus::Linked));
+
+                let op = UringDescriptor {
+                    fd: link.raw(),
+                    user_data: to_user_data(add_source(link, self.submission_queue.clone())),
+                    args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
+                };
+                fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
+            }
         }
 
         self.ring.submit_sqes_and_wait(1)
@@ -648,7 +612,7 @@ impl UringCommon for SleepableRing {
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
         process_one_event(
             self.ring.peek_for_cqe(),
-            |source| match &mut source.source_type {
+            |source| match &mut *source.source_type.borrow_mut() {
                 SourceType::LinkRings(status @ LinkStatus::Linked) => {
                     *status = LinkStatus::Freestanding;
                     Some(())
@@ -831,7 +795,7 @@ impl Reactor {
     }
 
     pub(crate) fn statx(&self, source: &Source) {
-        let op = match source.source_type() {
+        let op = match &*source.source_type() {
             SourceType::Statx(path, buf) => {
                 let path = path.as_c_str().as_ptr();
                 let buf = buf.as_ptr();
@@ -843,7 +807,7 @@ impl Reactor {
     }
 
     pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::c_int) {
-        let pathptr = match source.source_type() {
+        let pathptr = match &*source.source_type() {
             SourceType::Open(cstring) => cstring.as_c_str().as_ptr(),
             _ => panic!("Wrong source type!"),
         };
@@ -948,8 +912,8 @@ impl Reactor {
     }
 
     fn queue_storage_io_request(&self, source: &Source, op: UringOpDescriptor) {
-        let pollable = match source.source_type() {
-            SourceType::DmaRead(p, _) | SourceType::DmaWrite(p) => p,
+        let pollable = match &*source.source_type() {
+            SourceType::DmaRead(p, _) | SourceType::DmaWrite(p) => *p,
             _ => panic!("SourceType should declare if it supports poll operations"),
         };
         match pollable {
@@ -995,7 +959,7 @@ mod tests {
                 -1,
                 SourceType::Timeout(None, TimeSpec64::from(Duration::from_millis(millis))),
             );
-            let op = match &mut_source(&source.inner).source_type {
+            let op = match &*source.source_type() {
                 SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
                 _ => unreachable!(),
             };

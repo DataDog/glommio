@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use std::cell::{RefCell, UnsafeCell};
+use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, TcpStream};
@@ -183,40 +183,52 @@ impl Wakers {
 }
 
 /// A registered source of I/O events.
-#[derive(Debug)]
 pub struct InnerSource {
     /// Raw file descriptor on Unix platforms.
-    pub(crate) raw: RawFd,
+    raw: RawFd,
 
     /// Tasks interested in events on this source.
-    pub(crate) wakers: RefCell<Wakers>,
+    wakers: RefCell<Wakers>,
 
-    pub(crate) source_type: SourceType,
+    source_type: RefCell<SourceType>,
 
     io_requirements: IoRequirements,
 
-    id: Option<SourceId>,
+    enqueued: Cell<Option<EnqueuedSource>>,
+}
 
-    queue: Option<ReactorQueue>,
+pub struct EnqueuedSource {
+    pub(crate) id: SourceId,
+    pub(crate) queue: ReactorQueue,
+}
+
+impl fmt::Debug for InnerSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InnerSource")
+            .field("raw", &self.raw)
+            .field("wakers", &self.wakers)
+            .field("source_type", &self.source_type)
+            .field("io_requirements", &self.io_requirements)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
 pub struct Source {
-    pub(crate) inner: Rc<UnsafeCell<InnerSource>>,
+    pub(crate) inner: Rc<InnerSource>,
 }
 
 impl Source {
     /// Registers an I/O source in the reactor.
     pub(crate) fn new(ioreq: IoRequirements, raw: RawFd, source_type: SourceType) -> Source {
         Source {
-            inner: Rc::new(UnsafeCell::new(InnerSource {
+            inner: Rc::new(InnerSource {
                 raw,
                 wakers: RefCell::new(Wakers::new()),
-                source_type,
+                source_type: RefCell::new(source_type),
                 io_requirements: ioreq,
-                id: None,
-                queue: None,
-            })),
+                enqueued: Cell::new(None),
+            }),
         }
     }
 }

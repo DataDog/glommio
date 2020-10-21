@@ -284,7 +284,7 @@ impl DmaFile {
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
     pub async fn read_dma_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
-        let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
+        let source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let stype = source.extract_source_type();
         let buffer = match stype {
@@ -310,8 +310,7 @@ impl DmaFile {
         let b = (pos - eff_pos) as usize;
 
         let eff_size = self.align_up((size + b) as u64) as usize;
-        let mut source =
-            Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
+        let source = Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let stype = source.extract_source_type();
@@ -398,7 +397,7 @@ impl DmaFile {
     async fn statx(&self) -> io::Result<libc::statx> {
         let path = self.file.path_required("stat")?;
 
-        let mut source = Reactor::get().statx(self.as_raw_fd(), path);
+        let source = Reactor::get().statx(self.as_raw_fd(), path);
         enhanced_try!(
             source.collect_rw().await,
             "getting file metadata",
