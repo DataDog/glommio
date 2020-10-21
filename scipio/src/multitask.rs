@@ -202,13 +202,6 @@ impl LocalExecutor {
     }
 }
 
-impl Drop for LocalExecutor {
-    fn drop(&mut self) {
-        // TODO(stjepang): Close the local queue and empty it.
-        // TODO(stjepang): Cancel all remaining tasks.
-    }
-}
-
 /// A cloneable callback function.
 #[derive(Clone)]
 struct Callback(Rc<dyn Fn()>);
