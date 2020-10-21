@@ -116,8 +116,8 @@ pub(crate) enum LinkStatus {
 
 #[derive(Debug)]
 pub(crate) enum SourceType {
-    DmaWrite(PollableStatus),
-    DmaRead(PollableStatus, Option<DmaBuffer>),
+    Write(PollableStatus, DmaBuffer),
+    Read(PollableStatus, Option<DmaBuffer>),
     PollableFd,
     Open(CString),
     FdataSync,

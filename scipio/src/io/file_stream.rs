@@ -14,7 +14,7 @@ use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::{self, StreamExt};
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -166,7 +166,7 @@ impl StreamReaderState {
             if read_state.borrow().error.is_some() {
                 return;
             }
-            let buffer = file.read_dma_aligned(pos, len as _).await;
+            let buffer = file.read_at_aligned(pos, len as _).await;
 
             let mut state = read_state.borrow_mut();
             match buffer {
@@ -676,7 +676,7 @@ struct StreamWriterState {
     file_status: FileStatus,
     error: Option<io::Error>,
     pending: Vec<task::JoinHandle<(), ()>>,
-    buffer_queue: VecDeque<DmaBuffer>,
+    current_buffer: Option<DmaBuffer>,
     file_pos: u64,
     // this is so we track the last flushed pos. Buffers may return
     // out of order, so we can't report them as flushed_pos yet. Store for
@@ -700,7 +700,7 @@ impl StreamWriterState {
         let must_truncate = final_pos != self.file_pos;
 
         if self.buffer_pos > 0 {
-            let buffer = self.buffer_queue.pop_front();
+            let buffer = self.current_buffer.take();
             self.flush_one_buffer(buffer.unwrap(), state.clone(), file.clone());
             if must_truncate {
                 // flush will have adjusted that, we will fix.
@@ -777,11 +777,8 @@ impl StreamWriterState {
         self.buffer_pos = 0;
         self.pending.push(
             Local::local(async move {
-                let res = file.write_dma(&buffer, file_pos).await;
-                if !collect_error!(state, res) {
-                    let mut state = state.borrow_mut();
-                    state.buffer_queue.push_back(buffer);
-                }
+                let res = file.write_at(buffer, file_pos).await;
+                collect_error!(state, res);
 
                 let mut state = state.borrow_mut();
                 state.adjust_flushed_pos(file_pos);
@@ -826,16 +823,11 @@ pub struct StreamWriter {
 
 impl StreamWriter {
     fn new(builder: StreamWriterBuilder) -> StreamWriter {
-        let mut buffer_queue = VecDeque::with_capacity(builder.write_behind);
-        for _ in 0..builder.write_behind {
-            buffer_queue.push_back(DmaFile::alloc_dma_buffer(builder.buffer_size));
-        }
-
         let state = StreamWriterState {
             buffer_size: builder.buffer_size,
             write_behind: builder.write_behind,
             flush_on_close: builder.flush_on_close,
-            buffer_queue,
+            current_buffer: None,
             waker: None,
             pending: Vec::new(),
             error: None,
@@ -978,9 +970,13 @@ impl AsyncWrite for StreamWriter {
 
         let mut written = 0;
         while written < buf.len() {
-            match state.buffer_queue.pop_front() {
+            match state.current_buffer.take() {
                 None => {
-                    break;
+                    if state.pending.len() < state.write_behind {
+                        state.current_buffer = Some(DmaFile::alloc_dma_buffer(state.buffer_size));
+                    } else {
+                        break;
+                    }
                 }
                 Some(mut buffer) => {
                     let size = buf.len();
@@ -997,7 +993,7 @@ impl AsyncWrite for StreamWriter {
                             self.file.clone().unwrap(),
                         );
                     } else {
-                        state.buffer_queue.push_front(buffer);
+                        state.current_buffer = Some(buffer);
                     }
                 }
             }
@@ -1071,7 +1067,7 @@ mod test {
                             for (v, x) in buf.as_bytes_mut().iter_mut().enumerate() {
                                 *x = v as u8;
                             }
-                            new_file.write_dma(&buf, 0).await.unwrap();
+                            new_file.write_at(buf, 0).await.unwrap();
                             if bufsz != $size {
                                 new_file.truncate($size).await.unwrap();
                             }

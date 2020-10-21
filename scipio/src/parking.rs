@@ -272,12 +272,12 @@ impl Reactor {
     pub(crate) fn write_dma(
         &self,
         raw: RawFd,
-        buf: &DmaBuffer,
+        buf: DmaBuffer,
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
-        let source = self.new_source(raw, SourceType::DmaWrite(pollable));
-        self.sys.write_dma(&source, buf, pos);
+        let source = self.new_source(raw, SourceType::Write(pollable, buf));
+        self.sys.write_dma(&source, pos);
         source
     }
 
@@ -288,7 +288,7 @@ impl Reactor {
         size: usize,
         pollable: PollableStatus,
     ) -> Source {
-        let source = self.new_source(raw, SourceType::DmaRead(pollable, None));
+        let source = self.new_source(raw, SourceType::Read(pollable, None));
         self.sys.read_dma(&source, pos, size);
         source
     }
