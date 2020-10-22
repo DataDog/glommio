@@ -11,7 +11,7 @@ repository = "https://github.com/DataDog/scipio"
 homepage = "https://github.com/DataDog/scipio"
 keywords = ["uring", "reactor", "thread-per-core"]
 categories = ["asynchronous", "os"]
-readme = "README.md"
+readme = "../README.md"
 
 [dependencies]
 log = "0.4"
