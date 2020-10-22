@@ -1,6 +1,6 @@
 [package]
 name = "scipio"
-version = "0.1.1-alpha"
+version = "0.1.2-alpha"
 authors = [ "Glauber Costa <glauber@datadoghq.com>",
             "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
             "DataDog"]
