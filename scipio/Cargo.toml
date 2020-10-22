@@ -14,6 +14,7 @@ categories = ["asynchronous", "os"]
 readme = "README.md"
 
 [dependencies]
+log = "0.4"
 concurrent-queue = "1.1.2"
 futures-lite = "1.11.1"
 libc = "0.2.73"

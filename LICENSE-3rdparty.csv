@@ -19,3 +19,4 @@ rlimit,https://crates.io/crates/rlimit,MIT,Nugine
 lazy-static,https://crates.io/crates/lazy_static,MIT/Apache-2.0,Marvin Löbel
 scopeguard,https://crates.io/crates/scopeguard,MIT/Apache-2.0,bluss
 pin-project-lite:https://crates.io/crates/pin-project-lite,MIT/Apache-2.0,Taiki Endo
+log,https://crates.io/crates/log,MIT/Apache-2.0/The Rust Project Developers
