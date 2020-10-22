@@ -58,7 +58,7 @@ struct UringDescriptor {
     args: UringOpDescriptor,
 }
 
-pub fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
+fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
     unsafe {
         let probe = uring_sys::io_uring_get_probe();
         if probe.is_null() {
