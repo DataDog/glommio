@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
 use crate::channels::local_channel::{self, LocalReceiver, LocalSender};
-use crate::task;
+use crate::{enclose, task};
 use crate::{Latency, Local, Shares, SharesManager, TaskQueueHandle};
 use futures_lite::StreamExt;
 use log::warn;
@@ -356,17 +356,35 @@ impl<T: 'static> DeadlineQueue<T> {
         let (response_sender, responder): (LocalSender<T>, LocalReceiver<T>) =
             local_channel::new_bounded(1);
 
+        let queue_weak = Rc::downgrade(&queue);
+
         let handle = Local::local_into(
-            async move {
+            enclose! { (queue_weak) async move {
                 let response = Rc::new(response_sender);
                 while let Some(request) = receiver.next().await {
                     let res = request.action().await;
+                    // now that we have executed the action, pop it from
+                    // the queue. We must do it regardless of whether or not
+                    // we succeeded.
+                    //
+                    // It is legal for the queue not to be present anymore in
+                    // case the DeadlineQueue itself was destroyed after the action
+                    // was done. But if it does exist we expect to be able to pop
+                    // the element: so we unwrap() pop_front().
+                    //
+                    // Note that because this is a queue with concurrency of one we
+                    // can safely pop_front(). If we ever do this with higher concurrency
+                    // (very unlikely), then we need to move to a more complex data structure.
+                    if let Some(queue) = queue_weak.upgrade() {
+                        let mut queue = queue.queue.borrow_mut();
+                        queue.pop_front().unwrap();
+                    }
                     if response.send(res).await.is_err() {
                         warn!("receiver channel broken!");
                         break;
                     }
                 }
-            },
+            }},
             tq,
         )
         .unwrap()
@@ -457,6 +475,7 @@ mod test {
         duration: Duration,
         total_units: usize,
         processed_units: Cell<usize>,
+        drop_guarantee: Rc<Cell<bool>>,
     }
 
     impl DeadlineSourceTest {
@@ -465,11 +484,18 @@ mod test {
                 duration,
                 total_units,
                 processed_units: Cell::new(0),
+                drop_guarantee: Rc::new(Cell::new(false)),
             })
         }
         async fn wait(&self) -> usize {
             Timer::new(self.duration).await;
             0
+        }
+    }
+
+    impl Drop for DeadlineSourceTest {
+        fn drop(&mut self) {
+            self.drop_guarantee.set(true);
         }
     }
 
@@ -524,6 +550,21 @@ mod test {
             let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 0);
             let res = queue.push_work(test).await.unwrap();
             assert_eq!(res, 0);
+        });
+    }
+
+    #[test]
+    fn deadline_queue_successfully_drops_item_when_done() {
+        test_executor!(async move {
+            let queue = Rc::new(DeadlineQueue::<usize>::new(
+                "example",
+                Duration::from_millis(1),
+            ));
+            let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 0);
+            let drop_happens = test.drop_guarantee.clone();
+            let res = queue.push_work(test).await.unwrap();
+            assert_eq!(res, 0);
+            assert_eq!(drop_happens.get(), true);
         });
     }
 
@@ -590,7 +631,7 @@ mod test {
                     let elapsed = start.elapsed().as_millis();
                     let shares = queue.queue.shares();
                     let old = last_shares.replace(shares) as isize;
-                    if elapsed > 500 {
+                    if elapsed > 500 && elapsed < 850 {
                         let diff = old - shares as isize;
                         assert!(diff.abs() < 200, format!("Found diff: {}", diff));
                     }
