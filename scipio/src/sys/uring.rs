@@ -631,10 +631,6 @@ impl UringCommon for SleepableRing {
                     panic!("Impossible to have an event firing like this");
                 }
                 SourceType::Timeout(_) => Some(()),
-                // // This is actually possible: when the request is cancelled
-                // // the original source does complete, and the cancellation
-                // // would have marked us as false. Just ignore it.
-                // SourceType::Timeout(None, _) => None,
                 _ => None,
             },
             wakers,
