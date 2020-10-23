@@ -8,12 +8,12 @@ use rlimit::Resource;
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CStr;
-use std::io;
 use std::io::{Error, ErrorKind};
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
 use std::task::Waker;
 use std::time::Duration;
+use std::{io, mem};
 
 use crate::free_list::{FreeList, Idx};
 use crate::sys::posix_buffers::PosixDmaBuffer;
@@ -22,7 +22,7 @@ use crate::{IoRequirements, Latency};
 
 use uring_sys::IoRingOp;
 
-use super::{EnqueuedSource, TimeSpec64};
+use super::{QueueInfo, SourceState, TimeSpec64};
 
 type DmaBuffer = PosixDmaBuffer;
 
@@ -220,16 +220,18 @@ where
             return Some(());
         }
 
-        let src = consume_source(from_user_data(value.user_data()));
+        let (src, mut queue_info) = consume_source(from_user_data(value.user_data()));
 
         let result = value.result();
         let was_cancelled =
             matches!(&result, Err(err) if err.raw_os_error() == Some(libc::ECANCELED));
 
         if !was_cancelled && try_process(&*src).is_none() {
-            let mut w = src.wakers.borrow_mut();
-            w.result = Some(result);
-            wakers.append(&mut w.waiters);
+            let new_state = SourceState::Ready { result };
+            let old_state = src.transition(new_state);
+            assert!(matches!(old_state, SourceState::NotQueued));
+
+            wakers.append(&mut queue_info.waiters);
         }
         return Some(());
     }
@@ -251,10 +253,15 @@ fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
     SOURCE_MAP.with(|x| {
         let item = source.inner.clone();
         let id = x.borrow_mut().alloc(item);
-        source.inner.enqueued.set(Some(EnqueuedSource {
+
+        let new_state = SourceState::Queued(QueueInfo {
             id,
-            queue: queue.clone(),
-        }));
+            queue,
+            waiters: Vec::new(),
+        });
+        let old_state = source.inner.transition(new_state);
+        assert!(matches!(old_state, SourceState::NotQueued));
+
         id
     })
 }
@@ -263,11 +270,22 @@ fn peek_source(id: SourceId) -> Rc<InnerSource> {
     SOURCE_MAP.with(|x| Rc::clone(&x.borrow()[id]))
 }
 
-fn consume_source(id: SourceId) -> Rc<InnerSource> {
+fn consume_source(id: SourceId) -> (Rc<InnerSource>, QueueInfo) {
     SOURCE_MAP.with(|x| {
         let source = x.borrow_mut().dealloc(id);
-        source.enqueued.set(None);
-        source
+
+        let new_state = SourceState::NotQueued;
+        let old_state = source.transition(new_state);
+
+        match old_state {
+            SourceState::Queued(queue_info) => (source, queue_info),
+            SourceState::NotQueued | SourceState::Ready { .. } | SourceState::Consumed => {
+                unreachable!(
+                    "Source {:?} should be in Queued state, was in {:?}",
+                    id, old_state
+                )
+            }
+        }
     })
 }
 
@@ -470,6 +488,10 @@ impl InnerSource {
     pub(crate) fn update_source_type(&self, source_type: SourceType) -> SourceType {
         std::mem::replace(&mut *self.source_type.borrow_mut(), source_type)
     }
+
+    fn transition(&self, new_state: SourceState) -> SourceState {
+        mem::replace(&mut *self.state.borrow_mut(), new_state)
+    }
 }
 
 impl Source {
@@ -508,12 +530,23 @@ impl Source {
     }
 
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.result.take()
+        if let SourceState::Queued(..) = &*self.inner.state.borrow() {
+            return None;
+        }
+        let old_state = self.inner.transition(SourceState::Consumed);
+        match old_state {
+            SourceState::Ready { result } => Some(result),
+            SourceState::Queued(..) => unreachable!(),
+            SourceState::Consumed => panic!("Attempting to get a result from Source twice"),
+            SourceState::NotQueued => {
+                panic!("Attempting to get a result from Source, which wasn't queued")
+            }
+        }
     }
     pub(crate) fn add_waiter(&self, waker: Waker) {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.waiters.push(waker);
+        if let SourceState::Queued(queue_info) = &mut *self.inner.state.borrow_mut() {
+            queue_info.waiters.push(waker)
+        }
     }
 
     pub(crate) fn raw(&self) -> RawFd {
@@ -523,7 +556,11 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        if let Some(EnqueuedSource { id, queue }) = self.inner.enqueued.take() {
+        let state = self.inner.state.borrow();
+        if let SourceState::Queued(queue_info) = &*state {
+            let queue = queue_info.queue.clone();
+            let id = queue_info.id;
+            drop(state);
             queue.borrow_mut().cancel_request(id);
         }
     }
