@@ -5,7 +5,7 @@
 //
 use nix::poll::PollFlags;
 use rlimit::Resource;
-use std::cell::{Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::io;
@@ -550,33 +550,15 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
-    fn cancel_preempt_timer(&mut self, source: &mut Source) {
-        let source_id = match &*source.source_type() {
-            SourceType::Timeout(None, _) => return, // not armed, do nothing
-            SourceType::Timeout(Some(source_id), _) => *source_id,
-            _ => panic!("Unexpected source type when linking rings"),
-        };
-        // armed, need to cancel first
-        let op_remove = UringOpDescriptor::TimeoutRemove(source_id);
-        source.update_source_type(SourceType::Timeout(None, TimeSpec64::default()));
-
-        let q = self.submission_queue();
-        let mut queue = q.borrow_mut();
-        queue.cancellations.push_front(UringDescriptor {
-            args: op_remove,
-            fd: -1,
-            user_data: 0,
-        });
-    }
-
-    fn rearm_preempt_timer(&mut self, source: &mut Source, d: Duration) {
-        let new_id = add_source(source, self.submission_queue.clone());
-        source.update_source_type(SourceType::Timeout(
-            Some(to_user_data(new_id)),
-            TimeSpec64::from(d),
-        ));
+    fn arm_preempt_timer(&mut self, d: Duration) -> Source {
+        let source = Source::new(
+            IoRequirements::default(),
+            -1,
+            SourceType::Timeout(TimeSpec64::from(d)),
+        );
+        let new_id = add_source(&source, self.submission_queue.clone());
         let op = match &*source.source_type() {
-            SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+            SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
             _ => unreachable!(),
         };
 
@@ -593,6 +575,7 @@ impl SleepableRing {
         // No need to submit, the next ring enter will submit for us. Because
         // we just flushed and we got put in front of the queue we should get a SQE.
         // Still it would be nice to verify if we did.
+        source
     }
 
     fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
@@ -647,14 +630,11 @@ impl UringCommon for SleepableRing {
                 SourceType::LinkRings(LinkStatus::Freestanding) => {
                     panic!("Impossible to have an event firing like this");
                 }
-                SourceType::Timeout(id @ Some(_), _) => {
-                    *id = None;
-                    Some(())
-                }
-                // This is actually possible: when the request is cancelled
-                // the original source does complete, and the cancellation
-                // would have marked us as false. Just ignore it.
-                SourceType::Timeout(None, _) => None,
+                SourceType::Timeout(_) => Some(()),
+                // // This is actually possible: when the request is cancelled
+                // // the original source does complete, and the cancellation
+                // // would have marked us as false. Just ignore it.
+                // SourceType::Timeout(None, _) => None,
                 _ => None,
             },
             wakers,
@@ -683,7 +663,7 @@ pub struct Reactor {
 
     link_rings_src: RefCell<Source>,
 
-    timeout_src: RefCell<Source>,
+    timeout_src: Cell<Option<Source>>,
 }
 
 fn common_flags() -> PollFlags {
@@ -764,18 +744,12 @@ impl Reactor {
             SourceType::LinkRings(LinkStatus::Freestanding),
         );
 
-        let timeout_src = Source::new(
-            IoRequirements::default(),
-            -1,
-            SourceType::Timeout(None, TimeSpec64::default()),
-        );
-
         Ok(Reactor {
             main_ring: RefCell::new(main_ring),
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(PollRing::new(128)?),
             link_rings_src: RefCell::new(link_rings_src),
-            timeout_src: RefCell::new(timeout_src),
+            timeout_src: Cell::new(None),
         })
     }
 
@@ -891,10 +865,10 @@ impl Reactor {
         let mut should_sleep = match timeout {
             None => true,
             Some(dur) => {
-                let mut src = self.timeout_src.borrow_mut();
-                lat_ring.cancel_preempt_timer(&mut src);
+                // Cancel the old timer.
+                self.timeout_src.take();
                 flush_cancellations!(into wakers; lat_ring);
-                lat_ring.rearm_preempt_timer(&mut src, dur);
+                self.timeout_src.set(Some(lat_ring.arm_preempt_timer(dur)));
                 false
             }
         };
@@ -912,8 +886,8 @@ impl Reactor {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = timer_expiration {
-                let mut src = self.timeout_src.borrow_mut();
-                lat_ring.cancel_preempt_timer(&mut src);
+                // Cancel the old timer.
+                self.timeout_src.take();
                 flush_cancellations!(into wakers; lat_ring);
                 // Although we keep the SQE queue separate for cancellations
                 // and submission the CQE queue is a single one. So when we
@@ -923,7 +897,7 @@ impl Reactor {
                 // If we did, bail now.
                 should_sleep &= wakers.is_empty();
                 if should_sleep {
-                    lat_ring.rearm_preempt_timer(&mut src, dur);
+                    self.timeout_src.set(Some(lat_ring.arm_preempt_timer(dur)));
                     flush_rings!(lat_ring)?;
                 }
             }
@@ -1003,10 +977,10 @@ mod tests {
             let source = Source::new(
                 IoRequirements::default(),
                 -1,
-                SourceType::Timeout(None, TimeSpec64::from(Duration::from_millis(millis))),
+                SourceType::Timeout(TimeSpec64::from(Duration::from_millis(millis))),
             );
             let op = match &*source.source_type() {
-                SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+                SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
                 _ => unreachable!(),
             };
             (source, op)
