@@ -136,7 +136,7 @@ pub(crate) enum SourceType {
     Close,
     LinkRings(LinkStatus),
     Statx(CString, Box<RefCell<libc::statx>>),
-    Timeout(Option<u64>, TimeSpec64),
+    Timeout(TimeSpec64),
     Invalid,
 }
 

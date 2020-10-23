@@ -554,15 +554,11 @@ impl SleepableRing {
         let source = Source::new(
             IoRequirements::default(),
             -1,
-            SourceType::Timeout(None, TimeSpec64::default()),
+            SourceType::Timeout(TimeSpec64::from(d)),
         );
         let new_id = add_source(&source, self.submission_queue.clone());
-        source.update_source_type(SourceType::Timeout(
-            Some(to_user_data(new_id)),
-            TimeSpec64::from(d),
-        ));
         let op = match &*source.source_type() {
-            SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+            SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
             _ => unreachable!(),
         };
 
@@ -634,14 +630,11 @@ impl UringCommon for SleepableRing {
                 SourceType::LinkRings(LinkStatus::Freestanding) => {
                     panic!("Impossible to have an event firing like this");
                 }
-                SourceType::Timeout(id @ Some(_), _) => {
-                    *id = None;
-                    Some(())
-                }
-                // This is actually possible: when the request is cancelled
-                // the original source does complete, and the cancellation
-                // would have marked us as false. Just ignore it.
-                SourceType::Timeout(None, _) => None,
+                SourceType::Timeout(_) => Some(()),
+                // // This is actually possible: when the request is cancelled
+                // // the original source does complete, and the cancellation
+                // // would have marked us as false. Just ignore it.
+                // SourceType::Timeout(None, _) => None,
                 _ => None,
             },
             wakers,
@@ -984,10 +977,10 @@ mod tests {
             let source = Source::new(
                 IoRequirements::default(),
                 -1,
-                SourceType::Timeout(None, TimeSpec64::from(Duration::from_millis(millis))),
+                SourceType::Timeout(TimeSpec64::from(Duration::from_millis(millis))),
             );
             let op = match &*source.source_type() {
-                SourceType::Timeout(_, ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+                SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
                 _ => unreachable!(),
             };
             (source, op)
