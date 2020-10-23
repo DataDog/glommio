@@ -590,7 +590,7 @@ mod test {
                     let elapsed = start.elapsed().as_millis();
                     let shares = queue.queue.shares();
                     let old = last_shares.replace(shares) as isize;
-                    if elapsed > 500 {
+                    if elapsed > 500 && elapsed < 850 {
                         let diff = old - shares as isize;
                         assert!(diff.abs() < 200, format!("Found diff: {}", diff));
                     }
