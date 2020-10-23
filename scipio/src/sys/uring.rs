@@ -550,7 +550,7 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
-    fn arm_preempt_timer(&mut self, d: Duration) -> Source {
+    fn arm_timer(&mut self, d: Duration) -> Source {
         let source = Source::new(
             IoRequirements::default(),
             -1,
@@ -848,23 +848,56 @@ impl Reactor {
         Ok(())
     }
 
+    // This function can be passed two timers. Because they play different roles we keep them
+    // separate instead of overloading the same parameter.
+    //
+    // * The first is the preempt timer. It is designed to take the current task queue out of the
+    //   cpu. If nothing else fires in the latency ring the preempt timer will, making need_preempt
+    //   return true. Currently we always install a preempt timer in the upper layers but from the
+    //   point of view of the io_uring implementation it is optional: it is perfectly valid not to
+    //   have one. Preempt timers are installed by Scipio executor runtime.
+    //
+    // * The second is the user timer. It is installed per a user request when the user creates a
+    //   Timer (or TimerAction).
+    //
+    // At some level, those are both just timers and can be coalesced. And they certainly are: if
+    // there is a user timer that needs to fire in 1ms and we want the preempt_timer to also fire
+    // around 1ms, there is no need to register two timers. At the end of the day, all that matters
+    // is that the latency ring flares and that we leave the CPU. That is because unlike I/O, we
+    // don't have one Source per timer, and parking.rs just keeps them on a wheel and just tell us
+    // about what is the next expiration.
+    //
+    // However they are also different. The main source of difference is sleep and wake behavior:
+    //
+    // * When there is no more work to do and we go to sleep, we do not want to register the
+    //   preempt timer: it is designed to fire periodically to take us out of the CPU and if
+    //   there is no task queue running, we don't want to wake up and spend power just for
+    //   that. However if there is a user timer that needs to fire in the future we must
+    //   register it. Otherwise we will sleep and never wake up.
+    //
+    // * The user timer point of expiration never changes. So once we register it we don't need
+    //   to rearm it until it fires. But the preempt timer has to be rearmed every time. Moreover
+    //   it needs to give every task queue a fair shot at running. So it needs to be rearmed as
+    //   close as possible to the point where we *leave* this method. For instance: if we spin here
+    //   for 3ms and the preempt timer is 10ms that would leave the next task queue just 7ms to
+    //   run.
     pub(crate) fn wait(
         &self,
         wakers: &mut Vec<Waker>,
-        timeout: Option<Duration>,
-        timer_expiration: Option<Duration>,
+        preempt_timer: Option<Duration>,
+        user_timer: Option<Duration>,
     ) -> io::Result<bool> {
         let mut poll_ring = self.poll_ring.borrow_mut();
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        let mut should_sleep = match timeout {
+        let mut should_sleep = match preempt_timer {
             None => true,
             Some(dur) => {
                 // Cancel the old timer.
                 self.timeout_src.take();
                 flush_cancellations!(into wakers; lat_ring);
-                self.timeout_src.set(Some(lat_ring.arm_preempt_timer(dur)));
+                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
                 false
             }
         };
@@ -881,7 +914,7 @@ impl Reactor {
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
-            if let Some(dur) = timer_expiration {
+            if let Some(dur) = user_timer {
                 // Cancel the old timer.
                 self.timeout_src.take();
                 flush_cancellations!(into wakers; lat_ring);
@@ -893,7 +926,7 @@ impl Reactor {
                 // If we did, bail now.
                 should_sleep &= wakers.is_empty();
                 if should_sleep {
-                    self.timeout_src.set(Some(lat_ring.arm_preempt_timer(dur)));
+                    self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
                     flush_rings!(lat_ring)?;
                 }
             }
