@@ -675,9 +675,10 @@ struct DmaStreamWriterState {
     waker: Option<Waker>,
     file_status: FileStatus,
     error: Option<io::Error>,
-    pending: Vec<task::JoinHandle<(), ()>>,
+    pending: HashMap<u64, task::JoinHandle<(), ()>>,
     current_buffer: Option<DmaBuffer>,
     file_pos: u64,
+    flush_id: u64,
     // this is so we track the last flushed pos. Buffers may return
     // out of order, so we can't report them as flushed_pos yet. Store for
     // later.
@@ -707,7 +708,7 @@ impl DmaStreamWriterState {
                 self.file_pos = final_pos;
             }
         }
-        let mut drainers = std::mem::replace(&mut self.pending, Vec::new());
+        let mut drainers = std::mem::replace(&mut self.pending, HashMap::new());
         let flush_on_close = self.flush_on_close;
         self.file_status = FileStatus::Closing;
         Local::local(async move {
@@ -715,7 +716,7 @@ impl DmaStreamWriterState {
                 waker.wake();
             }
 
-            for v in drainers.drain(..) {
+            for (_, v) in drainers.drain() {
                 v.await;
             }
             if state.borrow().error.is_some() {
@@ -768,20 +769,28 @@ impl DmaStreamWriterState {
     }
 
     fn current_pending(&mut self) -> Vec<task::JoinHandle<(), ()>> {
-        std::mem::replace(&mut self.pending, Vec::new())
+        let mut handles = Vec::new();
+        for (_k, v) in self.pending.drain() {
+            handles.push(v);
+        }
+        handles
     }
 
     fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let file_pos = self.file_pos;
         self.file_pos += self.buffer_size as u64;
         self.buffer_pos = 0;
-        self.pending.push(
+        let flush_id = self.flush_id;
+        self.flush_id += 1;
+        self.pending.insert(
+            flush_id,
             Local::local(async move {
                 let res = file.write_at(buffer, file_pos).await;
                 collect_error!(state, res);
 
                 let mut state = state.borrow_mut();
                 state.adjust_flushed_pos(file_pos);
+                state.pending.remove(&flush_id); // can be None during close
                 if let Some(waker) = state.waker.take() {
                     drop(state);
                     waker.wake();
@@ -794,7 +803,7 @@ impl DmaStreamWriterState {
 
 impl Drop for DmaStreamWriterState {
     fn drop(&mut self) {
-        for v in self.pending.drain(..) {
+        for (_, v) in self.pending.drain() {
             v.cancel();
         }
     }
@@ -829,12 +838,13 @@ impl DmaStreamWriter {
             flush_on_close: builder.flush_on_close,
             current_buffer: None,
             waker: None,
-            pending: Vec::new(),
+            pending: HashMap::new(),
             error: None,
             file_status: FileStatus::Open,
             file_pos: 0,
             buffer_pos: 0,
             flushed_pos: 0,
+            flush_id: 0,
             out_of_order_write_returns: Vec::new(),
         };
 
@@ -1120,6 +1130,25 @@ mod test {
             _ => panic!("unexpected success"),
         }
         reader.close().await.unwrap();
+    });
+
+    // other tests look like they may be doing this, but the buffer_size can be rounded up
+    // So this one writes a bit more data
+    file_stream_write_test!(write_more_than_write_behind, path, _k, filename, file, {
+        let mut writer = DmaStreamWriterBuilder::new(file)
+            .with_buffer_size(128 << 10)
+            .with_write_behind(2)
+            .build();
+
+        for i in 0..1_000_000 {
+            assert_eq!(writer.current_pos(), i);
+            writer.write_all(&[i as u8]).await.unwrap();
+        }
+
+        writer.close().await.unwrap();
+
+        let rfile = DmaFile::open(&filename).await.unwrap();
+        assert_eq!(rfile.file_size().await.unwrap(), 1_000_000);
     });
 
     file_stream_read_test!(read_exact_zero_buffer, path, _k, file, _file_size: 131072, {
