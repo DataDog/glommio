@@ -138,9 +138,7 @@ struct DmaStreamReaderState {
 impl DmaStreamReaderState {
     fn discard_buffer(&mut self, id: u64) {
         self.buffermap.remove(&id);
-        if let Some(handle) = self.pending.remove(&id) {
-            handle.cancel();
-        }
+        self.pending.remove(&id);
     }
 
     fn replenish_read_ahead(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
@@ -236,14 +234,6 @@ impl DmaStreamReaderState {
             handles.push(v);
         }
         handles
-    }
-}
-
-impl Drop for DmaStreamReaderState {
-    fn drop(&mut self) {
-        for (_k, v) in self.pending.drain() {
-            v.cancel();
-        }
     }
 }
 
@@ -798,14 +788,6 @@ impl DmaStreamWriterState {
             })
             .detach(),
         );
-    }
-}
-
-impl Drop for DmaStreamWriterState {
-    fn drop(&mut self) {
-        for (_, v) in self.pending.drain() {
-            v.cancel();
-        }
     }
 }
 
