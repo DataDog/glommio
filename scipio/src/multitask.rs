@@ -200,6 +200,10 @@ impl LocalExecutor {
     pub(crate) fn get_task(&self) -> Option<Runnable> {
         self.local_queue.pop()
     }
+
+    pub(crate) fn is_active(&self) -> bool {
+        !self.local_queue.queue.borrow().is_empty()
+    }
 }
 
 /// A cloneable callback function.
