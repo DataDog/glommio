@@ -175,9 +175,7 @@ impl TaskQueue {
     }
 
     fn get_task(&mut self) -> Option<multitask::Runnable> {
-        let r = self.ex.get_task();
-        self.active = r.is_some();
-        r
+        self.ex.get_task()
     }
 
     fn yielded(&self) -> bool {
@@ -198,6 +196,8 @@ impl TaskQueue {
         let delta_scaled = (self.stats.reciprocal_shares * (delta.as_nanos() as u64)) >> 12;
         self.stats.runtime += delta;
         self.stats.queue_selected += 1;
+        self.active = self.ex.is_active();
+
         let vruntime = self.vruntime.checked_add(delta_scaled);
         if let Some(x) = vruntime {
             self.vruntime = x;
