@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
@@ -185,54 +185,40 @@ impl From<Duration> for TimeSpec64 {
     }
 }
 
-/// Tasks interested in events on a source.
-#[derive(Debug)]
-pub(crate) struct Wakers {
-    /// Raw result of the operation.
-    pub(crate) result: Option<io::Result<usize>>,
-
-    /// Tasks waiting for the next event.
-    pub(crate) waiters: Vec<Waker>,
-}
-
-impl Wakers {
-    pub(crate) fn new() -> Self {
-        Wakers {
-            result: None,
-            waiters: Vec::new(),
-        }
-    }
-}
-
 /// A registered source of I/O events.
+#[derive(Debug)]
 pub struct InnerSource {
     /// Raw file descriptor on Unix platforms.
     raw: RawFd,
-
-    /// Tasks interested in events on this source.
-    wakers: RefCell<Wakers>,
 
     source_type: RefCell<SourceType>,
 
     io_requirements: IoRequirements,
 
-    enqueued: Cell<Option<EnqueuedSource>>,
+    state: RefCell<SourceState>,
 }
 
-pub struct EnqueuedSource {
-    pub(crate) id: SourceId,
-    pub(crate) queue: ReactorQueue,
+#[derive(Debug)]
+enum SourceState {
+    /// The `Source` starts in this state.
+    NotQueued,
+    /// The source was queued into the ring.
+    Queued(QueueInfo),
+    /// The source was completed with the specified result.
+    Ready {
+        /// Raw result of the operation.
+        result: io::Result<usize>,
+    },
+    /// The source finishes in this state after the result is consumed.
+    Consumed,
 }
 
-impl fmt::Debug for InnerSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InnerSource")
-            .field("raw", &self.raw)
-            .field("wakers", &self.wakers)
-            .field("source_type", &self.source_type)
-            .field("io_requirements", &self.io_requirements)
-            .finish()
-    }
+#[derive(Debug)]
+struct QueueInfo {
+    id: SourceId,
+    queue: ReactorQueue,
+    /// Tasks waiting for the next event.
+    waiters: Vec<Waker>,
 }
 
 #[derive(Debug)]
@@ -246,10 +232,9 @@ impl Source {
         Source {
             inner: Rc::new(InnerSource {
                 raw,
-                wakers: RefCell::new(Wakers::new()),
                 source_type: RefCell::new(source_type),
                 io_requirements: ioreq,
-                enqueued: Cell::new(None),
+                state: RefCell::new(SourceState::NotQueued),
             }),
         }
     }
