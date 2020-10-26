@@ -194,8 +194,7 @@ impl<T> SharesManager for InnerQueue<T> {
 
         // so little time has passed we can't really make any useful prediction
         if expected < 0.01 {
-            self.last_shares.set(1);
-            return 1;
+            return self.last_shares.get();
         }
 
         let error = 1.0 - processed / expected;
