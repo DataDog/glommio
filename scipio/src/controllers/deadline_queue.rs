@@ -7,7 +7,7 @@ use crate::channels::local_channel::{self, LocalReceiver, LocalSender};
 use crate::{enclose, task};
 use crate::{Latency, Local, Shares, SharesManager, TaskQueueHandle};
 use futures_lite::StreamExt;
-use log::warn;
+use log::{trace, warn};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
@@ -181,6 +181,11 @@ impl<T> SharesManager for InnerQueue<T> {
 
         for (exp, source) in queue.iter() {
             let remaining_time = exp.saturating_duration_since(now);
+            trace!(
+                "Remaining time for this source: {:#?}, total_units {}",
+                remaining_time,
+                source.total_units()
+            );
             let time_fraction =
                 1.0 - (remaining_time.as_secs_f64() / source.expected_duration().as_secs_f64());
             if remaining_time.as_nanos() == 0 && now.saturating_duration_since(*exp).as_secs() > 5 {
@@ -222,6 +227,7 @@ impl<T> SharesManager for InnerQueue<T> {
         shares = std::cmp::max(shares, self.min_shares.get() as isize);
         let shares = shares as usize;
 
+        trace!("processed: {}. expected: {} error: {}, delta_error {} , kp term {}, ki term {}, shares: {}", processed, expected, error, delta_error, ki * error, kp * delta_error, shares);
         self.last_shares.set(shares);
         shares
     }
