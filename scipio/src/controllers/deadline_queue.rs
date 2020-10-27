@@ -4,6 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
 use crate::channels::local_channel::{self, LocalReceiver, LocalSender};
+use crate::controllers::ControllerStatus;
 use crate::{enclose, task};
 use crate::{Latency, Local, Shares, SharesManager, TaskQueueHandle};
 use futures_lite::StreamExt;
@@ -125,6 +126,8 @@ struct InnerQueue<T> {
     adjustment_period: Duration,
     last_error: Cell<f64>,
     min_shares: Cell<usize>,
+
+    state: Cell<ControllerStatus>,
 }
 
 impl<T> SharesManager for InnerQueue<T> {
@@ -174,6 +177,10 @@ impl<T> SharesManager for InnerQueue<T> {
     //  last output, and not how much the shares should be. It also eliminates any
     //  dependency on time when calculating the error which increases resiliency.
     fn shares(&self) -> usize {
+        if let ControllerStatus::Disabled(shares) = self.state.get() {
+            return shares;
+        }
+
         let queue = self.queue.borrow();
         let mut expected = 0.0;
         let mut processed = 0.0;
@@ -249,6 +256,7 @@ impl<T> InnerQueue<T> {
             adjustment_period,
             last_error: Cell::new(0.0),
             min_shares: Cell::new(1),
+            state: Cell::new(ControllerStatus::Enabled),
         }
     }
 
@@ -467,6 +475,33 @@ impl<T: 'static> DeadlineQueue<T> {
     /// then this has no effect.
     pub fn bump_priority(&self) -> PriorityBump<T> {
         PriorityBump::new(self.queue.clone())
+    }
+
+    /// Disables the controller.
+    ///
+    /// Instead the process being controlled will now have static shares defined by
+    /// the `shares` argument (between 1 and 1000).
+    pub fn disable(&self, mut shares: usize) {
+        shares = std::cmp::min(shares, 1000);
+        shares = std::cmp::max(shares, 1);
+        self.queue.state.set(ControllerStatus::Disabled(shares));
+    }
+
+    /// Enables the controller.
+    ///
+    /// This is a no-op if the controller was already enabled. If it had been manually
+    /// disabled then it moves back to automatic mode.
+    pub fn enable(&self) {
+        self.queue.state.set(ControllerStatus::Enabled);
+    }
+
+    /// Queries the controller for its status.
+    ///
+    /// The possible statuses are defined by the [`ControllerStatus`] enum
+    ///
+    /// [`ControllerStatus`]: enum.ControllerStatus.html
+    pub fn status(&self) -> ControllerStatus {
+        self.queue.state.get()
     }
 }
 
