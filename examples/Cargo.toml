@@ -6,6 +6,7 @@ edition = "2018"
 
 [dev-dependencies]
 futures = "0.3.5"
+futures-lite = "1.11.1"
 ansi_term = "0.12.1"
 scipio = { version = "0.1.0", path = "../scipio" }
 

@@ -10,5 +10,16 @@
 //! control theory like the [`PID controller`].
 //!
 //! [`PID controller`]: https://en.wikipedia.org/wiki/PID_controller
+
+/// The status of a particular controller. In some situations it is useful
+/// to disable the controller and use static shares instead.
+#[derive(Debug, Copy, Clone)]
+pub enum ControllerStatus {
+    /// Controller Enabled. Shares are automatically determined
+    Enabled,
+    /// Controller Disabled. The parameter of the enum item represents
+    Disabled(usize),
+}
+
 mod deadline_queue;
 pub use self::deadline_queue::*;

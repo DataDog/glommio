@@ -4,10 +4,11 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
 use crate::channels::local_channel::{self, LocalReceiver, LocalSender};
+use crate::controllers::ControllerStatus;
 use crate::{enclose, task};
 use crate::{Latency, Local, Shares, SharesManager, TaskQueueHandle};
 use futures_lite::StreamExt;
-use log::warn;
+use log::{trace, warn};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
@@ -39,11 +40,11 @@ pub trait DeadlineSource {
     /// to see completed at a particular deadline, and then the implementation of this would be:
     ///
     /// ```ignore
-    /// fn action(&self) -> Pin<Box<dyn Future<Output = io::Result<Duration>> + '_>> {
+    /// fn action(&self) -> Pin<Box<dyn Future<Output = io::Result<Duration>> + 'static>> {
     ///    Box::pin(self.my_action())
     /// }
     /// ```
-    fn action(&self) -> Pin<Box<dyn Future<Output = Self::Output> + '_>>;
+    fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Self::Output> + 'static>>;
 
     /// The total amount of units to be processed.
     ///
@@ -125,6 +126,8 @@ struct InnerQueue<T> {
     adjustment_period: Duration,
     last_error: Cell<f64>,
     min_shares: Cell<usize>,
+
+    state: Cell<ControllerStatus>,
 }
 
 impl<T> SharesManager for InnerQueue<T> {
@@ -174,6 +177,10 @@ impl<T> SharesManager for InnerQueue<T> {
     //  last output, and not how much the shares should be. It also eliminates any
     //  dependency on time when calculating the error which increases resiliency.
     fn shares(&self) -> usize {
+        if let ControllerStatus::Disabled(shares) = self.state.get() {
+            return shares;
+        }
+
         let queue = self.queue.borrow();
         let mut expected = 0.0;
         let mut processed = 0.0;
@@ -181,6 +188,11 @@ impl<T> SharesManager for InnerQueue<T> {
 
         for (exp, source) in queue.iter() {
             let remaining_time = exp.saturating_duration_since(now);
+            trace!(
+                "Remaining time for this source: {:#?}, total_units {}",
+                remaining_time,
+                source.total_units()
+            );
             let time_fraction =
                 1.0 - (remaining_time.as_secs_f64() / source.expected_duration().as_secs_f64());
             if remaining_time.as_nanos() == 0 && now.saturating_duration_since(*exp).as_secs() > 5 {
@@ -194,8 +206,7 @@ impl<T> SharesManager for InnerQueue<T> {
 
         // so little time has passed we can't really make any useful prediction
         if expected < 0.01 {
-            self.last_shares.set(1);
-            return 1;
+            return self.last_shares.get();
         }
 
         let error = 1.0 - processed / expected;
@@ -223,6 +234,7 @@ impl<T> SharesManager for InnerQueue<T> {
         shares = std::cmp::max(shares, self.min_shares.get() as isize);
         let shares = shares as usize;
 
+        trace!("processed: {}. expected: {} error: {}, delta_error {} , kp term {}, ki term {}, shares: {}", processed, expected, error, delta_error, ki * error, kp * delta_error, shares);
         self.last_shares.set(shares);
         shares
     }
@@ -244,6 +256,7 @@ impl<T> InnerQueue<T> {
             adjustment_period,
             last_error: Cell::new(0.0),
             min_shares: Cell::new(1),
+            state: Cell::new(ControllerStatus::Enabled),
         }
     }
 
@@ -425,7 +438,7 @@ impl<T: 'static> DeadlineQueue<T> {
     ///        Duration::from_secs(1)
     ///     }
     ///
-    ///     fn action(&self) -> Pin<Box<dyn Future<Output = Self::Output> + '_>> {
+    ///     fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Self::Output> + 'static>> {
     ///        Box::pin(ready(1))
     ///     }
     ///
@@ -463,6 +476,33 @@ impl<T: 'static> DeadlineQueue<T> {
     pub fn bump_priority(&self) -> PriorityBump<T> {
         PriorityBump::new(self.queue.clone())
     }
+
+    /// Disables the controller.
+    ///
+    /// Instead the process being controlled will now have static shares defined by
+    /// the `shares` argument (between 1 and 1000).
+    pub fn disable(&self, mut shares: usize) {
+        shares = std::cmp::min(shares, 1000);
+        shares = std::cmp::max(shares, 1);
+        self.queue.state.set(ControllerStatus::Disabled(shares));
+    }
+
+    /// Enables the controller.
+    ///
+    /// This is a no-op if the controller was already enabled. If it had been manually
+    /// disabled then it moves back to automatic mode.
+    pub fn enable(&self) {
+        self.queue.state.set(ControllerStatus::Enabled);
+    }
+
+    /// Queries the controller for its status.
+    ///
+    /// The possible statuses are defined by the [`ControllerStatus`] enum
+    ///
+    /// [`ControllerStatus`]: enum.ControllerStatus.html
+    pub fn status(&self) -> ControllerStatus {
+        self.queue.state.get()
+    }
 }
 
 #[cfg(test)]
@@ -487,7 +527,7 @@ mod test {
                 drop_guarantee: Rc::new(Cell::new(false)),
             })
         }
-        async fn wait(&self) -> usize {
+        async fn wait(self: Rc<Self>) -> usize {
             Timer::new(self.duration).await;
             0
         }
@@ -506,7 +546,7 @@ mod test {
             self.duration
         }
 
-        fn action(&self) -> Pin<Box<dyn Future<Output = Self::Output> + '_>> {
+        fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Self::Output> + 'static>> {
             Box::pin(self.wait())
         }
 

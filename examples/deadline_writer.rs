@@ -1,9 +1,10 @@
 use ansi_term::{Colour, Style};
+use futures_lite::io::AsyncBufReadExt;
 use scipio::controllers::{DeadlineQueue, DeadlineSource};
+use scipio::io::stdin;
 use scipio::{Latency, Local, LocalExecutorBuilder, Shares, Task, TaskQueueHandle};
 use std::cell::Cell;
 use std::future::Future;
-use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -39,7 +40,7 @@ impl IntWriter {
         })
     }
 
-    async fn write_int(&self) -> Duration {
+    async fn write_int(self: Rc<Self>) -> Duration {
         let my_handle = Local::current_task_queue();
 
         loop {
@@ -93,8 +94,8 @@ impl DeadlineSource for IntWriter {
         self.deadline
     }
 
-    fn action(&self) -> Pin<Box<dyn Future<Output = Duration> + '_>> {
-        Box::pin(self.write_int())
+    fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Duration> + 'static>> {
+        Box::pin(self.clone().write_int())
     }
 
     fn total_units(&self) -> u64 {
@@ -147,13 +148,9 @@ async fn static_writer(how_many: usize, shares: usize, cpuhog_tq: TaskQueueHandl
     res
 }
 
-// FIXME: this is just much simpler, but in a standard scipio program you should avoid blocking.
-// This has actually some nasty effects in that all the blocking time is accounted in this task
-// queue. As soon as we have a good buffered file implementation we should come here and fix this
-// so nobody thinks lowly of us.
-fn blocking_read_int() -> Result<usize, <usize as std::str::FromStr>::Err> {
+async fn read_int() -> Result<usize, <usize as std::str::FromStr>::Err> {
     let mut buffer = String::new();
-    io::stdin().read_line(&mut buffer).unwrap();
+    stdin().read_line(&mut buffer).await.unwrap();
     let buf = buffer.trim();
     buf.parse::<usize>()
 }
@@ -171,7 +168,7 @@ fn main() {
                      Style::new().bold().paint("best"));
 
             println!("\n\nPlease tell me how many integers you would like to write");
-            let to_write = blocking_read_int().unwrap();
+            let to_write = read_int().await.unwrap();
             println!("Ok, now let's write {} integers with both the writer and the CPU hog having the same priority", Colour::Blue.paint(to_write.to_string()));
             let dur = static_writer(to_write, 1000, cpuhog_tq).await;
             println!("Finished writing in {}", Colour::Green.paint(format!("{:#.0?}", dur)));
@@ -183,7 +180,7 @@ fn main() {
 
             println!("\n\nLet's try the controlled process. How long would you like it to take? (seconds)");
             println!("Keep in mind that very short processes will be inherently unstable because of the time the controller needs to adapt");
-            let mut duration = blocking_read_int().unwrap();
+            let mut duration = read_int().await.unwrap();
 
             loop {
                 let stop = Rc::new(Cell::new(false));
@@ -197,7 +194,7 @@ fn main() {
                 stop.set(true);
                 hog.await.unwrap();
                 println!("If you want to try again tell me how long it should take this time, or press some non-number to exit");
-                duration = match blocking_read_int() {
+                duration = match read_int().await {
                     Ok(num) => num,
                     Err(_) => break,
                 }
