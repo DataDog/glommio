@@ -39,11 +39,11 @@ pub trait DeadlineSource {
     /// to see completed at a particular deadline, and then the implementation of this would be:
     ///
     /// ```ignore
-    /// fn action(&self) -> Pin<Box<dyn Future<Output = io::Result<Duration>> + '_>> {
+    /// fn action(&self) -> Pin<Box<dyn Future<Output = io::Result<Duration>> + 'static>> {
     ///    Box::pin(self.my_action())
     /// }
     /// ```
-    fn action(&self) -> Pin<Box<dyn Future<Output = Self::Output> + '_>>;
+    fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Self::Output> + 'static>>;
 
     /// The total amount of units to be processed.
     ///
@@ -424,7 +424,7 @@ impl<T: 'static> DeadlineQueue<T> {
     ///        Duration::from_secs(1)
     ///     }
     ///
-    ///     fn action(&self) -> Pin<Box<dyn Future<Output = Self::Output> + '_>> {
+    ///     fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Self::Output> + 'static>> {
     ///        Box::pin(ready(1))
     ///     }
     ///
@@ -486,7 +486,7 @@ mod test {
                 drop_guarantee: Rc::new(Cell::new(false)),
             })
         }
-        async fn wait(&self) -> usize {
+        async fn wait(self: Rc<Self>) -> usize {
             Timer::new(self.duration).await;
             0
         }
@@ -505,7 +505,7 @@ mod test {
             self.duration
         }
 
-        fn action(&self) -> Pin<Box<dyn Future<Output = Self::Output> + '_>> {
+        fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Self::Output> + 'static>> {
             Box::pin(self.wait())
         }
 

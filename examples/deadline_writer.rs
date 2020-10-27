@@ -40,7 +40,7 @@ impl IntWriter {
         })
     }
 
-    async fn write_int(&self) -> Duration {
+    async fn write_int(self: Rc<Self>) -> Duration {
         let my_handle = Local::current_task_queue();
 
         loop {
@@ -94,8 +94,8 @@ impl DeadlineSource for IntWriter {
         self.deadline
     }
 
-    fn action(&self) -> Pin<Box<dyn Future<Output = Duration> + '_>> {
-        Box::pin(self.write_int())
+    fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Duration> + 'static>> {
+        Box::pin(self.clone().write_int())
     }
 
     fn total_units(&self) -> u64 {
