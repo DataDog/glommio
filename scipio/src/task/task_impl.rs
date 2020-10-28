@@ -16,69 +16,6 @@ use crate::task::raw::RawTask;
 use crate::task::state::*;
 use crate::task::JoinHandle;
 
-/// Creates a new task.
-///
-/// This constructor returns a [`Task`] reference that runs the future and a [`JoinHandle`] that
-/// awaits its result.
-///
-/// When run, the task polls `future`. When woken up, it gets scheduled for running by the
-/// `schedule` function. Argument `tag` is an arbitrary piece of data stored inside the task.
-///
-/// The schedule function should not attempt to run the task nor to drop it. Instead, it should
-/// push the task into some kind of queue so that it can be processed later.
-///
-/// If you need to spawn a future that does not implement [`Send`], consider using the
-/// [`spawn_local`] function instead.
-///
-/// [`Task`]: struct.Task.html
-/// [`JoinHandle`]: struct.JoinHandle.html
-/// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-/// [`spawn_local`]: fn.spawn_local.html
-///
-/// # Examples
-///
-/// ```
-/// use scipio::task::spawn;
-/// use std::sync::mpsc::sync_channel;
-///
-/// // The future inside the task.
-/// let future = async {
-///     println!("Hello, world!");
-/// };
-///
-/// // If the task gets woken up, it will be sent into this channel.
-/// let (s, r) = sync_channel(10);
-/// let schedule = move |task| s.send(task).unwrap();
-///
-/// // Create a task with the future and the schedule function.
-/// let (task, handle) = spawn(future, schedule, ());
-/// ```
-pub fn spawn<F, R, S, T>(future: F, schedule: S, tag: T) -> (Task<T>, JoinHandle<R, T>)
-where
-    F: Future<Output = R> + Send + 'static,
-    R: Send + 'static,
-    S: Fn(Task<T>) + Send + Sync + 'static,
-    T: Send + Sync + 'static,
-{
-    // Allocate large futures on the heap.
-    let raw_task = if mem::size_of::<F>() >= 2048 {
-        let future = alloc::boxed::Box::pin(future);
-        RawTask::<_, R, S, T>::allocate(future, schedule, tag)
-    } else {
-        RawTask::<F, R, S, T>::allocate(future, schedule, tag)
-    };
-
-    let task = Task {
-        raw_task,
-        _marker: PhantomData,
-    };
-    let handle = JoinHandle {
-        raw_task,
-        _marker: PhantomData,
-    };
-    (task, handle)
-}
-
 /// Creates a new local task.
 ///
 /// This constructor returns a [`Task`] reference that runs the future and a [`JoinHandle`] that
@@ -87,94 +24,15 @@ where
 /// When run, the task polls `future`. When woken up, it gets scheduled for running by the
 /// `schedule` function. Argument `tag` is an arbitrary piece of data stored inside the task.
 ///
-/// The schedule function should not attempt to run the task nor to drop it. Instead, it should
-/// push the task into some kind of queue so that it can be processed later.
-///
-/// Unlike [`spawn`], this function does not require the future to implement [`Send`]. If the
-/// [`Task`] reference is run or dropped on a thread it was not created on, a panic will occur.
-///
-/// **NOTE:** This function is only available when the `std` feature for this crate is enabled (it
-/// is by default).
-///
 /// [`Task`]: struct.Task.html
 /// [`JoinHandle`]: struct.JoinHandle.html
-/// [`spawn`]: fn.spawn.html
-/// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-///
-/// # Examples
-///
-/// ```
-/// use scipio::task::spawn_local;
-/// use std::sync::mpsc::sync_channel;
-///
-/// // The future inside the task.
-/// let future = async {
-///     println!("Hello, world!");
-/// };
-///
-/// // If the task gets woken up, it will be sent into this channel.
-/// let (s, r) = sync_channel(10);
-/// let schedule = move |task| s.send(task).unwrap();
-///
-/// // Create a task with the future and the schedule function.
-/// let (task, handle) = spawn_local(future, schedule, ());
-/// ```
-pub fn spawn_local<F, R, S, T>(future: F, schedule: S, tag: T) -> (Task<T>, JoinHandle<R, T>)
+pub(crate) fn spawn_local<F, R, S, T>(future: F, schedule: S, tag: T) -> (Task<T>, JoinHandle<R, T>)
 where
     F: Future<Output = R> + 'static,
     R: 'static,
     S: Fn(Task<T>) + 'static,
     T: 'static,
 {
-    use std::mem::ManuallyDrop;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use std::thread::{self, ThreadId};
-
-    #[inline]
-    fn thread_id() -> ThreadId {
-        thread_local! {
-            static ID: ThreadId = thread::current().id();
-        }
-        ID.try_with(|id| *id)
-            .unwrap_or_else(|_| thread::current().id())
-    }
-
-    struct Checked<F> {
-        id: ThreadId,
-        inner: ManuallyDrop<F>,
-    }
-
-    impl<F> Drop for Checked<F> {
-        fn drop(&mut self) {
-            assert!(
-                self.id == thread_id(),
-                "local task dropped by a thread that didn't spawn it"
-            );
-            unsafe {
-                ManuallyDrop::drop(&mut self.inner);
-            }
-        }
-    }
-
-    impl<F: Future> Future for Checked<F> {
-        type Output = F::Output;
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            assert!(
-                self.id == thread_id(),
-                "local task polled by a thread that didn't spawn it"
-            );
-            unsafe { self.map_unchecked_mut(|c| &mut *c.inner).poll(cx) }
-        }
-    }
-
-    // Wrap the future into one that which thread it's on.
-    let future = Checked {
-        id: thread_id(),
-        inner: ManuallyDrop::new(future),
-    };
-
     // Allocate large futures on the heap.
     let raw_task = if mem::size_of::<F>() >= 2048 {
         let future = alloc::boxed::Box::pin(future);
