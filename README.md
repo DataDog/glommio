@@ -2,6 +2,12 @@
 
 [![CircleCI](https://circleci.com/gh/DataDog/scipio.svg?style=svg)](https://circleci.com/gh/DataDog/scipio)
 
+###  _"Contextvm Svitchae Delenda Est"_
+
+>    -- Scipio Africanus after defeating Hannibal in the Battle of Zama (*)
+
+<sub>(*) That really happened. You weren't there so you can't prove Scipio never said that</sub>
+
 ## Join our Zulip community!
 
 If you are interested in Scipio consider joining our [Zulip](https://scipio.zulipchat.com) community.
