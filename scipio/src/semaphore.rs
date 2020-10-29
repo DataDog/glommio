@@ -42,6 +42,7 @@ impl Future for Waiter {
 struct State {
     idgen: u64,
     avail: u64,
+    virtual_consumed: u64,
     waiterset: HashMap<WaiterId, (u64, Waker)>,
     list: VecDeque<WaiterId>,
     closed: bool,
@@ -51,6 +52,7 @@ impl State {
     fn new(avail: u64) -> Self {
         State {
             avail,
+            virtual_consumed: 0,
             list: VecDeque::new(),
             waiterset: HashMap::new(),
             closed: false,
@@ -78,7 +80,7 @@ impl State {
             return Err(Error::new(ErrorKind::BrokenPipe, "Semaphore Broken"));
         }
 
-        if self.list.is_empty() && self.avail >= units {
+        if self.avail >= units {
             self.avail -= units;
             return Ok(true);
         }
@@ -103,9 +105,11 @@ impl State {
             Entry::Vacant(_) => unreachable!(),
         };
         let units = waiterset_entry.get().0;
-        if units <= self.avail {
+        let expected_units = self.avail - self.virtual_consumed;
+        if units <= expected_units {
             self.list.pop_front();
-            let (_units, waker) = waiterset_entry.remove();
+            let (units, waker) = waiterset_entry.remove();
+            self.virtual_consumed += units;
             return Some(waker);
         }
         None
@@ -127,6 +131,7 @@ impl Waiter {
 /// Resources are held while the Permit is alive, and released when the
 /// permit is dropped.
 #[derive(Debug)]
+#[must_use = "units are only held while the permit is alive. If unused then semaphore will immediately release units"]
 pub struct Permit {
     units: u64,
     sem: Rc<RefCell<State>>,
@@ -138,9 +143,20 @@ impl Permit {
     }
 }
 
+fn process_wakes(sem: Rc<RefCell<State>>, units: u64) {
+    let mut state = sem.borrow_mut();
+    state.signal(units);
+    while let Some(waiter) = state.try_wake_one() {
+        drop(state);
+        waiter.wake();
+        state = sem.borrow_mut();
+    }
+    state.virtual_consumed = 0;
+}
+
 impl Drop for Permit {
     fn drop(&mut self) {
-        self.sem.borrow_mut().signal(self.units);
+        process_wakes(self.sem.clone(), self.units);
     }
 }
 
@@ -201,7 +217,7 @@ impl Semaphore {
     ///         // once it is dropped it can be acquired again
     ///         // going out of scope will drop
     ///     }
-    ///     let _ = sem.acquire_permit(1).await.unwrap();
+    ///     let _guard = sem.acquire_permit(1).await.unwrap();
     /// });
     /// ```
     pub async fn acquire_permit(&self, units: u64) -> Result<Permit> {
@@ -228,15 +244,14 @@ impl Semaphore {
     /// });
     /// ```
     pub async fn acquire(&self, units: u64) -> Result<()> {
+        let mut state = self.state.borrow_mut();
         // Try acquiring first without paying the price to construct a waker.
         // If that fails then we construct a waker and wait on it.
-        if self.state.borrow_mut().try_acquire(units)? {
+        if state.list.is_empty() && state.try_acquire(units)? {
             return Ok(());
         }
-        let waiter = self
-            .state
-            .borrow_mut()
-            .new_waiter(units, self.state.clone());
+        let waiter = state.new_waiter(units, self.state.clone());
+        drop(state);
         waiter.await
     }
 
@@ -260,11 +275,7 @@ impl Semaphore {
     /// });
     /// ```
     pub fn signal(&self, units: u64) {
-        let mut state = self.state.borrow_mut();
-        state.signal(units);
-        while let Some(waiter) = state.try_wake_one() {
-            waiter.wake();
-        }
+        process_wakes(self.state.clone(), units);
     }
 
     /// Closes the semaphore
@@ -296,6 +307,8 @@ impl Semaphore {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::{enclose, Local};
+    use std::cell::Cell;
     use std::time::Instant;
 
     #[test]
@@ -309,27 +322,34 @@ mod test {
 
     #[test]
     fn permit_raii_works() {
-        make_shared_var!(Semaphore::new(1), sem1, sem2);
-        make_shared_var_mut!(0, exec1, exec2, exec3);
+        test_executor!(async move {
+            let sem = Rc::new(Semaphore::new(0));
+            let exec = Rc::new(Cell::new(0));
 
-        test_executor!(
-            async move {
-                {
-                    let _ = sem1.acquire_permit(1).await.unwrap();
-                    update_cond!(exec1, 1);
-                }
-            },
-            async move {
-                wait_on_cond!(exec2, 1);
-                // This statement will only execute if the permit was released successfully
-                let _ = sem2.acquire_permit(1).await.unwrap();
-                update_cond!(exec2, 2);
-            },
-            async move {
-                // Busy loop yielding, waiting for the previous semaphore to return
-                wait_on_cond!(exec3, 2, 1);
+            let t1 = Local::local(enclose! { (sem, exec) async move {
+                exec.set(exec.get() + 1);
+                let _g = sem.acquire_permit(1).await.unwrap();
+            }});
+            let t2 = Task::local(enclose! { (sem, exec) async move {
+                exec.set(exec.get() + 1);
+                let _g = sem.acquire_permit(1).await.unwrap();
+            }});
+
+            let t3 = Local::local(enclose! { (sem, exec) async move {
+                exec.set(exec.get() + 1);
+                let _g = sem.acquire_permit(1).await.unwrap();
+            }});
+
+            // Wait for all permits to try and acquire, then unleash the gates.
+            while exec.get() != 3 {
+                Local::later().await;
             }
-        );
+            sem.signal(1);
+
+            t3.await;
+            t2.await;
+            t1.await;
+        });
     }
 
     #[test]
@@ -341,7 +361,7 @@ mod test {
             async move {
                 {
                     wait_on_cond!(exec1, 1);
-                    let _ = sem1.acquire_permit(1).await.unwrap();
+                    let _g = sem1.acquire_permit(1).await.unwrap();
                     update_cond!(exec1, 2);
                 }
             },
@@ -396,7 +416,7 @@ mod test {
                 wait_on_cond!(exec1, 1);
                 // even if try to acquire 0, which always succeed,
                 // we should fail if it is closed.
-                let _ = sem1.acquire_permit(0).await.unwrap();
+                let _g = sem1.acquire_permit(0).await.unwrap();
             },
             async move {
                 sem2.close();
@@ -416,7 +436,7 @@ mod test {
         test_executor!(
             async move {
                 update_cond!(exec1, 1);
-                let _ = sem1.acquire_permit(1).await.unwrap();
+                let _g = sem1.acquire_permit(1).await.unwrap();
             },
             async move {
                 wait_on_cond!(exec2, 1);
