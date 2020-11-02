@@ -755,6 +755,18 @@ impl LocalExecutor {
         self.queues.borrow().spin_before_park
     }
 
+    fn run_task_queues(&self) -> bool {
+        let mut ran = false;
+        while !Reactor::need_preempt() {
+            if !self.run_one_task_queue() {
+                return false;
+            } else {
+                ran = true;
+            }
+        }
+        ran
+    }
+
     fn run_one_task_queue(&self) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
@@ -860,7 +872,7 @@ impl LocalExecutor {
             // the opportunity to install the timer.
             let duration = self.preempt_timer_duration();
             self.parker.poll_io(duration);
-            if !self.run_one_task_queue() {
+            if !self.run_task_queues() {
                 if spin {
                     if let Some(t) = spin_since {
                         if t.elapsed() < spin_before_park {
