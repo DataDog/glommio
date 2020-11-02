@@ -54,6 +54,10 @@ impl<T> Default for FreeList<T> {
     }
 }
 
+pub(crate) struct Values<'a, T> {
+    inner: std::slice::Iter<'a, Slot<T>>,
+}
+
 impl<T> FreeList<T> {
     pub(crate) fn alloc(&mut self, item: T) -> Idx<T> {
         let slot = Slot::Full { item };
@@ -80,6 +84,27 @@ impl<T> FreeList<T> {
             Slot::Full { item } => item,
             Slot::Free { .. } => unreachable!(),
         }
+    }
+
+    pub(crate) fn values<'a>(&'a self) -> Values<'a, T> {
+        Values {
+            inner: self.slots.iter(),
+        }
+    }
+}
+
+impl<'a, T> Iterator for Values<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        self.inner.next().map(|x| match &x {
+            Slot::Free { .. } => unreachable!(),
+            Slot::Full { item } => item,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
 
@@ -136,4 +161,20 @@ fn free_list_smoke_test() {
     assert_eq!(a, Idx::from_raw(1));
     assert_eq!(b, Idx::from_raw(0));
     assert_eq!(c, Idx::from_raw(2));
+}
+
+#[test]
+fn free_list_iterator() {
+    let mut free_list: FreeList<usize> = FreeList::default();
+    let mut sum_expected = 0;
+    for i in 0..10 {
+        sum_expected += i;
+        free_list.alloc(i);
+    }
+
+    let mut sum_obtained = 0;
+    for val in free_list.values() {
+        sum_obtained += val;
+    }
+    assert_eq!(sum_obtained, sum_expected);
 }
