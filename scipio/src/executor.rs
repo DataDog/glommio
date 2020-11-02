@@ -31,7 +31,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use std::cell::RefCell;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt;
 use std::future::Future;
 use std::io;
@@ -317,7 +317,7 @@ impl TaskQueueStats {
 #[derive(Debug)]
 struct ExecutorQueues {
     active_executors: BinaryHeap<Rc<RefCell<TaskQueue>>>,
-    available_executors: HashMap<usize, Rc<RefCell<TaskQueue>>>,
+    available_executors: BTreeMap<usize, Rc<RefCell<TaskQueue>>>,
     active_executing: Option<Rc<RefCell<TaskQueue>>>,
     default_executor: TaskQueueHandle,
     executor_index: usize,
@@ -331,7 +331,7 @@ impl ExecutorQueues {
     fn new() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(ExecutorQueues {
             active_executors: BinaryHeap::new(),
-            available_executors: HashMap::new(),
+            available_executors: BTreeMap::new(),
             active_executing: None,
             default_executor: TaskQueueHandle::default(),
             executor_index: 1, // 0 is the default
