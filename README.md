@@ -24,7 +24,7 @@ unlike its counterparts it doesn't use helper threads anywhere.
 Using Scipio is not hard if you are familiar with rust async. All you have to do is:
 
 ```rust
-    use scipio::LocalExecutorBuilder;
+    use scipio::prelude::*;
     LocalExecutorBuilder::new().spawn(|| async move {
         /// your code here
     }).unwrap();

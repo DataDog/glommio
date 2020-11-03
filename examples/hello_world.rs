@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use futures::future::join_all;
-use scipio::{Local, LocalExecutorBuilder};
+use scipio::prelude::*;
 use std::io::Result;
 
 async fn hello() {
