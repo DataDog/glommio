@@ -1,5 +1,5 @@
 use futures::join;
-use scipio::{Latency, Local, LocalExecutorBuilder, Shares};
+use scipio::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};

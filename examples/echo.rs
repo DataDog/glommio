@@ -5,7 +5,8 @@
 //
 use futures::future::join_all;
 use futures::io::{copy, AsyncReadExt, AsyncWriteExt};
-use scipio::{Async, Local, LocalExecutorBuilder};
+use scipio::prelude::*;
+use scipio::Async;
 use std::io::Result;
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::rc::Rc;

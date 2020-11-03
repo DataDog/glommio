@@ -381,6 +381,11 @@ pub use crate::shares::{Shares, SharesManager};
 pub use enclose::enclose;
 pub use scopeguard::defer;
 
+/// Provides common imports that almost all Scipio applications will need
+pub mod prelude {
+    pub use crate::{Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares, TaskQueueHandle};
+}
+
 /// Local is an ergonomic way to access the local executor.
 /// The local is executed through a Task type, but the Task type has a type
 /// parameter consisting of the return type of the future encapsulated by this
