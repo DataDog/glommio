@@ -31,7 +31,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use std::cell::RefCell;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt;
 use std::future::Future;
 use std::io;
@@ -317,7 +317,7 @@ impl TaskQueueStats {
 #[derive(Debug)]
 struct ExecutorQueues {
     active_executors: BinaryHeap<Rc<RefCell<TaskQueue>>>,
-    available_executors: HashMap<usize, Rc<RefCell<TaskQueue>>>,
+    available_executors: BTreeMap<usize, Rc<RefCell<TaskQueue>>>,
     active_executing: Option<Rc<RefCell<TaskQueue>>>,
     default_executor: TaskQueueHandle,
     executor_index: usize,
@@ -331,7 +331,7 @@ impl ExecutorQueues {
     fn new() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(ExecutorQueues {
             active_executors: BinaryHeap::new(),
-            available_executors: HashMap::new(),
+            available_executors: BTreeMap::new(),
             active_executing: None,
             default_executor: TaskQueueHandle::default(),
             executor_index: 1, // 0 is the default
@@ -755,6 +755,18 @@ impl LocalExecutor {
         self.queues.borrow().spin_before_park
     }
 
+    fn run_task_queues(&self) -> bool {
+        let mut ran = false;
+        while !Reactor::need_preempt() {
+            if !self.run_one_task_queue() {
+                return false;
+            } else {
+                ran = true;
+            }
+        }
+        ran
+    }
+
     fn run_one_task_queue(&self) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
@@ -860,7 +872,7 @@ impl LocalExecutor {
             // the opportunity to install the timer.
             let duration = self.preempt_timer_duration();
             self.parker.poll_io(duration);
-            if !self.run_one_task_queue() {
+            if !self.run_task_queues() {
                 if spin {
                     if let Some(t) = spin_since {
                         if t.elapsed() < spin_before_park {
