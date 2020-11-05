@@ -705,21 +705,6 @@ macro_rules! flush_rings {
 
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
-        // Different threads have no business passing files around. Once you have
-        // a file descriptor you can do unsafe operations on it, and if some other
-        // thread happens to have the same fd, then this is no fun.
-        //
-        // In Seastar fds are passed around to the I/O Scheduler, but when the time
-        // come for us to do the same I would prefer to mediate that through other,
-        // safer interfaces like an Arc-like version of the DmaFile.
-        //
-        // We can't prohibit users from passing a file descriptor because at the end
-        // of the day that's just an integer, but we can call unshare() to make sure
-        // that threads of the same process do not have the same set of file descriptors.
-        //
-        // The damage is at least contained.
-        syscall!(unshare(libc::CLONE_FILES | libc::CLONE_FS))?;
-
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {

@@ -363,22 +363,6 @@ pub(crate) mod test {
         };
     }
 
-    dma_file_test!(fallback_drop_closes_the_file, path, _k, {
-        let fd;
-        {
-            let file = DmaFile::create(path.join("testfile"))
-                .await
-                .expect("failed to create file");
-            fd = file.as_raw_fd();
-            std::fs::remove_file(path.join("testfile")).unwrap();
-        }
-        assert!(fd != -1);
-        let ret = unsafe { libc::close(fd) };
-        assert_eq!(ret, -1);
-        let err = std::io::Error::last_os_error().raw_os_error().unwrap();
-        assert_eq!(err, libc::EBADF);
-    });
-
     dma_file_test!(file_create_close, path, _k, {
         let new_file = DmaFile::create(path.join("testfile"))
             .await
