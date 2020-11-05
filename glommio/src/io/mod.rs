@@ -109,8 +109,8 @@ mod buffered_file_stream;
 mod directory;
 mod dma_file;
 mod dma_file_stream;
-mod read_result;
 mod glommio_file;
+mod read_result;
 
 use crate::sys;
 use std::io;

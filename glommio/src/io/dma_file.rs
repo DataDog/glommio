@@ -3,8 +3,8 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::read_result::ReadResult;
 use crate::io::glommio_file::GlommioFile;
+use crate::io::read_result::ReadResult;
 use crate::parking::Reactor;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus};

@@ -9,7 +9,7 @@
 //!
 //! This crate was previously named Glommio but was renamed after a trademark dispute.
 //! We are removing this message soon but it is now here to avoid confusion.
-//! 
+//!
 //! ## What is Glommio
 //!
 //! Glommio is a library allowing asynchronous thread-per-core applications in rust.
