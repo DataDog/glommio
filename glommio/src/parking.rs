@@ -23,7 +23,7 @@
 //!
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::CString;
 use std::fmt;
 use std::io;
@@ -33,7 +33,8 @@ use std::os::unix::io::RawFd;
 use std::panic::{self, RefUnwindSafe, UnwindSafe};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -172,6 +173,39 @@ impl Timers {
     }
 }
 
+struct SharedChannels {
+    id: u64,
+    check_map: BTreeMap<u64, Box<dyn Fn() -> usize>>,
+    wakers_map: BTreeMap<u64, VecDeque<Waker>>,
+}
+
+impl SharedChannels {
+    fn new() -> SharedChannels {
+        SharedChannels {
+            id: 0,
+            check_map: BTreeMap::new(),
+            wakers_map: BTreeMap::new(),
+        }
+    }
+
+    fn process_shared_channels(&mut self, wakers: &mut Vec<Waker>) -> usize {
+        let current_wakers = std::mem::replace(&mut self.wakers_map, BTreeMap::new());
+        let mut added = 0;
+        for (id, mut pending) in current_wakers.into_iter() {
+            let room = self.check_map.get(&id).unwrap()();
+            let room = std::cmp::min(room, pending.len());
+            for w in pending.drain(0..room) {
+                added += 1;
+                wakers.push(w);
+            }
+            if !pending.is_empty() {
+                self.wakers_map.insert(id, pending);
+            }
+        }
+        added
+    }
+}
+
 /// The reactor.
 ///
 /// Every async I/O handle and every timer is registered here. Invocations of
@@ -183,6 +217,8 @@ pub(crate) struct Reactor {
     sys: sys::Reactor,
 
     timers: RefCell<Timers>,
+
+    shared_channels: RefCell<SharedChannels>,
 
     /// I/O Requirements of the task currently executing.
     current_io_requirements: RefCell<IoRequirements>,
@@ -208,6 +244,7 @@ impl Reactor {
         Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
+            shared_channels: RefCell::new(SharedChannels::new()),
             current_io_requirements: RefCell::new(IoRequirements::default()),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
@@ -255,6 +292,14 @@ impl Reactor {
         }
     }
 
+    pub(crate) fn eventfd(&self) -> Arc<AtomicUsize> {
+        self.sys.eventfd()
+    }
+
+    pub(crate) fn notify(&self, remote: RawFd) {
+        sys::write_eventfd(remote);
+    }
+
     fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
         let ioreq = self.current_io_requirements.borrow();
         sys::Source::new(*ioreq, raw, stype)
@@ -263,6 +308,24 @@ impl Reactor {
     pub(crate) fn inform_io_requirements(&self, req: IoRequirements) {
         let mut ioreq = self.current_io_requirements.borrow_mut();
         *ioreq = req;
+    }
+
+    pub(crate) fn register_shared_channel<F>(&self, test_function: Box<F>) -> u64
+    where
+        F: Fn() -> usize + 'static,
+    {
+        let mut channels = self.shared_channels.borrow_mut();
+        let id = channels.id;
+        channels.id += 1;
+        let ret = channels.check_map.insert(id, test_function);
+        assert_eq!(ret.is_none(), true);
+        id
+    }
+
+    pub(crate) fn add_shared_channel_waker(&self, id: u64, waker: Waker) {
+        let mut channels = self.shared_channels.borrow_mut();
+        let map = channels.wakers_map.entry(id).or_insert_with(VecDeque::new);
+        map.push_back(waker);
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
@@ -410,6 +473,11 @@ impl Reactor {
         let mut timers = self.timers.borrow_mut();
         timers.process_timers(wakers)
     }
+
+    fn process_shared_channels(&self, wakers: &mut Vec<Waker>) -> usize {
+        let mut channels = self.shared_channels.borrow_mut();
+        channels.process_shared_channels(wakers)
+    }
 }
 
 /// A lock on the reactor.
@@ -428,17 +496,22 @@ impl ReactorLock<'_> {
 
         // Process ready timers.
         let next_timer = self.reactor.process_timers(&mut wakers);
+        self.reactor.process_shared_channels(&mut wakers);
 
         // Block on I/O events.
-        let res = match self.reactor.sys.wait(&mut wakers, timeout, next_timer) {
-            // We slept, so don't wait for the next loop to process timers
+        let res = match self
+            .reactor
+            .sys
+            .wait(&mut wakers, timeout, next_timer, |wakers| {
+                self.reactor.process_shared_channels(wakers)
+            }) {
+            // Don't wait for the next loop to process timers or shared channels
             Ok(true) => {
                 self.reactor.process_timers(&mut wakers);
                 Ok(())
             }
 
-            // At least one I/O event occurred.
-            Ok(_) => Ok(()),
+            Ok(false) => Ok(()),
 
             // The syscall was interrupted.
             Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),

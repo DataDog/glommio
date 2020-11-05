@@ -20,3 +20,4 @@ lazy-static,https://crates.io/crates/lazy_static,MIT/Apache-2.0,Marvin Löbel
 scopeguard,https://crates.io/crates/scopeguard,MIT/Apache-2.0,bluss
 pin-project-lite:https://crates.io/crates/pin-project-lite,MIT/Apache-2.0,Taiki Endo
 log,https://crates.io/crates/log,MIT/Apache-2.0/The Rust Project Developers
+bounded-spsc-queue:https://github.com/polyfractal/bounded-spsc-queue.git,Apache-2.0,Zachary Tong

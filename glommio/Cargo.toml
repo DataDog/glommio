@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name = "local_channel"
 harness = false
+
+[[bench]]
+name = "shared_channel"
+harness = false

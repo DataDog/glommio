@@ -88,6 +88,16 @@ pub(crate) fn sync_open(path: &Path, flags: libc::c_int, mode: libc::c_int) -> i
     syscall!(open(path.as_ptr(), flags, mode))
 }
 
+pub(crate) fn create_eventfd() -> io::Result<RawFd> {
+    syscall!(eventfd(0, libc::O_CLOEXEC))
+}
+
+pub(crate) fn write_eventfd(eventfd: RawFd) {
+    let buf = [1u64; 1];
+    let ret = syscall!(write(eventfd, &buf as *const u64 as _, 8)).unwrap();
+    assert_eq!(ret, 8);
+}
+
 fn cstr(path: &Path) -> io::Result<CString> {
     Ok(CString::new(path.as_os_str().as_bytes())?)
 }
