@@ -1,9 +1,9 @@
 use ansi_term::{Colour, Style};
 use futures_lite::io::AsyncBufReadExt;
-use scipio::controllers::{DeadlineQueue, DeadlineSource};
-use scipio::io::stdin;
-use scipio::prelude::*;
-use scipio::Task;
+use glommio::controllers::{DeadlineQueue, DeadlineSource};
+use glommio::io::stdin;
+use glommio::prelude::*;
+use glommio::Task;
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
@@ -111,7 +111,7 @@ impl DeadlineSource for IntWriter {
 fn competing_cpu_hog(
     stop: Rc<Cell<bool>>,
     cpuhog_tq: TaskQueueHandle,
-) -> scipio::task::JoinHandle<(), ()> {
+) -> glommio::task::JoinHandle<(), ()> {
     Local::local_into(
         async move {
             while !stop.get() {

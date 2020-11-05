@@ -52,8 +52,8 @@ pin_project! {
 /// # Examples
 ///
 /// ```no_run
-/// use scipio::io::stdin;
-/// use scipio::LocalExecutor;
+/// use glommio::io::stdin;
+/// use glommio::LocalExecutor;
 /// use futures_lite::AsyncBufReadExt;
 ///
 /// let ex = LocalExecutor::make_default();
@@ -198,8 +198,8 @@ impl StreamReaderBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::io::{BufferedFile, StreamReaderBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{BufferedFile, StreamReaderBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -269,8 +269,8 @@ impl StreamWriterBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::io::{BufferedFile, StreamWriterBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{BufferedFile, StreamWriterBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {

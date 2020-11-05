@@ -44,7 +44,7 @@ impl Debug for dyn SharesManager {
 #[derive(Debug, Clone)]
 /// Represents how many shares a [`TaskQueue`] should receive.
 ///
-/// Scipio's scheduler doesn't work with priorities, but rather shares. That means
+/// Glommio's scheduler doesn't work with priorities, but rather shares. That means
 /// that if there is only one active task queue in the system, it will always receive
 /// 100 % of the resources.
 ///
@@ -60,7 +60,7 @@ impl Debug for dyn SharesManager {
 /// 33%.
 ///
 /// This can be far off if there are other heavy processes competing for resources with
-/// your application in a way that scipio can't see. For best results you should consider
+/// your application in a way that glommio can't see. For best results you should consider
 /// dedicating CPUs and storage devices to your application.
 ///
 /// Shares are enforced by the system to be between 1 and 1000. So if all [`TaskQueue`]s want

@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use futures::future::join_all;
-use scipio::prelude::*;
+use glommio::prelude::*;
 use std::io::Result;
 
 async fn hello() {

@@ -275,7 +275,7 @@ impl<T> InnerQueue<T> {
 }
 
 #[derive(Debug)]
-/// Scipio's scheduler is based on [`Shares`]: the more shares, the more resources the task
+/// Glommio's scheduler is based on [`Shares`]: the more shares, the more resources the task
 /// will receive.
 ///
 /// There are situations however in which we don't want shares to grow too high: for instance,
@@ -338,8 +338,8 @@ impl<T: 'static> DeadlineQueue<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::LocalExecutor;
-    /// use scipio::controllers::DeadlineQueue;
+    /// use glommio::LocalExecutor;
+    /// use glommio::controllers::DeadlineQueue;
     /// use std::time::Duration;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -419,8 +419,8 @@ impl<T: 'static> DeadlineQueue<T> {
     /// # Examples:
     ///
     /// ```
-    /// use scipio::LocalExecutor;
-    /// use scipio::controllers::{DeadlineQueue, DeadlineSource};
+    /// use glommio::LocalExecutor;
+    /// use glommio::controllers::{DeadlineQueue, DeadlineSource};
     /// use std::time::Duration;
     /// use futures_lite::future::ready;
     /// use std::io;

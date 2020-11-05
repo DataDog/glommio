@@ -7,7 +7,7 @@
 //!
 //! # Spawning
 //!
-//! To spawn a future onto the Scipio executor, we first need to allocate it on the heap and keep some
+//! To spawn a future onto the Glommio executor, we first need to allocate it on the heap and keep some
 //! state alongside it. The state indicates whether the future is ready for polling, waiting to be
 //! woken up, or completed. Such a future is called a *task*.
 //!
@@ -44,7 +44,7 @@
 //! woken, the function gets called:
 //!
 //! ```
-//! let waker = scipio::task::waker_fn(|| println!("Wake!"));
+//! let waker = glommio::task::waker_fn(|| println!("Wake!"));
 //!
 //! // Prints "Wake!" twice.
 //! waker.wake_by_ref();

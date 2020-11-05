@@ -2,9 +2,9 @@
 // MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
-//! scipio::io provides data structures targeted towards File I/O.
+//! glommio::io provides data structures targeted towards File I/O.
 //!
-//! File I/O in Scipio comes in two kinds: Buffered and Direct I/O.
+//! File I/O in Glommio comes in two kinds: Buffered and Direct I/O.
 //!
 //! Ideally an application would pick one of them according to its needs and not mix both.
 //! However if you do want to mix both, it is recommended that you do not do so in the same
@@ -110,7 +110,7 @@ mod directory;
 mod dma_file;
 mod dma_file_stream;
 mod read_result;
-mod scipio_file;
+mod glommio_file;
 
 use crate::sys;
 use std::io;

@@ -53,8 +53,8 @@ impl Inner {
 /// Sleep for 100 milliseconds:
 ///
 /// ```
-/// use scipio::LocalExecutor;
-/// use scipio::timer::Timer;
+/// use glommio::LocalExecutor;
+/// use glommio::timer::Timer;
 /// use std::time::Duration;
 ///
 /// async fn sleep(dur: Duration) {
@@ -79,7 +79,7 @@ impl Timer {
     /// # Examples
     ///
     /// ```
-    /// use scipio::timer::Timer;
+    /// use glommio::timer::Timer;
     /// use std::time::Duration;
     ///
     /// Timer::new(Duration::from_millis(100));
@@ -115,7 +115,7 @@ impl Timer {
     /// # Examples
     ///
     /// ```
-    /// use scipio::timer::Timer;
+    /// use glommio::timer::Timer;
     /// use std::time::Duration;
     ///
     /// let mut t = Timer::new(Duration::from_secs(1));
@@ -194,8 +194,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -224,8 +224,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutorBuilder, Local, Latency, Shares};
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::{LocalExecutorBuilder, Local, Latency, Shares};
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -273,8 +273,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::{Instant, Duration};
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -304,8 +304,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutorBuilder, Local, Latency, Shares};
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::{LocalExecutorBuilder, Local, Latency, Shares};
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::{Instant, Duration};
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -345,8 +345,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -374,8 +374,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -403,8 +403,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -426,8 +426,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -450,8 +450,8 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionOnce;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionOnce;
     /// use std::time::{Duration, Instant};
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -491,8 +491,8 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::{LocalExecutorBuilder, Latency, Local, Shares};
-    /// use scipio::timer::TimerActionRepeat;
+    /// use glommio::{LocalExecutorBuilder, Latency, Local, Shares};
+    /// use glommio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -545,8 +545,8 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionRepeat;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -576,8 +576,8 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionRepeat;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -605,8 +605,8 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionRepeat;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
@@ -635,8 +635,8 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
-    /// use scipio::timer::TimerActionRepeat;
+    /// use glommio::LocalExecutorBuilder;
+    /// use glommio::timer::TimerActionRepeat;
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {

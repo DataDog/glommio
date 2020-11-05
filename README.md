@@ -1,30 +1,34 @@
-# scipio
+# glommio 
 
-[![CircleCI](https://circleci.com/gh/DataDog/scipio.svg?style=svg)](https://circleci.com/gh/DataDog/scipio)
+**ATTENTION** If you are confused between this and Scipio, this
+project was previously called Scipio but had to be very unfortunately
+renamed due to a trademark dispute. This disclaimer will self-destruct
+as soon as people have enough time to switch over. We would also like to
+make sure to clarify that this doesn't change our opinion on Scipio
+Africanus being such a great and underrated general that deserved a lot
+better from Rome than what we got.
 
-###  _"Contextvm Svitchae Delenda Est"_
 
->    -- Scipio Africanus after defeating Hannibal in the Battle of Zama (*)
-
-<sub>(*) That really happened. You weren't there so you can't prove Scipio never said that</sub>
+[![CircleCI](https://circleci.com/gh/DataDog/glommio.svg?style=svg)](https://circleci.com/gh/DataDog/glommio)
 
 ## Join our Zulip community!
 
-If you are interested in Scipio consider joining our [Zulip](https://scipio.zulipchat.com) community.
+If you are interested in Glommio consider joining our [Zulip](https://scipio.zulipchat.com) community.
 Come tell us about exciting applications you are building, ask for help,
 or really just chat with friends
 
-## What is Scipio?
+## What is Glommio?
 
-Scipio (pronounced skip-io or |skɪpjəʊ|) is a Cooperative Thread-per-Core crate for
+
+Glommio (pronounced glo-mee-jow or |glomjəʊ|) is a Cooperative Thread-per-Core crate for
 Rust & Linux based on `io_uring`. Like other rust asynchronous crates it allows
 one to write asynchronous code that takes advantage of rust `async`/`await`, but
 unlike its counterparts it doesn't use helper threads anywhere.
 
-Using Scipio is not hard if you are familiar with rust async. All you have to do is:
+Using Glommio is not hard if you are familiar with rust async. All you have to do is:
 
 ```rust
-    use scipio::prelude::*;
+    use glommio::prelude::*;
     LocalExecutorBuilder::new().spawn(|| async move {
         /// your code here
     }).unwrap();
@@ -35,7 +39,7 @@ page](https://docs.rs/crate/scipio/0.1.0-alpha)
 
 ## Status
 
-Scipio is still considered an alpha release. The main reasons are:
+Glommio is still considered an alpha release. The main reasons are:
 
 * The existing API is still evolving
 * There are still some uses of unsafe that can be avoided

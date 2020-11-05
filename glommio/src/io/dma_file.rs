@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::read_result::ReadResult;
-use crate::io::scipio_file::ScipioFile;
+use crate::io::glommio_file::GlommioFile;
 use crate::parking::Reactor;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus};
@@ -26,7 +26,7 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 /// All access uses Direct I/O, and all operations including
 /// open and close are asynchronous.
 pub struct DmaFile {
-    file: ScipioFile,
+    file: GlommioFile,
     o_direct_alignment: u64,
     pollable: PollableStatus,
 }
@@ -64,8 +64,8 @@ impl DmaFile {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::LocalExecutor;
-    /// use scipio::io::DmaFile;
+    /// use glommio::LocalExecutor;
+    /// use glommio::io::DmaFile;
     /// use std::os::unix::io::AsRawFd;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -91,7 +91,7 @@ impl DmaFile {
         mode: libc::c_int,
     ) -> io::Result<DmaFile> {
         let mut pollable = PollableStatus::Pollable;
-        let res = ScipioFile::open_at(dir, path, flags, mode).await;
+        let res = GlommioFile::open_at(dir, path, flags, mode).await;
 
         let file = match res {
             Err(os_err) => {
@@ -99,7 +99,7 @@ impl DmaFile {
                 // open again without O_DIRECT
                 if os_err.raw_os_error().unwrap() == libc::EINVAL {
                     pollable = PollableStatus::NonPollable;
-                    ScipioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
+                    GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
                 } else {
                     Err(os_err)
                 }
@@ -164,8 +164,8 @@ impl DmaFile {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::LocalExecutor;
-    /// use scipio::io::DmaFile;
+    /// use glommio::LocalExecutor;
+    /// use glommio::io::DmaFile;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -314,13 +314,13 @@ pub(crate) mod test {
     pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
         let mut vec = Vec::new();
 
-        // Scipio currently only supports NVMe-backed volumes formatted with XFS or EXT4.
-        // We therefore let the user decide what directory scipio should use to host the unit tests in.
+        // Glommio currently only supports NVMe-backed volumes formatted with XFS or EXT4.
+        // We therefore let the user decide what directory glommio should use to host the unit tests in.
         // For more information regarding this limitation, see the README
         match std::env::var("SCIPIO_TEST_POLLIO_ROOTDIR") {
             Err(_) => {
                 eprintln!(
-                    "Scipio currently only supports NVMe-backed volumes formatted with XFS \
+                    "Glommio currently only supports NVMe-backed volumes formatted with XFS \
                     or EXT4. To run poll io-related tests, please set SCIPIO_TEST_POLLIO_ROOTDIR to a \
                     NVMe-backed directory path in your environment.\nPoll io tests will not run."
                 );

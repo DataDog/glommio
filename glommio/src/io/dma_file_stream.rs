@@ -51,8 +51,8 @@ impl DmaStreamReaderBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -296,8 +296,8 @@ impl DmaStreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -362,8 +362,8 @@ impl DmaStreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -400,8 +400,8 @@ impl DmaStreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -436,8 +436,8 @@ impl DmaStreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -603,8 +603,8 @@ impl DmaStreamWriterBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {
@@ -859,8 +859,8 @@ impl DmaStreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
+    /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -892,8 +892,8 @@ impl DmaStreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
+    /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -929,8 +929,8 @@ impl DmaStreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use scipio::LocalExecutor;
+    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
+    /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
     /// let ex = LocalExecutor::make_default();

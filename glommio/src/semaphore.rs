@@ -173,7 +173,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use scipio::Semaphore;
+    /// use glommio::Semaphore;
     ///
     /// let _ = Semaphore::new(1);
     ///
@@ -189,7 +189,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use scipio::Semaphore;
+    /// use glommio::Semaphore;
     ///
     /// let sem = Semaphore::new(1);
     /// assert_eq!(sem.available(), 1);
@@ -206,7 +206,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Semaphore};
+    /// use glommio::{LocalExecutor, Semaphore};
     ///
     /// let sem = Semaphore::new(1);
     ///
@@ -233,7 +233,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Semaphore};
+    /// use glommio::{LocalExecutor, Semaphore};
     ///
     /// let sem = Semaphore::new(1);
     ///
@@ -263,7 +263,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Semaphore};
+    /// use glommio::{LocalExecutor, Semaphore};
     ///
     /// let sem = Semaphore::new(0);
     ///
@@ -285,7 +285,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Semaphore};
+    /// use glommio::{LocalExecutor, Semaphore};
     ///
     /// let sem = Semaphore::new(0);
     ///

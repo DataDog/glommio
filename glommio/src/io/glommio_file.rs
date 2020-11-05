@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 ///
 /// It also implements some operations that are common among Buffered and non-Buffered files
 #[derive(Debug)]
-pub(crate) struct ScipioFile {
+pub(crate) struct GlommioFile {
     pub(crate) file: std::fs::File,
     // A file can appear in many paths, through renaming and linking.
     // If we do that, each path should have its own object. This is to
@@ -28,7 +28,7 @@ pub(crate) struct ScipioFile {
     pub(crate) dev_minor: u32,
 }
 
-impl Drop for ScipioFile {
+impl Drop for GlommioFile {
     fn drop(&mut self) {
         eprintln!(
             "File dropped while still active. Should have been async closed ({:?} / fd {})
@@ -39,15 +39,15 @@ I will close it and turn a leak bug into a performance bug. Please investigate",
     }
 }
 
-impl AsRawFd for ScipioFile {
+impl AsRawFd for GlommioFile {
     fn as_raw_fd(&self) -> RawFd {
         self.file.as_raw_fd()
     }
 }
 
-impl FromRawFd for ScipioFile {
+impl FromRawFd for GlommioFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
-        ScipioFile {
+        GlommioFile {
             file: std::fs::File::from_raw_fd(fd),
             path: None,
             inode: 0,
@@ -57,17 +57,17 @@ impl FromRawFd for ScipioFile {
     }
 }
 
-impl ScipioFile {
+impl GlommioFile {
     pub(crate) async fn open_at(
         dir: RawFd,
         path: &Path,
         flags: libc::c_int,
         mode: libc::c_int,
-    ) -> io::Result<ScipioFile> {
+    ) -> io::Result<GlommioFile> {
         let source = Reactor::get().open_at(dir, path, flags, mode);
         let fd = source.collect_rw().await?;
 
-        let mut file = ScipioFile {
+        let mut file = GlommioFile {
             file: unsafe { std::fs::File::from_raw_fd(fd as _) },
             path: Some(path.to_owned()),
             inode: 0,
@@ -82,7 +82,7 @@ impl ScipioFile {
         Ok(file)
     }
 
-    pub(crate) fn is_same(&self, other: &ScipioFile) -> bool {
+    pub(crate) fn is_same(&self, other: &GlommioFile) -> bool {
         self.inode == other.inode
             && self.dev_major == other.dev_major
             && self.dev_minor == other.dev_minor
@@ -102,7 +102,7 @@ impl ScipioFile {
         Ok(())
     }
 
-    pub(crate) fn with_path(mut self, path: Option<PathBuf>) -> ScipioFile {
+    pub(crate) fn with_path(mut self, path: Option<PathBuf>) -> GlommioFile {
         self.path = path;
         self
     }
