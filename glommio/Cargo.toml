@@ -1,5 +1,5 @@
 [package]
-name = "scipio"
+name = "glommio"
 version = "0.1.0"
 authors = [ "Glauber Costa <glauber@datadoghq.com>",
             "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
@@ -7,8 +7,8 @@ authors = [ "Glauber Costa <glauber@datadoghq.com>",
 edition = "2018"
 description = "A set of utilities to allow one to write thread per core applications"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/DataDog/scipio"
-homepage = "https://github.com/DataDog/scipio"
+repository = "https://github.com/DataDog/glommio"
+homepage = "https://github.com/DataDog/glommio"
 keywords = ["uring", "reactor", "thread-per-core"]
 categories = ["asynchronous", "os"]
 readme = "../README.md"

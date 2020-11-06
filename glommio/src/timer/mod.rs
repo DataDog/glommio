@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-//! scipio::timer is a module that provides timing related primitives.
+//! glommio::timer is a module that provides timing related primitives.
 mod timer_impl;
 
 pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
@@ -11,8 +11,8 @@ pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
 /// Sleep for some time.
 ///
 /// ```
-/// use scipio::LocalExecutor;
-/// use scipio::timer::sleep;
+/// use glommio::LocalExecutor;
+/// use glommio::timer::sleep;
 /// use std::time::Duration;
 ///
 /// let ex = LocalExecutor::make_default();

@@ -855,7 +855,7 @@ impl Reactor {
     //   cpu. If nothing else fires in the latency ring the preempt timer will, making need_preempt
     //   return true. Currently we always install a preempt timer in the upper layers but from the
     //   point of view of the io_uring implementation it is optional: it is perfectly valid not to
-    //   have one. Preempt timers are installed by Scipio executor runtime.
+    //   have one. Preempt timers are installed by Glommio executor runtime.
     //
     // * The second is the user timer. It is installed per a user request when the user creates a
     //   Timer (or TimerAction).

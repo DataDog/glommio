@@ -3,13 +3,13 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-//! scipio::channels is a module that provides scipio channel-like abstractions.
+//! glommio::channels is a module that provides glommio channel-like abstractions.
 //!
 
 /// Allow data to be transmitted across two tasks in the same shard.
 ///
 /// Asynchronous code is rarely useful if it is serialized. In practice,
-/// you will want to spawn asynchronous tasks or in the case of Scipio which
+/// you will want to spawn asynchronous tasks or in the case of Glommio which
 /// support multi-queued execution have a dedicated [`TaskQueue`] for each group
 /// of tasks with their own priority.
 ///
@@ -27,8 +27,8 @@
 /// # Examples
 ///
 /// ```
-/// use scipio::{LocalExecutor, Local, Latency, Shares};
-/// use scipio::channels::local_channel;
+/// use glommio::{LocalExecutor, Local, Latency, Shares};
+/// use glommio::channels::local_channel;
 /// use futures_lite::stream::StreamExt;
 ///
 /// let ex = LocalExecutor::make_default();
@@ -61,7 +61,7 @@ pub mod local_channel;
 #[derive(Debug)]
 /// Establishes the capacity of this channel.
 ///
-/// The same enum is used for all Scipio channels.
+/// The same enum is used for all Glommio channels.
 enum ChannelCapacity {
     Unbounded,
     Bounded(usize),

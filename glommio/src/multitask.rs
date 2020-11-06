@@ -56,8 +56,8 @@ impl<T> Task<T> {
     ///
     /// ```
     /// use std::time::Duration;
-    /// use scipio::LocalExecutor;
-    /// use scipio::timer::Timer;
+    /// use glommio::LocalExecutor;
+    /// use glommio::timer::Timer;
     ///
     /// let ex = LocalExecutor::make_default();
     ///
@@ -87,8 +87,8 @@ impl<T> Task<T> {
     /// ```
     /// use std::thread;
     /// use std::time::Duration;
-    /// use scipio::LocalExecutor;
-    /// use scipio::timer::Timer;
+    /// use glommio::LocalExecutor;
+    /// use glommio::timer::Timer;
     /// use futures_lite::future::block_on;
     ///
     /// let ex = LocalExecutor::make_default();

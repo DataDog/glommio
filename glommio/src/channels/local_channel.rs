@@ -64,8 +64,8 @@ pub struct LocalSender<T> {
 /// # Examples
 ///
 /// ```
-/// use scipio::{LocalExecutor, Local};
-/// use scipio::channels::local_channel;
+/// use glommio::{LocalExecutor, Local};
+/// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
 ///
 /// let ex = LocalExecutor::make_default();
@@ -163,8 +163,8 @@ impl<T> LocalChannel<T> {
 ///
 /// # Examples
 /// ```
-/// use scipio::{LocalExecutor, Local};
-/// use scipio::channels::local_channel;
+/// use glommio::{LocalExecutor, Local};
+/// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
 ///
 /// let ex = LocalExecutor::make_default();
@@ -186,8 +186,8 @@ pub fn new_unbounded<T>() -> (LocalSender<T>, LocalReceiver<T>) {
 ///
 /// # Examples
 /// ```
-/// use scipio::{LocalExecutor, Local};
-/// use scipio::channels::local_channel;
+/// use glommio::{LocalExecutor, Local};
+/// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
 ///
 /// let ex = LocalExecutor::make_default();
@@ -213,8 +213,8 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{LocalExecutor, Local};
-    /// use scipio::channels::local_channel;
+    /// use glommio::{LocalExecutor, Local};
+    /// use glommio::channels::local_channel;
     /// use futures_lite::StreamExt;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -246,8 +246,8 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{LocalExecutor, Local};
-    /// use scipio::channels::local_channel;
+    /// use glommio::{LocalExecutor, Local};
+    /// use glommio::channels::local_channel;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {
@@ -272,8 +272,8 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{LocalExecutor, Local};
-    /// use scipio::channels::local_channel;
+    /// use glommio::{LocalExecutor, Local};
+    /// use glommio::channels::local_channel;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {
@@ -292,8 +292,8 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{LocalExecutor, Local};
-    /// use scipio::channels::local_channel;
+    /// use glommio::{LocalExecutor, Local};
+    /// use glommio::channels::local_channel;
     /// use futures_lite::StreamExt;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -386,8 +386,8 @@ impl<T> LocalReceiver<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{LocalExecutor, Local};
-    /// use scipio::channels::local_channel;
+    /// use glommio::{LocalExecutor, Local};
+    /// use glommio::channels::local_channel;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {

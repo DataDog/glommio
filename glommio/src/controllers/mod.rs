@@ -2,7 +2,7 @@
 // MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
-//! scipio::controllers provide helpful constructs to automatically control the
+//! glommio::controllers provide helpful constructs to automatically control the
 //! shares, and in consequence the proportion of resources, that a particular process
 //! uses.
 //!

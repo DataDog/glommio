@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
-use crate::io::scipio_file::ScipioFile;
+use crate::io::glommio_file::GlommioFile;
 use crate::parking::Reactor;
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -13,7 +13,7 @@ use std::path::Path;
 /// Constructs a file that is backed by the operating system page cache
 #[derive(Debug)]
 pub struct BufferedFile {
-    file: ScipioFile,
+    file: GlommioFile,
 }
 
 impl AsRawFd for BufferedFile {
@@ -25,7 +25,7 @@ impl AsRawFd for BufferedFile {
 impl FromRawFd for BufferedFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         BufferedFile {
-            file: ScipioFile::from_raw_fd(fd),
+            file: GlommioFile::from_raw_fd(fd),
         }
     }
 }
@@ -44,8 +44,8 @@ impl BufferedFile {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::LocalExecutor;
-    /// use scipio::io::BufferedFile;
+    /// use glommio::LocalExecutor;
+    /// use glommio::io::BufferedFile;
     /// use std::os::unix::io::AsRawFd;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -71,7 +71,7 @@ impl BufferedFile {
         let flags = libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
         Ok(BufferedFile {
             file: enhanced_try!(
-                ScipioFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await,
+                GlommioFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await,
                 "Creating",
                 Some(path.as_ref()),
                 None
@@ -86,7 +86,7 @@ impl BufferedFile {
         let flags = libc::O_CLOEXEC | libc::O_RDONLY;
         Ok(BufferedFile {
             file: enhanced_try!(
-                ScipioFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await,
+                GlommioFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await,
                 "Reading",
                 Some(path.as_ref()),
                 None
@@ -105,8 +105,8 @@ impl BufferedFile {
     ///
     /// # Examples
     /// ```no_run
-    /// use scipio::LocalExecutor;
-    /// use scipio::io::BufferedFile;
+    /// use glommio::LocalExecutor;
+    /// use glommio::io::BufferedFile;
     ///
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async {

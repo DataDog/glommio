@@ -12,8 +12,8 @@
 //! Run four single-threaded executors concurrently:
 //!
 //! ```
-//! use scipio::{LocalExecutor, LocalExecutorBuilder};
-//! use scipio::timer::Timer;
+//! use glommio::{LocalExecutor, LocalExecutorBuilder};
+//! use glommio::timer::Timer;
 //!
 //! for i in 0..4 {
 //!     std::thread::spawn(move || {
@@ -254,7 +254,7 @@ impl ExecutorStats {
         self.total_runtime
     }
 
-    /// Returns the amount of times the scheduler loop was called. Scipio scheduler selects a task
+    /// Returns the amount of times the scheduler loop was called. Glommio scheduler selects a task
     /// queue to run and runs many tasks in that task queue. This number corresponds to the amount
     /// of times was called upon to select a new queue.
     pub fn scheduler_runs(&self) -> u64 {
@@ -389,7 +389,7 @@ impl ExecutorQueues {
 /// # Examples
 ///
 /// ```
-/// use scipio::LocalExecutorBuilder;
+/// use glommio::LocalExecutorBuilder;
 ///
 /// let builder = LocalExecutorBuilder::new();
 /// let ex = builder.make().unwrap();
@@ -439,7 +439,7 @@ impl LocalExecutorBuilder {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
+    /// use glommio::LocalExecutorBuilder;
     ///
     /// let local_ex = LocalExecutorBuilder::new().make().unwrap();
     /// ```
@@ -465,7 +465,7 @@ impl LocalExecutorBuilder {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutorBuilder;
+    /// use glommio::LocalExecutorBuilder;
     ///
     /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
     ///     println!("hello");
@@ -511,7 +511,7 @@ impl Default for LocalExecutorBuilder {
 /// # Examples
 ///
 /// ```
-/// use scipio::LocalExecutor;
+/// use glommio::LocalExecutor;
 ///
 /// let local_ex = LocalExecutor::make_default();
 ///
@@ -566,7 +566,7 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutor;
+    /// use glommio::LocalExecutor;
     ///
     /// let local_ex = LocalExecutor::make_default();
     /// ```
@@ -587,7 +587,7 @@ impl LocalExecutor {
     ///
     /// # Examples
     /// ```
-    /// use scipio::LocalExecutor;
+    /// use glommio::LocalExecutor;
     ///
     /// let local_ex = LocalExecutor::make_default();
     /// println!("My ID: {}", local_ex.id());
@@ -604,7 +604,7 @@ impl LocalExecutor {
     ///
     /// ```
     /// use std::time::Duration;
-    /// use scipio::{LocalExecutor, Latency, Shares};
+    /// use glommio::{LocalExecutor, Latency, Shares};
     ///
     /// let local_ex = LocalExecutor::make_default();
     ///
@@ -698,7 +698,7 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutor;
+    /// use glommio::LocalExecutor;
     ///
     /// let local_ex = LocalExecutor::make_default();
     ///
@@ -724,10 +724,10 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Shares};
+    /// use glommio::{LocalExecutor, Shares};
     ///
     /// let local_ex = LocalExecutor::make_default();
-    /// let handle = local_ex.create_task_queue(Shares::default(), scipio::Latency::NotImportant, "test_queue");
+    /// let handle = local_ex.create_task_queue(Shares::default(), glommio::Latency::NotImportant, "test_queue");
     ///
     /// let task = local_ex.spawn_into(async {
     ///     println!("Hello world");
@@ -841,7 +841,7 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use scipio::LocalExecutor;
+    /// use glommio::LocalExecutor;
     ///
     /// let local_ex = LocalExecutor::make_default();
     ///
@@ -905,7 +905,7 @@ impl LocalExecutor {
 /// # Examples
 ///
 /// ```
-/// use scipio::{LocalExecutor, Task};
+/// use glommio::{LocalExecutor, Task};
 ///
 /// let ex = LocalExecutor::make_default();
 ///
@@ -932,7 +932,7 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Task};
+    /// use glommio::{LocalExecutor, Task};
     ///
     /// let local_ex = LocalExecutor::make_default();
     ///
@@ -994,7 +994,7 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutorBuilder, Local};
+    /// use glommio::{LocalExecutorBuilder, Local};
     ///
     /// let ex = LocalExecutorBuilder::new().spawn(|| async {
     ///     loop {
@@ -1031,10 +1031,10 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Task, Shares};
+    /// use glommio::{LocalExecutor, Task, Shares};
     ///
     /// let local_ex = LocalExecutor::make_default();
-    /// let handle = local_ex.create_task_queue(Shares::default(), scipio::Latency::NotImportant, "test_queue");
+    /// let handle = local_ex.create_task_queue(Shares::default(), glommio::Latency::NotImportant, "test_queue");
     ///
     /// local_ex.spawn_into(async {
     ///     let task = Task::local(async { 1 + 2 });
@@ -1064,7 +1064,7 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Task};
+    /// use glommio::{LocalExecutor, Task};
     ///
     /// let local_ex = LocalExecutor::make_default();
     ///
@@ -1088,8 +1088,8 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Task};
-    /// use scipio::timer::Timer;
+    /// use glommio::{LocalExecutor, Task};
+    /// use glommio::timer::Timer;
     /// use futures_lite::future;
     ///
     /// let ex = LocalExecutor::make_default();
@@ -1123,7 +1123,7 @@ impl<T> Task<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{LocalExecutor, Local, Latency, LocalExecutorBuilder, Shares};
+    /// use glommio::{LocalExecutor, Local, Latency, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let original_tq = Local::current_task_queue();
@@ -1152,7 +1152,7 @@ impl<T> Task<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{Local, Latency, LocalExecutorBuilder, Shares};
+    /// use glommio::{Local, Latency, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
@@ -1184,7 +1184,7 @@ impl<T> Task<T> {
     ///
     /// # Examples
     /// ```
-    /// use scipio::{Local, Latency, LocalExecutorBuilder, Shares};
+    /// use glommio::{Local, Latency, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
     ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
@@ -1218,7 +1218,7 @@ impl<T> Task<T> {
     /// # Examples:
     ///
     /// ```
-    /// use scipio::{Local, LocalExecutorBuilder};
+    /// use glommio::{Local, LocalExecutorBuilder};
     ///
     /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
     ///     println!("Stats for executor: {:?}", Local::executor_stats());
@@ -1247,7 +1247,7 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::{LocalExecutor, Task};
+    /// use glommio::{LocalExecutor, Task};
     /// use futures_lite::future;
     ///
     /// let ex = LocalExecutor::make_default();

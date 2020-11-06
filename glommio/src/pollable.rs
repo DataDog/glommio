@@ -33,7 +33,7 @@ use crate::sys::{self, Source};
 /// Connect to a server and echo incoming messages back to the server:
 ///
 /// ```no_run
-/// use scipio::Async;
+/// use glommio::Async;
 /// use futures_lite::io;
 /// use std::net::TcpStream;
 ///
@@ -51,7 +51,7 @@ use crate::sys::{self, Source};
 /// [`Async::write_with_mut()`]:
 ///
 /// ```no_run
-/// use scipio::Async;
+/// use glommio::Async;
 /// use std::net::TcpListener;
 ///
 /// # futures_lite::future::block_on(async {
@@ -87,7 +87,7 @@ impl<T: AsRawFd> Async<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::{SocketAddr, TcpListener};
     ///
     /// # futures_lite::future::block_on(async {
@@ -115,7 +115,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::TcpListener;
     ///
     /// # futures_lite::future::block_on(async {
@@ -132,7 +132,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::TcpListener;
     ///
     /// # futures_lite::future::block_on(async {
@@ -149,7 +149,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::TcpListener;
     ///
     /// # futures_lite::future::block_on(async {
@@ -169,7 +169,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::TcpListener;
     ///
     /// # futures_lite::future::block_on(async {
@@ -190,7 +190,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::{TcpStream, ToSocketAddrs};
     ///
     /// # futures_lite::future::block_on(async {
@@ -217,7 +217,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::TcpListener;
     ///
     /// # futures_lite::future::block_on(async {
@@ -250,7 +250,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::TcpListener;
     ///
     /// # futures_lite::future::block_on(async {
@@ -289,7 +289,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::UdpSocket;
     ///
     /// # futures_lite::future::block_on(async {
@@ -323,7 +323,7 @@ impl<T> Async<T> {
     /// # Examples
     ///
     /// ```no_run
-    /// use scipio::Async;
+    /// use glommio::Async;
     /// use std::net::UdpSocket;
     ///
     /// # futures_lite::future::block_on(async {

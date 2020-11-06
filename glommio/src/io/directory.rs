@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::scipio_file::ScipioFile;
+use crate::io::glommio_file::GlommioFile;
 use crate::parking::Reactor;
 use crate::sys;
 use std::io;
@@ -13,7 +13,7 @@ use std::path::Path;
 #[derive(Debug)]
 /// A directory representation where asynchronous operations can be issued
 pub struct Directory {
-    file: ScipioFile,
+    file: GlommioFile,
 }
 
 impl AsRawFd for Directory {
@@ -33,7 +33,7 @@ impl Directory {
             "Cloning directory",
             self.file
         )?;
-        let file = unsafe { ScipioFile::from_raw_fd(fd as _) }.with_path(self.file.path.clone());
+        let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(self.file.path.clone());
         Ok(Directory { file })
     }
 
@@ -47,7 +47,7 @@ impl Directory {
             Some(&path),
             None
         )?;
-        let file = unsafe { ScipioFile::from_raw_fd(fd as _) }.with_path(Some(path));
+        let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(Some(path));
         Ok(Directory { file })
     }
 
@@ -62,7 +62,7 @@ impl Directory {
             Some(&path),
             None
         )?;
-        let file = unsafe { ScipioFile::from_raw_fd(fd as _) }.with_path(Some(path));
+        let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(Some(path));
         Ok(Directory { file })
     }
 

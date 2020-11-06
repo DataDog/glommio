@@ -3,19 +3,27 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-//! Scipio - asynchronous thread per core applications in Rust.
+//! Glommio - asynchronous thread per core applications in Rust.
 //!
-//! Makes heavy use of io_uring so this is Linux-only. 5.8 or
+//! ## Attention
+//!
+//! This crate was previously named Glommio but was renamed after a trademark dispute.
+//! We are removing this message soon but it is now here to avoid confusion.
+//!
+//! ## What is Glommio
+//!
+//! Glommio is a library allowing asynchronous thread-per-core applications in rust.
+//! It makes heavy use of io_uring so this is Linux-only. 5.8 or
 //! newer is recommended.
 //!
 //! This library provides abstractions for timers, file I/O and
 //! networking plus support for multiple-queues and an internal
 //! scheduler. All without using helper threads.
 //!
-//! Using Scipio is not hard if you are familiar with rust async. All you have to do is:
+//! Using Glommio is not hard if you are familiar with rust async. All you have to do is:
 //!
 //! ```
-//!     use scipio::LocalExecutorBuilder;
+//!     use glommio::LocalExecutorBuilder;
 //!     LocalExecutorBuilder::new().spawn(|| async move {
 //!         // your code here
 //!     }).unwrap();
@@ -30,7 +38,7 @@
 //!
 //! ```
 //!     /// This will now never leave CPU 0
-//!     use scipio::LocalExecutorBuilder;
+//!     use glommio::LocalExecutorBuilder;
 //!     LocalExecutorBuilder::new().pin_to_cpu(0).spawn(|| async move {
 //!         // your code here
 //!     }).unwrap();
@@ -47,7 +55,7 @@
 //! task queues inside each of your executors:
 //!
 //! ```
-//!     use scipio::{Local, LocalExecutorBuilder, Shares, Latency};
+//!     use glommio::{Local, LocalExecutorBuilder, Shares, Latency};
 //!
 //!     LocalExecutorBuilder::new().pin_to_cpu(0).spawn(|| async move {
 //!         let tq1 = Local::create_task_queue(Shares::Static(2), Latency::NotImportant, "test1");
@@ -73,23 +81,13 @@
 //!
 //! ## Controlled processes
 //!
-//! Scipio ships with embedded controllers. You can read more about them in the
+//! Glommio ships with embedded controllers. You can read more about them in the
 //! [Controllers](controllers)
 //! module documentation. Controllers allow one to automatically adjust the scheduler shares to
 //! control how fast a particular process should happen given a user-provided criteria.
 //!
 //! For a real-life application of such technology I recommend reading
 //! [this post](https://www.scylladb.com/2018/06/12/scylla-leverages-control-theory/) from Glauber.
-//!
-//! ## What does scipio mean?
-//!
-//! This crate is named after
-//! [Publius Cornelius Scipio](https://en.wikipedia.org/wiki/Scipio_Africanus), who
-//! defeated [Hannibal Barca](https://en.wikipedia.org/wiki/Hannibal) at the
-//! [Battle of Zama](https://en.wikipedia.org/wiki/Battle_of_Zama), ending the
-//! [Second Punic War](https://en.wikipedia.org/wiki/Second_Punic_War). I actually
-//! like Hannibal a bit more (just a bit), but Scipio ends with IO, which makes for a
-//! nicer name for an I/O oriented framework.
 //!
 //! ## Prior work
 //!
@@ -177,9 +175,9 @@
 //!    not relying on interrupts we can be even more efficient with I/O in
 //!    high IOPS scenarios
 //!
-//! ## Before using Scipio
+//! ## Before using Glommio
 //!
-//! Please note Scipio requires at least 256 KiB of locked memory for `io_uring`
+//! Please note Glommio requires at least 256 KiB of locked memory for `io_uring`
 //! to work. You can increase the `memlock` resource limit (rlimit) as follows:
 //!
 //! ```sh
@@ -246,8 +244,8 @@
 //! Connect to `example.com:80`, or time out after 10 seconds.
 //!
 //! ```
-//! use scipio::{Async, LocalExecutor};
-//! use scipio::timer::Timer;
+//! use glommio::{Async, LocalExecutor};
+//! use glommio::timer::Timer;
 //! use futures_lite::{future::FutureExt, io};
 //!
 //! use std::net::{TcpStream, ToSocketAddrs};
@@ -381,7 +379,7 @@ pub use crate::shares::{Shares, SharesManager};
 pub use enclose::enclose;
 pub use scopeguard::defer;
 
-/// Provides common imports that almost all Scipio applications will need
+/// Provides common imports that almost all Glommio applications will need
 pub mod prelude {
     pub use crate::{Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares, TaskQueueHandle};
 }

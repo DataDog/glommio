@@ -1,5 +1,5 @@
 use futures::join;
-use scipio::prelude::*;
+use glommio::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};

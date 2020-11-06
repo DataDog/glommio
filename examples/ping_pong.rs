@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use scipio::{enclose, Local, LocalExecutor};
+use glommio::{enclose, Local, LocalExecutor};
 use std::cell::RefCell;
 use std::rc::Rc;
 
