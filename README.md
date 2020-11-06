@@ -13,7 +13,11 @@ better from Rome than what we got.
 
 ## Join our Zulip community!
 
-If you are interested in Glommio consider joining our [Zulip](https://scipio.zulipchat.com) community.
+If you are interested in Glommio consider joining our [Zulip](https://glommio.zulipchat.com) community.
+If the link above doesn't work, this could be due to the temporary
+migration from the name Scipio to Glommio, in which case please try
+again later or shoot us a message on github.
+
 Come tell us about exciting applications you are building, ask for help,
 or really just chat with friends
 
@@ -35,7 +39,7 @@ Using Glommio is not hard if you are familiar with rust async. All you have to d
 ```
 
 For more details check out our [docs
-page](https://docs.rs/crate/scipio/0.1.0-alpha)
+page](https://docs.rs/crate/glommio/0.2.0-alpha)
 
 ## Status
 
