@@ -35,7 +35,7 @@ Using Glommio is not hard if you are familiar with rust async. All you have to d
 ```
 
 For more details check out our [docs
-page](https://docs.rs/crate/scipio/0.1.0-alpha)
+page](https://docs.rs/glommio/0.2.0-alpha/glommio/)
 
 ## Status
 
