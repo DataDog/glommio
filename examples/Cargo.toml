@@ -8,7 +8,7 @@ edition = "2018"
 futures = "0.3.5"
 futures-lite = "1.11.1"
 ansi_term = "0.12.1"
-glommio = { version = "0.1.0", path = "../glommio" }
+glommio = { version = "0.2.0", path = "../glommio" }
 
 [[example]]
 name = "echo"
