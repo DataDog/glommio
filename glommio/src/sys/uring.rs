@@ -891,17 +891,22 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
+        // Cancel the old timer regardless of whether or not we can sleep:
+        // if we won't sleep, we will register the new timer with its new
+        // value.
+        //
+        // But if we will sleep, there might be a timer registered that needs
+        // to be removed otherwise we'll wake up when it expires.
+        self.timeout_src.take();
+        flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
+
         let mut should_sleep = match preempt_timer {
             None => true,
             Some(dur) => {
-                // Cancel the old timer.
-                self.timeout_src.take();
-                flush_cancellations!(into wakers; lat_ring);
                 self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
                 false
             }
         };
-        flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
         flush_rings!(main_ring, lat_ring, poll_ring)?;
         should_sleep &= poll_ring.can_sleep();
 
@@ -915,9 +920,6 @@ impl Reactor {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
-                // Cancel the old timer.
-                self.timeout_src.take();
-                flush_cancellations!(into wakers; lat_ring);
                 // Although we keep the SQE queue separate for cancellations
                 // and submission the CQE queue is a single one. So when we
                 // flushed cancellations it is possible that we generated an

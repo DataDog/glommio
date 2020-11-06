@@ -873,6 +873,13 @@ impl LocalExecutor {
             let duration = self.preempt_timer_duration();
             self.parker.poll_io(duration);
             if !self.run_task_queues() {
+                // It may be that we just became ready now that the task queue
+                // is exhausted. But if we sleep (park) we'll never know so we
+                // test again here. We can't test *just* here because the main
+                // future is probably the one setting up the task queues and etc.
+                if let Poll::Ready(t) = future.as_mut().poll(cx) {
+                    break t;
+                }
                 if spin {
                     if let Some(t) = spin_since {
                         if t.elapsed() < spin_before_park {
