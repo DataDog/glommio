@@ -486,6 +486,7 @@ impl LocalExecutorBuilder {
             let mut le = LocalExecutor::new(id);
             if let Some(cpu) = self.binding {
                 le.bind_to_cpu(cpu).unwrap();
+                le.queues.borrow_mut().spin_before_park = self.spin_before_park;
             }
             le.init().unwrap();
             le.run(async move {
