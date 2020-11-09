@@ -13,7 +13,7 @@ better from Rome than what we got.
 
 ## Join our Zulip community!
 
-If you are interested in Glommio consider joining our [Zulip](https://scipio.zulipchat.com) community.
+If you are interested in Glommio consider joining our [Zulip](https://glommio.zulipchat.com) community.
 Come tell us about exciting applications you are building, ask for help,
 or really just chat with friends
 
