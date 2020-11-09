@@ -595,6 +595,11 @@ impl SleepableRing {
                     args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                 };
                 fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
+            } else {
+                // Can't link rings because we ran out of CQEs. Just can't sleep.
+                // Submit what we have, once we're out of here we'll consume them
+                // and at some point will be able to sleep again.
+                return self.ring.submit_sqes();
             }
         }
 
