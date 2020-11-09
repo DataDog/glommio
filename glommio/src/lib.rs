@@ -7,7 +7,7 @@
 //!
 //! ## Attention
 //!
-//! This crate was previously named Glommio but was renamed after a trademark dispute.
+//! This crate was previously named Scipio but was renamed after a trademark dispute.
 //! We are removing this message soon but it is now here to avoid confusion.
 //!
 //! ## What is Glommio
