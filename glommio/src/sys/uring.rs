@@ -17,8 +17,11 @@ use std::time::Duration;
 
 use crate::free_list::{FreeList, Idx};
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::{self, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
 use crate::{IoRequirements, Latency};
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use uring_sys::IoRingOp;
 
@@ -578,7 +581,23 @@ impl SleepableRing {
         source
     }
 
-    fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
+    fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
+        if let Some(mut sqe) = self.ring.next_sqe() {
+            // Now must wait on the eventfd in case someone wants to wake us up.
+            // If we can't then we can't sleep and will just bail immediately
+            let op = UringDescriptor {
+                fd: eventfd_src.raw(),
+                user_data: to_user_data(add_source(eventfd_src, self.submission_queue.clone())),
+                args: UringOpDescriptor::Read(0, 8),
+            };
+            fill_sqe(&mut sqe, &op, |_| panic!("not in the poll ring"));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn sleep(&mut self, link: &mut Source, eventfd_src: &Source) -> io::Result<usize> {
         let is_freestanding = match &*link.source_type() {
             SourceType::LinkRings(LinkStatus::Linked) => false, // nothing to do
             SourceType::LinkRings(LinkStatus::Freestanding) => true,
@@ -595,10 +614,33 @@ impl SleepableRing {
                     args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                 };
                 fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
+            } else {
+                // Can't link rings because we ran out of CQEs. Just can't sleep.
+                // Submit what we have, once we're out of here we'll consume them
+                // and at some point will be able to sleep again.
+                return self.ring.submit_sqes();
             }
         }
 
-        self.ring.submit_sqes_and_wait(1)
+        let res = eventfd_src.take_result();
+        match res {
+            None => {
+                // We already have the eventfd registered and nobody woke us up so far.
+                // Just proceed to sleep
+                self.ring.submit_sqes_and_wait(1)
+            }
+            Some(res) => {
+                if self.install_eventfd(eventfd_src) {
+                    // Do not expect any failures reading from eventfd. This will panic if we failed.
+                    res.unwrap();
+                    // Now must wait on the eventfd in case someone wants to wake us up.
+                    // If we can't then we can't sleep and will just bail immediately
+                    self.ring.submit_sqes_and_wait(1)
+                } else {
+                    self.ring.submit_sqes()
+                }
+            }
+        }
     }
 }
 
@@ -660,6 +702,14 @@ pub struct Reactor {
     link_rings_src: RefCell<Source>,
 
     timeout_src: Cell<Option<Source>>,
+
+    // This keeps the eventfd alive. Drop will close it when we're done
+    _eventfd: std::fs::File,
+    // This tells the other reactors whether we are sleeping or not, and if we
+    // are what is our eventfd
+    eventfd_memory: Arc<AtomicUsize>,
+    // This is the source used to handle the notifications into the ring
+    eventfd_src: Source,
 }
 
 fn common_flags() -> PollFlags {
@@ -705,21 +755,6 @@ macro_rules! flush_rings {
 
 impl Reactor {
     pub(crate) fn new() -> io::Result<Reactor> {
-        // Different threads have no business passing files around. Once you have
-        // a file descriptor you can do unsafe operations on it, and if some other
-        // thread happens to have the same fd, then this is no fun.
-        //
-        // In Seastar fds are passed around to the I/O Scheduler, but when the time
-        // come for us to do the same I would prefer to mediate that through other,
-        // safer interfaces like an Arc-like version of the DmaFile.
-        //
-        // We can't prohibit users from passing a file descriptor because at the end
-        // of the day that's just an integer, but we can call unshare() to make sure
-        // that threads of the same process do not have the same set of file descriptors.
-        //
-        // The damage is at least contained.
-        syscall!(unshare(libc::CLONE_FILES | libc::CLONE_FS))?;
-
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
@@ -731,7 +766,7 @@ impl Reactor {
                 ),
             ));
         }
-        let main_ring = SleepableRing::new(128, "main")?;
+        let mut main_ring = SleepableRing::new(128, "main")?;
         let latency_ring = SleepableRing::new(128, "latency")?;
         let link_fd = latency_ring.ring_fd();
         let link_rings_src = Source::new(
@@ -740,13 +775,28 @@ impl Reactor {
             SourceType::LinkRings(LinkStatus::Freestanding),
         );
 
+        let eventfd = unsafe { std::fs::File::from_raw_fd(sys::create_eventfd()?) };
+        let eventfd_src = Source::new(
+            IoRequirements::default(),
+            eventfd.as_raw_fd(),
+            SourceType::Read(PollableStatus::NonPollable, None),
+        );
+        assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
+
         Ok(Reactor {
             main_ring: RefCell::new(main_ring),
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(PollRing::new(128)?),
             link_rings_src: RefCell::new(link_rings_src),
             timeout_src: Cell::new(None),
+            _eventfd: eventfd,
+            eventfd_memory: Arc::new(AtomicUsize::new(0)),
+            eventfd_src,
         })
+    }
+
+    pub(crate) fn eventfd(&self) -> Arc<AtomicUsize> {
+        self.eventfd_memory.clone()
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
@@ -842,9 +892,13 @@ impl Reactor {
     //
     // We may not be able to register an SQE at this point, so we return an Error and
     // will just not sleep.
-    fn link_rings_and_sleep(&self, ring: &mut SleepableRing) -> io::Result<()> {
+    fn link_rings_and_sleep(
+        &self,
+        ring: &mut SleepableRing,
+        eventfd_src: &Source,
+    ) -> io::Result<()> {
         let mut link_rings = self.link_rings_src.borrow_mut();
-        ring.sleep(&mut link_rings)?;
+        ring.sleep(&mut link_rings, eventfd_src)?;
         Ok(())
     }
 
@@ -881,12 +935,16 @@ impl Reactor {
     //   close as possible to the point where we *leave* this method. For instance: if we spin here
     //   for 3ms and the preempt timer is 10ms that would leave the next task queue just 7ms to
     //   run.
-    pub(crate) fn wait(
+    pub(crate) fn wait<F>(
         &self,
         wakers: &mut Vec<Waker>,
         preempt_timer: Option<Duration>,
         user_timer: Option<Duration>,
-    ) -> io::Result<bool> {
+        process_remote_channels: F,
+    ) -> io::Result<bool>
+    where
+        F: Fn(&mut Vec<Waker>) -> usize,
+    {
         let mut poll_ring = self.poll_ring.borrow_mut();
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
@@ -913,6 +971,7 @@ impl Reactor {
         if should_sleep {
             consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
         }
+
         // If we generated any event so far, we can't sleep. Need to handle them.
         should_sleep &= wakers.is_empty();
 
@@ -933,11 +992,22 @@ impl Reactor {
                 }
             }
             if should_sleep {
-                self.link_rings_and_sleep(&mut main_ring)?;
+                // From this moment on the remote executors are aware that we are sleeping
+                // We have to sweep the remote channels function once more because since
+                // last time until now it could be that something happened in a remote executor
+                // that opened up room. If if did we bail on sleep and go process it.
+                self.eventfd_memory
+                    .store(self.eventfd_src.raw() as _, Ordering::Release);
+                if process_remote_channels(wakers) == 0 {
+                    self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)?;
+                    // woke up, so no need to notify us anymore.
+                    self.eventfd_memory.store(0, Ordering::Release);
+                }
             }
         }
 
         consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
+
         // A Note about need_preempt:
         //
         // If in the last call to consume_rings! some events completed, the tail and
@@ -1028,14 +1098,14 @@ mod tests {
 
         let start = Instant::now();
         let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None, None).unwrap();
+        reactor.wait(&mut wakers, None, None, |_| 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(50 <= elapsed_ms && elapsed_ms < 100);
 
         drop(slow); // Cancel this one.
 
         let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None, None).unwrap();
+        reactor.wait(&mut wakers, None, None, |_| 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(300 <= elapsed_ms && elapsed_ms < 350);
     }
