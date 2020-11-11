@@ -8,7 +8,7 @@ use crate::io::glommio_file::GlommioFile;
 use crate::parking::Reactor;
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Constructs a file that is backed by the operating system page cache
 #[derive(Debug)]
@@ -184,6 +184,10 @@ impl BufferedFile {
 
     pub(crate) fn path(&self) -> &Path {
         self.file.path.as_ref().unwrap().as_path()
+    }
+
+    pub(crate) fn discard(self) -> (RawFd, Option<PathBuf>) {
+        self.file.discard()
     }
 }
 
