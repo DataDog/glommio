@@ -88,15 +88,17 @@ impl GlommioFile {
             && self.dev_minor == other.dev_minor
     }
 
-    pub(crate) async fn close(mut self) -> io::Result<()> {
+    pub(crate) fn discard(mut self) -> (RawFd, Option<PathBuf>) {
         // Destruct `self` into components skipping Drop.
-        let (fd, path) = {
-            let fd = self.as_raw_fd();
-            let path = self.path.take();
-            mem::forget(self);
-            (fd, path)
-        };
+        let fd = self.as_raw_fd();
+        let path = self.path.take();
+        mem::forget(self);
+        (fd, path)
+    }
 
+    pub(crate) async fn close(self) -> io::Result<()> {
+        // Destruct `self` into components skipping Drop.
+        let (fd, path) = self.discard();
         let source = Reactor::get().close(fd);
         enhanced_try!(source.collect_rw().await, "Closing", path, Some(fd))?;
         Ok(())
