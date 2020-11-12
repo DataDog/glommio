@@ -10,12 +10,12 @@ use crate::sys::DmaBuffer;
 use crate::task;
 use crate::Local;
 use core::task::Waker;
+use futures_lite::future::poll_fn;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::{self, StreamExt};
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -456,16 +456,43 @@ impl DmaStreamReader {
     /// [`AsyncReadExt`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncReadExt.html
     /// [`ReadResult`]: struct.ReadResult.html
     pub async fn get_buffer_aligned(&mut self, len: u64) -> io::Result<ReadResult> {
-        let x = PrepareBuffer::new(
-            self.state.clone(),
-            self.file.clone(),
-            self.current_pos,
-            len,
-            false,
-        )
-        .await?;
+        if len == 0 {
+            return Ok(ReadResult::empty_buffer());
+        }
+
+        let state = self.state.borrow();
+        let start_id = state.buffer_id(self.current_pos);
+        let end_id = state.buffer_id(self.current_pos + len - 1);
+
+        if start_id != end_id {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})", len, self.current_pos, state.buffer_size)));
+        }
+        drop(state);
+
+        let x = poll_fn(|cx| self.get_buffer(cx, len, start_id)).await?;
         self.skip(len);
         Ok(x)
+    }
+
+    fn get_buffer(
+        &mut self,
+        cx: &mut Context<'_>,
+        len: u64,
+        buffer_id: u64,
+    ) -> Poll<io::Result<ReadResult>> {
+        let mut state = self.state.borrow_mut();
+        match state.buffermap.get(&buffer_id) {
+            None => {
+                state.fill_buffer(self.state.clone(), self.file.clone());
+                state.add_waker(buffer_id, cx.waker().clone());
+                Poll::Pending
+            }
+            Some(buffer) => {
+                let offset = state.offset_of(self.current_pos);
+                let len = std::cmp::min(len as usize, buffer.len() - offset);
+                Poll::Ready(buffer.slice(offset, len))
+            }
+        }
     }
 }
 
@@ -511,76 +538,6 @@ impl AsyncRead for DmaStreamReader {
         drop(state);
         self.skip(current_offset as u64);
         Poll::Ready(Ok(current_offset))
-    }
-}
-
-// If we had an I/O thread (or if -- one can hope -- uring could do mremap()), we could remap
-// those buffers into a contiguous memory area and provide unaligned access. If we manage to
-// accumulate all mremap from all threads in a single thread (instead of one syscall thread per
-// executor), then the mmap sem would not ever need to be help and we can do that relatively
-// efficiently.
-//
-// None of that is for now.
-#[derive(Debug)]
-pub struct PrepareBuffer {
-    state: Rc<RefCell<DmaStreamReaderState>>,
-    file: Rc<DmaFile>,
-    pos: u64,
-    len: u64,
-    merge_buffers: bool,
-}
-
-impl PrepareBuffer {
-    fn new(
-        state: Rc<RefCell<DmaStreamReaderState>>,
-        file: Rc<DmaFile>,
-        pos: u64,
-        len: u64,
-        merge_buffers: bool,
-    ) -> Self {
-        PrepareBuffer {
-            state,
-            file,
-            pos,
-            len,
-            merge_buffers,
-        }
-    }
-}
-
-impl Future for PrepareBuffer {
-    type Output = io::Result<ReadResult>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.state.borrow_mut();
-
-        let start_id = state.buffer_id(self.pos);
-        if self.len == 0 {
-            return Poll::Ready(Ok(ReadResult::empty_buffer()));
-        }
-        let end_id = state.buffer_id(self.pos + self.len - 1);
-        if start_id != end_id {
-            return Poll::Ready(Err(io::Error::new(io::ErrorKind::WouldBlock, format!("Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})", self.len, self.pos, state.buffer_size))));
-        }
-
-        if let Some(err) = current_error!(state) {
-            return Poll::Ready(err);
-        }
-
-        let buffer_id = state.buffer_id(self.pos);
-        let offset = state.offset_of(self.pos);
-
-        match state.buffermap.get(&buffer_id) {
-            None => {
-                state.fill_buffer(self.state.clone(), self.file.clone());
-                state.add_waker(buffer_id, cx.waker().clone());
-                Poll::Pending
-            }
-            Some(buffer) => {
-                let len = std::cmp::min(self.len as usize, buffer.len() - offset);
-                Poll::Ready(buffer.slice(offset, len))
-            }
-        }
     }
 }
 
