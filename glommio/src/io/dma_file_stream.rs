@@ -555,7 +555,10 @@ impl Future for PrepareBuffer {
         let mut state = self.state.borrow_mut();
 
         let start_id = state.buffer_id(self.pos);
-        let end_id = state.buffer_id(self.pos + self.len);
+        if self.len == 0 {
+            return Poll::Ready(Ok(ReadResult::empty_buffer()));
+        }
+        let end_id = state.buffer_id(self.pos + self.len - 1);
         if start_id != end_id {
             return Poll::Ready(Err(io::Error::new(io::ErrorKind::WouldBlock, format!("Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})", self.len, self.pos, state.buffer_size))));
         }
@@ -1362,6 +1365,28 @@ mod test {
         assert_eq!(eof_short_buffer.len(), 2);
         check_contents!(eof_short_buffer.as_bytes(), 131072);
 
+        reader.close().await.unwrap();
+    });
+
+    file_stream_read_test!(read_get_buffer_aligned_zero_buffer, path, _k, file, _file_size: 131072, {
+        let mut reader = DmaStreamReaderBuilder::new(file)
+            .with_buffer_size(131072)
+            .build();
+
+        let buffer = reader.get_buffer_aligned(0).await.unwrap();
+        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.as_bytes().len(), 0);
+        reader.close().await.unwrap();
+    });
+
+    file_stream_read_test!(read_get_buffer_aligned_entire_buffer_at_once, path, _k, file, _file_size: 131072, {
+        let mut reader = DmaStreamReaderBuilder::new(file)
+            .with_buffer_size(131072)
+            .build();
+
+        let buffer = reader.get_buffer_aligned(131072).await.unwrap();
+        assert_eq!(buffer.len(), 131072);
+        check_contents!(buffer.as_bytes(), 0);
         reader.close().await.unwrap();
     });
 
