@@ -173,7 +173,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::Semaphore;
+    /// use glommio::sync::Semaphore;
     ///
     /// let _ = Semaphore::new(1);
     ///
@@ -189,7 +189,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::Semaphore;
+    /// use glommio::sync::Semaphore;
     ///
     /// let sem = Semaphore::new(1);
     /// assert_eq!(sem.available(), 1);
@@ -206,7 +206,8 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Semaphore};
+    /// use glommio::LocalExecutor;
+    /// use glommio::sync::Semaphore;
     ///
     /// let sem = Semaphore::new(1);
     ///
@@ -233,7 +234,8 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Semaphore};
+    /// use glommio::LocalExecutor;
+    /// use glommio::sync::Semaphore;
     ///
     /// let sem = Semaphore::new(1);
     ///
@@ -263,7 +265,8 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Semaphore};
+    /// use glommio::LocalExecutor;
+    /// use glommio::sync::Semaphore;
     ///
     /// let sem = Semaphore::new(0);
     ///
@@ -285,7 +288,8 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Semaphore};
+    /// use glommio::LocalExecutor;
+    /// use glommio::sync::Semaphore;
     ///
     /// let sem = Semaphore::new(0);
     ///

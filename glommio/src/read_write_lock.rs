@@ -830,7 +830,7 @@ mod test {
     use crate::read_write_lock::ReadWriteLock;
     use crate::read_write_lock::TryReadWriteLockError;
 
-    use crate::Semaphore;
+    use crate::sync::Semaphore;
     use rand::{self, Rng};
     use std::cell::RefCell;
     use std::rc::Rc;
