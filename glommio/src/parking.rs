@@ -100,8 +100,7 @@ impl Inner {
     fn park(&self, timeout: Option<Duration>) -> bool {
         // If the timeout is zero, then there is no need to actually block.
         // Process available I/O events.
-        let reactor_lock = Reactor::get().lock();
-        let _ = reactor_lock.react(timeout);
+        let _ = Reactor::get().react(timeout);
         false
     }
 }
@@ -460,12 +459,6 @@ impl Reactor {
         timers.remove(id);
     }
 
-    /// Locks the reactor, potentially blocking if the lock is held by another thread.
-    fn lock(&self) -> ReactorLock<'_> {
-        let reactor = self;
-        ReactorLock { reactor }
-    }
-
     /// Processes ready timers and extends the list of wakers to wake.
     ///
     /// Returns the duration until the next timer before this method was called.
@@ -478,16 +471,9 @@ impl Reactor {
         let mut channels = self.shared_channels.borrow_mut();
         channels.process_shared_channels(wakers)
     }
-}
 
-/// A lock on the reactor.
-struct ReactorLock<'a> {
-    reactor: &'a Reactor,
-}
-
-impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
-    fn react(self, timeout: Option<Duration>) -> io::Result<()> {
+    fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
         // FIXME: there must be a way to avoid this allocation
         // Indeed it just showed in a profiler. We can cap the number of
         // cqes produced, but this is used for timers as well. Need to
@@ -495,19 +481,16 @@ impl ReactorLock<'_> {
         let mut wakers = Vec::new();
 
         // Process ready timers.
-        let next_timer = self.reactor.process_timers(&mut wakers);
-        self.reactor.process_shared_channels(&mut wakers);
+        let next_timer = self.process_timers(&mut wakers);
+        self.process_shared_channels(&mut wakers);
 
         // Block on I/O events.
-        let res = match self
-            .reactor
-            .sys
-            .wait(&mut wakers, timeout, next_timer, |wakers| {
-                self.reactor.process_shared_channels(wakers)
-            }) {
+        let res = match self.sys.wait(&mut wakers, timeout, next_timer, |wakers| {
+            self.process_shared_channels(wakers)
+        }) {
             // Don't wait for the next loop to process timers or shared channels
             Ok(true) => {
-                self.reactor.process_timers(&mut wakers);
+                self.process_timers(&mut wakers);
                 Ok(())
             }
 
