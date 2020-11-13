@@ -33,15 +33,14 @@
 //!
 use alloc::rc::Rc;
 use core::fmt::Debug;
-use core::marker::PhantomData;
-use futures_lite::io::ErrorKind;
-use std::cell::{RefCell, UnsafeCell};
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::io;
+use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
@@ -126,10 +125,10 @@ impl From<TryLockError> for io::Error {
     }
 }
 
-struct Waiter<T> {
+struct Waiter {
     kind: WaiterKind,
     id: WaiterId,
-    rw: Rc<RefCell<State<T>>>,
+    rw: Rc<RefCell<State>>,
 }
 
 /// A reader-writer lock
@@ -182,13 +181,12 @@ struct Waiter<T> {
 ///
 #[derive(Debug)]
 pub struct RwLock<T> {
-    rw: Rc<RefCell<State<T>>>,
+    rw: Rc<RefCell<State>>,
+    value: Rc<RefCell<T>>,
 }
 
 #[derive(Debug)]
-struct State<T> {
-    value: UnsafeCell<T>,
-
+struct State {
     id_gen: u64,
     //number of granted write access
     //there can be only single writer, but we use u32 type to support reentrancy fot the lock
@@ -206,13 +204,13 @@ struct State<T> {
     waiters: VecDeque<WaiterId>,
 }
 
-impl<T> Waiter<T> {
-    fn new(id: WaiterId, kind: WaiterKind, rw: Rc<RefCell<State<T>>>) -> Self {
+impl Waiter {
+    fn new(id: WaiterId, kind: WaiterKind, rw: Rc<RefCell<State>>) -> Self {
         Waiter { id, kind, rw }
     }
 }
 
-impl<T> Future for Waiter<T> {
+impl Future for Waiter {
     type Output = LockResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -239,10 +237,9 @@ impl<T> Future for Waiter<T> {
     }
 }
 
-impl<T> State<T> {
-    fn new(value: T) -> Self {
+impl State {
+    fn new() -> Self {
         State {
-            value: UnsafeCell::new(value),
             id_gen: 0,
             writers: 0,
             readers: 0,
@@ -310,9 +307,8 @@ impl<T> State<T> {
 #[derive(Debug)]
 #[must_use = "if unused the RwLock will immediately unlock"]
 pub struct RwLockReadGuard<'a, T> {
-    rw: Rc<RefCell<State<T>>>,
-    //guard can not outlive rw-lock owner
-    phantom: PhantomData<&'a T>,
+    rw: Rc<RefCell<State>>,
+    value_ref: Ref<'a, T>,
 }
 
 impl<'a, T> Deref for RwLockReadGuard<'a, T> {
@@ -324,8 +320,7 @@ impl<'a, T> Deref for RwLockReadGuard<'a, T> {
             panic!("Related RwLock is already closed");
         }
 
-        let ptr = state.value.get();
-        unsafe { &*ptr }
+        &self.value_ref
     }
 }
 
@@ -353,9 +348,8 @@ impl<'a, T> Drop for RwLockReadGuard<'a, T> {
 #[must_use = "if unused the RwLock will immediately unlock"]
 #[derive(Debug)]
 pub struct RwLockWriteGuard<'a, T> {
-    rw: Rc<RefCell<State<T>>>,
-    //guard can not outlive rw-lock owner
-    phantom: PhantomData<&'a T>,
+    rw: Rc<RefCell<State>>,
+    value_ref: RefMut<'a, T>,
 }
 
 impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
@@ -368,9 +362,7 @@ impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
             panic!("Related RwLock is already closed");
         }
 
-        let state = (*self.rw).borrow();
-        let ptr = state.value.get();
-        unsafe { &*ptr }
+        &self.value_ref
     }
 }
 
@@ -382,9 +374,7 @@ impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
             panic!("Related RwLock is already closed");
         }
 
-        let state = (*self.rw).borrow();
-        let ptr = state.value.get();
-        unsafe { &mut *ptr }
+        &mut self.value_ref
     }
 }
 
@@ -413,7 +403,8 @@ impl<T> RwLock<T> {
     /// ```
     pub fn new(value: T) -> Self {
         RwLock {
-            rw: Rc::new(RefCell::new(State::new(value))),
+            rw: Rc::new(RefCell::new(State::new())),
+            value: Rc::new(RefCell::new(value)),
         }
     }
 
@@ -446,7 +437,7 @@ impl<T> RwLock<T> {
             return Err(LockClosedError);
         }
 
-        Ok(unsafe { &mut *(state.value.get()) })
+        Ok(unsafe { &mut (*self.value.as_ptr()) })
     }
 
     /// Locks this RwLock with shared read access, suspending the current fiber
@@ -497,7 +488,7 @@ impl<T> RwLock<T> {
         if try_result {
             return Ok(RwLockReadGuard {
                 rw: self.rw.clone(),
-                phantom: PhantomData,
+                value_ref: self.value.borrow(),
             });
         }
 
@@ -509,7 +500,7 @@ impl<T> RwLock<T> {
 
         waiter.await.map(|_| RwLockReadGuard {
             rw: self.rw.clone(),
-            phantom: PhantomData,
+            value_ref: self.value.borrow(),
         })
     }
 
@@ -549,7 +540,7 @@ impl<T> RwLock<T> {
         if try_result {
             return Ok(RwLockWriteGuard {
                 rw: self.rw.clone(),
-                phantom: PhantomData,
+                value_ref: self.value.borrow_mut(),
             });
         }
 
@@ -563,7 +554,7 @@ impl<T> RwLock<T> {
 
         Ok(RwLockWriteGuard {
             rw: self.rw.clone(),
-            phantom: PhantomData,
+            value_ref: self.value.borrow_mut(),
         })
     }
 
@@ -598,7 +589,7 @@ impl<T> RwLock<T> {
         if try_result {
             return Ok(RwLockReadGuard {
                 rw: self.rw.clone(),
-                phantom: PhantomData,
+                value_ref: self.value.borrow(),
             });
         }
 
@@ -640,7 +631,7 @@ impl<T> RwLock<T> {
         if try_result {
             return Ok(RwLockWriteGuard {
                 rw: self.rw.clone(),
-                phantom: PhantomData,
+                value_ref: self.value.borrow_mut(),
             });
         }
 
@@ -749,19 +740,17 @@ impl<T> RwLock<T> {
 
         self.close();
 
-        let state = self.rw.clone();
+        let value = self.value.clone();
         drop(self);
 
         //it is safe operation because we own lock and because non of the guards can outlive lock
-        Ok(Rc::try_unwrap(state)
+        Ok(Rc::try_unwrap(value)
             .ok()
-            .expect("There are dangling references on lock's state")
-            .into_inner()
-            .value
+            .expect("There are dangling references on lock's value")
             .into_inner())
     }
 
-    fn wake_up_fibers(rw: &mut State<T>) {
+    fn wake_up_fibers(rw: &mut State) {
         //created with assumption in mind that waker will trigger delayed execution of fibers
         //such behaviour supports users intuition about fibers.
 
@@ -782,7 +771,7 @@ impl<T> RwLock<T> {
         }
     }
 
-    fn wake_up_all_readers_till_first_writer(rw: &mut State<T>) {
+    fn wake_up_all_readers_till_first_writer(rw: &mut State) {
         loop {
             let waiter_id = rw.waiters.front();
 
@@ -805,7 +794,7 @@ impl<T> RwLock<T> {
             }
         }
     }
-    fn wake_up_readers_and_first_writer(rw: &mut State<T>) {
+    fn wake_up_readers_and_first_writer(rw: &mut State) {
         loop {
             let waiter_id = rw.waiters.pop_front();
             if let Some(waiter_id) = waiter_id {
@@ -822,7 +811,7 @@ impl<T> RwLock<T> {
         }
     }
 
-    fn wake_up_all_fibers(rw: &mut State<T>) {
+    fn wake_up_all_fibers(rw: &mut State) {
         for (_, (_, waker)) in rw.waiters_map.drain() {
             waker.wake();
         }
