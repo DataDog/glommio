@@ -8,9 +8,9 @@
 //! # Examples
 //!
 //! ```
-//! use glommio::sync::ReadWriteLock;
+//! use glommio::sync::RwLock;
 //! use glommio::LocalExecutor;
-//! let lock = ReadWriteLock::new(5);
+//! let lock = RwLock::new(5);
 //! let ex = LocalExecutor::make_default();
 //!
 //! ex.run( async move {
@@ -34,26 +34,26 @@
 use alloc::rc::Rc;
 use core::fmt::Debug;
 use core::marker::PhantomData;
+use futures_lite::io::ErrorKind;
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
+use std::io;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
-use std::io;
-use futures_lite::io::ErrorKind;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 struct WaiterId(u64);
 
 /// A type alias for the result of a lock method which can be suspended.
-pub type ReadWriteLockResult<T> = Result<T, LockClosedError>;
+pub type LockResult<T> = Result<T, LockClosedError>;
 
 /// A type alias for the result of a non-suspending locking method.
-pub type TryReadWriteLockResult<T> = Result<T, TryReadWriteLockError>;
+pub type TryLockResult<T> = Result<T, TryLockError>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum WaiterKind {
@@ -61,7 +61,7 @@ enum WaiterKind {
     WRITER,
 }
 
-///Error which indicates that ReadWriteLock is closed and can not be use
+///Error which indicates that RwLock is closed and can not be use
 ///to request lock access
 pub struct LockClosedError;
 
@@ -80,37 +80,37 @@ impl Debug for LockClosedError {
 }
 
 ///Error which indicates reason of the error returned by [`try_read`] and ['try_write'] methods
-///on ['ReadWriteLock']
-pub enum TryReadWriteLockError {
+///on ['RwLock']
+pub enum TryLockError {
     ///Lock is closed and can not be used to request access to the lock
     Closed(LockClosedError),
     ///Requested access can not be granted till already hold access will be released
     WouldSuspend,
 }
 
-impl Display for TryReadWriteLockError {
+impl Display for TryLockError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
-            TryReadWriteLockError::Closed(error) => Display::fmt(error, f),
-            TryReadWriteLockError::WouldSuspend => f.write_str("call would suspend execution"),
+            TryLockError::Closed(error) => Display::fmt(error, f),
+            TryLockError::WouldSuspend => f.write_str("call would suspend execution"),
         }
     }
 }
 
-impl Debug for TryReadWriteLockError {
+impl Debug for TryLockError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
-            TryReadWriteLockError::Closed(error) => Debug::fmt(error, f),
-            TryReadWriteLockError::WouldSuspend => f.write_str("WouldSuspend"),
+            TryLockError::Closed(error) => Debug::fmt(error, f),
+            TryLockError::WouldSuspend => f.write_str("WouldSuspend"),
         }
     }
 }
 
-impl Error for TryReadWriteLockError {}
+impl Error for TryLockError {}
 
-impl From<LockClosedError> for TryReadWriteLockError {
+impl From<LockClosedError> for TryLockError {
     fn from(error: LockClosedError) -> Self {
-        TryReadWriteLockError::Closed(error)
+        TryLockError::Closed(error)
     }
 }
 
@@ -120,8 +120,8 @@ impl From<LockClosedError> for io::Error {
     }
 }
 
-impl From<TryReadWriteLockError> for io::Error {
-    fn from(er: TryReadWriteLockError) -> Self {
+impl From<TryLockError> for io::Error {
+    fn from(er: TryLockError) -> Self {
         io::Error::new(ErrorKind::Other, er)
     }
 }
@@ -139,7 +139,7 @@ struct Waiter<T> {
 /// of the underlying data (exclusive access) and the read portion of this lock
 /// typically allows for read-only access (shared access).
 ///
-/// An `ReadWriteLock` will allow any number of readers to acquire the
+/// An `RwLock` will allow any number of readers to acquire the
 /// lock as long as a writer is not holding the lock.
 ///
 /// The priority policy of the lock is based on FIFO policy. Fibers will be granted access in the
@@ -156,10 +156,10 @@ struct Waiter<T> {
 /// # Examples
 ///
 /// ```
-///use glommio::sync::ReadWriteLock;
+///use glommio::sync::RwLock;
 ///use glommio::LocalExecutor;
 ///
-/// let lock = ReadWriteLock::new(5);
+/// let lock = RwLock::new(5);
 /// let ex = LocalExecutor::make_default();
 ///
 /// ex.run( async move {
@@ -180,9 +180,8 @@ struct Waiter<T> {
 /// });
 /// ```
 ///
-/// [`Mutex`]: super::Mutex
 #[derive(Debug)]
-pub struct ReadWriteLock<T> {
+pub struct RwLock<T> {
     rw: Rc<RefCell<State<T>>>,
 }
 
@@ -214,7 +213,7 @@ impl<T> Waiter<T> {
 }
 
 impl<T> Future for Waiter<T> {
-    type Output = ReadWriteLockResult<()>;
+    type Output = LockResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut state = self.rw.borrow_mut();
@@ -255,7 +254,7 @@ impl<T> State<T> {
         }
     }
 
-    fn try_read(&mut self) -> ReadWriteLockResult<bool> {
+    fn try_read(&mut self) -> LockResult<bool> {
         if self.closed {
             return Err(LockClosedError);
         }
@@ -270,7 +269,7 @@ impl<T> State<T> {
         Ok(false)
     }
 
-    fn try_write(&mut self) -> ReadWriteLockResult<bool> {
+    fn try_write(&mut self) -> LockResult<bool> {
         if self.closed {
             return Err(LockClosedError);
         }
@@ -304,25 +303,25 @@ impl<T> State<T> {
 /// dropped.
 ///
 /// This structure is created by the [`read`] and [`try_read`] methods on
-/// [`ReadWriteLock`].
+/// [`RwLock`].
 ///
-/// [`read`]: ReadWriteLock::read
-/// [`try_read`]: ReadWriteLock::try_read
+/// [`read`]: RwLock::read
+/// [`try_read`]: RwLock::try_read
 #[derive(Debug)]
-#[must_use = "if unused the ReadWriteLock will immediately unlock"]
-pub struct ReadWriteLockReadGuard<'a, T> {
+#[must_use = "if unused the RwLock will immediately unlock"]
+pub struct RwLockReadGuard<'a, T> {
     rw: Rc<RefCell<State<T>>>,
     //guard can not outlive rw-lock owner
     phantom: PhantomData<&'a T>,
 }
 
-impl<'a, T> Deref for ReadWriteLockReadGuard<'a, T> {
+impl<'a, T> Deref for RwLockReadGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
         let state = (*self.rw).borrow();
         if state.closed {
-            panic!("Related ReadWriteLock is already closed");
+            panic!("Related RwLock is already closed");
         }
 
         let ptr = state.value.get();
@@ -330,7 +329,7 @@ impl<'a, T> Deref for ReadWriteLockReadGuard<'a, T> {
     }
 }
 
-impl<'a, T> Drop for ReadWriteLockReadGuard<'a, T> {
+impl<'a, T> Drop for RwLockReadGuard<'a, T> {
     fn drop(&mut self) {
         let mut state = self.rw.borrow_mut();
 
@@ -338,7 +337,7 @@ impl<'a, T> Drop for ReadWriteLockReadGuard<'a, T> {
             debug_assert!(state.readers > 0);
             state.readers -= 1;
 
-            ReadWriteLock::<T>::wake_up_fibers(&mut state);
+            RwLock::<T>::wake_up_fibers(&mut state);
         }
     }
 }
@@ -347,26 +346,26 @@ impl<'a, T> Drop for ReadWriteLockReadGuard<'a, T> {
 /// dropped.
 ///
 /// This structure is created by the [`write`] and [`try_write`] methods
-/// on [`ReadWriteLock`].
+/// on [`RwLock`].
 ///
-/// [`write`]: ReadWriteLock::write
-/// [`try_write`]: ReadWriteLock::try_write
-#[must_use = "if unused the ReadWriteLock will immediately unlock"]
+/// [`write`]: RwLock::write
+/// [`try_write`]: RwLock::try_write
+#[must_use = "if unused the RwLock will immediately unlock"]
 #[derive(Debug)]
-pub struct ReadWriteLockWriteGuard<'a, T> {
+pub struct RwLockWriteGuard<'a, T> {
     rw: Rc<RefCell<State<T>>>,
     //guard can not outlive rw-lock owner
     phantom: PhantomData<&'a T>,
 }
 
-impl<'a, T> Deref for ReadWriteLockWriteGuard<'a, T> {
+impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
         let state = (*self.rw).borrow();
 
         if state.closed {
-            panic!("Related ReadWriteLock is already closed");
+            panic!("Related RwLock is already closed");
         }
 
         let state = (*self.rw).borrow();
@@ -375,12 +374,12 @@ impl<'a, T> Deref for ReadWriteLockWriteGuard<'a, T> {
     }
 }
 
-impl<'a, T> DerefMut for ReadWriteLockWriteGuard<'a, T> {
+impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         let state = (*self.rw).borrow();
 
         if state.closed {
-            panic!("Related ReadWriteLock is already closed");
+            panic!("Related RwLock is already closed");
         }
 
         let state = (*self.rw).borrow();
@@ -389,7 +388,7 @@ impl<'a, T> DerefMut for ReadWriteLockWriteGuard<'a, T> {
     }
 }
 
-impl<'a, T> Drop for ReadWriteLockWriteGuard<'a, T> {
+impl<'a, T> Drop for RwLockWriteGuard<'a, T> {
     fn drop(&mut self) {
         let mut state = self.rw.borrow_mut();
 
@@ -397,43 +396,43 @@ impl<'a, T> Drop for ReadWriteLockWriteGuard<'a, T> {
             debug_assert!(state.writers > 0);
             state.writers -= 1;
 
-            ReadWriteLock::<T>::wake_up_fibers(&mut state);
+            RwLock::<T>::wake_up_fibers(&mut state);
         }
     }
 }
 
-impl<T> ReadWriteLock<T> {
-    /// Creates a new instance of an `ReadWriteLock<T>` which is unlocked.
+impl<T> RwLock<T> {
+    /// Creates a new instance of an `RwLock<T>` which is unlocked.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     ///
-    /// let lock = ReadWriteLock::new(5);
+    /// let lock = RwLock::new(5);
     /// ```
     pub fn new(value: T) -> Self {
-        ReadWriteLock {
+        RwLock {
             rw: Rc::new(RefCell::new(State::new(value))),
         }
     }
 
     /// Returns a mutable reference to the underlying data.
     ///
-    /// Since this call borrows the `ReadWriteLock` mutably, no actual locking needs to
+    /// Since this call borrows the `RwLock` mutably, no actual locking needs to
     /// take place -- the mutable borrow statically guarantees no locks exist.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ReadWriteLock is closed.
+    /// This function will return an error if the RwLock is closed.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     /// use glommio::LocalExecutor;
     ///
-    /// let mut lock = ReadWriteLock::new(0);
+    /// let mut lock = RwLock::new(0);
     /// let ex = LocalExecutor::make_default();
     ///
     /// ex.run(async move {
@@ -441,7 +440,7 @@ impl<T> ReadWriteLock<T> {
     ///     assert_eq!(*lock.read().await.unwrap(), 10);
     /// });
     /// ```
-    pub fn get_mut(&mut self) -> ReadWriteLockResult<&mut T> {
+    pub fn get_mut(&mut self) -> LockResult<&mut T> {
         let state = (*self.rw).borrow();
         if state.closed {
             return Err(LockClosedError);
@@ -450,7 +449,7 @@ impl<T> ReadWriteLock<T> {
         Ok(unsafe { &mut *(state.value.get()) })
     }
 
-    /// Locks this ReadWriteLock with shared read access, suspending the current fiber
+    /// Locks this RwLock with shared read access, suspending the current fiber
     /// until lock can be acquired.
     ///
     /// The calling fiber will be suspended until there are no more writers which
@@ -462,17 +461,17 @@ impl<T> ReadWriteLock<T> {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ReadWriteLock is closed.
+    /// This function will return an error if the RwLock is closed.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     /// use glommio::LocalExecutor;
     /// use std::rc::Rc;
     /// use futures::future::join;
     ///
-    /// let lock = Rc::new(ReadWriteLock::new(1));
+    /// let lock = Rc::new(RwLock::new(1));
     /// let c_lock = lock.clone();
     ///
     /// let ex = LocalExecutor::make_default();
@@ -491,12 +490,12 @@ impl<T> ReadWriteLock<T> {
     ///     join(first_reader, second_reader).await;
     /// });
     /// ```
-    pub async fn read(&self) -> ReadWriteLockResult<ReadWriteLockReadGuard<'_, T>> {
+    pub async fn read(&self) -> LockResult<RwLockReadGuard<'_, T>> {
         let mut state = self.rw.borrow_mut();
         let try_result = state.try_read()?;
 
         if try_result {
-            return Ok(ReadWriteLockReadGuard {
+            return Ok(RwLockReadGuard {
                 rw: self.rw.clone(),
                 phantom: PhantomData,
             });
@@ -508,32 +507,32 @@ impl<T> ReadWriteLock<T> {
         let waiter = Waiter::new(WaiterId(waiter_id), WaiterKind::READER, self.rw.clone());
         drop(state);
 
-        waiter.await.map(|_| ReadWriteLockReadGuard {
+        waiter.await.map(|_| RwLockReadGuard {
             rw: self.rw.clone(),
             phantom: PhantomData,
         })
     }
 
-    /// Locks this ReadWriteLock with exclusive write access, suspending the current
+    /// Locks this RwLock with exclusive write access, suspending the current
     /// finber until it can be acquired.
     ///
     /// This function will not return while other writers or other readers
     /// currently have access to the lock.
     ///
-    /// Returns an RAII guard which will drop the write access of this ReadWriteLock
+    /// Returns an RAII guard which will drop the write access of this RwLock
     /// when dropped.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ReadWriteLock is closed.
+    /// This function will return an error if the RwLock is closed.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     /// use glommio::LocalExecutor;
     ///
-    /// let lock = ReadWriteLock::new(1);
+    /// let lock = RwLock::new(1);
     /// let ex = LocalExecutor::make_default();
     ///
     /// ex.run(async move {
@@ -543,12 +542,12 @@ impl<T> ReadWriteLock<T> {
     ///     assert!(lock.try_read().is_err());
     /// });
     /// ```
-    pub async fn write(&self) -> ReadWriteLockResult<ReadWriteLockWriteGuard<'_, T>> {
+    pub async fn write(&self) -> LockResult<RwLockWriteGuard<'_, T>> {
         let mut state = self.rw.borrow_mut();
         let try_result = state.try_write()?;
 
         if try_result {
-            return Ok(ReadWriteLockWriteGuard {
+            return Ok(RwLockWriteGuard {
                 rw: self.rw.clone(),
                 phantom: PhantomData,
             });
@@ -562,13 +561,13 @@ impl<T> ReadWriteLock<T> {
 
         waiter.await?;
 
-        Ok(ReadWriteLockWriteGuard {
+        Ok(RwLockWriteGuard {
             rw: self.rw.clone(),
             phantom: PhantomData,
         })
     }
 
-    /// Attempts to acquire this ReadWriteLock with shared read access.
+    /// Attempts to acquire this RwLock with shared read access.
     ///
     /// If the access could not be granted at this time, then `Err` is returned.
     /// Otherwise, an RAII guard is returned which will release the shared access
@@ -578,35 +577,35 @@ impl<T> ReadWriteLock<T> {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ReadWriteLock is closed.
+    /// This function will return an error if the RwLock is closed.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     ///
-    /// let lock = ReadWriteLock::new(1);
+    /// let lock = RwLock::new(1);
     ///
     /// match lock.try_read() {
     ///     Ok(n) => assert_eq!(*n, 1),
     ///     Err(_) => unreachable!(),
     /// };
     /// ```
-    pub fn try_read(&self) -> TryReadWriteLockResult<ReadWriteLockReadGuard<'_, T>> {
+    pub fn try_read(&self) -> TryLockResult<RwLockReadGuard<'_, T>> {
         let mut state = self.rw.borrow_mut();
         let try_result = state.try_read()?;
 
         if try_result {
-            return Ok(ReadWriteLockReadGuard {
+            return Ok(RwLockReadGuard {
                 rw: self.rw.clone(),
                 phantom: PhantomData,
             });
         }
 
-        Err(TryReadWriteLockError::WouldSuspend)
+        Err(TryLockError::WouldSuspend)
     }
 
-    /// Attempts to lock this ReadWriteLock with exclusive write access.
+    /// Attempts to lock this RwLock with exclusive write access.
     ///
     /// If the lock could not be acquired at this time, then `Err` is returned.
     /// Otherwise, an RAII guard is returned which will release the lock when
@@ -616,15 +615,15 @@ impl<T> ReadWriteLock<T> {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ReadWriteLock is closed.
+    /// This function will return an error if the RwLock is closed.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     /// use glommio::LocalExecutor;
     ///
-    /// let lock = ReadWriteLock::new(1);
+    /// let lock = RwLock::new(1);
     /// let ex = LocalExecutor::make_default();
     ///
     /// ex.run(async move {
@@ -634,29 +633,29 @@ impl<T> ReadWriteLock<T> {
     ///   assert!(lock.try_write().is_err());
     /// });
     /// ```
-    pub fn try_write(&self) -> TryReadWriteLockResult<ReadWriteLockWriteGuard<'_, T>> {
+    pub fn try_write(&self) -> TryLockResult<RwLockWriteGuard<'_, T>> {
         let mut state = self.rw.borrow_mut();
         let try_result = state.try_write()?;
 
         if try_result {
-            return Ok(ReadWriteLockWriteGuard {
+            return Ok(RwLockWriteGuard {
                 rw: self.rw.clone(),
                 phantom: PhantomData,
             });
         }
 
-        Err(TryReadWriteLockError::WouldSuspend)
+        Err(TryLockError::WouldSuspend)
     }
 
-    ///Indicates whether current ReadWriteLock is closed. Once lock is closed all subsequent calls
+    ///Indicates whether current RwLock is closed. Once lock is closed all subsequent calls
     ///to the methods which requests lock access will return `Err`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     ///
-    /// let lock = ReadWriteLock::new(());
+    /// let lock = RwLock::new(());
     ///
     /// lock.close();
     ///
@@ -666,19 +665,19 @@ impl<T> ReadWriteLock<T> {
         (*self.rw).borrow().closed
     }
 
-    ///Closes current ReadWriteLock. Once lock is closed all being hold accesses will be released
+    ///Closes current RwLock. Once lock is closed all being hold accesses will be released
     ///and all subsequent calls to the methods to request lock access will return `Err`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     /// use glommio::LocalExecutor;
     /// use std::rc::Rc;
     /// use std::cell::RefCell;
     ///
     ///
-    /// let lock = Rc::new(ReadWriteLock::new(()));
+    /// let lock = Rc::new(RwLock::new(()));
     /// let c_lock = lock.clone();
     ///
     /// let ex = LocalExecutor::make_default();
@@ -717,7 +716,7 @@ impl<T> ReadWriteLock<T> {
         Self::wake_up_fibers(&mut state);
     }
 
-    /// Consumes this `ReadWriteLock`, returning the underlying data.
+    /// Consumes this `RwLock`, returning the underlying data.
     ///
     ///
     /// # Errors
@@ -727,10 +726,10 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::ReadWriteLock;
+    /// use glommio::sync::RwLock;
     /// use glommio::LocalExecutor;
     ///
-    /// let lock = ReadWriteLock::new(String::new());
+    /// let lock = RwLock::new(String::new());
     /// let ex = LocalExecutor::make_default();
     ///
     /// ex.run(async move {
@@ -740,7 +739,7 @@ impl<T> ReadWriteLock<T> {
     ///     assert_eq!(lock.into_inner().unwrap(), "modified");
     /// });
     /// ```
-    pub fn into_inner(self) -> ReadWriteLockResult<T> {
+    pub fn into_inner(self) -> LockResult<T> {
         let state = (*self.rw).borrow();
         if state.closed {
             return Err(LockClosedError {});
@@ -832,7 +831,7 @@ impl<T> ReadWriteLock<T> {
     }
 }
 
-impl<T> Drop for ReadWriteLock<T> {
+impl<T> Drop for RwLock<T> {
     fn drop(&mut self) {
         self.close();
     }
@@ -840,14 +839,14 @@ impl<T> Drop for ReadWriteLock<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::sync::read_write_lock::LockClosedError;
-    use crate::sync::read_write_lock::ReadWriteLock;
-    use crate::sync::read_write_lock::TryReadWriteLockError;
+    use crate::sync::rwlock::LockClosedError;
+    use crate::sync::rwlock::RwLock;
+    use crate::sync::rwlock::TryLockError;
 
     use crate::sync::Semaphore;
+    use crate::Local;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use crate::Local;
 
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);
@@ -855,7 +854,7 @@ mod test {
     #[test]
     fn test_smoke() {
         test_executor!(async move {
-            let lock = ReadWriteLock::new(());
+            let lock = RwLock::new(());
             drop(lock.read().await.unwrap());
             drop(lock.write().await.unwrap());
             drop((lock.read().await.unwrap(), lock.read().await.unwrap()));
@@ -869,7 +868,7 @@ mod test {
             const N: u32 = 10;
             const M: usize = 1000;
 
-            let r = Rc::new(ReadWriteLock::new(()));
+            let r = Rc::new(RwLock::new(()));
             let mut futures = Vec::new();
 
             for _ in 0..N {
@@ -895,7 +894,7 @@ mod test {
     #[test]
     fn test_close_wr() {
         test_executor!(async move {
-            let rc = Rc::new(ReadWriteLock::new(1));
+            let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
             Task::local(async move {
@@ -911,7 +910,7 @@ mod test {
     #[test]
     fn test_close_ww() {
         test_executor!(async move {
-            let rc = Rc::new(ReadWriteLock::new(1));
+            let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
             Task::local(async move {
@@ -927,7 +926,7 @@ mod test {
     #[test]
     fn test_close_rr() {
         test_executor!(async move {
-            let rc = Rc::new(ReadWriteLock::new(1));
+            let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
             Task::local(async move {
@@ -943,7 +942,7 @@ mod test {
     #[test]
     fn test_close_rw() {
         test_executor!(async move {
-            let rc = Rc::new(ReadWriteLock::new(1));
+            let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
             Task::local(async move {
@@ -959,7 +958,7 @@ mod test {
     #[test]
     fn test_global_lock() {
         test_executor!(async move {
-            let rc = Rc::new(ReadWriteLock::new(0));
+            let rc = Rc::new(RwLock::new(0));
             let rc2 = rc.clone();
 
             let s = Rc::new(Semaphore::new(0));
@@ -1001,7 +1000,7 @@ mod test {
     #[test]
     fn test_local_lock() {
         test_executor!(async move {
-            let rc = Rc::new(ReadWriteLock::new(0));
+            let rc = Rc::new(RwLock::new(0));
             let rc2 = rc.clone();
 
             let s = Rc::new(Semaphore::new(0));
@@ -1045,7 +1044,7 @@ mod test {
         test_executor!(async move {
             const ITERATIONS: i32 = 10;
 
-            let ball = Rc::new(ReadWriteLock::new(0));
+            let ball = Rc::new(RwLock::new(0));
             let ball2 = ball.clone();
             let ball3 = ball.clone();
 
@@ -1127,12 +1126,12 @@ mod test {
     #[test]
     fn test_try_write() {
         test_executor!(async move {
-            let lock = ReadWriteLock::new(());
+            let lock = RwLock::new(());
             let read_guard = lock.read().await.unwrap();
 
             let write_result = lock.try_write();
             match write_result {
-                Err(TryReadWriteLockError::WouldSuspend) => (),
+                Err(TryLockError::WouldSuspend) => (),
                 Ok(_) => assert!(
                     false,
                     "try_write should not succeed while read_guard is in scope"
@@ -1147,12 +1146,12 @@ mod test {
     #[test]
     fn test_try_read() {
         test_executor!(async move {
-            let lock = ReadWriteLock::new(());
+            let lock = RwLock::new(());
             let read_guard = lock.write().await.unwrap();
 
             let write_result = lock.try_read();
             match write_result {
-                Err(TryReadWriteLockError::WouldSuspend) => (),
+                Err(TryLockError::WouldSuspend) => (),
                 Ok(_) => assert!(
                     false,
                     "try_read should not succeed while read_guard is in scope"
@@ -1166,7 +1165,7 @@ mod test {
 
     #[test]
     fn test_into_inner() {
-        let lock = ReadWriteLock::new(NonCopy(10));
+        let lock = RwLock::new(NonCopy(10));
         assert_eq!(lock.into_inner().unwrap(), NonCopy(10));
     }
 
@@ -1181,7 +1180,7 @@ mod test {
         }
 
         let num_drop = Rc::new(RefCell::new(0));
-        let lock = ReadWriteLock::new(Foo(num_drop.clone()));
+        let lock = RwLock::new(Foo(num_drop.clone()));
         assert_eq!(*num_drop.borrow(), 0);
 
         {
@@ -1194,7 +1193,7 @@ mod test {
 
     #[test]
     fn test_into_inner_close() {
-        let lock = ReadWriteLock::new(());
+        let lock = RwLock::new(());
         lock.close();
 
         assert!(lock.is_closed());
@@ -1207,14 +1206,14 @@ mod test {
 
     #[test]
     fn test_get_mut() {
-        let mut lock = ReadWriteLock::new(NonCopy(10));
+        let mut lock = RwLock::new(NonCopy(10));
         *lock.get_mut().unwrap() = NonCopy(20);
         assert_eq!(lock.into_inner().unwrap(), NonCopy(20));
     }
 
     #[test]
     fn test_get_mut_close() {
-        let mut lock = ReadWriteLock::new(());
+        let mut lock = RwLock::new(());
         lock.close();
 
         assert!(lock.is_closed());
