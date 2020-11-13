@@ -13,8 +13,56 @@ use std::ptr;
 use aligned_alloc::{aligned_alloc, aligned_free};
 
 #[derive(Debug)]
-pub struct PosixDmaBuffer {
+struct SysAlloc {
     data: ptr::NonNull<u8>,
+}
+
+impl SysAlloc {
+    fn new(size: usize) -> Option<Self> {
+        let data = aligned_alloc(size, 4 << 10) as *mut u8;
+        let data = ptr::NonNull::new(data)?;
+        Some(SysAlloc { data })
+    }
+
+    fn as_ptr(&self) -> *const u8 {
+        self.data.as_ptr()
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.data.as_ptr()
+    }
+}
+
+impl Drop for SysAlloc {
+    fn drop(&mut self) {
+        unsafe {
+            aligned_free(self.data.as_ptr() as *mut ());
+        }
+    }
+}
+
+#[derive(Debug)]
+enum BufferStorage {
+    Sys(SysAlloc),
+}
+
+impl BufferStorage {
+    fn as_ptr(&self) -> *const u8 {
+        match self {
+            BufferStorage::Sys(x) => x.as_ptr(),
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        match self {
+            BufferStorage::Sys(x) => x.as_mut_ptr(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PosixDmaBuffer {
+    storage: BufferStorage,
     // Invariant: trim + size are at most one byte past the original allocation.
     trim: usize,
     size: usize,
@@ -22,10 +70,8 @@ pub struct PosixDmaBuffer {
 
 impl PosixDmaBuffer {
     pub(crate) fn new(size: usize) -> Option<PosixDmaBuffer> {
-        let data = aligned_alloc(size, 4 << 10) as *mut u8;
-        let data = ptr::NonNull::new(data)?;
         Some(PosixDmaBuffer {
-            data,
+            storage: BufferStorage::Sys(SysAlloc::new(size)?),
             size,
             trim: 0,
         })
@@ -55,11 +101,11 @@ impl PosixDmaBuffer {
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        unsafe { self.data.as_ptr().add(self.trim) }
+        unsafe { self.storage.as_mut_ptr().add(self.trim) }
     }
 
     pub fn as_ptr(&self) -> *const u8 {
-        unsafe { self.data.as_ptr().add(self.trim) }
+        unsafe { self.storage.as_ptr().add(self.trim) }
     }
 
     pub fn read_at(&self, offset: usize, dst: &mut [u8]) -> usize {
@@ -84,13 +130,5 @@ impl PosixDmaBuffer {
 
     pub fn memset(&mut self, value: u8) {
         unsafe { std::ptr::write_bytes(self.as_mut_ptr(), value, self.size) }
-    }
-}
-
-impl Drop for PosixDmaBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            aligned_free(self.data.as_ptr() as *mut ());
-        }
     }
 }
