@@ -1,5 +1,6 @@
 use glommio::prelude::*;
-use glommio::{enclose, Semaphore};
+use glommio::enclose;
+use glommio::sync::Semaphore;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
