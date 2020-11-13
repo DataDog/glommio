@@ -295,12 +295,14 @@ impl DmaFile {
 pub(crate) mod test {
     use super::*;
     use crate::Local;
+    use nix::sys::statfs::*;
     use std::path::PathBuf;
 
     #[derive(Copy, Clone)]
     pub(crate) enum TestDirectoryKind {
         TempFs,
-        StorageMedia,
+        PollMedia,
+        NonPollMedia,
     }
 
     pub(crate) struct TestDirectory {
@@ -321,7 +323,7 @@ pub(crate) mod test {
         // Glommio currently only supports NVMe-backed volumes formatted with XFS or EXT4.
         // We therefore let the user decide what directory glommio should use to host the unit tests in.
         // For more information regarding this limitation, see the README
-        match std::env::var("SCIPIO_TEST_POLLIO_ROOTDIR") {
+        match std::env::var("GLOMMIO_TEST_POLLIO_ROOTDIR") {
             Err(_) => {
                 eprintln!(
                     "Glommio currently only supports NVMe-backed volumes formatted with XFS \
@@ -338,7 +340,7 @@ pub(crate) mod test {
                 std::fs::create_dir_all(&dir).unwrap();
                 vec.push(TestDirectory {
                     path: dir,
-                    kind: TestDirectoryKind::StorageMedia,
+                    kind: TestDirectoryKind::PollMedia,
                 })
             }
         };
@@ -347,10 +349,15 @@ pub(crate) mod test {
         dir.push(test_name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        vec.push(TestDirectory {
-            path: dir,
-            kind: TestDirectoryKind::TempFs,
-        });
+        let buf = statfs(&dir).unwrap();
+        let fstype = buf.filesystem_type();
+        let kind = if fstype == TMPFS_MAGIC {
+            TestDirectoryKind::TempFs
+        } else {
+            TestDirectoryKind::NonPollMedia
+        };
+
+        vec.push(TestDirectory { path: dir, kind });
         return vec;
     }
 
@@ -477,7 +484,7 @@ pub(crate) mod test {
             .await
             .expect("failed to create file");
 
-        let mut buf = DmaBuffer::new(4096).expect("failed to allocate dma buffer");
+        let mut buf = DmaFile::alloc_dma_buffer(4096);
         buf.memset(42);
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 4096);
