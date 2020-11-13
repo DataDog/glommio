@@ -364,7 +364,6 @@ pub mod io;
 mod multitask;
 mod networking;
 mod pollable;
-pub mod read_write_lock;
 mod shares;
 pub mod sync;
 pub mod timer;

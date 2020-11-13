@@ -15,7 +15,13 @@
 //! ['try_acquire'] method which fails if semaphore lacks of permits requested without suspending the
 //! fiber.
 //!
+//! 2. RwLock - Implementation of read-write lock optimized for single-thread bound executor.
+//! All methods of RwLock have the same meaning as the methods of [`std::sync::RwLock`]. With
+//! exception that RwLock can not be poisoned but can be closed.
+//!
 
 mod semaphore;
+mod read_write_lock;
 
-pub use self::semaphore::{Permit, Semaphore};
+pub use self::semaphore::*;
+pub use self::read_write_lock::*;

@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```
-//! use glommio::read_write_lock::ReadWriteLock;
+//! use glommio::sync::ReadWriteLock;
 //! use glommio::LocalExecutor;
 //! let lock = ReadWriteLock::new(5);
 //! let ex = LocalExecutor::make_default();
@@ -156,7 +156,7 @@ struct Waiter<T> {
 /// # Examples
 ///
 /// ```
-///use glommio::read_write_lock::ReadWriteLock;
+///use glommio::sync::ReadWriteLock;
 ///use glommio::LocalExecutor;
 ///
 /// let lock = ReadWriteLock::new(5);
@@ -408,7 +408,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     ///
     /// let lock = ReadWriteLock::new(5);
     /// ```
@@ -430,7 +430,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     /// use glommio::LocalExecutor;
     ///
     /// let mut lock = ReadWriteLock::new(0);
@@ -467,7 +467,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     /// use glommio::LocalExecutor;
     /// use std::rc::Rc;
     /// use futures::future::join;
@@ -530,7 +530,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     /// use glommio::LocalExecutor;
     ///
     /// let lock = ReadWriteLock::new(1);
@@ -583,7 +583,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     ///
     /// let lock = ReadWriteLock::new(1);
     ///
@@ -621,7 +621,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     /// use glommio::LocalExecutor;
     ///
     /// let lock = ReadWriteLock::new(1);
@@ -654,7 +654,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     ///
     /// let lock = ReadWriteLock::new(());
     ///
@@ -672,7 +672,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     /// use glommio::LocalExecutor;
     /// use std::rc::Rc;
     /// use std::cell::RefCell;
@@ -727,7 +727,7 @@ impl<T> ReadWriteLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::read_write_lock::ReadWriteLock;
+    /// use glommio::sync::ReadWriteLock;
     /// use glommio::LocalExecutor;
     ///
     /// let lock = ReadWriteLock::new(String::new());
@@ -840,9 +840,9 @@ impl<T> Drop for ReadWriteLock<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::read_write_lock::LockClosedError;
-    use crate::read_write_lock::ReadWriteLock;
-    use crate::read_write_lock::TryReadWriteLockError;
+    use crate::sync::read_write_lock::LockClosedError;
+    use crate::sync::read_write_lock::ReadWriteLock;
+    use crate::sync::read_write_lock::TryReadWriteLockError;
 
     use crate::sync::Semaphore;
     use std::cell::RefCell;
