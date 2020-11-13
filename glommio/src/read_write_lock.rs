@@ -43,14 +43,16 @@ use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
+use std::io;
+use futures_lite::io::ErrorKind;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 struct WaiterId(u64);
 
-/// A type alias for the result of a lock method which can be blocked.
+/// A type alias for the result of a lock method which can be suspended.
 pub type ReadWriteLockResult<T> = Result<T, LockClosedError>;
 
-/// A type alias for the result of a nonblocking locking method.
+/// A type alias for the result of a non-suspending locking method.
 pub type TryReadWriteLockResult<T> = Result<T, TryReadWriteLockError>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -67,7 +69,7 @@ impl Error for LockClosedError {}
 
 impl Display for LockClosedError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.write_str("Lock already closed")
+        f.write_str("lock already closed")
     }
 }
 
@@ -83,14 +85,14 @@ pub enum TryReadWriteLockError {
     ///Lock is closed and can not be used to request access to the lock
     Closed(LockClosedError),
     ///Requested access can not be granted till already hold access will be released
-    WouldBlock,
+    WouldSuspend,
 }
 
 impl Display for TryReadWriteLockError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             TryReadWriteLockError::Closed(error) => Display::fmt(error, f),
-            TryReadWriteLockError::WouldBlock => f.write_str("Call would block execution"),
+            TryReadWriteLockError::WouldSuspend => f.write_str("call would suspend execution"),
         }
     }
 }
@@ -99,7 +101,7 @@ impl Debug for TryReadWriteLockError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             TryReadWriteLockError::Closed(error) => Debug::fmt(error, f),
-            TryReadWriteLockError::WouldBlock => f.write_str("WouldBlock"),
+            TryReadWriteLockError::WouldSuspend => f.write_str("WouldSuspend"),
         }
     }
 }
@@ -109,6 +111,18 @@ impl Error for TryReadWriteLockError {}
 impl From<LockClosedError> for TryReadWriteLockError {
     fn from(error: LockClosedError) -> Self {
         TryReadWriteLockError::Closed(error)
+    }
+}
+
+impl From<LockClosedError> for io::Error {
+    fn from(er: LockClosedError) -> Self {
+        io::Error::new(ErrorKind::Other, er)
+    }
+}
+
+impl From<TryReadWriteLockError> for io::Error {
+    fn from(er: TryReadWriteLockError) -> Self {
+        io::Error::new(ErrorKind::Other, er)
     }
 }
 
@@ -436,10 +450,10 @@ impl<T> ReadWriteLock<T> {
         Ok(unsafe { &mut *(state.value.get()) })
     }
 
-    /// Locks this ReadWriteLock with shared read access, blocking the current fiber
-    /// until it can be acquired.
+    /// Locks this ReadWriteLock with shared read access, suspending the current fiber
+    /// until lock can be acquired.
     ///
-    /// The calling fiber will be blocked until there are no more writers which
+    /// The calling fiber will be suspended until there are no more writers which
     /// hold the lock. There may be other readers currently inside the lock when
     /// this method returns.
     ///
@@ -500,7 +514,7 @@ impl<T> ReadWriteLock<T> {
         })
     }
 
-    /// Locks this ReadWriteLock with exclusive write access, blocking the current
+    /// Locks this ReadWriteLock with exclusive write access, suspending the current
     /// finber until it can be acquired.
     ///
     /// This function will not return while other writers or other readers
@@ -560,7 +574,7 @@ impl<T> ReadWriteLock<T> {
     /// Otherwise, an RAII guard is returned which will release the shared access
     /// when it is dropped.
     ///
-    /// This function does not block.
+    /// This function does not suspend.
     ///
     /// # Errors
     ///
@@ -589,7 +603,7 @@ impl<T> ReadWriteLock<T> {
             });
         }
 
-        Err(TryReadWriteLockError::WouldBlock)
+        Err(TryReadWriteLockError::WouldSuspend)
     }
 
     /// Attempts to lock this ReadWriteLock with exclusive write access.
@@ -598,7 +612,7 @@ impl<T> ReadWriteLock<T> {
     /// Otherwise, an RAII guard is returned which will release the lock when
     /// it is dropped.
     ///
-    /// This function does not block.
+    /// This function does not suspend.
     ///
     /// # Errors
     ///
@@ -631,7 +645,7 @@ impl<T> ReadWriteLock<T> {
             });
         }
 
-        Err(TryReadWriteLockError::WouldBlock)
+        Err(TryReadWriteLockError::WouldSuspend)
     }
 
     ///Indicates whether current ReadWriteLock is closed. Once lock is closed all subsequent calls
@@ -831,9 +845,9 @@ mod test {
     use crate::read_write_lock::TryReadWriteLockError;
 
     use crate::sync::Semaphore;
-    use rand::{self, Rng};
     use std::cell::RefCell;
     use std::rc::Rc;
+    use crate::Local;
 
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);
@@ -852,7 +866,7 @@ mod test {
     #[test]
     fn test_frob() {
         test_executor!(async move {
-            const N: u64 = 10;
+            const N: u32 = 10;
             const M: usize = 1000;
 
             let r = Rc::new(ReadWriteLock::new(()));
@@ -862,9 +876,8 @@ mod test {
                 let r = r.clone();
 
                 let f = Task::local(async move {
-                    let mut rng = rand::thread_rng();
                     for _ in 0..M {
-                        if rng.gen_bool(1.0 / (N as f64)) {
+                        if fastrand::u32(0..N) == 0 {
                             drop(r.write().await.unwrap());
                         } else {
                             drop(r.read().await.unwrap());
@@ -957,10 +970,10 @@ mod test {
                 let mut lock = rc2.write().await.unwrap();
 
                 for _ in 0..10 {
-                    Task::<()>::later().await;
+                    Local::later().await;
                     let tmp = *lock;
                     *lock -= 1;
-                    Task::<()>::later().await;
+                    Local::later().await;
                     *lock = tmp + 1;
                 }
 
@@ -974,7 +987,7 @@ mod test {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock == 0 || *lock == 10);
 
-                    Task::<()>::later().await;
+                    Local::later().await;
                 }));
             }
 
@@ -1001,7 +1014,7 @@ mod test {
                     let tmp = *lock;
                     *lock -= 1;
 
-                    Task::<()>::later().await;
+                    Local::later().await;
 
                     *lock = tmp + 1;
                 }
@@ -1016,7 +1029,7 @@ mod test {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock >= 0);
 
-                    Task::<()>::later().await;
+                    Local::later().await;
                 }));
             }
 
@@ -1042,7 +1055,7 @@ mod test {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    Task::<()>::later().await;
+                    Local::later().await;
 
                     let mut lock = ball2.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1065,7 +1078,7 @@ mod test {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    Task::<()>::later().await;
+                    Local::later().await;
 
                     let mut lock = ball3.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1093,7 +1106,7 @@ mod test {
                     let mut prev = -1;
                     loop {
                         //give a room for other fibers to participate
-                        Task::<()>::later().await;
+                        Local::later().await;
                         let lock = ball.read().await.unwrap();
 
                         if *lock == ITERATIONS {
@@ -1119,7 +1132,7 @@ mod test {
 
             let write_result = lock.try_write();
             match write_result {
-                Err(TryReadWriteLockError::WouldBlock) => (),
+                Err(TryReadWriteLockError::WouldSuspend) => (),
                 Ok(_) => assert!(
                     false,
                     "try_write should not succeed while read_guard is in scope"
@@ -1139,7 +1152,7 @@ mod test {
 
             let write_result = lock.try_read();
             match write_result {
-                Err(TryReadWriteLockError::WouldBlock) => (),
+                Err(TryReadWriteLockError::WouldSuspend) => (),
                 Ok(_) => assert!(
                     false,
                     "try_read should not succeed while read_guard is in scope"
