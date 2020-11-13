@@ -107,7 +107,11 @@ impl DmaFile {
             Ok(res) => Ok(res),
         }?;
 
-        if sysfs::BlockDevice::is_md(file.dev_major as _, file.dev_minor as _) {
+        // Docker overlay can show as dev_major 0.
+        // Anything like that is obviously not something that supports poll.
+        if file.dev_major == 0
+            || sysfs::BlockDevice::is_md(file.dev_major as _, file.dev_minor as _)
+        {
             pollable = PollableStatus::NonPollable;
         }
         Ok(DmaFile {
