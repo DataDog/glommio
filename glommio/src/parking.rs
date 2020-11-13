@@ -222,6 +222,8 @@ pub(crate) struct Reactor {
     /// I/O Requirements of the task currently executing.
     current_io_requirements: RefCell<IoRequirements>,
 
+    wakers: RefCell<Vec<Waker>>,
+
     /// Whether there are events in the latency ring.
     ///
     /// There will be events if the head and tail of the CQ ring are different.
@@ -245,6 +247,7 @@ impl Reactor {
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
             current_io_requirements: RefCell::new(IoRequirements::default()),
+            wakers: RefCell::new(Vec::with_capacity(256)),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
         }
@@ -474,11 +477,10 @@ impl Reactor {
 
     /// Processes new events, blocking until the first event or the timeout.
     fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
-        // FIXME: there must be a way to avoid this allocation
-        // Indeed it just showed in a profiler. We can cap the number of
-        // cqes produced, but this is used for timers as well. Need to
-        // be more careful, but doable.
-        let mut wakers = Vec::new();
+        // FIXME: use shrink_to here to bring the capacity back to
+        // its normal level. It is not stable API yet and this is unlikely
+        // to be a problem in practice.
+        let mut wakers = self.wakers.borrow_mut();
 
         // Process ready timers.
         let next_timer = self.process_timers(&mut wakers);
@@ -504,7 +506,7 @@ impl Reactor {
         };
 
         // Wake up ready tasks.
-        for waker in wakers {
+        for waker in wakers.drain(..) {
             // Don't let a panicking waker blow everything up.
             let _ = panic::catch_unwind(|| waker.wake());
         }

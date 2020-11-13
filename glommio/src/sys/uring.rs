@@ -232,7 +232,7 @@ where
         if !was_cancelled && try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
             w.result = Some(result);
-            wakers.append(&mut w.waiters);
+            wakers.extend_from_slice(&w.waiters.as_slice());
         }
         return Some(());
     }
