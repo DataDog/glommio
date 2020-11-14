@@ -9,13 +9,13 @@ use crate::io::DmaFile;
 use crate::sys::DmaBuffer;
 use crate::task;
 use crate::Local;
+use ahash::AHashMap;
 use core::task::Waker;
 use futures_lite::future::poll_fn;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::{self, StreamExt};
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -129,10 +129,10 @@ struct DmaStreamReaderState {
     max_pos: u64,
     buffer_size: u64,
     read_ahead: usize,
-    wakermap: HashMap<u64, Vec<Waker>>,
-    pending: HashMap<u64, task::JoinHandle<(), ()>>,
+    wakermap: AHashMap<u64, Waker>,
+    pending: AHashMap<u64, task::JoinHandle<(), ()>>,
     error: Option<io::Error>,
-    buffermap: HashMap<u64, ReadResult>,
+    buffermap: AHashMap<u64, ReadResult>,
 }
 
 impl DmaStreamReaderState {
@@ -180,7 +180,7 @@ impl DmaStreamReaderState {
             state.pending.remove(&buffer_id);
             let wakers = state.wakermap.remove(&buffer_id);
             drop(state);
-            for w in wakers.into_iter().flatten() {
+            for w in wakers.into_iter() {
                 w.wake();
             }
         })
@@ -220,11 +220,11 @@ impl DmaStreamReaderState {
 
     fn add_waker(&mut self, buffer_id: u64, waker: Waker) {
         match self.wakermap.get_mut(&buffer_id) {
-            Some(v) => {
-                v.push(waker);
+            Some(_) => {
+                panic!("More than one waker in a linear access API. Something is wrong!");
             }
             None => {
-                self.wakermap.insert(buffer_id, vec![waker]);
+                self.wakermap.insert(buffer_id, waker);
             }
         }
     }
@@ -329,9 +329,9 @@ impl DmaStreamReader {
             read_ahead: builder.read_ahead,
             max_pos: builder.end,
             buffer_size: builder.buffer_size as u64,
-            wakermap: HashMap::new(),
-            buffermap: HashMap::new(),
-            pending: HashMap::new(),
+            wakermap: AHashMap::with_capacity(builder.read_ahead),
+            buffermap: AHashMap::with_capacity(builder.read_ahead),
+            pending: AHashMap::with_capacity(builder.read_ahead),
             error: None,
         };
 
@@ -635,7 +635,7 @@ struct DmaStreamWriterState {
     waker: Option<Waker>,
     file_status: FileStatus,
     error: Option<io::Error>,
-    pending: HashMap<u64, task::JoinHandle<(), ()>>,
+    pending: AHashMap<u64, task::JoinHandle<(), ()>>,
     current_buffer: Option<DmaBuffer>,
     file_pos: u64,
     flush_id: u64,
@@ -668,7 +668,7 @@ impl DmaStreamWriterState {
                 self.file_pos = final_pos;
             }
         }
-        let mut drainers = std::mem::replace(&mut self.pending, HashMap::new());
+        let mut drainers = std::mem::replace(&mut self.pending, AHashMap::new());
         let flush_on_close = self.flush_on_close;
         self.file_status = FileStatus::Closing;
         Local::local(async move {
@@ -798,7 +798,7 @@ impl DmaStreamWriter {
             flush_on_close: builder.flush_on_close,
             current_buffer: None,
             waker: None,
-            pending: HashMap::new(),
+            pending: AHashMap::new(),
             error: None,
             file_status: FileStatus::Open,
             file_pos: 0,

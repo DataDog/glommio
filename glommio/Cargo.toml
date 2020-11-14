@@ -32,6 +32,7 @@ enclose = "1.1.8"
 scopeguard = "1.1.0"
 pin-project-lite = "0.1.10"
 smallvec = "1.4.2"
+ahash = "0.5.8"
 
 [dev-dependencies]
 futures = "0.3.5"
