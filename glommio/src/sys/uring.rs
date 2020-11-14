@@ -232,7 +232,7 @@ where
         if !was_cancelled && try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
             w.result = Some(result);
-            wakers.append(&mut w.waiters);
+            wakers.extend_from_slice(&w.waiters.as_slice());
         }
         return Some(());
     }
@@ -318,36 +318,48 @@ impl UringQueueState {
 trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
-    fn needs_kernel_enter(&self, submitted: usize) -> bool;
-    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()>;
+    fn needs_kernel_enter(&self) -> bool;
+    // None if it wasn't possible to acquire an sqe. Some(true) if it was possible and there was
+    // something to dispatch. Some(false) if there was nothing to dispatch
+    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool>;
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
     fn name(&self) -> &'static str;
 
-    fn consume_sqe_queue(&mut self, queue: &mut VecDeque<UringDescriptor>) -> io::Result<usize> {
-        let mut sub = 0;
+    fn consume_sqe_queue(
+        &mut self,
+        queue: &mut VecDeque<UringDescriptor>,
+        mut dispatch: bool,
+    ) -> io::Result<usize> {
         loop {
-            if self.submit_one_event(queue).is_none() {
-                break;
+            match self.submit_one_event(queue) {
+                None => {
+                    dispatch = true;
+                    break;
+                }
+                Some(true) => {}
+                Some(false) => break,
             }
-            sub += 1;
         }
 
-        if self.needs_kernel_enter(sub) {
-            return self.submit_sqes();
+        if dispatch && self.needs_kernel_enter() {
+            self.submit_sqes()
+        } else {
+            Ok(0)
         }
-        Ok(0)
     }
 
+    // We will not dispatch the cancellation queue unless we need to.
+    // Dispatches will come from the submission queue.
     fn consume_cancellation_queue(&mut self) -> io::Result<usize> {
         let q = self.submission_queue();
         let mut queue = q.borrow_mut();
-        self.consume_sqe_queue(&mut queue.cancellations)
+        self.consume_sqe_queue(&mut queue.cancellations, false)
     }
 
     fn consume_submission_queue(&mut self) -> io::Result<usize> {
         let q = self.submission_queue();
         let mut queue = q.borrow_mut();
-        self.consume_sqe_queue(&mut queue.submissions)
+        self.consume_sqe_queue(&mut queue.submissions, true)
     }
 
     fn consume_completion_queue(&mut self, wakers: &mut Vec<Waker>) -> usize {
@@ -420,7 +432,7 @@ impl UringCommon for PollRing {
         "poll"
     }
 
-    fn needs_kernel_enter(&self, _submitted: usize) -> bool {
+    fn needs_kernel_enter(&self) -> bool {
         // if we submitted anything, we will have the submission count
         // differing from the completion count and can_sleep will be false.
         //
@@ -446,9 +458,9 @@ impl UringCommon for PollRing {
         })
     }
 
-    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()> {
+    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         if queue.is_empty() {
-            return None;
+            return Some(false);
         }
 
         //let buffers = self.buffers.clone();
@@ -463,9 +475,10 @@ impl UringCommon for PollRing {
                 */
                 PosixDmaBuffer::new(size)
             });
-            return Some(());
+            Some(true)
+        } else {
+            None
         }
-        None
     }
 }
 
@@ -535,6 +548,7 @@ impl Drop for Source {
 struct SleepableRing {
     ring: iou::IoUring,
     submission_queue: ReactorQueue,
+    waiting_submission: usize,
     name: &'static str,
 }
 
@@ -545,6 +559,7 @@ impl SleepableRing {
             //     ring: iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?,
             ring: iou::IoUring::new(size as _)?,
             submission_queue: UringQueueState::with_capacity(size * 4),
+            waiting_submission: 0,
             name,
         })
     }
@@ -583,6 +598,7 @@ impl SleepableRing {
 
     fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
         if let Some(mut sqe) = self.ring.next_sqe() {
+            self.waiting_submission += 1;
             // Now must wait on the eventfd in case someone wants to wake us up.
             // If we can't then we can't sleep and will just bail immediately
             let op = UringDescriptor {
@@ -606,6 +622,7 @@ impl SleepableRing {
 
         if is_freestanding {
             if let Some(mut sqe) = self.ring.next_sqe() {
+                self.waiting_submission += 1;
                 link.update_source_type(SourceType::LinkRings(LinkStatus::Linked));
 
                 let op = UringDescriptor {
@@ -649,8 +666,8 @@ impl UringCommon for SleepableRing {
         self.name
     }
 
-    fn needs_kernel_enter(&self, submitted: usize) -> bool {
-        submitted > 0
+    fn needs_kernel_enter(&self) -> bool {
+        self.waiting_submission > 0
     }
 
     fn submission_queue(&mut self) -> ReactorQueue {
@@ -658,7 +675,9 @@ impl UringCommon for SleepableRing {
     }
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
-        self.ring.submit_sqes()
+        let x = self.ring.submit_sqes()?;
+        self.waiting_submission -= x;
+        Ok(x)
     }
 
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
@@ -679,15 +698,16 @@ impl UringCommon for SleepableRing {
         )
     }
 
-    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<()> {
+    fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         if queue.is_empty() {
-            return None;
+            return Some(false);
         }
 
         if let Some(mut sqe) = self.ring.next_sqe() {
+            self.waiting_submission += 1;
             let op = queue.pop_front().unwrap();
             fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
-            return Some(());
+            return Some(true);
         }
         None
     }
@@ -955,9 +975,7 @@ impl Reactor {
         //
         // But if we will sleep, there might be a timer registered that needs
         // to be removed otherwise we'll wake up when it expires.
-        self.timeout_src.take();
-        flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
-
+        drop(self.timeout_src.take());
         let mut should_sleep = match preempt_timer {
             None => true,
             Some(dur) => {
@@ -965,48 +983,38 @@ impl Reactor {
                 false
             }
         };
-        flush_rings!(main_ring, lat_ring, poll_ring)?;
-        should_sleep &= poll_ring.can_sleep();
 
-        if should_sleep {
-            consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
-        }
+        // this will only dispatch if we run out of sqes. Which means until
+        // flush_rings! nothing is really send to the kernel...
+        flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
+        // ... which happens right here. If you ever reorder this code just
+        // be careful about this dependency.
+        flush_rings!(main_ring, lat_ring, poll_ring)?;
+        consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
-        should_sleep &= wakers.is_empty();
+        should_sleep &= wakers.is_empty() & poll_ring.can_sleep();
 
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
-                // Although we keep the SQE queue separate for cancellations
-                // and submission the CQE queue is a single one. So when we
-                // flushed cancellations it is possible that we generated an
-                // event. (cancellations don't generate events)
-                //
-                // If we did, bail now.
-                should_sleep &= wakers.is_empty();
-                if should_sleep {
-                    self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
-                    flush_rings!(lat_ring)?;
-                }
+                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
+                flush_rings!(lat_ring)?;
             }
-            if should_sleep {
-                // From this moment on the remote executors are aware that we are sleeping
-                // We have to sweep the remote channels function once more because since
-                // last time until now it could be that something happened in a remote executor
-                // that opened up room. If if did we bail on sleep and go process it.
-                self.eventfd_memory
-                    .store(self.eventfd_src.raw() as _, Ordering::Release);
-                if process_remote_channels(wakers) == 0 {
-                    self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)?;
-                    // woke up, so no need to notify us anymore.
-                    self.eventfd_memory.store(0, Ordering::Release);
-                }
+            // From this moment on the remote executors are aware that we are sleeping
+            // We have to sweep the remote channels function once more because since
+            // last time until now it could be that something happened in a remote executor
+            // that opened up room. If if did we bail on sleep and go process it.
+            self.eventfd_memory
+                .store(self.eventfd_src.raw() as _, Ordering::Release);
+            if process_remote_channels(wakers) == 0 {
+                self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)?;
+                // woke up, so no need to notify us anymore.
+                self.eventfd_memory.store(0, Ordering::Release);
+                consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
             }
         }
-
-        consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
 
         // A Note about need_preempt:
         //
