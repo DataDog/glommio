@@ -481,6 +481,10 @@ impl DmaStreamReader {
         buffer_id: u64,
     ) -> Poll<io::Result<ReadResult>> {
         let mut state = self.state.borrow_mut();
+        if let Some(err) = current_error!(state) {
+            return Poll::Ready(err);
+        }
+
         match state.buffermap.get(&buffer_id) {
             None => {
                 state.fill_buffer(self.state.clone(), self.file.clone());
