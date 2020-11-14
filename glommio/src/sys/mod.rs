@@ -120,14 +120,22 @@ pub(crate) enum IOBuffer {
     Buffered(Vec<u8>),
 }
 
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum DirectIO {
+    Enabled,
+    Disabled,
+}
+
 // You can be NonPollable and Buffered: that is the case for a Direct I/O file
 // dispatched, say, on a RAID array (RAID do not currently support Poll, but it
 // happily supports Direct I/O). So this is a 2 x 2 = 4 Matrix of possibilibies
 // meaning we can't conflate Pollable and the buffer type.
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PollableStatus {
+    // The pollable ring only supports Direct I/O, so always true.
     Pollable,
-    NonPollable,
+    // Non pollable can go either way
+    NonPollable(DirectIO),
 }
 
 #[derive(Debug, Copy, Clone)]

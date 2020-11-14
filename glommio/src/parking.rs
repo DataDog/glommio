@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 use futures_lite::*;
 
 use crate::sys;
-use crate::sys::{DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
+use crate::sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
 use crate::IoRequirements;
 use crate::Local;
 
@@ -319,7 +319,10 @@ impl Reactor {
     pub(crate) fn write_buffered(&self, raw: RawFd, buf: Vec<u8>, pos: u64) -> Source {
         let source = self.new_source(
             raw,
-            SourceType::Write(PollableStatus::NonPollable, IOBuffer::Buffered(buf)),
+            SourceType::Write(
+                PollableStatus::NonPollable(DirectIO::Disabled),
+                IOBuffer::Buffered(buf),
+            ),
         );
         self.sys.write_buffered(&source, pos);
         source
@@ -338,7 +341,10 @@ impl Reactor {
     }
 
     pub(crate) fn read_buffered(&self, raw: RawFd, pos: u64, size: usize) -> Source {
-        let source = self.new_source(raw, SourceType::Read(PollableStatus::NonPollable, None));
+        let source = self.new_source(
+            raw,
+            SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
+        );
         self.sys.read_buffered(&source, pos, size);
         source
     }

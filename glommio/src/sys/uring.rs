@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use crate::free_list::{FreeList, Idx};
 use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{self, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::{
+    self, DirectIO, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType,
+};
 use crate::{IoRequirements, Latency};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -142,7 +144,7 @@ where
                 sqe.prep_read(op.fd, &mut buf, pos);
 
                 let src = peek_source(from_user_data(op.user_data));
-                if let SourceType::Read(PollableStatus::NonPollable, slot) =
+                if let SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), slot) =
                     &mut *src.source_type.borrow_mut()
                 {
                     *slot = Some(IOBuffer::Buffered(buf));
@@ -799,7 +801,7 @@ impl Reactor {
         let eventfd_src = Source::new(
             IoRequirements::default(),
             eventfd.as_raw_fd(),
-            SourceType::Read(PollableStatus::NonPollable, None),
+            SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
         );
         assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
 
@@ -848,7 +850,10 @@ impl Reactor {
 
     pub(crate) fn write_buffered(&self, source: &Source, pos: u64) {
         match &*source.source_type() {
-            SourceType::Write(PollableStatus::NonPollable, IOBuffer::Buffered(buf)) => {
+            SourceType::Write(
+                PollableStatus::NonPollable(DirectIO::Disabled),
+                IOBuffer::Buffered(buf),
+            ) => {
                 let op = UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos);
                 self.queue_standard_request(source, op);
             }
@@ -1047,7 +1052,7 @@ impl Reactor {
         };
         match pollable {
             PollableStatus::Pollable => queue_request_into_ring(&self.poll_ring, source, op),
-            PollableStatus::NonPollable => queue_request_into_ring(&self.main_ring, source, op),
+            PollableStatus::NonPollable(_) => queue_request_into_ring(&self.main_ring, source, op),
         }
     }
 }

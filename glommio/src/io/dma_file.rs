@@ -6,7 +6,8 @@
 use crate::io::glommio_file::GlommioFile;
 use crate::io::read_result::ReadResult;
 use crate::sys::sysfs;
-use crate::sys::{DmaBuffer, PollableStatus};
+use crate::sys::{DirectIO, DmaBuffer, PollableStatus};
+use nix::sys::statfs::*;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
@@ -97,8 +98,16 @@ impl DmaFile {
                 // if we failed to open the file with a recoverable error,
                 // open again without O_DIRECT
                 if os_err.raw_os_error().unwrap() == libc::EINVAL {
-                    pollable = PollableStatus::NonPollable;
-                    GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
+                    // Allow this to work on non direct I/O devices, but only
+                    // if this is in-memory.
+                    let buf = statfs(path).unwrap();
+                    let fstype = buf.filesystem_type();
+                    if fstype == TMPFS_MAGIC {
+                        pollable = PollableStatus::NonPollable(DirectIO::Disabled);
+                        GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
+                    } else {
+                        Err(os_err)
+                    }
                 } else {
                     Err(os_err)
                 }
@@ -107,12 +116,13 @@ impl DmaFile {
         }?;
 
         // Docker overlay can show as dev_major 0.
-        // Anything like that is obviously not something that supports poll.
+        // Anything like that is obviously not something that supports the poll ring.
         if file.dev_major == 0
             || sysfs::BlockDevice::is_md(file.dev_major as _, file.dev_minor as _)
         {
-            pollable = PollableStatus::NonPollable;
+            pollable = PollableStatus::NonPollable(DirectIO::Enabled);
         }
+
         Ok(DmaFile {
             file,
             o_direct_alignment: 4096,
@@ -302,7 +312,6 @@ impl DmaFile {
 pub(crate) mod test {
     use super::*;
     use crate::Local;
-    use nix::sys::statfs::*;
     use std::path::PathBuf;
 
     #[derive(Copy, Clone)]
