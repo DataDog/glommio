@@ -245,8 +245,8 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    pub(crate) fn new() -> Reactor {
-        let sys = sys::Reactor::new().expect("cannot initialize I/O event notification");
+    pub(crate) fn new(io_memory: usize) -> Reactor {
+        let sys = sys::Reactor::new(io_memory).expect("cannot initialize I/O event notification");
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
             sys,

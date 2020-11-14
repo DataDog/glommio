@@ -10,10 +10,11 @@
 
 use std::ptr;
 
+use crate::sys::uring::UringBuffer;
 use aligned_alloc::{aligned_alloc, aligned_free};
 
 #[derive(Debug)]
-struct SysAlloc {
+pub(crate) struct SysAlloc {
     data: ptr::NonNull<u8>,
 }
 
@@ -42,20 +43,23 @@ impl Drop for SysAlloc {
 }
 
 #[derive(Debug)]
-enum BufferStorage {
+pub(crate) enum BufferStorage {
     Sys(SysAlloc),
+    Uring(UringBuffer),
 }
 
 impl BufferStorage {
     fn as_ptr(&self) -> *const u8 {
         match self {
             BufferStorage::Sys(x) => x.as_ptr(),
+            BufferStorage::Uring(x) => x.as_ptr(),
         }
     }
 
     fn as_mut_ptr(&mut self) -> *mut u8 {
         match self {
             BufferStorage::Sys(x) => x.as_mut_ptr(),
+            BufferStorage::Uring(x) => x.as_mut_ptr(),
         }
     }
 }
@@ -75,6 +79,21 @@ impl PosixDmaBuffer {
             size,
             trim: 0,
         })
+    }
+
+    pub(crate) fn with_storage(size: usize, storage: BufferStorage) -> PosixDmaBuffer {
+        PosixDmaBuffer {
+            storage,
+            size,
+            trim: 0,
+        }
+    }
+
+    pub(crate) fn uring_buffer_id(&self) -> Option<usize> {
+        match &self.storage {
+            BufferStorage::Uring(x) => x.uring_buffer_id(),
+            _ => None,
+        }
     }
 
     pub(crate) fn trim_to_size(&mut self, newsize: usize) {
