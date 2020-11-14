@@ -713,7 +713,7 @@ impl UringCommon for SleepableRing {
     }
 }
 
-pub struct Reactor {
+pub(crate) struct Reactor {
     // FIXME: it is starting to feel we should clean this up to a Inner pattern
     main_ring: RefCell<SleepableRing>,
     latency_ring: RefCell<SleepableRing>,

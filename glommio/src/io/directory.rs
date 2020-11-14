@@ -4,8 +4,8 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::glommio_file::GlommioFile;
-use crate::parking::Reactor;
 use crate::sys;
+use crate::Local;
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
@@ -55,7 +55,8 @@ impl Directory {
     pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<Directory> {
         let path = path.as_ref().to_owned();
         let flags = libc::O_DIRECTORY | libc::O_CLOEXEC;
-        let source = Reactor::get().open_at(-1, &path, flags, 0o755);
+        let reactor = Local::get_reactor();
+        let source = reactor.open_at(-1, &path, flags, 0o755);
         let fd = enhanced_try!(
             source.collect_rw().await,
             "Opening directory",
@@ -94,7 +95,7 @@ impl Directory {
 
     /// Issues fdatasync into the underlying file.
     pub async fn sync(&self) -> io::Result<()> {
-        let source = Reactor::get().fdatasync(self.as_raw_fd());
+        let source = self.file.reactor.fdatasync(self.as_raw_fd());
         source.collect_rw().await?;
         Ok(())
     }

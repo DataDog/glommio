@@ -5,7 +5,6 @@
 //
 use crate::io::glommio_file::GlommioFile;
 use crate::io::read_result::ReadResult;
-use crate::parking::Reactor;
 use crate::sys::sysfs;
 use crate::sys::{DmaBuffer, PollableStatus};
 use std::io;
@@ -123,7 +122,7 @@ impl DmaFile {
 
     /// Allocates a buffer that is suitable for using to write to this file.
     pub fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
-        Reactor::get().alloc_dma_buffer(size)
+        self.file.reactor.alloc_dma_buffer(size)
     }
 
     /// Similar to create() in the standard library, but returns a DMA file
@@ -184,7 +183,10 @@ impl DmaFile {
     ///
     /// [`alloc_dma_buffer`]: struct.DmaFile.html#method.alloc_dma_buffer
     pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> io::Result<usize> {
-        let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
+        let source = self
+            .file
+            .reactor
+            .write_dma(self.as_raw_fd(), buf, pos, self.pollable);
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
@@ -193,7 +195,10 @@ impl DmaFile {
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
     pub async fn read_at_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
-        let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
+        let mut source = self
+            .file
+            .reactor
+            .read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let mut buffer = source.extract_dma_buffer();
         buffer.trim_to_size(read_size);
@@ -212,7 +217,9 @@ impl DmaFile {
 
         let eff_size = self.align_up((size + b) as u64) as usize;
         let mut source =
-            Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
+            self.file
+                .reactor
+                .read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let mut buffer = source.extract_dma_buffer();

@@ -6,7 +6,8 @@
 //
 use crate::channels::spsc_queue::{make, Consumer, Producer};
 use crate::channels::ChannelError;
-use crate::{enclose, Reactor};
+use crate::parking::Reactor;
+use crate::{enclose, Local};
 use futures_lite::stream::Stream;
 use futures_lite::FutureExt;
 use futures_lite::{future, ready};
@@ -57,6 +58,7 @@ unsafe impl<T: Send + Sized + Copy> Send for SharedSender<T> {}
 pub struct ConnectedReceiver<T: Send + Sized + Copy> {
     id: u64,
     state: Rc<ReceiverState<T>>,
+    reactor: Rc<Reactor>,
 }
 
 #[derive(Debug)]
@@ -64,6 +66,7 @@ pub struct ConnectedReceiver<T: Send + Sized + Copy> {
 pub struct ConnectedSender<T: Send + Sized + Copy> {
     id: u64,
     state: Rc<SenderState<T>>,
+    reactor: Rc<Reactor>,
 }
 
 #[derive(Debug)]
@@ -98,8 +101,9 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
     /// [`ConnectedSender`]: struct.ConnectedSender.html
     pub fn connect(mut self) -> ConnectedSender<T> {
         let state = self.state.take().unwrap();
-        state.buffer.connect(Reactor::get().eventfd());
-        let id = Reactor::get().register_shared_channel(Box::new(enclose! {(state) move || {
+        let reactor = Local::get_reactor();
+        state.buffer.connect(reactor.eventfd());
+        let id = reactor.register_shared_channel(Box::new(enclose! {(state) move || {
             if state.buffer.consumer_disconnected() {
                 state.buffer.capacity()
             } else {
@@ -107,7 +111,7 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
             }
         }}));
 
-        ConnectedSender { state, id }
+        ConnectedSender { state, id, reactor }
     }
 }
 
@@ -155,7 +159,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
         match self.state.buffer.try_push(item) {
             None => {
                 if let Some(fd) = self.state.buffer.must_notify() {
-                    Reactor::get().notify(fd);
+                    self.reactor.notify(fd);
                 }
                 Ok(())
             }
@@ -198,7 +202,8 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
         match self.state.buffer.free_space() > 0 {
             true => Poll::Ready(()),
             false => {
-                Reactor::get().add_shared_channel_waker(self.id, cx.waker().clone());
+                self.reactor
+                    .add_shared_channel_waker(self.id, cx.waker().clone());
                 Poll::Pending
             }
         }
@@ -211,16 +216,17 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
     ///
     /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
     pub fn connect(mut self) -> ConnectedReceiver<T> {
+        let reactor = Local::get_reactor();
         let state = self.state.take().unwrap();
-        state.buffer.connect(Reactor::get().eventfd());
-        let id = Reactor::get().register_shared_channel(Box::new(enclose! { (state) move || {
+        state.buffer.connect(reactor.eventfd());
+        let id = reactor.register_shared_channel(Box::new(enclose! { (state) move || {
             if state.buffer.producer_disconnected() {
                 state.buffer.capacity()
             } else {
                 state.buffer.size()
             }
         }}));
-        ConnectedReceiver { state, id }
+        ConnectedReceiver { state, id, reactor }
     }
 }
 
@@ -269,13 +275,14 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
                 if self.state.buffer.producer_disconnected() {
                     Poll::Ready(None)
                 } else {
-                    Reactor::get().add_shared_channel_waker(self.id, cx.waker().clone());
+                    self.reactor
+                        .add_shared_channel_waker(self.id, cx.waker().clone());
                     Poll::Pending
                 }
             }
         });
         if let Some(fd) = self.state.buffer.must_notify() {
-            Reactor::get().notify(fd);
+            self.reactor.notify(fd);
         }
         Poll::Ready(res)
     }
@@ -296,7 +303,7 @@ impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
             // Never connected, we must connect ourselves.
             state.buffer.disconnect();
             if let Some(fd) = state.buffer.must_notify() {
-                Reactor::get().notify(fd);
+                Local::get_reactor().notify(fd);
             }
         }
     }
@@ -308,7 +315,7 @@ impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
             // Never connected, we must connect ourselves.
             state.buffer.disconnect();
             if let Some(fd) = state.buffer.must_notify() {
-                Reactor::get().notify(fd);
+                Local::get_reactor().notify(fd);
             }
         }
     }
@@ -318,7 +325,7 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.state.buffer.must_notify() {
-            Reactor::get().notify(fd);
+            self.reactor.notify(fd);
         }
     }
 }
@@ -327,7 +334,7 @@ impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.state.buffer.must_notify() {
-            Reactor::get().notify(fd);
+            self.reactor.notify(fd);
         }
     }
 }

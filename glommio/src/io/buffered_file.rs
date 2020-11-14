@@ -5,7 +5,6 @@
 //
 
 use crate::io::glommio_file::GlommioFile;
-use crate::parking::Reactor;
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -118,7 +117,7 @@ impl BufferedFile {
     /// });
     /// ```
     pub async fn write_at(&self, buf: Vec<u8>, pos: u64) -> io::Result<usize> {
-        let source = Reactor::get().write_buffered(self.as_raw_fd(), buf, pos);
+        let source = self.file.reactor.write_buffered(self.as_raw_fd(), buf, pos);
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
@@ -130,7 +129,7 @@ impl BufferedFile {
     ///
     /// [`DmaFile`]: struct.DmaFile.html
     pub async fn read_at(&self, pos: u64, size: usize) -> io::Result<Vec<u8>> {
-        let mut source = Reactor::get().read_buffered(self.as_raw_fd(), pos, size);
+        let mut source = self.file.reactor.read_buffered(self.as_raw_fd(), pos, size);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let mut buffer = source.extract_buffer();
         buffer.truncate(read_size);
