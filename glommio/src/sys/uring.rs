@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use nix::poll::PollFlags;
+use iou::PollFlags;
 use rlimit::Resource;
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::VecDeque;
