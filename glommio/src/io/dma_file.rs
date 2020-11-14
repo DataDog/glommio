@@ -122,7 +122,7 @@ impl DmaFile {
     }
 
     /// Allocates a buffer that is suitable for using to write to this file.
-    pub fn alloc_dma_buffer(size: usize) -> DmaBuffer {
+    pub fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         Reactor::get().alloc_dma_buffer(size)
     }
 
@@ -175,7 +175,7 @@ impl DmaFile {
     /// ex.run(async {
     ///     let file = DmaFile::create("test.txt").await.unwrap();
     ///
-    ///     let mut buf = DmaFile::alloc_dma_buffer(4096);
+    ///     let mut buf = file.alloc_dma_buffer(4096);
     ///     let res = file.write_at(buf, 0).await.unwrap();
     ///     assert!(res <= 4096);
     ///     file.close().await.unwrap();
@@ -484,7 +484,7 @@ pub(crate) mod test {
             .await
             .expect("failed to create file");
 
-        let mut buf = DmaFile::alloc_dma_buffer(4096);
+        let mut buf = new_file.alloc_dma_buffer(4096);
         buf.memset(42);
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 4096);
@@ -559,7 +559,7 @@ pub(crate) mod test {
         file.truncate(size as u64).await.unwrap();
         let mut futs = vec![];
         for _ in 0..200 {
-            let mut buf = DmaFile::alloc_dma_buffer(size);
+            let mut buf = file.alloc_dma_buffer(size);
             let bytes = buf.as_bytes_mut();
             bytes[0] = 'x' as u8;
 
@@ -586,7 +586,7 @@ pub(crate) mod test {
                     let size: usize = 4096;
                     file.truncate(size as u64).await.unwrap();
 
-                    let mut buf = DmaFile::alloc_dma_buffer(size);
+                    let mut buf = file.alloc_dma_buffer(size);
                     let bytes = buf.as_bytes_mut();
                     bytes[0] = 'x' as u8;
                     file.write_at(buf, 0).await.unwrap();

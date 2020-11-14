@@ -947,7 +947,12 @@ impl AsyncWrite for DmaStreamWriter {
             match state.current_buffer.take() {
                 None => {
                     if state.pending.len() < state.write_behind {
-                        state.current_buffer = Some(DmaFile::alloc_dma_buffer(state.buffer_size));
+                        state.current_buffer = Some(
+                            self.file
+                                .as_ref()
+                                .unwrap()
+                                .alloc_dma_buffer(state.buffer_size),
+                        );
                     } else {
                         break;
                     }
