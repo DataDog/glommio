@@ -10,7 +10,13 @@ use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 
-/// Constructs a file that is backed by the operating system page cache
+/// An asynchronously accessed file backed by the OS page cache.
+///
+/// All access uses buffered I/O, and all operations including open and close are
+/// asynchronous (with some exceptions noted).
+///
+/// See the module-level [documentation](index.html) for more details and
+/// examples.
 #[derive(Debug)]
 pub struct BufferedFile {
     file: GlommioFile,
@@ -64,7 +70,7 @@ impl BufferedFile {
         self.file.is_same(&other.file)
     }
 
-    /// Similar to [`create`] in the standard library, but returns a BufferedFile
+    /// Similar to [`create`] in the standard library, but returns a `BufferedFile`
     ///
     /// [`create`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.create
     pub async fn create<P: AsRef<Path>>(path: P) -> io::Result<BufferedFile> {
@@ -79,7 +85,7 @@ impl BufferedFile {
         })
     }
 
-    /// Similar to [`open`] in the standard library, but returns a BufferedFile
+    /// Similar to [`open`] in the standard library, but returns a `BufferedFile`
     ///
     /// [`open`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.open
     pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<BufferedFile> {
@@ -94,14 +100,14 @@ impl BufferedFile {
         })
     }
 
-    /// Write the data in the buffer `buf` to this BufferedFile at the specified position
+    /// Write the data in the buffer `buf` to this `BufferedFile` at the specified position
     ///
     /// This method acquires ownership of the buffer so the buffer can be kept alive
     /// while the kernel has it.
     ///
     /// Note that it is legal to return fewer bytes than the buffer size. That is the
     /// situation, for example, when the device runs out of space (See the man page for
-    /// write(2) for details)
+    /// `write(2)` for details)
     ///
     /// # Examples
     /// ```no_run
@@ -122,7 +128,7 @@ impl BufferedFile {
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
-    /// Reads data at the specified position into the user-provided buffer `buf`.
+    /// Reads data at the specified position into a buffer allocated by the OS.
     ///
     /// Note that this differs from [`DmaFile`]'s read APIs: that reflects the
     /// fact that buffered reads need no specific alignment and io_uring will not
@@ -137,42 +143,44 @@ impl BufferedFile {
         Ok(buffer)
     }
 
-    /// Issues fdatasync into the underlying file.
+    /// Issues `fdatasync` for the underlying file, instructing the OS to flush
+    /// all reads/writes to the device, providing durability even if the system
+    /// crashes or is rebooted.
     pub async fn fdatasync(&self) -> io::Result<()> {
         self.file.fdatasync().await
     }
 
-    /// pre-allocates space in the filesystem to hold a file at least as big as the size argument
+    /// pre-allocates space in the filesystem to hold a file at least as big as the size argument.
     pub async fn pre_allocate(&self, size: u64) -> io::Result<()> {
         self.file.pre_allocate(size).await
     }
 
     /// Truncates a file to the specified size.
     ///
-    /// Warning: synchronous operation, will block the reactor
+    /// **Warning:** synchronous operation, will block the reactor
     pub async fn truncate(&self, size: u64) -> io::Result<()> {
         self.file.truncate(size).await
     }
 
     /// rename this file.
     ///
-    /// Warning: synchronous operation, will block the reactor
+    /// **Warning:** synchronous operation, will block the reactor
     pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
         self.file.rename(new_path).await
     }
 
-    /// remove this file
+    /// remove this file.
     ///
     /// The file does not have to be closed to be removed. Removing removes
     /// the name from the filesystem but the file will still be accessible for
     /// as long as it is open.
     ///
-    /// Warning: synchronous operation, will block the reactor
+    /// **Warning:** synchronous operation, will block the reactor
     pub async fn remove(&self) -> io::Result<()> {
         self.file.remove().await
     }
 
-    /// Returns the size of a file, in bytes
+    /// Returns the size of a file, in bytes.
     pub async fn file_size(&self) -> io::Result<u64> {
         self.file.file_size().await
     }

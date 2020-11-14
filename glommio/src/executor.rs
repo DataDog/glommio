@@ -371,19 +371,20 @@ impl ExecutorQueues {
     }
 }
 
-/// LocalExecutor factory, which can be used in order to configure the properties of a new
-/// `LocalExecutor`.
+/// [`LocalExecutor`] factory, which can be used in order to configure the
+/// properties of a new [`LocalExecutor`].
 ///
 /// Methods can be chained on it in order to configure it.
 ///
-/// The `spawn` method will take ownership of the builder and create an
-/// `io::Result` to the `LocalExecutor` handle with the given configuration.
+/// The [`spawn`] method will take ownership of the builder and create an
+/// `io::Result` to the [`LocalExecutor`] handle with the given configuration.
 ///
-/// The `LocalExecutor::make_default` free function uses a Builder with default configuration and
-/// unwraps its return value.
+/// The [`LocalExecutor::make_default`] free function uses a Builder with
+/// default configuration and unwraps its return value.
 ///
-/// You may want to use `LocalExecutorBuilder::spawn` instead of `LocalExecutor::make_default`,
-/// when you want to recover from a failure to launch a thread, indeed the free function will panic
+/// You may want to use [`LocalExecutorBuilder::spawn`] instead of
+/// [`LocalExecutor::make_default`], when you want to recover from a failure to
+/// launch a thread. The [`LocalExecutor::make_default`] function will panic
 /// where the Builder method will return a `io::Result`.
 ///
 /// # Examples
@@ -394,6 +395,11 @@ impl ExecutorQueues {
 /// let builder = LocalExecutorBuilder::new();
 /// let ex = builder.make().unwrap();
 /// ```
+///
+/// [`LocalExecutor`]: struct.LocalExecutor.html
+/// [`LocalExecutor::make_default`]: struct.LocalExecutor.html#method.make_default
+/// [`LocalExecutorBuilder::spawn`]: struct.LocalExecutorBuilder.html#method.spawn
+/// [`spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
 pub struct LocalExecutorBuilder {
     // The id of a CPU to bind the current (or yet to be created) thread
@@ -455,14 +461,27 @@ impl LocalExecutorBuilder {
         }
     }
 
-    /// Spawns a new [`LocalExecutor`] in a new thread by taking ownership of the Builder,
-    /// and returns an io::Result to its JoinHandle.
+    /// Spawn a new [`LocalExecutor`] in a new thread with a given task.
     ///
-    /// This is a more ergonomic way to create a thread and then run an executor inside it
-    /// This function panics if creating the thread or the executor fails. If you need more
-    /// fine-grained error handling consider initializing those entities manually.
+    /// This `spawn` function is an ergonomic shortcut for calling
+    /// `std::thread::spawn`, [`LocalExecutorBuilder::make`] in the spawned
+    /// thread, and then [`LocalExecutor::run`]. This `spawn` function takes
+    /// ownership of a [`LocalExecutorBuilder`] with the configuration for the
+    /// [`LocalExecutor`], spawns that executor in a new thread, and starts the
+    /// task given by `fut_gen()` in that thread.
     ///
-    /// # Examples
+    /// The indirection of `fut_gen()` here (instead of taking a `Future`)
+    /// allows for futures that may not be `Send`-able once started. As this
+    /// executor is thread-local, it can guarantee that the futures will not be
+    /// Sent once started.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if creating the thread or the executor
+    /// fails. If you need more fine-grained error handling consider
+    /// initializing those entities manually.
+    ///
+    /// # Example
     ///
     /// ```
     /// use glommio::LocalExecutorBuilder;
@@ -473,6 +492,11 @@ impl LocalExecutorBuilder {
     ///
     /// handle.join().unwrap();
     /// ```
+    ///
+    /// [`LocalExecutor`]: struct.LocalExecutor.html
+    /// [`LocalExecutorBuilder`]: struct.LocalExecutorBuilder.html
+    /// [`LocalExecutorBuilder::make`]: struct.LocalExecutor.html#method.make
+    /// [`LocalExecutor::run`]:struct.LocalExecutor.html#method.run
     #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
     pub fn spawn<G, F, T>(self, fut_gen: G) -> io::Result<JoinHandle<()>>
     where
@@ -520,6 +544,13 @@ impl Default for LocalExecutorBuilder {
 ///     println!("Hello world!");
 /// });
 /// ```
+///
+/// In many cases, use of [`LocalExecutorBuilder`] will provide more
+/// configuration options and more ergonomic methods. See
+/// [`LocalExecutorBuilder::spawn`] for examples.
+///
+/// [`LocalExecutorBuilder`]: struct.LocalExecutorBuilder.html
+/// [`LocalExecutorBuilder::spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
 pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
