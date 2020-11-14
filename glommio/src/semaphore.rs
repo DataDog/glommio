@@ -3,8 +3,9 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use ahash::AHashMap;
 use std::cell::RefCell;
-use std::collections::hash_map::{Entry, HashMap};
+use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
@@ -43,7 +44,7 @@ struct State {
     idgen: u64,
     avail: u64,
     virtual_consumed: u64,
-    waiterset: HashMap<WaiterId, (u64, Waker)>,
+    waiterset: AHashMap<WaiterId, (u64, Waker)>,
     list: VecDeque<WaiterId>,
     closed: bool,
 }
@@ -54,7 +55,7 @@ impl State {
             avail,
             virtual_consumed: 0,
             list: VecDeque::new(),
-            waiterset: HashMap::new(),
+            waiterset: AHashMap::new(),
             closed: false,
             idgen: 0,
         }

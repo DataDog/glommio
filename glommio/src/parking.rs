@@ -22,8 +22,9 @@
 //! no thread context switch is necessary when going between task execution and I/O.
 //!
 
+use ahash::AHashMap;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
 use std::fmt;
 use std::io;
@@ -107,7 +108,7 @@ impl Inner {
 
 struct Timers {
     timer_id: u64,
-    timers_by_id: HashMap<u64, Instant>,
+    timers_by_id: AHashMap<u64, Instant>,
 
     /// An ordered map of registered timers.
     ///
@@ -121,7 +122,7 @@ impl Timers {
     fn new() -> Timers {
         Timers {
             timer_id: 0,
-            timers_by_id: HashMap::new(),
+            timers_by_id: AHashMap::new(),
             timers: BTreeMap::new(),
         }
     }
