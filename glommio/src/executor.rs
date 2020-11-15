@@ -638,7 +638,11 @@ impl LocalExecutor {
 
     /// Creates a task queue in the executor.
     ///
-    /// Returns an opaque handler that can later be used to launch tasks into that queue with spawn_into
+    /// Each task queue is scheduled based on the [`Shares`] and [`Latency`]
+    /// system, and tasks within a queue will be scheduled in serial.
+    ///
+    /// Returns an opaque handler that can later be used to launch tasks into
+    /// that queue with [`spawn_into`].
     ///
     /// # Examples
     ///
@@ -653,6 +657,10 @@ impl LocalExecutor {
     ///     println!("Hello world");
     /// }, task_queue).expect("failed to spawn task");
     /// ```
+    ///
+    /// [`spawn_into`]: struct.LocalExecutor.html#method.spawn_into
+    /// [`Shares`]: enum.Shares.html
+    /// [`Latency`]: enum.Latency.html
     pub fn create_task_queue<S>(&self, shares: Shares, latency: Latency, name: S) -> TaskQueueHandle
     where
         S: Into<String>,

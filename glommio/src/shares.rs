@@ -50,12 +50,13 @@ impl Debug for dyn SharesManager {
 /// that if there is only one active task queue in the system, it will always receive
 /// 100 % of the resources.
 ///
-/// As soon as two or more task queues are active resources will be split between them
-/// proportionally to their shares: a queue with more shares will receive more resources.
+/// As soon as two or more task queues are active, resources will be split
+/// between them proportionally to their shares: a queue with more shares will
+/// receive more resources.
 ///
-/// Be careful when trying to reason about percentages of utilization as they will depend
-/// on the active task queues (The percentage of resources assigned to a task queue should be close to
-/// `shares(i) / sum(shares(i) for i in t)`)
+/// Be careful when trying to reason about percentages of utilization as they
+/// will depend on the active task queues: The percentage of resources assigned
+/// to a task queue should be close to `shares(i) / sum(shares(i) for i in t)`.
 ///
 /// For example, if all task queues have 1000 shares (the default), when two of them are active
 /// they will have each 50% of the resources. As soon as a third one activates, each now has
@@ -70,7 +71,7 @@ impl Debug for dyn SharesManager {
 /// to say it wants to use more than the others: it is only possible for the other task queues to
 /// say they are okay with using less (by reducing their shares)
 ///
-/// [`TaskQueue`]: struct.LocalExecutor.html#method.create_task_queue
+/// [`TaskQueue`]: struct.TaskQueueHandle.html
 pub enum Shares {
     /// Static shares never change over the course of a lifetime of the application, therefore they
     /// never have to be recomputed

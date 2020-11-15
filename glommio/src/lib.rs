@@ -406,26 +406,28 @@ pub mod prelude {
 /// parameter consisting of the return type of the future encapsulated by this
 /// task.
 ///
-/// However for associated functions without a self parameter, like local() and
-/// local_into(), the type is always () and Rust is not able to elide.
+/// However for associated functions without a self parameter, like `local()` and
+/// `local_into()`, the type is always `()` and Rust is not able to elide.
 ///
-/// Writing Task::<()>::function() works, but it is not very ergonomic.
+/// Writing `Task::<()>::function()` works, but it is not very ergonomic.
 pub type Local = Task<()>;
 
-/// An attribute of a TaskQueue, passed during its creation.
+/// An attribute of a [`TaskQueue`], passed during its creation.
 ///
 /// This tells the executor whether or not tasks in this class are latency
 /// sensitive. Latency sensitive tasks will be placed in their own I/O ring,
 /// and tasks in background classes can cooperatively preempt themselves in
 /// the faces of pending events for latency classes.
+///
+/// [`TaskQueue`]: struct.TaskQueueHandle.html
 #[derive(Clone, Copy, Debug)]
 pub enum Latency {
-    /// Tasks marked as Latency::Matters will cooperatively signal to other tasks that the should
-    /// preempt often
+    /// Tasks marked as `Latency::Matters` will cooperatively signal to other
+    /// tasks that they should preempt often
     Matters(Duration),
 
-    /// Tasks marked as Latency::NotImportant will not signal to other tasks that the should
-    /// preempt often
+    /// Tasks marked as `Latency::NotImportant` will not signal to other tasks
+    /// that they should preempt often
     NotImportant,
 }
 
