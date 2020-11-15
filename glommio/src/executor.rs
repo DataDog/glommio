@@ -98,7 +98,7 @@ impl fmt::Display for QueueStillActiveError {
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-/// An opaque handler indicating in which queue a group of tasks will execute.
+/// An opaque handle indicating in which queue a group of tasks will execute.
 /// Tasks in the same group will execute in FIFO order but no guarantee is made
 /// about ordering on different task queues.
 pub struct TaskQueueHandle {
@@ -641,7 +641,7 @@ impl LocalExecutor {
     /// Each task queue is scheduled based on the [`Shares`] and [`Latency`]
     /// system, and tasks within a queue will be scheduled in serial.
     ///
-    /// Returns an opaque handler that can later be used to launch tasks into
+    /// Returns an opaque handle that can later be used to launch tasks into
     /// that queue with [`spawn_into`].
     ///
     /// # Examples
