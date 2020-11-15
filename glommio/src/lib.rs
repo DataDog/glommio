@@ -13,8 +13,8 @@
 //!
 //! ## What is Glommio
 //!
-//! Glommio is a library providing a safe Rust interface for asynchronous I/O, based on the linux
-//! `io_uring` interface and Rust's `async` support. Additionally, Glommio provides support for
+//! Glommio is a library providing a safe Rust interface for asynchronous, thread-local I/O, based
+//! on the linux `io_uring` interface and Rust's `async` support. Glommio also provides support for
 //! pinning threads to CPUs, allowing thread-per-core applications in Rust.
 //!
 //! This library depends on linux's `io_uring` interface, so this is Linux-only, with a kernel
