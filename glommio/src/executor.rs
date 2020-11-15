@@ -298,7 +298,7 @@ impl TaskQueueStats {
     /// If the task queue is configured to use dynamic shares, this returns a sample
     /// of the shares values the last time the scheduler ran.
     pub fn current_shares(&self) -> usize {
-        ((1u64 << 22) / self.reciprocal_shares) as usize
+        (crate::shares::MAX_SHARES / self.reciprocal_shares) as usize
     }
 
     /// Returns the accumulated runtime this task queue had received since the beginning
