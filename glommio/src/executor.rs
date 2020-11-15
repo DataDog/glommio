@@ -565,6 +565,11 @@ impl LocalExecutor {
 
     fn init(&mut self) -> io::Result<()> {
         let index = 0;
+        // This reference will be passed into the `notify` function. This
+        // `notify` function will then be owned by a `TaskQueue` which is in
+        // turn owned by `self.queues`, so this then creates a cycle. We use a
+        // weak reference here to break that cycle, allowing `self.queues` to be
+        // cleaned up when `self` is reclaimed.
         let queues_weak = Rc::downgrade(&self.queues);
 
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
@@ -576,6 +581,9 @@ impl LocalExecutor {
                 Shares::Static(1000),
                 io_requirements,
                 move || {
+                    // Because this `notify` function is owned by `self.queues`,
+                    // and this is a reference to `self.queues`, it is
+                    // guaranteed that this weak reference is still alive.
                     let q = queues_weak.upgrade().unwrap();
                     let mut queues = q.borrow_mut();
                     queues.maybe_activate(index);
