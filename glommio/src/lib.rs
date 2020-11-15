@@ -215,9 +215,9 @@
 //! design assumptions:
 //!
 //!  - NVMe. Supports for any other storage type is not even considered. This
-//!    allow us to use io uring's poll ring for reads and writes which are
+//!    allosw us to use io uring's poll ring for reads and writes which are
 //!    interrupt free. This also assumes that one is running either `XFS` or
-//!    `Ext4` (an assumption that Seastar also makes)
+//!    `Ext4` (an assumption that Seastar also makes).
 //!
 //!  - A corollary to the above is that the CPUs are likely to be the
 //!    bottleneck, so this crate has a CPU scheduler but lacks an I/O scheduler.
