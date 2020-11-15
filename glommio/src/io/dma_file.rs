@@ -24,15 +24,13 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 #[derive(Debug)]
 /// An asynchronously accessed Direct Memory Access (DMA) file.
 ///
-/// All access uses Direct I/O, and all operations including open and close are
-/// asynchronous (with some exceptions noted). Reads from and writes to this
-/// struct must come and go through the `DmaBuffer` type, which will buffer them
-/// in memory; on calling `write_at` and `read_at`, the buffers will be passed
-/// to the OS to asynchronously write directly to the file on disk, bypassing
+/// All access uses Direct I/O, and all operations including open and close are asynchronous (with
+/// some exceptions noted). Reads from and writes to this struct must come and go through the
+/// `DmaBuffer` type, which will buffer them in memory; on calling `write_at` and `read_at`, the
+/// buffers will be passed to the OS to asynchronously write directly to the file on disk, bypassing
 /// page caches.
 ///
-/// See the module-level [documentation](index.html) for more details and
-/// examples.
+/// See the module-level [documentation](index.html) for more details and examples.
 pub struct DmaFile {
     file: GlommioFile,
     o_direct_alignment: u64,
@@ -229,13 +227,11 @@ impl DmaFile {
         Ok(ReadResult::from_whole_buffer(buffer))
     }
 
-    /// Issues `fdatasync` for the underlying file, instructing the OS to flush
-    /// all reads/writes to the device, providing durability even if the system
-    /// crashes or is rebooted.
+    /// Issues `fdatasync` for the underlying file, instructing the OS to flush all reads/writes to
+    /// the device, providing durability even if the system crashes or is rebooted.
     ///
-    /// As this is a DMA file, the OS should not be caching this file; however,
-    /// this is not guaranteed, and there may also be caches on the drive
-    /// itself.
+    /// As this is a DMA file, the OS should not be caching this file; however, this is not
+    /// guaranteed, and there may also be caches on the drive itself.
     pub async fn fdatasync(&self) -> io::Result<()> {
         self.file.fdatasync().await
     }
@@ -245,20 +241,19 @@ impl DmaFile {
         self.file.pre_allocate(size).await
     }
 
-    /// Hint to the OS the size of increase of this file, to allow more
-    /// efficient allocation of blocks.
+    /// Hint to the OS the size of increase of this file, to allow more efficient allocation of
+    /// blocks.
     ///
-    /// Allocating blocks at the filesystem level turns asynchronous writes into
-    /// threaded synchronous writes, as we need to first find the blocks to host
-    /// the file.
+    /// Allocating blocks at the filesystem level turns asynchronous writes into threaded
+    /// synchronous writes, as we need to first find the blocks to host the file.
     ///
-    /// If the extent is larger, that means many blocks are allocated at a time.
-    /// For instance, if the extent size is 1MB, that means that only 1 out of 4
-    /// 256kB writes will be turned synchronous. Combined with diligent use of
-    /// `fallocate` we can greatly minimize context switches.
+    /// If the extent is larger, that means many blocks are allocated at a time. For instance, if
+    /// the extent size is 1MB, that means that only 1 out of 4 256kB writes will be turned
+    /// synchronous. Combined with diligent use of `fallocate` we can greatly minimize context
+    /// switches.
     ///
-    /// It is important not to set the extent size too big. Writes can fail
-    /// otherwise if the extent can't be allocated.
+    /// It is important not to set the extent size too big. Writes can fail otherwise if the extent
+    /// can't be allocated.
     pub async fn hint_extent_size(&self, size: usize) -> nix::Result<i32> {
         self.file.hint_extent_size(size).await
     }

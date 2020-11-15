@@ -34,9 +34,8 @@
 //!    (usually 4kB), even though modern NVMe devices are perfectly capable of issuing 512-byte
 //!    I/O.
 //!
-//! The main structure to deal with Buffered I/O is the [`BufferedFile`] struct.
-//! It is targeted at random I/O. Reads from and writes to it expect a
-//! position.
+//! The main structure to deal with Buffered I/O is the [`BufferedFile`] struct. It is targeted at
+//! random I/O. Reads from and writes to it expect a position.
 //!
 //! Direct I/O
 //! ==========

@@ -12,11 +12,10 @@ use std::path::{Path, PathBuf};
 
 /// An asynchronously accessed file backed by the OS page cache.
 ///
-/// All access uses buffered I/O, and all operations including open and close are
-/// asynchronous (with some exceptions noted).
+/// All access uses buffered I/O, and all operations including open and close are asynchronous (with
+/// some exceptions noted).
 ///
-/// See the module-level [documentation](index.html) for more details and
-/// examples.
+/// See the module-level [documentation](index.html) for more details and examples.
 #[derive(Debug)]
 pub struct BufferedFile {
     file: GlommioFile,
@@ -143,9 +142,8 @@ impl BufferedFile {
         Ok(buffer)
     }
 
-    /// Issues `fdatasync` for the underlying file, instructing the OS to flush
-    /// all reads/writes to the device, providing durability even if the system
-    /// crashes or is rebooted.
+    /// Issues `fdatasync` for the underlying file, instructing the OS to flush all reads/writes to
+    /// the device, providing durability even if the system crashes or is rebooted.
     pub async fn fdatasync(&self) -> io::Result<()> {
         self.file.fdatasync().await
     }
