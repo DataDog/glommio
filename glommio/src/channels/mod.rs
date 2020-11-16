@@ -50,7 +50,7 @@ mod spsc_queue;
 /// [`TaskQueue`]: ../../struct.TaskQueueHandle.html
 /// [`LocalSender`]: struct.LocalSender.html
 /// [`LocalReceiver`]: struct.LocalReceiver.html
-/// [`ChannelError`]: struct.ChannelError.html
+/// [`ChannelError`]: ../struct.ChannelError.html
 /// [`push`]: struct.LocalSender.html#method.push
 /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
 /// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
@@ -127,7 +127,7 @@ pub mod local_channel;
 /// ex1.join().unwrap();
 /// ex2.join().unwrap();
 /// ```
-/// [`ChannelError`]: struct.ChannelError.html
+/// [`ChannelError`]: ../struct.ChannelError.html
 /// [`ConnectedSender`]: struct.ConnectedSender.html
 /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
 /// [`SharedSender`]: struct.SharedSender.html
