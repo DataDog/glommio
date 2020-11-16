@@ -143,7 +143,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
     /// [`WouldBlock`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.WouldBlock
     /// [`Other`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.Other
-    /// [`ChannelError`]: struct.ChannelError.html
+    /// [`ChannelError`]: ../struct.ChannelError.html
     pub fn try_send(&self, item: T) -> Result<(), ChannelError<T>> {
         // This is a shared channel so state can change under our noses.
         // We test if the buffer is disconnected before sending to avoid
