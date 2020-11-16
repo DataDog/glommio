@@ -25,11 +25,13 @@ impl Async<TcpListener> {
     /// ```
     /// use glommio::Async;
     /// use std::net::TcpListener;
+    /// use glommio::LocalExecutor;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
-    /// println!("Listening on {}", listener.get_ref().local_addr()?);
-    /// # std::io::Result::Ok(()) });
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
+    ///     println!("Listening on {}", listener.get_ref().local_addr().unwrap());
+    /// });
     /// ```
     pub fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Async<TcpListener>> {
         let addr = addr.into();
@@ -175,11 +177,13 @@ impl Async<UdpSocket> {
     /// ```
     /// use glommio::Async;
     /// use std::net::UdpSocket;
+    /// use glommio::LocalExecutor;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// let socket = Async::<UdpSocket>::bind(([127, 0, 0, 1], 0))?;
-    /// println!("Bound to {}", socket.get_ref().local_addr()?);
-    /// # std::io::Result::Ok(()) });
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let socket = Async::<UdpSocket>::bind(([127, 0, 0, 1], 0)).unwrap();
+    ///     println!("Bound to {}", socket.get_ref().local_addr().unwrap());
+    /// });
     /// ```
     pub fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Async<UdpSocket>> {
         let addr = addr.into();

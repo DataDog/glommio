@@ -108,7 +108,7 @@ pub(crate) mod sysfs;
 mod uring;
 
 pub use self::posix_buffers::*;
-pub use self::uring::*;
+pub(crate) use self::uring::*;
 use crate::IoRequirements;
 
 /// A buffer that can be used with DmaFile.

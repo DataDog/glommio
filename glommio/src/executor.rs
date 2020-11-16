@@ -525,9 +525,14 @@ pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
     parker: parking::Parker,
     id: usize,
+    reactor: Rc<parking::Reactor>,
 }
 
 impl LocalExecutor {
+    fn get_reactor(&self) -> Rc<Reactor> {
+        self.reactor.clone()
+    }
+
     fn bind_to_cpu(&self, cpu: usize) -> io::Result<()> {
         bind_to_cpu(cpu)
     }
@@ -581,6 +586,7 @@ impl LocalExecutor {
             queues: ExecutorQueues::new(),
             parker: p,
             id,
+            reactor: Rc::new(parking::Reactor::new()),
         }
     }
 
@@ -756,9 +762,14 @@ impl LocalExecutor {
         self.queues.borrow().spin_before_park
     }
 
+    #[inline(always)]
+    pub(crate) fn need_preempt(&self) -> bool {
+        self.reactor.need_preempt()
+    }
+
     fn run_task_queues(&self) -> bool {
         let mut ran = false;
-        while !Reactor::need_preempt() {
+        while !self.need_preempt() {
             if !self.run_one_task_queue() {
                 return false;
             } else {
@@ -788,12 +799,12 @@ impl LocalExecutor {
                 let mut tasks_executed_this_loop = 0;
                 loop {
                     let mut queue_ref = queue.borrow_mut();
-                    if Reactor::need_preempt() || queue_ref.yielded() {
+                    if self.need_preempt() || queue_ref.yielded() {
                         break;
                     }
 
                     if let Some(r) = queue_ref.get_task() {
-                        Reactor::get().inform_io_requirements(queue_ref.io_requirements);
+                        Local::get_reactor().inform_io_requirements(queue_ref.io_requirements);
                         drop(queue_ref);
                         r.run();
                         tasks_executed_this_loop += 1;
@@ -953,21 +964,31 @@ impl<T> Task<T> {
     where
         T: 'static,
     {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.spawn(future))
-        } else {
-            panic!("`Task::local()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| local_ex.spawn(future))
     }
 
     /// Unconditionally yields the current task, moving it back to the end of its queue.
     /// It is not possible to yield futures that are not spawn'd, as they don't have a task
     /// associated with them.
     pub async fn later() {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.mark_me_for_yield())
-        } else {
-            panic!("`Task::local()` must be called from a `LocalExecutor`")
+        Self::cond_yield(|_| true).await
+    }
+
+    async fn cond_yield<F>(cond: F)
+    where
+        F: FnOnce(&LocalExecutor) -> bool,
+    {
+        let need_yield = LOCAL_EX.with(|local_ex| {
+            if cond(local_ex) {
+                local_ex.mark_me_for_yield();
+                true
+            } else {
+                false
+            }
+        });
+
+        if !need_yield {
+            return;
         }
 
         struct Yield {
@@ -1016,18 +1037,43 @@ impl<T> Task<T> {
     /// ```
     ///
     /// [`RefMut`]: https://doc.rust-lang.org/std/cell/struct.RefMut.html
-    #[inline]
+    #[inline(always)]
+    // FIXME: This is a bit less efficient than it needs, because the scoped thread local key
+    // does lazy initialization. Every time we call into this, we are paying to test if this
+    // is initialized. This is what I got from objdump:
+    //
+    // 0:    50                      push   %rax
+    // 1:    ff 15 00 00 00 00       callq  *0x0(%rip)
+    // 7:    48 85 c0                test   %rax,%rax
+    // a:    74 17                   je     23  <== will call into the initialization routine
+    // c:    48 8b 88 38 03 00 00    mov    0x338(%rax),%rcx <== address of the head
+    // 13:   48 8b 80 40 03 00 00    mov    0x340(%rax),%rax <== address of the tail
+    // 1a:   8b 00                   mov    (%rax),%eax
+    // 1c:   3b 01                   cmp    (%rcx),%eax <== need preempt
+    // 1e:   0f 95 c0                setne  %al
+    // 21:   59                      pop    %rcx
+    // 22:   c3                      retq
+    // 23    <== initialization stuff
+    //
+    // Rust has a thread local feature that is under experimental so we can maybe switch to
+    // that someday.
+    //
+    // We will prefer to use the stable compiler and pay that unfortunate price for now.
+
     pub fn need_preempt() -> bool {
-        Reactor::need_preempt()
+        LOCAL_EX.with(|local_ex| local_ex.need_preempt())
     }
 
     /// Conditionally yields the current task, moving it back to the end of its queue, if the task
     /// has run for too long
     #[inline]
     pub async fn yield_if_needed() {
-        if Reactor::need_preempt() {
-            Local::later().await;
-        }
+        Self::cond_yield(|local_ex| local_ex.need_preempt()).await;
+    }
+
+    #[inline]
+    pub(crate) fn get_reactor() -> Rc<parking::Reactor> {
+        LOCAL_EX.with(|local_ex| local_ex.get_reactor())
     }
 
     /// Spawns a task onto the current single-threaded executor, in a particular task queue
@@ -1056,11 +1102,7 @@ impl<T> Task<T> {
     where
         T: 'static,
     {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle))
-        } else {
-            panic!("`Task::local()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle))
     }
 
     /// Returns the id of the current executor
@@ -1084,11 +1126,7 @@ impl<T> Task<T> {
     where
         T: 'static,
     {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.id())
-        } else {
-            panic!("`Task::id()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| local_ex.id())
     }
 
     /// Detaches the task to let it keep running in the background.
@@ -1118,11 +1156,7 @@ impl<T> Task<T> {
 
     /// Creates a new task queue, with a given latency hint and the provided name
     pub fn create_task_queue(shares: Shares, latency: Latency, name: &str) -> TaskQueueHandle {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
-        } else {
-            panic!("`Task::create_task_queue()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
     }
 
     /// Returns the [`TaskQueueHandle`] that represents the TaskQueue currently running.
@@ -1148,11 +1182,7 @@ impl<T> Task<T> {
     /// ex.join().unwrap();
     /// ```
     pub fn current_task_queue() -> TaskQueueHandle {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.current_task_queue())
-        } else {
-            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| local_ex.current_task_queue())
     }
 
     /// Returns a [`Result`] with its `Ok` value wrapping a [`TaskQueueStats`] or
@@ -1174,14 +1204,10 @@ impl<T> Task<T> {
     /// [`QueueNotFoundError`]: struct.QueueNotFoundError.html
     /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
     pub fn task_queue_stats(handle: TaskQueueHandle) -> Result<TaskQueueStats, QueueNotFoundError> {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| match local_ex.get_queue(&handle) {
-                Some(x) => Ok(x.borrow().stats),
-                None => Err(QueueNotFoundError::new(handle)),
-            })
-        } else {
-            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| match local_ex.get_queue(&handle) {
+            Some(x) => Ok(x.borrow().stats),
+            None => Err(QueueNotFoundError::new(handle)),
+        })
     }
 
     /// Returns a collection of [`TaskQueueStats`] with information about all task queues
@@ -1210,15 +1236,11 @@ impl<T> Task<T> {
     where
         V: Extend<TaskQueueStats>,
     {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| {
-                let tq = local_ex.queues.borrow();
-                output.extend(tq.available_executors.values().map(|x| x.borrow().stats));
-                output
-            })
-        } else {
-            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| {
+            let tq = local_ex.queues.borrow();
+            output.extend(tq.available_executors.values().map(|x| x.borrow().stats));
+            output
+        })
     }
 
     /// Returns a [`ExecutorStats`] struct with information about this Executor
@@ -1237,11 +1259,7 @@ impl<T> Task<T> {
     ///
     /// [`ExecutorStats`]: struct.ExecutorStats.html
     pub fn executor_stats() -> ExecutorStats {
-        if LOCAL_EX.is_set() {
-            LOCAL_EX.with(|local_ex| local_ex.queues.borrow().stats)
-        } else {
-            panic!("`Task::current_task_queue()` must be called from a `LocalExecutor`")
-        }
+        LOCAL_EX.with(|local_ex| local_ex.queues.borrow().stats)
     }
 
     /// Cancels the task and waits for it to stop running.
