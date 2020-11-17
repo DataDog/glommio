@@ -255,14 +255,14 @@ where
                 sqe.prep_write(op.fd, buf, pos);
             }
             UringOpDescriptor::Read(pos, len) => {
-                let mut buf = vec![0; len];
-                sqe.prep_read(op.fd, &mut buf, pos);
+                let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
+                sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
 
                 let src = peek_source(from_user_data(op.user_data));
                 if let SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), slot) =
                     &mut *src.source_type.borrow_mut()
                 {
-                    *slot = Some(IOBuffer::Buffered(buf));
+                    *slot = Some(IOBuffer::Dma(buf));
                 } else {
                     panic!("Expected Read source type");
                 };
@@ -737,7 +737,8 @@ impl SleepableRing {
                 user_data: to_user_data(add_source(eventfd_src, self.submission_queue.clone())),
                 args: UringOpDescriptor::Read(0, 8),
             };
-            fill_sqe(&mut sqe, &op, |_| panic!("not in the poll ring"));
+            let allocator = self.allocator.clone();
+            fill_sqe(&mut sqe, &op, |size| allocator.new_buffer(size));
             true
         } else {
             false
