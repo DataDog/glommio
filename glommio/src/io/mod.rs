@@ -73,7 +73,7 @@
 //!
 //! [`BufferedFile`]: struct.BufferedFile.html
 //! [`DmaFile`]: struct.DmaFile.html
-//! [`DmaBuffer`]: type.DmaBuffer.html
+//! [`DmaBuffer`]: struct.DmaBuffer.html
 //! [`DmaStreamWriter`]: struct.DmaStreamWriter.html
 //! [`DmaStreamReader`]: struct.DmaStreamReader.html
 //! [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/io/trait.AsyncReadExt.html

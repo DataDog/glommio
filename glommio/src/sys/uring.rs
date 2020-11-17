@@ -3,22 +3,29 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use nix::poll::PollFlags;
+use alloc::alloc::Layout;
+use iou::PollFlags;
+use log::warn;
 use rlimit::Resource;
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CStr;
+use std::fmt;
 use std::io;
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, IoSlice};
 use std::os::unix::io::RawFd;
+use std::ptr;
 use std::rc::Rc;
 use std::task::Waker;
 use std::time::Duration;
 
 use crate::free_list::{FreeList, Idx};
-use crate::sys::posix_buffers::PosixDmaBuffer;
-use crate::sys::{self, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType};
+use crate::sys::dma_buffer::{BufferStorage, DmaBuffer};
+use crate::sys::{
+    self, DirectIO, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType,
+};
 use crate::{IoRequirements, Latency};
+use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -26,8 +33,6 @@ use std::sync::Arc;
 use uring_sys::IoRingOp;
 
 use super::{EnqueuedSource, TimeSpec64};
-
-type DmaBuffer = PosixDmaBuffer;
 
 pub(crate) fn add_flag(fd: RawFd, flag: libc::c_int) -> io::Result<()> {
     let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
@@ -59,6 +64,118 @@ struct UringDescriptor {
     fd: RawFd,
     user_data: u64,
     args: UringOpDescriptor,
+}
+
+pub(crate) struct UringBufferAllocator {
+    data: ptr::NonNull<u8>,
+    size: usize,
+    allocator: RefCell<BuddyAlloc>,
+    layout: Layout,
+    uring_buffer_id: Cell<Option<usize>>,
+}
+
+impl fmt::Debug for UringBufferAllocator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UringBufferAllocator")
+            .field("data", &self.data)
+            .finish()
+    }
+}
+
+impl UringBufferAllocator {
+    fn new(size: usize) -> Self {
+        let layout = Layout::from_size_align(size, 4096).unwrap();
+        let (data, allocator) = unsafe {
+            let data = alloc::alloc::alloc(layout) as *mut u8;
+            let data = std::ptr::NonNull::new(data).unwrap();
+            let allocator = BuddyAlloc::new(BuddyAllocParam::new(
+                data.as_ptr(),
+                layout.size(),
+                layout.align(),
+            ));
+            (data, RefCell::new(allocator))
+        };
+
+        UringBufferAllocator {
+            data,
+            size,
+            allocator,
+            layout,
+            uring_buffer_id: Cell::new(None),
+        }
+    }
+
+    fn activate_registered_buffers(&self, idx: usize) {
+        self.uring_buffer_id.set(Some(idx))
+    }
+
+    fn free(&self, ptr: ptr::NonNull<u8>) {
+        let mut allocator = self.allocator.borrow_mut();
+        allocator.free(ptr.as_ptr() as *mut u8);
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), self.size) }
+    }
+
+    fn new_buffer(self: &Rc<Self>, size: usize) -> Option<DmaBuffer> {
+        let mut alloc = self.allocator.borrow_mut();
+        match ptr::NonNull::new(alloc.malloc(size)) {
+            Some(data) => {
+                let ub = UringBuffer {
+                    allocator: self.clone(),
+                    data,
+                    uring_buffer_id: self.uring_buffer_id.get(),
+                };
+                Some(DmaBuffer::with_storage(size, BufferStorage::Uring(ub)))
+            }
+            None => DmaBuffer::new(size),
+        }
+    }
+}
+
+impl Drop for UringBufferAllocator {
+    fn drop(&mut self) {
+        unsafe {
+            alloc::alloc::dealloc(self.data.as_ptr(), self.layout);
+        }
+    }
+}
+
+pub(crate) struct UringBuffer {
+    allocator: Rc<UringBufferAllocator>,
+    data: ptr::NonNull<u8>,
+    uring_buffer_id: Option<usize>,
+}
+
+impl fmt::Debug for UringBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UringBuffer")
+            .field("data", &self.data)
+            .field("uring_buffer_id", &self.uring_buffer_id)
+            .finish()
+    }
+}
+
+impl UringBuffer {
+    pub(crate) fn as_ptr(&self) -> *const u8 {
+        self.data.as_ptr()
+    }
+
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.data.as_ptr()
+    }
+
+    pub(crate) fn uring_buffer_id(&self) -> Option<usize> {
+        self.uring_buffer_id
+    }
+}
+
+impl Drop for UringBuffer {
+    fn drop(&mut self) {
+        let ptr = self.data;
+        self.allocator.free(ptr);
+    }
 }
 
 fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
@@ -142,7 +259,7 @@ where
                 sqe.prep_read(op.fd, &mut buf, pos);
 
                 let src = peek_source(from_user_data(op.user_data));
-                if let SourceType::Read(PollableStatus::NonPollable, slot) =
+                if let SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), slot) =
                     &mut *src.source_type.borrow_mut()
                 {
                     *slot = Some(IOBuffer::Buffered(buf));
@@ -185,23 +302,31 @@ where
             }
             UringOpDescriptor::ReadFixed(pos, len) => {
                 let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
-                //let slabidx = buf.slabidx;
-
-                //sqe.prep_read_fixed(op.fd, buf.as_mut_bytes(), pos, slabidx);
-                sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
                 let src = peek_source(from_user_data(op.user_data));
 
-                if let SourceType::Read(_, slot) = &mut *src.source_type.borrow_mut() {
-                    *slot = Some(IOBuffer::Dma(buf));
-                } else {
-                    panic!("Expected DmaRead source type");
+                match &mut *src.source_type.borrow_mut() {
+                    SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), slot) => {
+                        sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
+                        *slot = Some(IOBuffer::Dma(buf));
+                    }
+                    SourceType::Read(_, slot) => {
+                        match buf.uring_buffer_id() {
+                            None => {
+                                sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
+                            }
+                            Some(idx) => {
+                                sqe.prep_read_fixed(op.fd, buf.as_bytes_mut(), pos, idx);
+                            }
+                        };
+                        *slot = Some(IOBuffer::Dma(buf));
+                    }
+                    _ => unreachable!(),
                 };
             }
 
-            UringOpDescriptor::WriteFixed(ptr, len, pos, _) => {
+            UringOpDescriptor::WriteFixed(ptr, len, pos, buf_index) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
-                //sqe.prep_write_fixed(op.fd, buf, pos, buf_index);
-                sqe.prep_write(op.fd, buf, pos);
+                sqe.prep_write_fixed(op.fd, buf, pos, buf_index);
             }
         }
     }
@@ -324,6 +449,7 @@ trait UringCommon {
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool>;
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
     fn name(&self) -> &'static str;
+    fn registrar(&self) -> iou::Registrar<'_>;
 
     fn consume_sqe_queue(
         &mut self,
@@ -404,17 +530,18 @@ struct PollRing {
     submission_queue: ReactorQueue,
     submitted: u64,
     completed: u64,
+    allocator: Rc<UringBufferAllocator>,
 }
 
 impl PollRing {
-    fn new(size: usize) -> io::Result<Self> {
+    fn new(size: usize, allocator: Rc<UringBufferAllocator>) -> io::Result<Self> {
         let ring = iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?;
-
         Ok(PollRing {
             submitted: 0,
             completed: 0,
             ring,
             submission_queue: UringQueueState::with_capacity(size * 4),
+            allocator,
         })
     }
 
@@ -423,13 +550,17 @@ impl PollRing {
     }
 
     pub(crate) fn alloc_dma_buffer(&mut self, size: usize) -> DmaBuffer {
-        PosixDmaBuffer::new(size).expect("Buffer allocation failed")
+        self.allocator.new_buffer(size).unwrap()
     }
 }
 
 impl UringCommon for PollRing {
     fn name(&self) -> &'static str {
         "poll"
+    }
+
+    fn registrar(&self) -> iou::Registrar<'_> {
+        self.ring.registrar()
     }
 
     fn needs_kernel_enter(&self) -> bool {
@@ -467,14 +598,8 @@ impl UringCommon for PollRing {
         if let Some(mut sqe) = self.ring.next_sqe() {
             self.submitted += 1;
             let op = queue.pop_front().unwrap();
-            fill_sqe(&mut sqe, &op, |size| {
-                /* FIXME: uring registered buffers need more work...
-                let b = buffers.clone();
-                let arena = buffers[b.len() - 1].clone();
-                arena.alloc_buffer(size)
-                */
-                PosixDmaBuffer::new(size)
-            });
+            let allocator = self.allocator.clone();
+            fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
             Some(true)
         } else {
             None
@@ -550,10 +675,15 @@ struct SleepableRing {
     submission_queue: ReactorQueue,
     waiting_submission: usize,
     name: &'static str,
+    allocator: Rc<UringBufferAllocator>,
 }
 
 impl SleepableRing {
-    fn new(size: usize, name: &'static str) -> io::Result<Self> {
+    fn new(
+        size: usize,
+        name: &'static str,
+        allocator: Rc<UringBufferAllocator>,
+    ) -> io::Result<Self> {
         assert_eq!(*IO_URING_RECENT_ENOUGH, true);
         Ok(SleepableRing {
             //     ring: iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?,
@@ -561,6 +691,7 @@ impl SleepableRing {
             submission_queue: UringQueueState::with_capacity(size * 4),
             waiting_submission: 0,
             name,
+            allocator,
         })
     }
 
@@ -630,7 +761,7 @@ impl SleepableRing {
                     user_data: to_user_data(add_source(link, self.submission_queue.clone())),
                     args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                 };
-                fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
+                fill_sqe(&mut sqe, &op, DmaBuffer::new);
             } else {
                 // Can't link rings because we ran out of CQEs. Just can't sleep.
                 // Submit what we have, once we're out of here we'll consume them
@@ -664,6 +795,10 @@ impl SleepableRing {
 impl UringCommon for SleepableRing {
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn registrar(&self) -> iou::Registrar<'_> {
+        self.ring.registrar()
     }
 
     fn needs_kernel_enter(&self) -> bool {
@@ -706,7 +841,8 @@ impl UringCommon for SleepableRing {
         if let Some(mut sqe) = self.ring.next_sqe() {
             self.waiting_submission += 1;
             let op = queue.pop_front().unwrap();
-            fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
+            let allocator = self.allocator.clone();
+            fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
             return Some(true);
         }
         None
@@ -773,8 +909,12 @@ macro_rules! flush_rings {
     }}
 }
 
+fn align_up(v: usize, align: usize) -> usize {
+    (v + align - 1) & !(align - 1)
+}
+
 impl Reactor {
-    pub(crate) fn new() -> io::Result<Reactor> {
+    pub(crate) fn new(mut io_memory: usize) -> io::Result<Reactor> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
@@ -786,8 +926,37 @@ impl Reactor {
                 ),
             ));
         }
-        let mut main_ring = SleepableRing::new(128, "main")?;
-        let latency_ring = SleepableRing::new(128, "latency")?;
+
+        // always have at least some small amount of memory for the slab
+        io_memory = std::cmp::max(align_up(io_memory, 4096), 65536);
+
+        let allocator = Rc::new(UringBufferAllocator::new(io_memory));
+        let registry = vec![IoSlice::new(allocator.as_bytes())];
+
+        let mut main_ring = SleepableRing::new(128, "main", allocator.clone())?;
+        let poll_ring = PollRing::new(128, allocator.clone())?;
+
+        match main_ring.registrar().register_buffers(&registry) {
+            Err(x) => warn!(
+                "Error: registering buffers in the main ring. Skipping{:#?}",
+                x
+            ),
+            Ok(_) => match poll_ring.registrar().register_buffers(&registry) {
+                Err(x) => {
+                    warn!(
+                        "Error: registering buffers in the poll ring. Skipping{:#?}",
+                        x
+                    );
+                    main_ring.registrar().unregister_buffers().unwrap();
+                }
+                Ok(_) => {
+                    allocator.activate_registered_buffers(0);
+                }
+            },
+        }
+
+        let latency_ring = SleepableRing::new(128, "latency", allocator.clone())?;
+
         let link_fd = latency_ring.ring_fd();
         let link_rings_src = Source::new(
             IoRequirements::default(),
@@ -799,14 +968,14 @@ impl Reactor {
         let eventfd_src = Source::new(
             IoRequirements::default(),
             eventfd.as_raw_fd(),
-            SourceType::Read(PollableStatus::NonPollable, None),
+            SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
         );
         assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
 
         Ok(Reactor {
             main_ring: RefCell::new(main_ring),
             latency_ring: RefCell::new(latency_ring),
-            poll_ring: RefCell::new(PollRing::new(128)?),
+            poll_ring: RefCell::new(poll_ring),
             link_rings_src: RefCell::new(link_rings_src),
             timeout_src: Cell::new(None),
             _eventfd: eventfd,
@@ -837,18 +1006,26 @@ impl Reactor {
     }
 
     pub(crate) fn write_dma(&self, source: &Source, pos: u64) {
-        match &*source.source_type() {
-            SourceType::Write(_, IOBuffer::Dma(buf)) => {
-                let op = UringOpDescriptor::WriteFixed(buf.as_ptr(), buf.len(), pos, 0);
-                self.queue_storage_io_request(source, op);
-            }
+        let op = match &*source.source_type() {
+            SourceType::Write(
+                PollableStatus::NonPollable(DirectIO::Disabled),
+                IOBuffer::Dma(buf),
+            ) => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
+            SourceType::Write(_, IOBuffer::Dma(buf)) => match buf.uring_buffer_id() {
+                Some(id) => UringOpDescriptor::WriteFixed(buf.as_ptr(), buf.len(), pos, id),
+                None => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
+            },
             x => panic!("Unexpected source type for write: {:?}", x),
-        }
+        };
+        self.queue_storage_io_request(source, op);
     }
 
     pub(crate) fn write_buffered(&self, source: &Source, pos: u64) {
         match &*source.source_type() {
-            SourceType::Write(PollableStatus::NonPollable, IOBuffer::Buffered(buf)) => {
+            SourceType::Write(
+                PollableStatus::NonPollable(DirectIO::Disabled),
+                IOBuffer::Buffered(buf),
+            ) => {
                 let op = UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos);
                 self.queue_standard_request(source, op);
             }
@@ -1047,7 +1224,7 @@ impl Reactor {
         };
         match pollable {
             PollableStatus::Pollable => queue_request_into_ring(&self.poll_ring, source, op),
-            PollableStatus::NonPollable => queue_request_into_ring(&self.main_ring, source, op),
+            PollableStatus::NonPollable(_) => queue_request_into_ring(&self.main_ring, source, op),
         }
     }
 }
@@ -1080,7 +1257,7 @@ mod tests {
 
     #[test]
     fn timeout_smoke_test() {
-        let reactor = Reactor::new().unwrap();
+        let reactor = Reactor::new(0).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
@@ -1116,5 +1293,58 @@ mod tests {
         reactor.wait(&mut wakers, None, None, |_| 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(300 <= elapsed_ms && elapsed_ms < 350);
+    }
+
+    #[test]
+    fn allocator() {
+        let l = Layout::from_size_align(10 << 20, 4 << 10).unwrap();
+        let mut allocator = unsafe {
+            let data = alloc::alloc::alloc(l) as *mut u8;
+            assert_eq!(data as usize & 4095, 0);
+            let data = std::ptr::NonNull::new(data).unwrap();
+            BuddyAlloc::new(BuddyAllocParam::new(data.as_ptr(), l.size(), l.align()))
+        };
+        let x = allocator.malloc(4096);
+        assert_eq!(x as usize & 4095, 0);
+        let x = allocator.malloc(1024);
+        assert_eq!(x as usize & 4095, 0);
+        let x = allocator.malloc(1);
+        assert_eq!(x as usize & 4095, 0);
+    }
+
+    #[test]
+    fn allocator_exhaustion() {
+        // The allocator fails with a single page, because it needs extra metadata
+        // space
+        let al = Rc::new(UringBufferAllocator::new(8192));
+        al.activate_registered_buffers(1234);
+        let x = al.new_buffer(4096).unwrap();
+        let y = al.new_buffer(4096).unwrap();
+
+        match x.uring_buffer_id() {
+            Some(x) => assert_eq!(x, 1234),
+            None => panic!("Expected uring buffer"),
+        }
+
+        match y.uring_buffer_id() {
+            Some(_) => panic!("Expected non-uring buffer"),
+            None => {}
+        }
+        drop(x);
+        drop(y);
+
+        // memory is back, able to allocate again
+        let x = al.new_buffer(4096).unwrap();
+        match x.uring_buffer_id() {
+            Some(x) => assert_eq!(x, 1234),
+            None => panic!("Expected uring buffer"),
+        }
+        drop(x);
+        // Allocation for an object that is too big fails
+        let x = al.new_buffer(40960).unwrap();
+        match x.uring_buffer_id() {
+            Some(_) => panic!("Expected non-uring buffer"),
+            None => {}
+        }
     }
 }

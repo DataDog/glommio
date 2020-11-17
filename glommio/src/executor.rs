@@ -402,6 +402,10 @@ pub struct LocalExecutorBuilder {
     spin_before_park: Option<Duration>,
     /// A name for the thread-to-be (if any), for identification in panic messages
     name: String,
+    /// Amount of memory to reserve for storage I/O. This will be preallocated and registered
+    /// with io_uring. It is still possible to use more than that but it will come from the
+    /// standard allocator and performance will suffer. Defaults to 10MB.
+    io_memory: usize,
 }
 
 impl LocalExecutorBuilder {
@@ -412,6 +416,7 @@ impl LocalExecutorBuilder {
             binding: None,
             spin_before_park: None,
             name: String::from("unnamed"),
+            io_memory: 10 << 20,
         }
     }
 
@@ -434,6 +439,17 @@ impl LocalExecutorBuilder {
         self
     }
 
+    /// Amount of memory to reserve for storage I/O. This will be preallocated and registered
+    /// with io_uring. It is still possible to use more than that but it will come from the
+    /// standard allocator and performance will suffer.
+    ///
+    /// The system will always try to allocate at least 64kB for I/O memory, and the default
+    /// is 10MB.
+    pub fn io_memory(mut self, io_memory: usize) -> LocalExecutorBuilder {
+        self.io_memory = io_memory;
+        self
+    }
+
     /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and returns an
     /// [`io::Result`] to the executor.
     /// # Examples
@@ -444,7 +460,8 @@ impl LocalExecutorBuilder {
     /// let local_ex = LocalExecutorBuilder::new().make().unwrap();
     /// ```
     pub fn make(self) -> io::Result<LocalExecutor> {
-        let mut le = LocalExecutor::new(EXECUTOR_ID.fetch_add(1, Ordering::Relaxed));
+        let mut le =
+            LocalExecutor::new(EXECUTOR_ID.fetch_add(1, Ordering::Relaxed), self.io_memory);
         if let Some(cpu) = self.binding {
             le.bind_to_cpu(cpu)?;
             le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -483,7 +500,7 @@ impl LocalExecutorBuilder {
         let name = format!("{}-{}", self.name, id);
 
         Builder::new().name(name).spawn(move || {
-            let mut le = LocalExecutor::new(id);
+            let mut le = LocalExecutor::new(id, self.io_memory);
             if let Some(cpu) = self.binding {
                 le.bind_to_cpu(cpu).unwrap();
                 le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -580,13 +597,13 @@ impl LocalExecutor {
         LocalExecutorBuilder::new().make().unwrap()
     }
 
-    fn new(id: usize) -> LocalExecutor {
+    fn new(id: usize, io_memory: usize) -> LocalExecutor {
         let p = parking::Parker::new();
         LocalExecutor {
             queues: ExecutorQueues::new(),
             parker: p,
             id,
-            reactor: Rc::new(parking::Reactor::new()),
+            reactor: Rc::new(parking::Reactor::new(io_memory)),
         }
     }
 
