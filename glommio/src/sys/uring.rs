@@ -20,7 +20,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use crate::free_list::{FreeList, Idx};
-use crate::sys::posix_buffers::{BufferStorage, PosixDmaBuffer};
+use crate::sys::dma_buffer::{BufferStorage, DmaBuffer};
 use crate::sys::{
     self, DirectIO, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType,
 };
@@ -33,8 +33,6 @@ use std::sync::Arc;
 use uring_sys::IoRingOp;
 
 use super::{EnqueuedSource, TimeSpec64};
-
-type DmaBuffer = PosixDmaBuffer;
 
 pub(crate) fn add_flag(fd: RawFd, flag: libc::c_int) -> io::Result<()> {
     let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
@@ -120,7 +118,7 @@ impl UringBufferAllocator {
         unsafe { std::slice::from_raw_parts(self.data.as_ptr(), self.size) }
     }
 
-    fn new_buffer(self: &Rc<Self>, size: usize) -> Option<PosixDmaBuffer> {
+    fn new_buffer(self: &Rc<Self>, size: usize) -> Option<DmaBuffer> {
         let mut alloc = self.allocator.borrow_mut();
         match ptr::NonNull::new(alloc.malloc(size)) {
             Some(data) => {
@@ -129,9 +127,9 @@ impl UringBufferAllocator {
                     data,
                     uring_buffer_id: self.uring_buffer_id.get(),
                 };
-                Some(PosixDmaBuffer::with_storage(size, BufferStorage::Uring(ub)))
+                Some(DmaBuffer::with_storage(size, BufferStorage::Uring(ub)))
             }
-            None => PosixDmaBuffer::new(size),
+            None => DmaBuffer::new(size),
         }
     }
 }
@@ -763,7 +761,7 @@ impl SleepableRing {
                     user_data: to_user_data(add_source(link, self.submission_queue.clone())),
                     args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                 };
-                fill_sqe(&mut sqe, &op, PosixDmaBuffer::new);
+                fill_sqe(&mut sqe, &op, DmaBuffer::new);
             } else {
                 // Can't link rings because we ran out of CQEs. Just can't sleep.
                 // Submit what we have, once we're out of here we'll consume them

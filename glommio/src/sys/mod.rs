@@ -103,20 +103,17 @@ fn cstr(path: &Path) -> io::Result<CString> {
     Ok(CString::new(path.as_os_str().as_bytes())?)
 }
 
-mod posix_buffers;
+mod dma_buffer;
 pub(crate) mod sysfs;
 mod uring;
 
-pub use self::posix_buffers::*;
+pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::uring::*;
 use crate::IoRequirements;
 
-/// A buffer that can be used with DmaFile.
-pub type DmaBuffer = PosixDmaBuffer;
-
 #[derive(Debug)]
 pub(crate) enum IOBuffer {
-    Dma(PosixDmaBuffer),
+    Dma(DmaBuffer),
     Buffered(Vec<u8>),
 }
 
