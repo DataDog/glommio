@@ -6,11 +6,13 @@
 use crate::error::ErrorEnhancer;
 use crate::parking::Reactor;
 use crate::sys;
+use crate::Local;
 use std::convert::TryInto;
 use std::io;
 use std::mem;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 /// A wrapper over `std::fs::File` which carries a path (for better error
 /// messages) and prints a warning if closed synchronously.
@@ -26,6 +28,7 @@ pub(crate) struct GlommioFile {
     pub(crate) inode: u64,
     pub(crate) dev_major: u32,
     pub(crate) dev_minor: u32,
+    pub(crate) reactor: Rc<Reactor>,
 }
 
 impl Drop for GlommioFile {
@@ -53,6 +56,7 @@ impl FromRawFd for GlommioFile {
             inode: 0,
             dev_major: 0,
             dev_minor: 0,
+            reactor: Local::get_reactor(),
         }
     }
 }
@@ -64,7 +68,8 @@ impl GlommioFile {
         flags: libc::c_int,
         mode: libc::c_int,
     ) -> io::Result<GlommioFile> {
-        let source = Reactor::get().open_at(dir, path, flags, mode);
+        let reactor = Local::get_reactor();
+        let source = reactor.open_at(dir, path, flags, mode);
         let fd = source.collect_rw().await?;
 
         let mut file = GlommioFile {
@@ -73,6 +78,7 @@ impl GlommioFile {
             inode: 0,
             dev_major: 0,
             dev_minor: 0,
+            reactor,
         };
 
         let st = file.statx().await?;
@@ -88,16 +94,19 @@ impl GlommioFile {
             && self.dev_minor == other.dev_minor
     }
 
-    pub(crate) async fn close(mut self) -> io::Result<()> {
+    pub(crate) fn discard(mut self) -> (RawFd, Option<PathBuf>) {
         // Destruct `self` into components skipping Drop.
-        let (fd, path) = {
-            let fd = self.as_raw_fd();
-            let path = self.path.take();
-            mem::forget(self);
-            (fd, path)
-        };
+        let fd = self.as_raw_fd();
+        let path = self.path.take();
+        mem::forget(self);
+        (fd, path)
+    }
 
-        let source = Reactor::get().close(fd);
+    pub(crate) async fn close(self) -> io::Result<()> {
+        let reactor = self.reactor.clone();
+        // Destruct `self` into components skipping Drop.
+        let (fd, path) = self.discard();
+        let source = reactor.close(fd);
         enhanced_try!(source.collect_rw().await, "Closing", path, Some(fd))?;
         Ok(())
     }
@@ -124,7 +133,7 @@ impl GlommioFile {
 
     pub(crate) async fn pre_allocate(&self, size: u64) -> io::Result<()> {
         let flags = libc::FALLOC_FL_ZERO_RANGE;
-        let source = Reactor::get().fallocate(self.as_raw_fd(), 0, size, flags);
+        let source = self.reactor.fallocate(self.as_raw_fd(), 0, size, flags);
         enhanced_try!(source.collect_rw().await, "Pre-allocate space", self)?;
         Ok(())
     }
@@ -153,7 +162,7 @@ impl GlommioFile {
     }
 
     pub(crate) async fn fdatasync(&self) -> io::Result<()> {
-        let source = Reactor::get().fdatasync(self.as_raw_fd());
+        let source = self.reactor.fdatasync(self.as_raw_fd());
         enhanced_try!(source.collect_rw().await, "Syncing", self)?;
         Ok(())
     }
@@ -167,7 +176,7 @@ impl GlommioFile {
     pub(crate) async fn statx(&self) -> io::Result<libc::statx> {
         let path = self.path_required("stat")?;
 
-        let source = Reactor::get().statx(self.as_raw_fd(), path);
+        let source = self.reactor.statx(self.as_raw_fd(), path);
         enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
         let stype = source.extract_source_type();
         stype.try_into()

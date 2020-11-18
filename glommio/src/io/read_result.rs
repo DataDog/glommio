@@ -14,18 +14,28 @@ use std::rc::Rc;
 /// [`get_buffer_aligned`]: struct.StreamReader.html#method.get_buffer_aligned
 /// [`read_dma`]: struct.DmaFile.html#method.read_dma
 pub struct ReadResult {
-    buffer: Rc<DmaBuffer>,
+    buffer: Option<Rc<DmaBuffer>>,
     offset: usize,
     end: usize,
 }
 
+static EMPTY: [u8; 0] = [0; 0];
+
 #[allow(clippy::len_without_is_empty)]
 impl ReadResult {
+    pub(crate) fn empty_buffer() -> ReadResult {
+        ReadResult {
+            end: 0,
+            offset: 0,
+            buffer: None,
+        }
+    }
+
     pub(crate) fn from_whole_buffer(buffer: DmaBuffer) -> ReadResult {
         ReadResult {
             end: buffer.len(),
             offset: 0,
-            buffer: Rc::new(buffer),
+            buffer: Some(Rc::new(buffer)),
         }
     }
 
@@ -38,7 +48,7 @@ impl ReadResult {
     /// [`ReadResult`]: struct.ReadResult.html
     pub fn read_at(&self, offset: usize, dst: &mut [u8]) -> usize {
         let offset = self.offset + offset;
-        self.buffer.read_at(offset, dst)
+        self.buffer.as_ref().unwrap().read_at(offset, dst)
     }
 
     /// Creates a slice of this ReadResult with the given offset and length.
@@ -53,7 +63,7 @@ impl ReadResult {
         let offset = self.offset + extra_offset;
         let end = offset + len;
 
-        if offset > self.buffer.len() {
+        if offset > self.buffer.as_ref().unwrap().len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
@@ -63,7 +73,7 @@ impl ReadResult {
             ));
         }
 
-        if end > self.buffer.len() {
+        if end > self.buffer.as_ref().unwrap().len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
@@ -87,6 +97,9 @@ impl ReadResult {
 
     /// Allows accessing the contents of this buffer as a byte slice
     pub fn as_bytes(&self) -> &[u8] {
-        &self.buffer.as_bytes()[self.offset..self.end]
+        match self.buffer.as_ref() {
+            None => &EMPTY,
+            Some(buffer) => &buffer.as_bytes()[self.offset..self.end],
+        }
     }
 }

@@ -4,14 +4,17 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
 use crate::io::BufferedFile;
+use crate::parking::Reactor;
 use crate::sys::Source;
-use crate::Reactor;
+use crate::Local;
 use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom};
+use futures_lite::ready;
 use pin_project_lite::pin_project;
 use std::convert::TryInto;
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 pin_project! {
@@ -32,6 +35,7 @@ pin_project! {
         max_pos: u64,
         source: Option<Source>,
         buffer: Buffer,
+        reactor: Rc<Reactor>,
     }
 }
 
@@ -44,6 +48,7 @@ pin_project! {
     pub struct Stdin {
         source: Option<Source>,
         buffer: Buffer,
+        reactor: Rc<Reactor>,
     }
 }
 
@@ -70,7 +75,15 @@ pub fn stdin() -> Stdin {
     Stdin {
         source: None,
         buffer: Buffer::new(128),
+        reactor: Local::get_reactor(),
     }
+}
+
+#[derive(Debug)]
+enum FileStatus {
+    Open,    // Open, can be closed.
+    Closing, // We are closing it.
+    Closed,  // It was closed, but the poll
 }
 
 #[derive(Debug)]
@@ -82,11 +95,13 @@ pub fn stdin() -> Stdin {
 /// [`StreamWriter`]: struct.StreamWriter.html
 /// [`AsyncWrite`]: https://docs.rs/futures/0.3.6/futures/io/trait.AsyncWrite.html
 pub struct StreamWriter {
-    file: BufferedFile,
+    file: Option<BufferedFile>,
     file_pos: u64,
     sync_on_close: bool,
     source: Option<Source>,
     buffer: Buffer,
+    file_status: FileStatus,
+    reactor: Rc<Reactor>,
 }
 
 #[derive(Debug)]
@@ -183,6 +198,7 @@ impl StreamReader {
             max_pos: builder.end,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
+            reactor: Local::get_reactor(),
         }
     }
 }
@@ -315,26 +331,15 @@ impl StreamWriterBuilder {
 }
 
 impl StreamWriter {
-    /// Asynchronously closes the underlying file.
-    pub async fn close(mut self) -> io::Result<()> {
-        let bytes = self.buffer.consumed_bytes();
-        if !bytes.is_empty() {
-            let sz = self.file.write_at(bytes, self.file_pos).await?;
-            self.file_pos += sz as u64;
-        }
-        if self.sync_on_close {
-            self.file.fdatasync().await?;
-        }
-        self.file.close().await
-    }
-
     fn new(builder: StreamWriterBuilder) -> StreamWriter {
         StreamWriter {
-            file: builder.file,
+            file: Some(builder.file),
+            file_status: FileStatus::Open,
             sync_on_close: builder.sync_on_close,
             file_pos: 0,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
+            reactor: Local::get_reactor(),
         }
     }
 
@@ -353,7 +358,11 @@ impl StreamWriter {
         assert!(self.source.is_none());
         let bytes = self.buffer.consumed_bytes();
         if !bytes.is_empty() {
-            let source = Reactor::get().write_buffered(self.file.as_raw_fd(), bytes, self.file_pos);
+            let source = self.reactor.write_buffered(
+                self.file.as_ref().unwrap().as_raw_fd(),
+                bytes,
+                self.file_pos,
+            );
             source.add_waiter(waker);
             self.source = Some(source);
             true
@@ -361,9 +370,84 @@ impl StreamWriter {
             false
         }
     }
+
+    fn poll_sync(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if !self.sync_on_close {
+            Poll::Ready(Ok(()))
+        } else {
+            match self.source.take() {
+                None => {
+                    let source = self
+                        .reactor
+                        .fdatasync(self.file.as_ref().unwrap().as_raw_fd());
+                    source.add_waiter(cx.waker().clone());
+                    self.source = Some(source);
+                    Poll::Pending
+                }
+                Some(source) => {
+                    let _ = source.take_result().unwrap();
+                    Poll::Ready(Ok(()))
+                }
+            }
+        }
+    }
+
+    fn poll_inner_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.source.take() {
+            None => {
+                let source = self.reactor.close(self.file.as_ref().unwrap().as_raw_fd());
+                source.add_waiter(cx.waker().clone());
+                self.source = Some(source);
+                Poll::Pending
+            }
+            Some(source) => {
+                let _ = source.take_result().unwrap();
+                self.file.take().unwrap().discard();
+                Poll::Ready(Ok(()))
+            }
+        }
+    }
+
+    fn do_poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.source.take() {
+            None => match self.flush_write_buffer(cx.waker().clone()) {
+                true => Poll::Pending,
+                false => Poll::Ready(Ok(())),
+            },
+            Some(source) => Poll::Ready(self.consume_flush_result(source)),
+        }
+    }
+
+    fn do_poll_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        while self.file.is_some() {
+            match self.file_status {
+                FileStatus::Open => {
+                    let res = ready!(self.do_poll_flush(cx));
+                    if res.is_err() {
+                        return Poll::Ready(res);
+                    }
+                    self.file_status = FileStatus::Closing;
+                    continue;
+                }
+                FileStatus::Closing => {
+                    let res = ready!(self.poll_sync(cx));
+                    if res.is_err() {
+                        return Poll::Ready(res);
+                    }
+                    self.file_status = FileStatus::Closed;
+                    continue;
+                }
+                FileStatus::Closed => {
+                    return self.poll_inner_close(cx);
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
 }
-macro_rules! do_poll {
-    ( $self:expr, $cx:expr, $pos:expr ) => {
+
+macro_rules! do_seek {
+    ( $self:expr, $fileobj:expr, $cx:expr, $pos:expr ) => {
         match $pos {
             SeekFrom::Start(pos) => {
                 $self.file_pos = pos;
@@ -375,7 +459,7 @@ macro_rules! do_poll {
             }
             SeekFrom::End(pos) => match $self.source.take() {
                 None => {
-                    let source = Reactor::get().statx($self.file.as_raw_fd(), $self.file.path());
+                    let source = $self.reactor.statx($fileobj.as_raw_fd(), $fileobj.path());
                     source.add_waiter($cx.waker().clone());
                     $self.source = Some(source);
                     Poll::Pending
@@ -398,7 +482,7 @@ impl AsyncSeek for StreamReader {
         cx: &mut Context<'_>,
         pos: SeekFrom,
     ) -> Poll<io::Result<u64>> {
-        do_poll!(self, cx, pos)
+        do_seek!(self, &self.file, cx, pos)
     }
 }
 
@@ -408,7 +492,7 @@ impl AsyncSeek for StreamWriter {
         cx: &mut Context<'_>,
         pos: SeekFrom,
     ) -> Poll<io::Result<u64>> {
-        do_poll!(self, cx, pos)
+        do_seek!(self, self.file.as_ref().unwrap(), cx, pos)
     }
 }
 
@@ -421,7 +505,7 @@ impl AsyncRead for StreamReader {
         // This is by far the most annoying thing about this interface.
         // read_exact works well if we use the user-provided buffer directly,
         // but read_to_end resets the buffer between calls.
-        let buffer = futures_lite::ready!(self.as_mut().poll_fill_buf(cx))?;
+        let buffer = ready!(self.as_mut().poll_fill_buf(cx))?;
         let bytes_read = std::cmp::min(buffer.len(), buf.len());
         buf[0..bytes_read].copy_from_slice(&buffer[0..bytes_read]);
         self.consume(bytes_read);
@@ -461,7 +545,8 @@ impl AsyncBufRead for StreamReader {
                     let file_pos = self.file_pos;
                     let fd = self.file.as_raw_fd();
                     let source =
-                        Reactor::get().read_buffered(fd, file_pos, self.buffer.max_buffer_size);
+                        self.reactor
+                            .read_buffered(fd, file_pos, self.buffer.max_buffer_size);
                     source.add_waiter(cx.waker().clone());
                     self.source = Some(source);
                     Poll::Pending
@@ -497,19 +582,11 @@ impl AsyncWrite for StreamWriter {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.source.take() {
-            None => match self.flush_write_buffer(cx.waker().clone()) {
-                true => Poll::Pending,
-                false => Poll::Ready(Ok(())),
-            },
-            Some(source) => Poll::Ready(self.consume_flush_result(source)),
-        }
+        self.do_poll_flush(cx)
     }
 
-    // We want our own close to be called so we can mem::forget the underlying file
-    #[allow(unreachable_code)]
-    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        panic!("Should never be called");
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.do_poll_close(cx)
     }
 }
 
@@ -519,7 +596,7 @@ impl AsyncRead for Stdin {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let buffer = futures_lite::ready!(self.as_mut().poll_fill_buf(cx))?;
+        let buffer = ready!(self.as_mut().poll_fill_buf(cx))?;
         let bytes_read = std::cmp::min(buffer.len(), buf.len());
         buf[0..bytes_read].copy_from_slice(&buffer[0..bytes_read]);
         self.consume(bytes_read);
@@ -551,7 +628,7 @@ impl AsyncBufRead for Stdin {
                     let this = self.project();
                     Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                 } else {
-                    let source = Reactor::get().read_buffered(
+                    let source = self.reactor.read_buffered(
                         libc::STDIN_FILENO,
                         0,
                         self.buffer.max_buffer_size,

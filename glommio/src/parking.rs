@@ -22,8 +22,9 @@
 //! no thread context switch is necessary when going between task execution and I/O.
 //!
 
+use ahash::AHashMap;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
 use std::fmt;
 use std::io;
@@ -41,10 +42,9 @@ use std::time::{Duration, Instant};
 use futures_lite::*;
 
 use crate::sys;
-use crate::sys::{DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
+use crate::sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
 use crate::IoRequirements;
-
-thread_local!(static LOCAL_REACTOR: Reactor = Reactor::new());
+use crate::Local;
 
 /// Waits for a notification.
 pub(crate) struct Parker {
@@ -94,21 +94,26 @@ impl fmt::Debug for Parker {
     }
 }
 
+impl fmt::Debug for Reactor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad("Reactor { .. }")
+    }
+}
+
 struct Inner {}
 
 impl Inner {
     fn park(&self, timeout: Option<Duration>) -> bool {
         // If the timeout is zero, then there is no need to actually block.
         // Process available I/O events.
-        let reactor_lock = Reactor::get().lock();
-        let _ = reactor_lock.react(timeout);
+        let _ = Local::get_reactor().react(timeout);
         false
     }
 }
 
 struct Timers {
     timer_id: u64,
-    timers_by_id: HashMap<u64, Instant>,
+    timers_by_id: AHashMap<u64, Instant>,
 
     /// An ordered map of registered timers.
     ///
@@ -122,7 +127,7 @@ impl Timers {
     fn new() -> Timers {
         Timers {
             timer_id: 0,
-            timers_by_id: HashMap::new(),
+            timers_by_id: AHashMap::new(),
             timers: BTreeMap::new(),
         }
     }
@@ -211,7 +216,7 @@ impl SharedChannels {
 /// Every async I/O handle and every timer is registered here. Invocations of
 /// [`run()`][`crate::run()`] poll the reactor to check for new events every now and then.
 ///
-/// There is only one global instance of this type, accessible by [`Reactor::get()`].
+/// There is only one global instance of this type, accessible by [`Local::get_reactor()`].
 pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
     sys: sys::Reactor,
@@ -222,6 +227,8 @@ pub(crate) struct Reactor {
 
     /// I/O Requirements of the task currently executing.
     current_io_requirements: RefCell<IoRequirements>,
+
+    wakers: RefCell<Vec<Waker>>,
 
     /// Whether there are events in the latency ring.
     ///
@@ -238,58 +245,23 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    fn new() -> Reactor {
-        let sys = sys::Reactor::new().expect("cannot initialize I/O event notification");
+    pub(crate) fn new(io_memory: usize) -> Reactor {
+        let sys = sys::Reactor::new(io_memory).expect("cannot initialize I/O event notification");
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
             current_io_requirements: RefCell::new(IoRequirements::default()),
+            wakers: RefCell::new(Vec::with_capacity(256)),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
         }
     }
 
-    pub(crate) fn get() -> &'static Reactor {
-        unsafe {
-            LOCAL_REACTOR.with(|r| {
-                let rc = r as *const Reactor;
-                &*rc
-            })
-        }
-    }
-
     #[inline(always)]
-    // FIXME: This is a bit less efficient than it needs, because the scoped thread local key
-    // does lazy initialization. Every time we call into this, we are paying to test if this
-    // is initialized. This is what I got from objdump:
-    //
-    // 0:    50                      push   %rax
-    // 1:    ff 15 00 00 00 00       callq  *0x0(%rip)
-    // 7:    48 85 c0                test   %rax,%rax
-    // a:    74 17                   je     23  <== will call into the initialization routine
-    // c:    48 8b 88 38 03 00 00    mov    0x338(%rax),%rcx <== address of the head
-    // 13:   48 8b 80 40 03 00 00    mov    0x340(%rax),%rax <== address of the tail
-    // 1a:   8b 00                   mov    (%rax),%eax
-    // 1c:   3b 01                   cmp    (%rcx),%eax <== need preempt
-    // 1e:   0f 95 c0                setne  %al
-    // 21:   59                      pop    %rcx
-    // 22:   c3                      retq
-    // 23    <== initialization stuff
-    //
-    // Rust has a thread local feature that is under experimental so we can maybe switch to
-    // that someday.
-    //
-    // We will prefer to use the stable compiler and pay that unfortunate price for now.
-    #[inline(always)]
-    pub(crate) fn need_preempt() -> bool {
-        unsafe {
-            LOCAL_REACTOR.with(|r| {
-                let rc = &*(r as *const Reactor);
-                *rc.preempt_ptr_head != (*rc.preempt_ptr_tail).load(Ordering::Acquire)
-            })
-        }
+    pub(crate) fn need_preempt(&self) -> bool {
+        unsafe { *self.preempt_ptr_head != (*self.preempt_ptr_tail).load(Ordering::Acquire) }
     }
 
     pub(crate) fn eventfd(&self) -> Arc<AtomicUsize> {
@@ -347,7 +319,10 @@ impl Reactor {
     pub(crate) fn write_buffered(&self, raw: RawFd, buf: Vec<u8>, pos: u64) -> Source {
         let source = self.new_source(
             raw,
-            SourceType::Write(PollableStatus::NonPollable, IOBuffer::Buffered(buf)),
+            SourceType::Write(
+                PollableStatus::NonPollable(DirectIO::Disabled),
+                IOBuffer::Buffered(buf),
+            ),
         );
         self.sys.write_buffered(&source, pos);
         source
@@ -366,7 +341,10 @@ impl Reactor {
     }
 
     pub(crate) fn read_buffered(&self, raw: RawFd, pos: u64, size: usize) -> Source {
-        let source = self.new_source(raw, SourceType::Read(PollableStatus::NonPollable, None));
+        let source = self.new_source(
+            raw,
+            SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
+        );
         self.sys.read_buffered(&source, pos, size);
         source
     }
@@ -460,12 +438,6 @@ impl Reactor {
         timers.remove(id);
     }
 
-    /// Locks the reactor, potentially blocking if the lock is held by another thread.
-    fn lock(&self) -> ReactorLock<'_> {
-        let reactor = self;
-        ReactorLock { reactor }
-    }
-
     /// Processes ready timers and extends the list of wakers to wake.
     ///
     /// Returns the duration until the next timer before this method was called.
@@ -478,36 +450,25 @@ impl Reactor {
         let mut channels = self.shared_channels.borrow_mut();
         channels.process_shared_channels(wakers)
     }
-}
 
-/// A lock on the reactor.
-struct ReactorLock<'a> {
-    reactor: &'a Reactor,
-}
-
-impl ReactorLock<'_> {
     /// Processes new events, blocking until the first event or the timeout.
-    fn react(self, timeout: Option<Duration>) -> io::Result<()> {
-        // FIXME: there must be a way to avoid this allocation
-        // Indeed it just showed in a profiler. We can cap the number of
-        // cqes produced, but this is used for timers as well. Need to
-        // be more careful, but doable.
-        let mut wakers = Vec::new();
+    fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
+        // FIXME: use shrink_to here to bring the capacity back to
+        // its normal level. It is not stable API yet and this is unlikely
+        // to be a problem in practice.
+        let mut wakers = self.wakers.borrow_mut();
 
         // Process ready timers.
-        let next_timer = self.reactor.process_timers(&mut wakers);
-        self.reactor.process_shared_channels(&mut wakers);
+        let next_timer = self.process_timers(&mut wakers);
+        self.process_shared_channels(&mut wakers);
 
         // Block on I/O events.
-        let res = match self
-            .reactor
-            .sys
-            .wait(&mut wakers, timeout, next_timer, |wakers| {
-                self.reactor.process_shared_channels(wakers)
-            }) {
+        let res = match self.sys.wait(&mut wakers, timeout, next_timer, |wakers| {
+            self.process_shared_channels(wakers)
+        }) {
             // Don't wait for the next loop to process timers or shared channels
             Ok(true) => {
-                self.reactor.process_timers(&mut wakers);
+                self.process_timers(&mut wakers);
                 Ok(())
             }
 
@@ -521,7 +482,7 @@ impl ReactorLock<'_> {
         };
 
         // Wake up ready tasks.
-        for waker in wakers {
+        for waker in wakers.drain(..) {
             // Don't let a panicking waker blow everything up.
             let _ = panic::catch_unwind(|| waker.wake());
         }
@@ -553,7 +514,7 @@ impl Source {
             }
 
             self.add_waiter(cx.waker().clone());
-            Reactor::get().sys.interest(self, true, false);
+            Local::get_reactor().sys.interest(self, true, false);
             Poll::Pending
         })
         .await
@@ -567,7 +528,7 @@ impl Source {
             }
 
             self.add_waiter(cx.waker().clone());
-            Reactor::get().sys.interest(self, false, true);
+            Local::get_reactor().sys.interest(self, false, true);
             Poll::Pending
         })
         .await

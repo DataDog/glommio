@@ -3,15 +3,15 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use ahash::AHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fs::{canonicalize, read_dir, read_to_string};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::vec::Vec;
 
-thread_local!(static DEV_MAP: RefCell<HashMap<(usize, usize), BlockDevice>> = RefCell::new(HashMap::new()));
+thread_local!(static DEV_MAP: RefCell<AHashMap<(usize, usize), BlockDevice>> = RefCell::new(AHashMap::new()));
 
 #[derive(Debug)]
 enum StorageCache {

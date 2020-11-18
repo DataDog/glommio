@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
 use std::ffi::CString;
@@ -102,21 +103,24 @@ fn cstr(path: &Path) -> io::Result<CString> {
     Ok(CString::new(path.as_os_str().as_bytes())?)
 }
 
-mod posix_buffers;
+mod dma_buffer;
 pub(crate) mod sysfs;
 mod uring;
 
-pub use self::posix_buffers::*;
-pub use self::uring::*;
+pub use self::dma_buffer::DmaBuffer;
+pub(crate) use self::uring::*;
 use crate::IoRequirements;
-
-/// A buffer that can be used with DmaFile.
-pub type DmaBuffer = PosixDmaBuffer;
 
 #[derive(Debug)]
 pub(crate) enum IOBuffer {
-    Dma(PosixDmaBuffer),
+    Dma(DmaBuffer),
     Buffered(Vec<u8>),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum DirectIO {
+    Enabled,
+    Disabled,
 }
 
 // You can be NonPollable and Buffered: that is the case for a Direct I/O file
@@ -125,8 +129,10 @@ pub(crate) enum IOBuffer {
 // meaning we can't conflate Pollable and the buffer type.
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PollableStatus {
+    // The pollable ring only supports Direct I/O, so always true.
     Pollable,
-    NonPollable,
+    // Non pollable can go either way
+    NonPollable(DirectIO),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -202,14 +208,14 @@ pub(crate) struct Wakers {
     pub(crate) result: Option<io::Result<usize>>,
 
     /// Tasks waiting for the next event.
-    pub(crate) waiters: Vec<Waker>,
+    pub(crate) waiters: SmallVec<[Waker; 4]>,
 }
 
 impl Wakers {
     pub(crate) fn new() -> Self {
         Wakers {
             result: None,
-            waiters: Vec::new(),
+            waiters: SmallVec::new(),
         }
     }
 }
