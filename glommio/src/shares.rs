@@ -7,8 +7,6 @@ use core::fmt::Debug;
 use std::rc::Rc;
 use std::time::Duration;
 
-pub(crate) const MAX_SHARES: u64 = 1u64 << 22;
-
 /// The SharesManager allows the user to implement dynamic shares for a [`TaskQueue`]
 ///
 /// In terms of behavior, a [`TaskQueue`] with static shares is the same as a `SharesManager`
@@ -93,6 +91,6 @@ impl Shares {
         };
         let shares = std::cmp::max(shares, 1);
         let shares = std::cmp::min(shares, 1000);
-        MAX_SHARES / (shares as u64)
+        (1u64 << 22) / (shares as u64)
     }
 }
