@@ -1322,8 +1322,8 @@ impl<T> Future for Task<T> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sync::Semaphore;
     use crate::timer::{self, Timer};
-    use crate::Semaphore;
     use crate::{enclose, SharesManager};
     use core::mem::MaybeUninit;
     use futures::join;
