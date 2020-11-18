@@ -62,6 +62,9 @@ jobs:
           name: Version information
           command: rustc --version; cargo --version; rustup --version
       - run:
+          name: Install cargo-deadlinks
+          command: cargo install cargo-deadlinks
+      - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
       - restore_cache:
@@ -70,6 +73,9 @@ jobs:
       - run:
           name: Generate documentation
           command: cargo doc --all-features
+      - run:
+          name: Validate links
+          command: cargo deadlinks --dir target/doc/glommio
       - save_cache:
           paths:
             - /usr/local/cargo/registry

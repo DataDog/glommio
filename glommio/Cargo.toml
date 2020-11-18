@@ -21,7 +21,7 @@ libc = "0.2.73"
 socket2 = { version = "0.3.12", features = ["pair", "unix"] }
 iou = { git = "https://github.com/glommer/iou", tag = "scipio-2020-09-11" }
 uring-sys = { git = "https://github.com/glommer/uring-sys", tag = "scipio-2020-09-10" }
-nix = "0.16.0"
+nix = "0.19.0"
 aligned_alloc = "0.1"
 bitmaps = "2.1.0"
 typenum = "1.12"
@@ -32,9 +32,12 @@ enclose = "1.1.8"
 scopeguard = "1.1.0"
 pin-project-lite = "0.1.10"
 smallvec = "1.4.2"
+buddy-alloc = "0.4.1"
+ahash = "0.5.8"
 
 [dev-dependencies]
 futures = "0.3.5"
+fastrand = "1.4.0"
 
 [[bench]]
 name = "executor"
@@ -50,4 +53,8 @@ harness = false
 
 [[bench]]
 name = "shared_channel"
+harness = false
+
+[[bench]]
+name = "preempt"
 harness = false

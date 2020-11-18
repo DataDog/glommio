@@ -21,13 +21,15 @@ struct Inner {
 
     /// When this timer fires.
     when: Instant,
+
+    reactor: Rc<Reactor>,
 }
 
 impl Inner {
     fn reset(&mut self, dur: Duration) {
         if self.waker.as_ref().is_some() {
             // Deregister the timer from the reactor.
-            Reactor::get().remove_timer(self.id);
+            self.reactor.remove_timer(self.id);
         }
 
         // Update the timeout.
@@ -35,7 +37,7 @@ impl Inner {
 
         if let Some(waker) = self.waker.as_mut() {
             // Re-register the timer with the new timeout.
-            Reactor::get().insert_timer(self.id, self.when, waker);
+            self.reactor.insert_timer(self.id, self.when, waker);
         }
     }
 }
@@ -80,16 +82,22 @@ impl Timer {
     ///
     /// ```
     /// use glommio::timer::Timer;
+    /// use glommio::LocalExecutor;
     /// use std::time::Duration;
     ///
-    /// Timer::new(Duration::from_millis(100));
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     Timer::new(Duration::from_millis(100)).await;
+    /// });
     /// ```
     pub fn new(dur: Duration) -> Timer {
+        let reactor = Local::get_reactor();
         Timer {
             inner: Rc::new(RefCell::new(Inner {
-                id: Reactor::get().register_timer(),
+                id: reactor.register_timer(),
                 waker: None,
                 when: Instant::now() + dur,
+                reactor,
             })),
         }
     }
@@ -102,6 +110,7 @@ impl Timer {
                 id,
                 waker: None,
                 when: Instant::now() + dur,
+                reactor: Local::get_reactor(),
             })),
         }
     }
@@ -116,10 +125,15 @@ impl Timer {
     ///
     /// ```
     /// use glommio::timer::Timer;
+    /// use glommio::LocalExecutor;
     /// use std::time::Duration;
     ///
-    /// let mut t = Timer::new(Duration::from_secs(1));
-    /// t.reset(Duration::from_millis(100));
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let mut t = Timer::new(Duration::from_secs(1));
+    ///     t.reset(Duration::from_millis(100));
+    ///     t.await;
+    /// });
     /// ```
     pub fn reset(&mut self, dur: Duration) {
         let mut inner = self.inner.borrow_mut();
@@ -132,7 +146,7 @@ impl Drop for Timer {
         let mut inner = self.inner.borrow_mut();
         if inner.waker.take().is_some() {
             // Deregister the timer from the reactor.
-            Reactor::get().remove_timer(inner.id);
+            inner.reactor.remove_timer(inner.id);
         }
     }
 }
@@ -145,11 +159,11 @@ impl Future for Timer {
 
         if Instant::now() >= inner.when {
             // Deregister the timer from the reactor if needed
-            Reactor::get().remove_timer(inner.id);
+            inner.reactor.remove_timer(inner.id);
             Poll::Ready(inner.when)
         } else {
             // Register the timer in the reactor.
-            Reactor::get().insert_timer(inner.id, inner.when, cx.waker());
+            inner.reactor.insert_timer(inner.id, inner.when, cx.waker());
             inner.waker = Some(cx.waker().clone());
             Poll::Pending
         }
@@ -170,6 +184,7 @@ impl Future for Timer {
 pub struct TimerActionOnce<T> {
     handle: JoinHandle<T, ()>,
     inner: Rc<RefCell<Inner>>,
+    reactor: Rc<Reactor>,
 }
 
 /// The TimerActionRepeat struct provides an ergonomic way to fire a repeated action at
@@ -180,6 +195,7 @@ pub struct TimerActionOnce<T> {
 pub struct TimerActionRepeat {
     handle: JoinHandle<(), ()>,
     timer_id: u64,
+    reactor: Rc<Reactor>,
 }
 
 impl<T: 'static> TimerActionOnce<T> {
@@ -245,7 +261,8 @@ impl<T: 'static> TimerActionOnce<T> {
         action: impl Future<Output = T> + 'static,
         tq: TaskQueueHandle,
     ) -> Result<TimerActionOnce<T>, QueueNotFoundError> {
-        let timer_id = Reactor::get().register_timer();
+        let reactor = Local::get_reactor();
+        let timer_id = reactor.register_timer();
         let timer = Timer::from_id(timer_id, when);
         let inner = timer.inner.clone();
 
@@ -260,6 +277,7 @@ impl<T: 'static> TimerActionOnce<T> {
         Ok(TimerActionOnce {
             handle: task.detach(),
             inner,
+            reactor,
         })
     }
 
@@ -391,7 +409,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// [`cancel`]: struct.TimerActionOnce.html#method.cancel
     /// [`join`]: struct.TimerActionOnce.html#method.join
     pub fn destroy(&self) {
-        Reactor::get().remove_timer(self.inner.borrow().id);
+        self.reactor.remove_timer(self.inner.borrow().id);
         self.handle.cancel();
     }
 
@@ -516,7 +534,8 @@ impl TimerActionRepeat {
         G: Fn() -> F + 'static,
         F: Future<Output = Option<Duration>> + 'static,
     {
-        let timer_id = Reactor::get().register_timer();
+        let reactor = Local::get_reactor();
+        let timer_id = reactor.register_timer();
 
         let task = Task::local_into(
             async move {
@@ -530,6 +549,7 @@ impl TimerActionRepeat {
         Ok(TimerActionRepeat {
             handle: task.detach(),
             timer_id,
+            reactor,
         })
     }
 
@@ -623,7 +643,7 @@ impl TimerActionRepeat {
     /// [`cancel`]: struct.TimerActionRepeat.html#method.cancel
     /// [`join`]: struct.TimerActionRepeat.html#method.join
     pub fn destroy(&self) {
-        Reactor::get().remove_timer(self.timer_id);
+        self.reactor.remove_timer(self.timer_id);
         self.handle.cancel();
     }
 

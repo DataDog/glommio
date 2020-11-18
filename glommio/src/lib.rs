@@ -352,8 +352,8 @@ pub mod io;
 mod multitask;
 mod networking;
 mod pollable;
-mod semaphore;
 mod shares;
+pub mod sync;
 pub mod timer;
 
 pub use crate::executor::{
@@ -362,7 +362,6 @@ pub use crate::executor::{
 };
 pub use crate::networking::*;
 pub use crate::pollable::Async;
-pub use crate::semaphore::Semaphore;
 pub use crate::shares::{Shares, SharesManager};
 pub use enclose::enclose;
 pub use scopeguard::defer;

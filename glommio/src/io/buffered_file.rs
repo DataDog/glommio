@@ -5,7 +5,7 @@
 //
 
 use crate::io::glommio_file::GlommioFile;
-use crate::parking::Reactor;
+use crate::io::read_result::ReadResult;
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -123,7 +123,7 @@ impl BufferedFile {
     /// });
     /// ```
     pub async fn write_at(&self, buf: Vec<u8>, pos: u64) -> io::Result<usize> {
-        let source = Reactor::get().write_buffered(self.as_raw_fd(), buf, pos);
+        let source = self.file.reactor.write_buffered(self.as_raw_fd(), buf, pos);
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
@@ -134,12 +134,13 @@ impl BufferedFile {
     /// be able to use its own pre-allocated buffers for it anyway.
     ///
     /// [`DmaFile`]: struct.DmaFile.html
-    pub async fn read_at(&self, pos: u64, size: usize) -> io::Result<Vec<u8>> {
-        let mut source = Reactor::get().read_buffered(self.as_raw_fd(), pos, size);
+    /// Reads from a specific position in the file and returns the buffer.
+    pub async fn read_at(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
+        let mut source = self.file.reactor.read_buffered(self.as_raw_fd(), pos, size);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        let mut buffer = source.extract_buffer();
-        buffer.truncate(read_size);
-        Ok(buffer)
+        let mut buffer = source.extract_dma_buffer();
+        buffer.trim_to_size(read_size);
+        Ok(ReadResult::from_whole_buffer(buffer))
     }
 
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush all writes to the
@@ -263,18 +264,18 @@ mod test {
 
         let rb = reader.read_at(0, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        check_contents!(rb, 0);
+        check_contents!(rb.as_bytes(), 0);
 
         // Can read again from the same position
         let rb = reader.read_at(0, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        check_contents!(rb, 0);
+        check_contents!(rb.as_bytes(), 0);
 
         // Can read again from a random, unaligned position, and will hit
         // EOF.
         let rb = reader.read_at(3, 6).await.unwrap();
         assert_eq!(rb.len(), 3);
-        check_contents!(rb[0..3], 3);
+        check_contents!(rb.as_bytes()[0..3], 3);
 
         writer.close().await.unwrap();
         reader.close().await.unwrap();
@@ -294,13 +295,13 @@ mod test {
 
         let rb = reader.read_at(0, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        for i in rb {
-            assert_eq!(i, 0);
+        for i in rb.as_bytes() {
+            assert_eq!(*i, 0);
         }
 
         let rb = reader.read_at(10, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        check_contents!(rb, 0);
+        check_contents!(rb.as_bytes(), 0);
 
         writer.close().await.unwrap();
         reader.close().await.unwrap();

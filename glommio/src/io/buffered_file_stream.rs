@@ -4,8 +4,9 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
 use crate::io::BufferedFile;
-use crate::sys::Source;
-use crate::Reactor;
+use crate::parking::Reactor;
+use crate::sys::{DmaBuffer, Source};
+use crate::Local;
 use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom};
 use futures_lite::ready;
 use pin_project_lite::pin_project;
@@ -13,6 +14,7 @@ use std::convert::TryInto;
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 pin_project! {
@@ -33,6 +35,7 @@ pin_project! {
         max_pos: u64,
         source: Option<Source>,
         buffer: Buffer,
+        reactor: Rc<Reactor>,
     }
 }
 
@@ -45,6 +48,7 @@ pin_project! {
     pub struct Stdin {
         source: Option<Source>,
         buffer: Buffer,
+        reactor: Rc<Reactor>,
     }
 }
 
@@ -71,6 +75,7 @@ pub fn stdin() -> Stdin {
     Stdin {
         source: None,
         buffer: Buffer::new(128),
+        reactor: Local::get_reactor(),
     }
 }
 
@@ -96,6 +101,7 @@ pub struct StreamWriter {
     source: Option<Source>,
     buffer: Buffer,
     file_status: FileStatus,
+    reactor: Rc<Reactor>,
 }
 
 #[derive(Debug)]
@@ -153,6 +159,12 @@ impl Buffer {
         self.data = buf;
     }
 
+    fn replenish_buffer(&mut self, buf: DmaBuffer) {
+        self.buffer_pos = 0;
+        self.data.resize(buf.len(), 0u8);
+        buf.read_at(0, &mut self.data);
+    }
+
     fn remaining_unconsumed_bytes(&self) -> usize {
         self.data.len() - self.buffer_pos
     }
@@ -192,6 +204,7 @@ impl StreamReader {
             max_pos: builder.end,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
+            reactor: Local::get_reactor(),
         }
     }
 }
@@ -332,6 +345,7 @@ impl StreamWriter {
             file_pos: 0,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
+            reactor: Local::get_reactor(),
         }
     }
 
@@ -350,7 +364,7 @@ impl StreamWriter {
         assert!(self.source.is_none());
         let bytes = self.buffer.consumed_bytes();
         if !bytes.is_empty() {
-            let source = Reactor::get().write_buffered(
+            let source = self.reactor.write_buffered(
                 self.file.as_ref().unwrap().as_raw_fd(),
                 bytes,
                 self.file_pos,
@@ -369,7 +383,9 @@ impl StreamWriter {
         } else {
             match self.source.take() {
                 None => {
-                    let source = Reactor::get().fdatasync(self.file.as_ref().unwrap().as_raw_fd());
+                    let source = self
+                        .reactor
+                        .fdatasync(self.file.as_ref().unwrap().as_raw_fd());
                     source.add_waiter(cx.waker().clone());
                     self.source = Some(source);
                     Poll::Pending
@@ -385,7 +401,7 @@ impl StreamWriter {
     fn poll_inner_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.source.take() {
             None => {
-                let source = Reactor::get().close(self.file.as_ref().unwrap().as_raw_fd());
+                let source = self.reactor.close(self.file.as_ref().unwrap().as_raw_fd());
                 source.add_waiter(cx.waker().clone());
                 self.source = Some(source);
                 Poll::Pending
@@ -449,7 +465,7 @@ macro_rules! do_seek {
             }
             SeekFrom::End(pos) => match $self.source.take() {
                 None => {
-                    let source = Reactor::get().statx($fileobj.as_raw_fd(), $fileobj.path());
+                    let source = $self.reactor.statx($fileobj.as_raw_fd(), $fileobj.path());
                     source.add_waiter($cx.waker().clone());
                     $self.source = Some(source);
                     Poll::Pending
@@ -514,14 +530,14 @@ impl AsyncBufRead for StreamReader {
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
                     Ok(sz) => {
-                        let mut buf = source.extract_buffer();
+                        let mut buf = source.extract_dma_buffer();
                         let old_pos = self.file_pos;
                         let new_pos = std::cmp::min(old_pos + sz as u64, self.max_pos);
                         let added_size = new_pos - old_pos;
                         self.file_pos += added_size;
-                        buf.truncate(added_size as usize);
+                        buf.trim_to_size(added_size as usize);
 
-                        self.buffer.replace_buffer(buf);
+                        self.buffer.replenish_buffer(buf);
                         let this = self.project();
                         Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                     }
@@ -535,7 +551,8 @@ impl AsyncBufRead for StreamReader {
                     let file_pos = self.file_pos;
                     let fd = self.file.as_raw_fd();
                     let source =
-                        Reactor::get().read_buffered(fd, file_pos, self.buffer.max_buffer_size);
+                        self.reactor
+                            .read_buffered(fd, file_pos, self.buffer.max_buffer_size);
                     source.add_waiter(cx.waker().clone());
                     self.source = Some(source);
                     Poll::Pending
@@ -604,9 +621,9 @@ impl AsyncBufRead for Stdin {
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
                     Ok(sz) => {
-                        let mut buf = source.extract_buffer();
-                        buf.truncate(sz);
-                        self.buffer.replace_buffer(buf);
+                        let mut buf = source.extract_dma_buffer();
+                        buf.trim_to_size(sz);
+                        self.buffer.replenish_buffer(buf);
                         let this = self.project();
                         Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                     }
@@ -617,7 +634,7 @@ impl AsyncBufRead for Stdin {
                     let this = self.project();
                     Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                 } else {
-                    let source = Reactor::get().read_buffered(
+                    let source = self.reactor.read_buffered(
                         libc::STDIN_FILENO,
                         0,
                         self.buffer.max_buffer_size,

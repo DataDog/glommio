@@ -5,9 +5,9 @@
 //
 use crate::io::glommio_file::GlommioFile;
 use crate::io::read_result::ReadResult;
-use crate::parking::Reactor;
 use crate::sys::sysfs;
-use crate::sys::{DmaBuffer, PollableStatus};
+use crate::sys::{DirectIO, DmaBuffer, PollableStatus};
+use nix::sys::statfs::*;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
@@ -104,8 +104,16 @@ impl DmaFile {
                 // if we failed to open the file with a recoverable error,
                 // open again without O_DIRECT
                 if os_err.raw_os_error().unwrap() == libc::EINVAL {
-                    pollable = PollableStatus::NonPollable;
-                    GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
+                    // Allow this to work on non direct I/O devices, but only
+                    // if this is in-memory.
+                    let buf = statfs(path).unwrap();
+                    let fstype = buf.filesystem_type();
+                    if fstype == TMPFS_MAGIC {
+                        pollable = PollableStatus::NonPollable(DirectIO::Disabled);
+                        GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
+                    } else {
+                        Err(os_err)
+                    }
                 } else {
                     Err(os_err)
                 }
@@ -114,12 +122,13 @@ impl DmaFile {
         }?;
 
         // Docker overlay can show as dev_major 0.
-        // Anything like that is obviously not something that supports poll.
+        // Anything like that is obviously not something that supports the poll ring.
         if file.dev_major == 0
             || sysfs::BlockDevice::is_md(file.dev_major as _, file.dev_minor as _)
         {
-            pollable = PollableStatus::NonPollable;
+            pollable = PollableStatus::NonPollable(DirectIO::Enabled);
         }
+
         Ok(DmaFile {
             file,
             o_direct_alignment: 4096,
@@ -128,8 +137,8 @@ impl DmaFile {
     }
 
     /// Allocates a buffer that is suitable for using to write to this file.
-    pub fn alloc_dma_buffer(size: usize) -> DmaBuffer {
-        Reactor::get().alloc_dma_buffer(size)
+    pub fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
+        self.file.reactor.alloc_dma_buffer(size)
     }
 
     /// Similar to `create()` in the standard library, but returns a DMA file
@@ -181,7 +190,7 @@ impl DmaFile {
     /// ex.run(async {
     ///     let file = DmaFile::create("test.txt").await.unwrap();
     ///
-    ///     let mut buf = DmaFile::alloc_dma_buffer(4096);
+    ///     let mut buf = file.alloc_dma_buffer(4096);
     ///     let res = file.write_at(buf, 0).await.unwrap();
     ///     assert!(res <= 4096);
     ///     file.close().await.unwrap();
@@ -190,7 +199,10 @@ impl DmaFile {
     ///
     /// [`alloc_dma_buffer`]: struct.DmaFile.html#method.alloc_dma_buffer
     pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> io::Result<usize> {
-        let source = Reactor::get().write_dma(self.as_raw_fd(), buf, pos, self.pollable);
+        let source = self
+            .file
+            .reactor
+            .write_dma(self.as_raw_fd(), buf, pos, self.pollable);
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
@@ -199,7 +211,10 @@ impl DmaFile {
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
     pub async fn read_at_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
-        let mut source = Reactor::get().read_dma(self.as_raw_fd(), pos, size, self.pollable);
+        let mut source = self
+            .file
+            .reactor
+            .read_dma(self.as_raw_fd(), pos, size, self.pollable);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let mut buffer = source.extract_dma_buffer();
         buffer.trim_to_size(read_size);
@@ -218,7 +233,9 @@ impl DmaFile {
 
         let eff_size = self.align_up((size + b) as u64) as usize;
         let mut source =
-            Reactor::get().read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
+            self.file
+                .reactor
+                .read_dma(self.as_raw_fd(), eff_pos, eff_size, self.pollable);
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let mut buffer = source.extract_dma_buffer();
@@ -308,7 +325,6 @@ impl DmaFile {
 pub(crate) mod test {
     use super::*;
     use crate::Local;
-    use nix::sys::statfs::*;
     use std::path::PathBuf;
 
     #[derive(Copy, Clone)]
@@ -497,7 +513,7 @@ pub(crate) mod test {
             .await
             .expect("failed to create file");
 
-        let mut buf = DmaFile::alloc_dma_buffer(4096);
+        let mut buf = new_file.alloc_dma_buffer(4096);
         buf.memset(42);
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 4096);
@@ -572,7 +588,7 @@ pub(crate) mod test {
         file.truncate(size as u64).await.unwrap();
         let mut futs = vec![];
         for _ in 0..200 {
-            let mut buf = DmaFile::alloc_dma_buffer(size);
+            let mut buf = file.alloc_dma_buffer(size);
             let bytes = buf.as_bytes_mut();
             bytes[0] = 'x' as u8;
 
@@ -599,7 +615,7 @@ pub(crate) mod test {
                     let size: usize = 4096;
                     file.truncate(size as u64).await.unwrap();
 
-                    let mut buf = DmaFile::alloc_dma_buffer(size);
+                    let mut buf = file.alloc_dma_buffer(size);
                     let bytes = buf.as_bytes_mut();
                     bytes[0] = 'x' as u8;
                     file.write_at(buf, 0).await.unwrap();

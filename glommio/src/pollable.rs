@@ -12,8 +12,8 @@ use std::task::{Context, Poll};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::{future, pin};
 
-use crate::parking::Reactor;
 use crate::sys::{self, Source};
+use crate::Local;
 
 /// Async I/O.
 ///
@@ -75,29 +75,24 @@ impl<T: AsRawFd> Async<T> {
     /// Creates an async I/O handle.
     ///
     /// This function will put the handle in non-blocking mode and register it in
-    /// [epoll]/[kqueue]/[wepoll].
-    ///
-    /// On Unix systems, the handle must implement `AsRawFd`, while on Windows it must implement
     /// `AsRawSocket`.
-    ///
-    /// [epoll]: https://en.wikipedia.org/wiki/Epoll
-    /// [kqueue]: https://en.wikipedia.org/wiki/Kqueue
-    /// [wepoll]: https://github.com/piscisaureus/wepoll
     ///
     /// # Examples
     ///
     /// ```
     /// use glommio::Async;
     /// use std::net::{SocketAddr, TcpListener};
+    /// use glommio::LocalExecutor;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
-    /// let listener = Async::new(listener)?;
-    /// # std::io::Result::Ok(()) });
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+    ///     let listener = Async::new(listener).unwrap();
+    /// });
     /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
-            source: Reactor::get().insert_pollable_io(io.as_raw_fd())?,
+            source: Local::get_reactor().insert_pollable_io(io.as_raw_fd())?,
             io: Some(Box::new(io)),
         })
     }
@@ -117,11 +112,13 @@ impl<T> Async<T> {
     /// ```
     /// use glommio::Async;
     /// use std::net::TcpListener;
+    /// use glommio::LocalExecutor;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
-    /// let inner = listener.get_ref();
-    /// # std::io::Result::Ok(()) });
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
+    ///     let inner = listener.get_ref();
+    /// });
     /// ```
     pub fn get_ref(&self) -> &T {
         self.io.as_ref().unwrap()
@@ -134,11 +131,13 @@ impl<T> Async<T> {
     /// ```
     /// use glommio::Async;
     /// use std::net::TcpListener;
+    /// use glommio::LocalExecutor;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// let mut listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
-    /// let inner = listener.get_mut();
-    /// # std::io::Result::Ok(()) });
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let mut listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
+    ///     let inner = listener.get_mut();
+    /// });
     /// ```
     pub fn get_mut(&mut self) -> &mut T {
         self.io.as_mut().unwrap()
@@ -151,11 +150,13 @@ impl<T> Async<T> {
     /// ```
     /// use glommio::Async;
     /// use std::net::TcpListener;
+    /// use glommio::LocalExecutor;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
-    /// let inner = listener.into_inner()?;
-    /// # std::io::Result::Ok(()) });
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
+    ///     let inner = listener.into_inner().unwrap();
+    /// });
     /// ```
     pub fn into_inner(mut self) -> io::Result<T> {
         let io = *self.io.take().unwrap();
@@ -171,13 +172,15 @@ impl<T> Async<T> {
     /// ```no_run
     /// use glommio::Async;
     /// use std::net::TcpListener;
+    /// use glommio::LocalExecutor;
     ///
-    /// # futures_lite::future::block_on(async {
-    /// let mut listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async move {
+    ///     let mut listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
     ///
-    /// // Wait until a client can be accepted.
-    /// listener.readable().await?;
-    /// # std::io::Result::Ok(()) });
+    ///     // Wait until a client can be accepted.
+    ///     listener.readable().await.unwrap();
+    /// });
     /// ```
     pub async fn readable(&self) -> io::Result<()> {
         self.source.readable().await
