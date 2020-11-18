@@ -115,13 +115,17 @@ impl From<LockClosedError> for TryLockError {
 
 impl From<LockClosedError> for io::Error {
     fn from(er: LockClosedError) -> Self {
-        io::Error::new(ErrorKind::Other, er)
+        io::Error::new(ErrorKind::BrokenPipe, er)
     }
 }
 
 impl From<TryLockError> for io::Error {
     fn from(er: TryLockError) -> Self {
-        io::Error::new(ErrorKind::Other, er)
+        match &er {
+            TryLockError::Closed(
+                _) => io::Error::new(ErrorKind::BrokenPipe, er),
+            TryLockError::WouldSuspend => io::Error::new(ErrorKind::WouldBlock, er),
+        }
     }
 }
 
@@ -448,7 +452,7 @@ impl<T> RwLock<T> {
     /// this method returns.
     ///
     /// Returns an RAII guard which will release this fiber's shared access
-    /// once it is dropped.
+    /// once guard is dropped.
     ///
     /// # Errors
     ///
@@ -505,7 +509,7 @@ impl<T> RwLock<T> {
     }
 
     /// Locks this RwLock with exclusive write access, suspending the current
-    /// finber until it can be acquired.
+    /// finber until RwLock can be acquired.
     ///
     /// This function will not return while other writers or other readers
     /// currently have access to the lock.
@@ -562,7 +566,7 @@ impl<T> RwLock<T> {
     ///
     /// If the access could not be granted at this time, then `Err` is returned.
     /// Otherwise, an RAII guard is returned which will release the shared access
-    /// when it is dropped.
+    /// when guard is dropped.
     ///
     /// This function does not suspend.
     ///
@@ -600,7 +604,7 @@ impl<T> RwLock<T> {
     ///
     /// If the lock could not be acquired at this time, then `Err` is returned.
     /// Otherwise, an RAII guard is returned which will release the lock when
-    /// it is dropped.
+    /// guard is dropped.
     ///
     /// This function does not suspend.
     ///
