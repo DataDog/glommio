@@ -127,7 +127,7 @@ impl BufferedFile {
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
-    /// Reads data at the specified position into a buffer allocated by the OS.
+    /// Reads data at the specified position into a buffer allocated by this library.
     ///
     /// Note that this differs from [`DmaFile`]'s read APIs: that reflects the
     /// fact that buffered reads need no specific alignment and io_uring will not
@@ -142,8 +142,8 @@ impl BufferedFile {
         Ok(buffer)
     }
 
-    /// Issues `fdatasync` for the underlying file, instructing the OS to flush all reads/writes to
-    /// the device, providing durability even if the system crashes or is rebooted.
+    /// Issues `fdatasync` for the underlying file, instructing the OS to flush all writes to the
+    /// device, providing durability even if the system crashes or is rebooted.
     pub async fn fdatasync(&self) -> io::Result<()> {
         self.file.fdatasync().await
     }

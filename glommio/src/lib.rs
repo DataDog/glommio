@@ -173,7 +173,7 @@
 //!
 //! ## Before using Glommio
 //!
-//! Please note Glommio requires at least 256 KiB of locked memory for `io_uring` to work. You can
+//! Please note Glommio requires at least 512 KiB of locked memory for `io_uring` to work. You can
 //! increase the `memlock` resource limit (rlimit) as follows:
 //!
 //! ```sh

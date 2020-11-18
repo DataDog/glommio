@@ -227,11 +227,11 @@ impl DmaFile {
         Ok(ReadResult::from_whole_buffer(buffer))
     }
 
-    /// Issues `fdatasync` for the underlying file, instructing the OS to flush all reads/writes to
-    /// the device, providing durability even if the system crashes or is rebooted.
+    /// Issues `fdatasync` for the underlying file, instructing the OS to flush all writes to the
+    /// device, providing durability even if the system crashes or is rebooted.
     ///
-    /// As this is a DMA file, the OS should not be caching this file; however, this is not
-    /// guaranteed, and there may also be caches on the drive itself.
+    /// As this is a DMA file, the OS will not be caching this file; however, there may be caches on
+    /// the drive itself.
     pub async fn fdatasync(&self) -> io::Result<()> {
         self.file.fdatasync().await
     }
