@@ -203,8 +203,8 @@ impl<T> LocalSender<T> {
 
     /// Sends data into this channel when it is ready to receive it
     ///
-    /// For an unbounded channel this is just a more expensive version of [`send`]. Prefer
-    /// to use [`send`] instead.
+    /// For an unbounded channel this is just a more expensive version of [`try_send`]. Prefer
+    /// to use [`try_send`] instead.
     ///
     /// For a bounded channel this will push to the channel when the channel is ready to
     /// receive data.
