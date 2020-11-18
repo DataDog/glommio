@@ -368,6 +368,7 @@ pub use scopeguard::defer;
 
 /// Provides common imports that almost all Glommio applications will need
 pub mod prelude {
+    #[doc(no_inline)]
     pub use crate::{Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares, TaskQueueHandle};
 }
 
