@@ -211,10 +211,6 @@
 //!
 //! There are many. In particular:
 //!
-//! * There is not yet any cross-shard communication nor ergonomic primitives to allow for
-//!   cross-shard services. This allows one to implement simple, independent sharded systems but
-//!   would need to happen before more complex work can be built on top of this crate.
-//!
 //! * Memory allocator: memory allocation is a big source of contention for thread per core systems.
 //!   A shard-aware allocator would be crucial for achieving good performance in allocation-heavy
 //!   workloads.
