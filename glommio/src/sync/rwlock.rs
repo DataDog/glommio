@@ -31,11 +31,12 @@
 //! });
 //! ```
 //!
+use ahash::AHashMap;
 use alloc::rc::Rc;
 use core::fmt::Debug;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -122,8 +123,7 @@ impl From<LockClosedError> for io::Error {
 impl From<TryLockError> for io::Error {
     fn from(er: TryLockError) -> Self {
         match &er {
-            TryLockError::Closed(
-                _) => io::Error::new(ErrorKind::BrokenPipe, er),
+            TryLockError::Closed(_) => io::Error::new(ErrorKind::BrokenPipe, er),
             TryLockError::WouldSuspend => io::Error::new(ErrorKind::WouldBlock, er),
         }
     }
@@ -204,7 +204,7 @@ struct State {
 
     closed: bool,
 
-    waiters_map: HashMap<WaiterId, (WaiterKind, Waker)>,
+    waiters_map: AHashMap<WaiterId, (WaiterKind, Waker)>,
     waiters: VecDeque<WaiterId>,
 }
 
@@ -251,7 +251,7 @@ impl State {
             closed: false,
 
             waiters: VecDeque::new(),
-            waiters_map: HashMap::new(),
+            waiters_map: AHashMap::new(),
         }
     }
 
@@ -477,7 +477,7 @@ impl<T> RwLock<T> {
     /// });
     ///
     /// let second_reader = ex.spawn(async move {
-    ///     let r = c_lock.await.read();
+    ///     let r = c_lock.read().await;
     ///     assert!(r.is_ok());
     /// });
     ///
@@ -667,30 +667,36 @@ impl<T> RwLock<T> {
     ///
     /// ```
     /// use glommio::sync::RwLock;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{LocalExecutor, Local};
     /// use std::rc::Rc;
     /// use std::cell::RefCell;
+    /// use glommio::sync::Semaphore;
     ///
     ///
     /// let lock = Rc::new(RwLock::new(()));
     /// let c_lock = lock.clone();
     ///
+    /// let semaphore = Rc::new(Semaphore::new(0));
+    /// let c_semaphore = semaphore.clone();
+    ///
     /// let ex = LocalExecutor::make_default();
     ///
     /// let closer = ex.spawn(async move {
-    ///     c_lock.close();
+    ///      //await till read lock will be acquired
+    ///      c_semaphore.acquire(1).await.unwrap();
+    ///      c_lock.close();
     ///
-    ///     assert!(c_lock.try_write().is_err());
+    ///      assert!(c_lock.try_write().is_err());
     /// });
     ///
     /// let dead_locker = ex.spawn(async move {
-    ///    c_lock.read().await.unwrap();
+    ///    let _r = lock.read().await.unwrap();
     ///
-    ///    // close lock in other fiber once execution will be paused on request of write access
-    ///    closer.detach();
+    ///    //allow another fiber close RwLock
+    ///    semaphore.signal(1);
     ///
     ///    // this situation leads to deadlock unless lock is closed
-    ///    let lock_result = c_lock.write().await;
+    ///    let lock_result = lock.write().await;
     ///    assert!(lock_result.is_err());
     /// });
     ///
@@ -728,8 +734,10 @@ impl<T> RwLock<T> {
     /// let ex = LocalExecutor::make_default();
     ///
     /// ex.run(async move {
-    ///     let mut s = lock.write().await.unwrap();
-    ///     *s = "modified".to_owned();
+    ///     {
+    ///         let mut s = lock.write().await.unwrap();
+    ///         *s = "modified".to_owned();
+    ///     }
     ///
     ///     assert_eq!(lock.into_inner().unwrap(), "modified");
     /// });
