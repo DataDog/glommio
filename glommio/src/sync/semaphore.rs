@@ -200,7 +200,7 @@ impl Semaphore {
         self.state.borrow().available()
     }
 
-    /// Blocks until a permit can be acquired with the specified amount of units.
+    /// Suspends until a permit can be acquired with the specified amount of units.
     ///
     /// Returns Err() if the semaphore is closed during the wait.
     ///
@@ -229,7 +229,7 @@ impl Semaphore {
 
     /// Acquires the specified amount of units from this semaphore.
     ///
-    /// The caller is then responsible to release it. Whenever possible,
+    /// The caller is then responsible to release units. Whenever possible,
     /// prefer acquire_permit().
     ///
     /// # Examples
@@ -243,7 +243,7 @@ impl Semaphore {
     /// let ex = LocalExecutor::make_default();
     /// ex.run(async move {
     ///     sem.acquire(1).await.unwrap();
-    ///     sem.signal(1); // Has to be signaled explicity. Be careful
+    ///     sem.signal(1); // Has to be signaled explicitly. Be careful
     /// });
     /// ```
     pub async fn acquire(&self, units: u64) -> Result<()> {
@@ -256,6 +256,94 @@ impl Semaphore {
         let waiter = state.new_waiter(units, self.state.clone());
         drop(state);
         waiter.await
+    }
+
+    /// Acquires the given number of units, if they are available, and
+    /// returns immediately, with the value true,
+    /// reducing the number of available units by the given amount.
+    ///
+    /// If insufficient units are available then this method will return
+    /// immediately with the value `false` and the number of available
+    /// permits is unchanged.
+    ///
+    /// This method does not suspend.
+    ///
+    /// The caller is then responsible to release units. Whenever possible,
+    /// prefer [`try_acquire_permit`].
+    ///
+    /// # Errors
+    ///
+    /// If semaphore is closed `Err(io::Error(BrokenPipe))` will be returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::LocalExecutor;
+    /// use glommio::sync::Semaphore;
+    ///
+    /// let sem = Semaphore::new(1);
+    ///
+    /// let ex = LocalExecutor::make_default();
+    ///
+    /// ex.run(async move {
+    ///     assert!(sem.try_acquire(1).unwrap());
+    ///     sem.signal(1); // Has to be signaled explicitly. Be careful
+    /// });
+    /// ```
+    pub fn try_acquire(&self, units: u64) -> Result<bool> {
+        let mut state = self.state.borrow_mut();
+
+        if state.list.is_empty() && state.try_acquire(units)? {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Acquires the given number of units, if they are available, and
+    /// returns immediately, with the RAAI guard,
+    /// reducing the number of available units by the given amount.
+    ///
+    /// If insufficient units are available then this method will return
+    /// `Err` and the number of available permits is unchanged.
+    ///
+    /// This method does not suspend.
+    ///
+    /// # Errors
+    ///  If semaphore is closed `Err(io::Error(BrokenPipe))` will be returned.
+    ///  If semaphore does not have sufficient amount of units
+    ///  `Err(io::Error(WouldBlock))` will be returned.
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::LocalExecutor;
+    /// use glommio::sync::Semaphore;
+    ///
+    /// let sem = Semaphore::new(1);
+    ///
+    /// let ex = LocalExecutor::make_default();
+    ///
+    /// ex.run(async move {
+    ///   let permit = sem.acquire_permit(1).await.unwrap();
+    ///         // once it is dropped it can be acquired again
+    ///         // going out of scope will drop
+    /// });
+    /// ```
+    pub fn try_acquire_permit(&self, units: u64) -> Result<Permit> {
+        let mut state = self.state.borrow_mut();
+
+        if state.list.is_empty() && state.try_acquire(units)? {
+            return Ok(Permit::new(units, self.state.clone()));
+        }
+
+        Err(Error::new(
+            ErrorKind::WouldBlock,
+            format!(
+                "There are no suficient units, requested {} but available {} ",
+                units,
+                state.available()
+            ),
+        ))
     }
 
     /// Signals the semaphore to release the specified amount of units.
@@ -408,6 +496,64 @@ mod test {
                 },
             }
         });
+    }
+
+    #[test]
+    fn try_acquire_sufficient_units() {
+        let sem = Semaphore::new(42);
+        assert!(sem.try_acquire(24).unwrap());
+    }
+
+    #[test]
+    fn try_acquire_permit_sufficient_units() {
+        let sem = Semaphore::new(42);
+        let _ = sem.try_acquire_permit(24).unwrap();
+    }
+
+    #[test]
+    fn try_acquire_insufficient_units() {
+        let sem = Semaphore::new(42);
+        assert!(!sem.try_acquire(62).unwrap());
+    }
+
+    #[test]
+    fn try_acquire_permit_insufficient_units() {
+        let sem = Semaphore::new(42);
+        let result = sem.try_acquire_permit(62);
+        assert!(result.is_err());
+
+        let err = result.err().unwrap();
+        if !matches!(err.kind(), ErrorKind::WouldBlock) {
+            panic!("Incorrect error type is returned from try_acquire_permit method");
+        }
+    }
+
+    #[test]
+    fn try_acquire_semaphore_is_closed() {
+        let sem = Semaphore::new(42);
+        sem.close();
+
+        let result = sem.try_acquire(24);
+        assert!(result.is_err());
+
+        let err = result.err().unwrap();
+        if !matches!(err.kind(), ErrorKind::BrokenPipe) {
+            panic!("Incorrect error type is returned from try_acquire method");
+        }
+    }
+
+    #[test]
+    fn try_acquire_permit_semaphore_is_closed() {
+        let sem = Semaphore::new(42);
+        sem.close();
+
+        let result = sem.try_acquire_permit(24);
+        assert!(result.is_err());
+
+        let err = result.err().unwrap();
+        if !matches!(err.kind(), ErrorKind::BrokenPipe) {
+            panic!("Incorrect error type is returned from try_acquire_permit method");
+        }
     }
 
     #[test]
