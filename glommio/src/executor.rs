@@ -98,7 +98,7 @@ impl fmt::Display for QueueStillActiveError {
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-/// An opaque handler indicating in which queue a group of tasks will execute.
+/// An opaque handle indicating in which queue a group of tasks will execute.
 /// Tasks in the same group will execute in FIFO order but no guarantee is made
 /// about ordering on different task queues.
 pub struct TaskQueueHandle {
@@ -371,20 +371,20 @@ impl ExecutorQueues {
     }
 }
 
-/// LocalExecutor factory, which can be used in order to configure the properties of a new
-/// `LocalExecutor`.
+/// [`LocalExecutor`] factory, which can be used in order to configure the properties of a new
+/// [`LocalExecutor`].
 ///
 /// Methods can be chained on it in order to configure it.
 ///
-/// The `spawn` method will take ownership of the builder and create an
-/// `io::Result` to the `LocalExecutor` handle with the given configuration.
+/// The [`spawn`] method will take ownership of the builder and create an `io::Result` to the
+/// [`LocalExecutor`] handle with the given configuration.
 ///
-/// The `LocalExecutor::make_default` free function uses a Builder with default configuration and
+/// The [`LocalExecutor::make_default`] free function uses a Builder with default configuration and
 /// unwraps its return value.
 ///
-/// You may want to use `LocalExecutorBuilder::spawn` instead of `LocalExecutor::make_default`,
-/// when you want to recover from a failure to launch a thread, indeed the free function will panic
-/// where the Builder method will return a `io::Result`.
+/// You may want to use [`LocalExecutorBuilder::spawn`] instead of [`LocalExecutor::make_default`],
+/// when you want to recover from a failure to launch a thread. The [`LocalExecutor::make_default`]
+/// function will panic where the Builder method will return a `io::Result`.
 ///
 /// # Examples
 ///
@@ -394,6 +394,14 @@ impl ExecutorQueues {
 /// let builder = LocalExecutorBuilder::new();
 /// let ex = builder.make().unwrap();
 /// ```
+///
+/// [`LocalExecutor`]: struct.LocalExecutor.html
+///
+/// [`LocalExecutor::make_default`]: struct.LocalExecutor.html#method.make_default
+///
+/// [`LocalExecutorBuilder::spawn`]: struct.LocalExecutorBuilder.html#method.spawn
+///
+/// [`spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
 pub struct LocalExecutorBuilder {
     // The id of a CPU to bind the current (or yet to be created) thread
@@ -472,14 +480,24 @@ impl LocalExecutorBuilder {
         }
     }
 
-    /// Spawns a new [`LocalExecutor`] in a new thread by taking ownership of the Builder,
-    /// and returns an io::Result to its JoinHandle.
+    /// Spawn a new [`LocalExecutor`] in a new thread with a given task.
     ///
-    /// This is a more ergonomic way to create a thread and then run an executor inside it
+    /// This `spawn` function is an ergonomic shortcut for calling `std::thread::spawn`,
+    /// [`LocalExecutorBuilder::make`] in the spawned thread, and then [`LocalExecutor::run`]. This
+    /// `spawn` function takes ownership of a [`LocalExecutorBuilder`] with the configuration for
+    /// the [`LocalExecutor`], spawns that executor in a new thread, and starts the task given by
+    /// `fut_gen()` in that thread.
+    ///
+    /// The indirection of `fut_gen()` here (instead of taking a `Future`) allows for futures that
+    /// may not be `Send`-able once started. As this executor is thread-local, it can guarantee that
+    /// the futures will not be Sent once started.
+    ///
+    /// # Panics
+    ///
     /// This function panics if creating the thread or the executor fails. If you need more
     /// fine-grained error handling consider initializing those entities manually.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use glommio::LocalExecutorBuilder;
@@ -490,6 +508,14 @@ impl LocalExecutorBuilder {
     ///
     /// handle.join().unwrap();
     /// ```
+    ///
+    /// [`LocalExecutor`]: struct.LocalExecutor.html
+    ///
+    /// [`LocalExecutorBuilder`]: struct.LocalExecutorBuilder.html
+    ///
+    /// [`LocalExecutorBuilder::make`]: struct.LocalExecutor.html#method.make
+    ///
+    /// [`LocalExecutor::run`]:struct.LocalExecutor.html#method.run
     #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
     pub fn spawn<G, F, T>(self, fut_gen: G) -> io::Result<JoinHandle<()>>
     where
@@ -537,6 +563,13 @@ impl Default for LocalExecutorBuilder {
 ///     println!("Hello world!");
 /// });
 /// ```
+///
+/// In many cases, use of [`LocalExecutorBuilder`] will provide more configuration options and more
+/// ergonomic methods. See [`LocalExecutorBuilder::spawn`] for examples.
+///
+/// [`LocalExecutorBuilder`]: struct.LocalExecutorBuilder.html
+///
+/// [`LocalExecutorBuilder::spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
 pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
@@ -556,6 +589,10 @@ impl LocalExecutor {
 
     fn init(&mut self) -> io::Result<()> {
         let index = 0;
+        // This reference will be passed into the `notify` function. This `notify` function will
+        // then be owned by a `TaskQueue` which is in turn owned by `self.queues`, so this then
+        // creates a cycle. We use a weak reference here to break that cycle, allowing `self.queues`
+        // to be cleaned up when `self` is reclaimed.
         let queues_weak = Rc::downgrade(&self.queues);
 
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
@@ -567,6 +604,9 @@ impl LocalExecutor {
                 Shares::Static(1000),
                 io_requirements,
                 move || {
+                    // Because this `notify` function is owned by `self.queues`, and this is a
+                    // reference to `self.queues`, it is guaranteed that this weak reference is
+                    // still alive.
                     let q = queues_weak.upgrade().unwrap();
                     let mut queues = q.borrow_mut();
                     queues.maybe_activate(index);
@@ -622,7 +662,11 @@ impl LocalExecutor {
 
     /// Creates a task queue in the executor.
     ///
-    /// Returns an opaque handler that can later be used to launch tasks into that queue with spawn_into
+    /// Each task queue is scheduled based on the [`Shares`] and [`Latency`] system, and tasks
+    /// within a queue will be scheduled in serial.
+    ///
+    /// Returns an opaque handle that can later be used to launch tasks into that queue with
+    /// [`spawn_into`].
     ///
     /// # Examples
     ///
@@ -637,6 +681,12 @@ impl LocalExecutor {
     ///     println!("Hello world");
     /// }, task_queue).expect("failed to spawn task");
     /// ```
+    ///
+    /// [`spawn_into`]: struct.LocalExecutor.html#method.spawn_into
+    ///
+    /// [`Shares`]: enum.Shares.html
+    ///
+    /// [`Latency`]: enum.Latency.html
     pub fn create_task_queue<S>(&self, shares: Shares, latency: Latency, name: S) -> TaskQueueHandle
     where
         S: Into<String>,
