@@ -31,6 +31,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt;
 use std::future::Future;
@@ -722,14 +723,14 @@ impl LocalExecutor {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut queues = self.queues.borrow_mut();
 
-        if let Some(tq) = queues.available_executors.get(&handle.index) {
+        let queue_entry = queues.available_executors.entry(handle.index);
+        if let Entry::Occupied(entry) = queue_entry {
+            let tq = entry.get();
             if tq.borrow().is_active() {
                 return Err(Box::new(QueueStillActiveError::new(handle)));
             }
-            queues
-                .available_executors
-                .remove(&handle.index)
-                .expect("test already done");
+
+            entry.remove();
             return Ok(());
         }
         Err(Box::new(QueueNotFoundError::new(handle)))
@@ -944,7 +945,7 @@ impl LocalExecutor {
                 break t;
             }
 
-            // We want to do I/O before we call run_one_task queue,
+            // We want to do I/O before we call run_task_queues,
             // for the benefit of the latency ring. If there are pending
             // requests that are latency sensitive we want them out of the
             // ring ASAP (before we run the task queues). We will also use
@@ -1126,7 +1127,6 @@ impl<T> Task<T> {
     // that someday.
     //
     // We will prefer to use the stable compiler and pay that unfortunate price for now.
-
     pub fn need_preempt() -> bool {
         LOCAL_EX.with(|local_ex| local_ex.need_preempt())
     }
