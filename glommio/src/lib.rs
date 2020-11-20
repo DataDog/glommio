@@ -110,7 +110,6 @@
 //! * [async-io](https://github.com/stjepang/async-io)
 //! * [async-task](https://github.com/stjepang/async-task)
 //! * [async-executor](https://github.com/stjepang/async-executor)
-//! * [multitask](https://github.com/stjepang/async-multitask)
 //!
 //! Aside from Stjepan's work, this is also inspired greatly by the [Seastar](http://seastar.io)
 //! Framework for C++ that powers I/O intensive systems that are pushing the performance envelope,

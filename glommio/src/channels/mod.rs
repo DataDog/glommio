@@ -22,7 +22,7 @@ mod spsc_queue;
 ///
 /// * The [`LocalReceiver`] never sees an error, as it is implemented as a stream
 ///   interface compatible with [`StreamExt`]. When the sender is no longer available the receiver's call to [`next`] will return [`None`].
-/// * The [`LocalSender`] will return a [`ChannelError`] encapsulating a [`BrokenPipe`] error if it tries to [`push`] into
+/// * The [`LocalSender`] will return a [`ChannelError`] encapsulating a [`BrokenPipe`] error if it tries to [`send`] into
 ///   a channel that no longer has a receiver.
 ///
 /// # Examples
@@ -51,7 +51,7 @@ mod spsc_queue;
 /// [`LocalSender`]: struct.LocalSender.html
 /// [`LocalReceiver`]: struct.LocalReceiver.html
 /// [`ChannelError`]: ../struct.ChannelError.html
-/// [`push`]: struct.LocalSender.html#method.push
+/// [`send`]: struct.LocalSender.html#method.send
 /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
 /// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
 /// [`channel`]: https://doc.rust-lang.org/std/sync/mpsc/fn.channel.html

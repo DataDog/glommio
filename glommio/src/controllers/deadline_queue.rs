@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 pub trait DeadlineSource {
     /// What type is returned by the [`action`] method
     ///
-    /// [`action`]: trait.DeadlineSource.html#method.action
+    /// [`action`]: trait.DeadlineSource.html#tymethod.action
     type Output;
 
     /// Returns a [`Duration`] indicating when we would like this operation to complete.
@@ -58,7 +58,7 @@ pub trait DeadlineSource {
     /// add it to the queue and increase its total units as the buffer is written to. This can
     /// lead to smoother operation as opposed to just adding a lot of units at once.
     ///
-    /// [`processed_units`]: trait.DeadlineSource.html#method.processed_units
+    /// [`processed_units`]: trait.DeadlineSource.html#tymethod.processed_units
     fn total_units(&self) -> u64;
 
     /// The amount of units that were already processed.
@@ -70,7 +70,7 @@ pub trait DeadlineSource {
     /// For example, you can buffer all updates and just inform that processed_units == total_units
     /// at the end of the process, but then the controller would be a step function.
     ///
-    /// [`total_units`]: trait.DeadlineSource.html#method.total_units
+    /// [`total_units`]: trait.DeadlineSource.html#tymethod.total_units
     fn processed_units(&self) -> u64;
 }
 

@@ -9,10 +9,10 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 /// ReadResult encapsulates a buffer, returned by read operations like [`get_buffer_aligned`] and
-/// [`read_dma`]
+/// [`read_at`]
 ///
-/// [`get_buffer_aligned`]: struct.StreamReader.html#method.get_buffer_aligned
-/// [`read_dma`]: struct.DmaFile.html#method.read_dma
+/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
+/// [`read_at`]: struct.DmaFile.html#method.read_at
 pub struct ReadResult {
     buffer: Option<Rc<DmaBuffer>>,
     offset: usize,

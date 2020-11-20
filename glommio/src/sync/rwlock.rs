@@ -79,8 +79,11 @@ impl Debug for LockClosedError {
     }
 }
 
-///Error which indicates reason of the error returned by [`try_read`] and ['try_write'] methods
-///on ['RwLock']
+/// Error which indicates reason of the error returned by [`try_read`] and ['try_write'] methods
+/// on ['RwLock']
+///
+/// [`try_read`]: struct.RwLock.html#method.try_read
+/// [`try_write`]: struct.RwLock.html#method.try_write
 pub enum TryLockError {
     ///Lock is closed and can not be used to request access to the lock
     Closed(LockClosedError),
