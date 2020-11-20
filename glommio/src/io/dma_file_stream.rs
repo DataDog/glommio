@@ -453,7 +453,7 @@ impl DmaStreamReader {
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
-    /// [`AsyncReadExt`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncReadExt.html
+    /// [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html
     /// [`ReadResult`]: struct.ReadResult.html
     pub async fn get_buffer_aligned(&mut self, len: u64) -> io::Result<ReadResult> {
         if len == 0 {

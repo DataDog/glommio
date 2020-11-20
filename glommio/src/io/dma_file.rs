@@ -146,7 +146,7 @@ impl DmaFile {
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags =
             libc::O_DIRECT | libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
-        let res = DmaFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await;
+        let res = DmaFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await;
 
         let mut f = enhanced_try!(res, "Creating", Some(path.as_ref()), None)?;
         f.o_direct_alignment = 4096;
@@ -157,7 +157,7 @@ impl DmaFile {
     pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags = libc::O_DIRECT | libc::O_CLOEXEC | libc::O_RDONLY;
-        let res = DmaFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await;
+        let res = DmaFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await;
 
         let mut f = enhanced_try!(res, "Opening", Some(path.as_ref()), None)?;
         f.o_direct_alignment = 512;

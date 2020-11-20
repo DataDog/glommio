@@ -74,8 +74,8 @@
 //! [`DmaBuffer`]: struct.DmaBuffer.html
 //! [`DmaStreamWriter`]: struct.DmaStreamWriter.html
 //! [`DmaStreamReader`]: struct.DmaStreamReader.html
-//! [`AsyncReadExt`]: ../../futures_lite/io/trait.AsyncReadExt.html
-//! [`AsyncWriteExt`]: ../../futures_lite/io/trait.AsyncReadExt.html
+//! [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html
+//! [`AsyncWriteExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncWriteExt.html
 
 macro_rules! enhanced_try {
     ($expr:expr, $op:expr, $path:expr, $fd:expr) => {{

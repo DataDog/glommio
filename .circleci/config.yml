@@ -1,11 +1,11 @@
-# Scipio Circle-CI configuration file
+# Glommio Circle-CI configuration file
 
 version: 2
 
 jobs:
   cargobuild:
     docker:
-      - image: circleci/rust:1.46.0
+      - image: circleci/rust:1.48.0
     steps:
       - checkout
       - run:
@@ -30,7 +30,7 @@ jobs:
 
   cargofmt:
     docker:
-      - image: circleci/rust:1.46.0
+      - image: circleci/rust:1.48.0
     steps:
       - checkout
       - run:
@@ -55,7 +55,7 @@ jobs:
 
   cargodoc:
     docker:
-      - image: circleci/rust:1.46.0
+      - image: circleci/rust:1.48.0
     steps:
       - checkout
       - run:
@@ -73,9 +73,10 @@ jobs:
       - run:
           name: Generate documentation
           command: cargo doc --all-features
-      - run:
-          name: Validate links
-          command: cargo deadlinks --dir target/doc/glommio
+          # temporarily disabled.
+          # - run:
+          # name: Validate links
+          # command: cargo deadlinks --dir target/doc/glommio
       - save_cache:
           paths:
             - /usr/local/cargo/registry

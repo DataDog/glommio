@@ -514,7 +514,7 @@ impl LocalExecutorBuilder {
     ///
     /// [`LocalExecutorBuilder`]: struct.LocalExecutorBuilder.html
     ///
-    /// [`LocalExecutorBuilder::make`]: struct.LocalExecutor.html#method.make
+    /// [`LocalExecutorBuilder::make`]: struct.LocalExecutorBuilder.html#method.make
     ///
     /// [`LocalExecutor::run`]:struct.LocalExecutor.html#method.run
     #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
