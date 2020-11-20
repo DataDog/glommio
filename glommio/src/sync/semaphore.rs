@@ -72,8 +72,22 @@ impl State {
     }
 
     fn add_waker(&mut self, id: WaiterId, units: u64, waker: Waker) {
-        self.waiterset.insert(id, (units, waker));
-        self.list.push_back(id);
+        let entry = self.waiterset.entry(id);
+
+        match entry {
+            Entry::Vacant(entry) => {
+                self.list.push_back(id);
+                entry.insert((units, waker));
+            }
+            Entry::Occupied(mut entry) => {
+                if cfg!(debug_assertions) {
+                    let (stored_units, _) = entry.get();
+                    assert_eq!(*stored_units, units);
+                }
+
+                *entry.get_mut() = (units, waker);
+            }
+        }
     }
 
     fn try_acquire(&mut self, units: u64) -> Result<bool> {
@@ -312,9 +326,11 @@ impl Semaphore {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{enclose, Local};
+    use crate::timer::Timer;
+    use crate::{enclose, Local, LocalExecutor};
+
     use std::cell::Cell;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn semaphore_acquisition_for_zero_unit_works() {
@@ -448,5 +464,26 @@ mod test {
                 sem2.close();
             }
         );
+    }
+
+    #[test]
+    fn semaphore_overflow() {
+        let ex = LocalExecutor::make_default();
+        let semaphore = Rc::new(Semaphore::new(0));
+        let semaphore_c = semaphore.clone();
+
+        ex.spawn(async move {
+            for _ in 0..100 {
+                Timer::new(Duration::from_micros(100)).await;
+            }
+            assert_eq!(1, semaphore_c.state.borrow().list.len());
+
+            semaphore_c.signal(1);
+        })
+        .detach();
+
+        ex.run(async move {
+            let _ = semaphore.acquire(1).await.unwrap();
+        });
     }
 }
