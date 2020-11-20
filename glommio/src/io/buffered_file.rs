@@ -76,7 +76,7 @@ impl BufferedFile {
         let flags = libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
         Ok(BufferedFile {
             file: enhanced_try!(
-                GlommioFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await,
+                GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await,
                 "Creating",
                 Some(path.as_ref()),
                 None
@@ -91,7 +91,7 @@ impl BufferedFile {
         let flags = libc::O_CLOEXEC | libc::O_RDONLY;
         Ok(BufferedFile {
             file: enhanced_try!(
-                GlommioFile::open_at(-1 as _, path.as_ref(), flags, 0o644).await,
+                GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await,
                 "Reading",
                 Some(path.as_ref()),
                 None
