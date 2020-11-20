@@ -292,12 +292,22 @@ impl State {
         debug_assert!(!(self.readers > 0 && self.writers > 0));
 
         let entry = self.waiters_map.entry(id);
-        if let Vacant(entry) = entry {
-            entry.insert((kind, waker));
-            self.waiters.push_back(id);
+        match entry {
+            Vacant(entry) => {
+                entry.insert((kind, waker));
+                self.waiters.push_back(id);
 
-            if kind == WaiterKind::WRITER {
-                self.queued_writers += 1;
+                if kind == WaiterKind::WRITER {
+                    self.queued_writers += 1;
+                }
+            }
+            Occupied(mut entry) => {
+                if cfg!(debug_assert) {
+                    let (stored_kind, _) = entry.get();
+                    assert_eq!(*stored_kind, kind);
+                }
+
+                *entry.get_mut() = (kind, waker);
             }
         }
     }
@@ -846,6 +856,10 @@ mod test {
     use crate::sync::rwlock::LockClosedError;
     use crate::sync::rwlock::RwLock;
     use crate::sync::rwlock::TryLockError;
+    use crate::timer::Timer;
+    use crate::LocalExecutor;
+    use crate::Task;
+    use std::time::Duration;
 
     use crate::sync::Semaphore;
     use crate::Local;
@@ -1226,5 +1240,39 @@ mod test {
             Err(LockClosedError) => (),
             Ok(_) => panic!("get_mut of closed lock is Ok"),
         }
+    }
+
+    #[test]
+    fn rwlock_overflow() {
+        let ex = LocalExecutor::make_default();
+
+        let lock = Rc::new(RwLock::new(()));
+        let c_lock = lock.clone();
+
+        let cond = Rc::new(RefCell::new(0));
+        let c_cond = cond.clone();
+
+        let semaphore = Rc::new(Semaphore::new(0));
+        let c_semaphore = semaphore.clone();
+
+        ex.spawn(async move {
+            c_semaphore.acquire(1).await.unwrap();
+
+            let _g = c_lock.read().await.unwrap();
+            wait_on_cond!(c_cond, 1);
+
+            for _ in 0..100 {
+                Timer::new(Duration::from_micros(100)).await;
+            }
+
+            assert_eq!(c_lock.rw.borrow().waiters.len(), 1);
+        })
+        .detach();
+
+        ex.run(async move {
+            semaphore.signal(1);
+            *cond.borrow_mut() = 1;
+            let _ = lock.write().await.unwrap();
+        })
     }
 }
