@@ -31,8 +31,8 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use std::cell::RefCell;
-use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::hash_map::Entry;
+use std::collections::BinaryHeap;
 use std::fmt;
 use std::future::Future;
 use std::io;
@@ -51,6 +51,7 @@ use crate::parking;
 use crate::task::{self, waker_fn::waker_fn};
 use crate::{IoRequirements, Latency};
 use crate::{Local, Reactor, Shares};
+use ahash::AHashMap;
 
 static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -318,9 +319,8 @@ impl TaskQueueStats {
 #[derive(Debug)]
 struct ExecutorQueues {
     active_executors: BinaryHeap<Rc<RefCell<TaskQueue>>>,
-    available_executors: BTreeMap<usize, Rc<RefCell<TaskQueue>>>,
+    available_executors: AHashMap<usize, Rc<RefCell<TaskQueue>>>,
     active_executing: Option<Rc<RefCell<TaskQueue>>>,
-    default_executor: TaskQueueHandle,
     executor_index: usize,
     last_vruntime: u64,
     preempt_timer_duration: Duration,
@@ -332,9 +332,8 @@ impl ExecutorQueues {
     fn new() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(ExecutorQueues {
             active_executors: BinaryHeap::new(),
-            available_executors: BTreeMap::new(),
+            available_executors: AHashMap::new(),
             active_executing: None,
-            default_executor: TaskQueueHandle::default(),
             executor_index: 1, // 0 is the default
             last_vruntime: 0,
             preempt_timer_duration: Duration::from_millis(100),
