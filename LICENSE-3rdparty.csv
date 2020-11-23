@@ -8,7 +8,6 @@ futures-lite,https://crates.io/crates/futures-lite,
 libc,https://crates.io/crates/libc,MIT/Apache-2.0,The Rust Project Developers
 socket2,https://crates.io/crates/socket2,MIT/Apache-2.0,Alex Crichton
 nix,https://crates.io/crates/nix,MIT,The nix-rust Project Developers
-aligned_alloc,https://crates.io/crates/aligned_alloc,MIT/Apache-2.0,Jonas Schievink
 typenum,https://crates.io/crates/typenum,MIT/Apache-2.0,Andre Bogus and Paho Lurie-Gregg
 scoped-tls,https://crates.io/crates/scoped-tls,MIT/Apache-2.0,Alex Crichton
 futures,https://crates.io/crates/futures,MIT/Apache-2.0,Alex Crichton

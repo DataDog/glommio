@@ -11,18 +11,20 @@
 use std::ptr;
 
 use crate::sys::uring::UringBuffer;
-use aligned_alloc::{aligned_alloc, aligned_free};
+use alloc::alloc::Layout;
 
 #[derive(Debug)]
 pub(crate) struct SysAlloc {
     data: ptr::NonNull<u8>,
+    layout: Layout,
 }
 
 impl SysAlloc {
     fn new(size: usize) -> Option<Self> {
-        let data = aligned_alloc(size, 4 << 10) as *mut u8;
+        let layout = Layout::from_size_align(size, 4096).unwrap();
+        let data = unsafe { alloc::alloc::alloc(layout) as *mut u8 };
         let data = ptr::NonNull::new(data)?;
-        Some(SysAlloc { data })
+        Some(SysAlloc { data, layout })
     }
 
     fn as_ptr(&self) -> *const u8 {
@@ -37,7 +39,7 @@ impl SysAlloc {
 impl Drop for SysAlloc {
     fn drop(&mut self) {
         unsafe {
-            aligned_free(self.data.as_ptr() as *mut ());
+            alloc::alloc::dealloc(self.data.as_ptr(), self.layout);
         }
     }
 }
