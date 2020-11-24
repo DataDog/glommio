@@ -499,21 +499,22 @@ impl<T> RwLock<T> {
     /// });
     /// ```
     pub async fn read(&self) -> LockResult<RwLockReadGuard<'_, T>> {
-        let mut state = self.rw.borrow_mut();
-        let try_result = state.try_read()?;
+        let waiter = {
+            let mut state = self.rw.borrow_mut();
+            let try_result = state.try_read()?;
 
-        if try_result {
-            return Ok(RwLockReadGuard {
-                rw: self.rw.clone(),
-                value_ref: self.value.borrow(),
-            });
-        }
+            if try_result {
+                return Ok(RwLockReadGuard {
+                    rw: self.rw.clone(),
+                    value_ref: self.value.borrow(),
+                });
+            }
 
-        let waiter_id = state.id_gen;
-        state.id_gen += 1;
+            let waiter_id = state.id_gen;
+            state.id_gen += 1;
 
-        let waiter = Waiter::new(WaiterId(waiter_id), WaiterKind::READER, self.rw.clone());
-        drop(state);
+            Waiter::new(WaiterId(waiter_id), WaiterKind::READER, self.rw.clone())
+        };
 
         waiter.await.map(|_| RwLockReadGuard {
             rw: self.rw.clone(),
@@ -551,22 +552,22 @@ impl<T> RwLock<T> {
     /// });
     /// ```
     pub async fn write(&self) -> LockResult<RwLockWriteGuard<'_, T>> {
-        let mut state = self.rw.borrow_mut();
-        let try_result = state.try_write()?;
+        let waiter = {
+            let mut state = self.rw.borrow_mut();
+            let try_result = state.try_write()?;
 
-        if try_result {
-            return Ok(RwLockWriteGuard {
-                rw: self.rw.clone(),
-                value_ref: self.value.borrow_mut(),
-            });
-        }
+            if try_result {
+                return Ok(RwLockWriteGuard {
+                    rw: self.rw.clone(),
+                    value_ref: self.value.borrow_mut(),
+                });
+            }
 
-        let waiter_id = state.id_gen;
-        state.id_gen += 1;
+            let waiter_id = state.id_gen;
+            state.id_gen += 1;
 
-        let waiter = Waiter::new(WaiterId(waiter_id), WaiterKind::WRITER, self.rw.clone());
-        drop(state);
-
+            Waiter::new(WaiterId(waiter_id), WaiterKind::WRITER, self.rw.clone())
+        };
         waiter.await?;
 
         Ok(RwLockWriteGuard {
