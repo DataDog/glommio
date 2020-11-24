@@ -261,14 +261,15 @@ impl Semaphore {
     /// });
     /// ```
     pub async fn acquire(&self, units: u64) -> Result<()> {
-        let mut state = self.state.borrow_mut();
-        // Try acquiring first without paying the price to construct a waker.
-        // If that fails then we construct a waker and wait on it.
-        if state.list.is_empty() && state.try_acquire(units)? {
-            return Ok(());
-        }
-        let waiter = state.new_waiter(units, self.state.clone());
-        drop(state);
+        let waiter = {
+            let mut state = self.state.borrow_mut();
+            // Try acquiring first without paying the price to construct a waker.
+            // If that fails then we construct a waker and wait on it.
+            if state.list.is_empty() && state.try_acquire(units)? {
+                return Ok(());
+            }
+            state.new_waiter(units, self.state.clone())
+        };
         waiter.await
     }
 

@@ -307,9 +307,11 @@ impl DmaStreamReader {
     /// });
     /// ```
     pub async fn close(self) -> io::Result<()> {
-        let mut state = self.state.borrow_mut();
-        let handles = state.cancel_all_in_flight();
-        drop(state);
+        let handles = {
+            let mut state = self.state.borrow_mut();
+            state.cancel_all_in_flight()
+        };
+
         let to_cancel = handles.len();
         let cancelled = stream::iter(handles).then(|f| f).count().await;
         assert_eq!(to_cancel, cancelled);
@@ -460,14 +462,16 @@ impl DmaStreamReader {
             return Ok(ReadResult::empty_buffer());
         }
 
-        let state = self.state.borrow();
-        let start_id = state.buffer_id(self.current_pos);
-        let end_id = state.buffer_id(self.current_pos + len - 1);
+        let (start_id, end_id, buffer_size) = {
+            let state = self.state.borrow();
+            let start_id = state.buffer_id(self.current_pos);
+            let end_id = state.buffer_id(self.current_pos + len - 1);
+            (start_id, end_id, state.buffer_size)
+        };
 
         if start_id != end_id {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})", len, self.current_pos, state.buffer_size)));
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})", len, self.current_pos, buffer_size)));
         }
-        drop(state);
 
         let x = poll_fn(|cx| self.get_buffer(cx, len, start_id)).await?;
         self.skip(len);
@@ -916,10 +920,10 @@ impl DmaStreamWriter {
     /// });
     /// ```
     pub async fn sync(&self) -> io::Result<u64> {
-        let mut state = self.state.borrow_mut();
-        let mut pending = state.current_pending();
-        let file_pos_at_sync_time = state.file_pos;
-        drop(state);
+        let (mut pending, file_pos_at_sync_time) = {
+            let mut state = self.state.borrow_mut();
+            (state.current_pending(), state.file_pos)
+        };
 
         for v in pending.drain(..) {
             v.await;
