@@ -75,10 +75,10 @@
 //!         let tq2 = Local::create_task_queue(Shares::Static(1), Latency::NotImportant, "test2");
 //!         let t1 = Local::local_into(async move {
 //!             // your code here
-//!         }, tq1).unwrap().detach();
+//!         }, tq1).unwrap();
 //!         let t2 = Local::local_into(async move {
 //!             // your code here
-//!         }, tq2).unwrap().detach();
+//!         }, tq2).unwrap();
 //!
 //!         t1.await;
 //!         t2.await;
