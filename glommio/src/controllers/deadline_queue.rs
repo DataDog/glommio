@@ -326,7 +326,7 @@ pub struct DeadlineQueue<T> {
     tq: TaskQueueHandle,
     sender: LocalSender<Rc<dyn DeadlineSource<Output = T>>>,
     responder: LocalReceiver<T>,
-    handle: task::join_handle::JoinHandle<(), ()>,
+    handle: task::join_handle::JoinHandle<()>,
     queue: Rc<InnerQueue<T>>,
 }
 

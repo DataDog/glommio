@@ -182,7 +182,7 @@ impl Future for Timer {
 /// [`Timer`]: struct.Timer.html
 #[derive(Debug)]
 pub struct TimerActionOnce<T> {
-    handle: JoinHandle<T, ()>,
+    handle: JoinHandle<T>,
     inner: Rc<RefCell<Inner>>,
     reactor: Rc<Reactor>,
 }
@@ -193,7 +193,7 @@ pub struct TimerActionOnce<T> {
 /// [`TimerActionOnce`]: struct.TimerActionOnce.html
 #[derive(Debug)]
 pub struct TimerActionRepeat {
-    handle: JoinHandle<(), ()>,
+    handle: JoinHandle<()>,
     timer_id: u64,
     reactor: Rc<Reactor>,
 }
