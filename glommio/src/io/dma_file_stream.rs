@@ -179,7 +179,7 @@ impl DmaStreamReaderState {
     }
 
     fn replenish_read_ahead(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
-        while self.buffermap.len() + self.pending.len() < self.read_ahead {
+        for _ in self.buffermap.len() + self.pending.len()..self.read_ahead {
             self.fill_buffer(state.clone(), file.clone());
         }
     }
