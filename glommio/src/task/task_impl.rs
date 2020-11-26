@@ -80,9 +80,6 @@ pub struct Task<T> {
     pub(crate) _marker: PhantomData<T>,
 }
 
-unsafe impl<T> Send for Task<T> {}
-unsafe impl<T> Sync for Task<T> {}
-
 impl<T> Task<T> {
     /// Schedules the task.
     ///
