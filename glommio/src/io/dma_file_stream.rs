@@ -77,7 +77,7 @@ impl DmaStreamReaderBuilder {
             start: 0,
             end: u64::MAX,
             buffer_size: 128 << 10,
-            read_ahead: 1,
+            read_ahead: 4,
             file,
         }
     }
@@ -622,7 +622,7 @@ impl DmaStreamWriterBuilder {
     pub fn new(file: DmaFile) -> DmaStreamWriterBuilder {
         DmaStreamWriterBuilder {
             buffer_size: 128 << 10,
-            write_behind: 1,
+            write_behind: 4,
             flush_on_close: true,
             file: Rc::new(file),
         }
