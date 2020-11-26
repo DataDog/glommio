@@ -41,6 +41,47 @@ pub struct DmaStreamReaderBuilder {
 }
 
 impl DmaStreamReaderBuilder {
+    /// Creates a new DmaStreamReaderBuilder, given a shared pointer to a [`DmaFile`]
+    ///
+    /// This method is useful in situations where a shared pointer was already present.
+    /// For example if you need to scan a header in the file and also make it available for
+    /// random reads.
+    ///
+    /// Other than that, it is the same as [`new`]
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
+    /// use glommio::{LocalExecutor, Local};
+    /// use std::rc::Rc;
+    ///
+    /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
+    ///     let file = Rc::new(DmaFile::open("myfile.txt").await.unwrap());
+    ///     let _reader = DmaStreamReaderBuilder::from_rc(file.clone()).build();
+    ///
+    ///     // issue random I/O now, even though a stream is open.
+    ///     Local::local(async move {
+    ///         file.read_at(0, 8).await.unwrap();
+    ///     }).await;
+    /// });
+    /// ```
+    /// [`DmaFile`]: struct.DmaFile.html
+    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
+    /// [`build`]: #method.build
+    /// [`new`]: #method.new
+    #[must_use = "The builder must be built to be useful"]
+    pub fn from_rc(file: Rc<DmaFile>) -> DmaStreamReaderBuilder {
+        DmaStreamReaderBuilder {
+            start: 0,
+            end: u64::MAX,
+            buffer_size: 128 << 10,
+            read_ahead: 1,
+            file,
+        }
+    }
+
     /// Creates a new DmaStreamReaderBuilder, given a [`DmaFile`]
     ///
     /// Various properties can be set by using its `with` methods.
@@ -65,13 +106,7 @@ impl DmaStreamReaderBuilder {
     /// [`build`]: #method.build
     #[must_use = "The builder must be built to be useful"]
     pub fn new(file: DmaFile) -> DmaStreamReaderBuilder {
-        DmaStreamReaderBuilder {
-            start: 0,
-            end: u64::MAX,
-            buffer_size: 128 << 10,
-            read_ahead: 1,
-            file: Rc::new(file),
-        }
+        Self::from_rc(Rc::new(file))
     }
 
     /// Define a starting position.
