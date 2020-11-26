@@ -72,10 +72,6 @@ pub struct Task {
     pub(crate) raw_task: NonNull<()>,
 }
 
-unsafe impl Send for Task {}
-
-unsafe impl Sync for Task {}
-
 impl Task {
     /// Schedules the task.
     ///
