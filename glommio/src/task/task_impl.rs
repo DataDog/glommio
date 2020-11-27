@@ -8,7 +8,6 @@ use core::future::Future;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering;
 use core::task::Waker;
 
 use crate::task::header::Header;
@@ -131,7 +130,7 @@ impl<T> Task<T> {
     /// [`Waker`]: https://doc.rust-lang.org/std/task/struct.Waker.html
     pub fn cancel(&self) {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *const Header;
+        let header = ptr as *mut Header;
 
         unsafe {
             (*header).cancel();
@@ -192,7 +191,7 @@ impl<T> Task<T> {
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *const Header;
+        let header = ptr as *mut Header;
 
         unsafe {
             // Cancel the task.
@@ -202,7 +201,8 @@ impl<T> Drop for Task<T> {
             ((*header).vtable.drop_future)(ptr);
 
             // Mark the task as unscheduled.
-            let state = (*header).state.fetch_and(!SCHEDULED, Ordering::AcqRel);
+            let state = (*header).state;
+            (*header).state &= !SCHEDULED;
 
             // Notify the awaiter that the future has been dropped.
             if state & AWAITER != 0 {
