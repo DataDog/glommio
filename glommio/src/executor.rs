@@ -1216,7 +1216,7 @@ impl<T> Task<T> {
     ///
     /// ex.run(async { Timer::new(std::time::Duration::from_micros(100)).await; });
     /// ```
-    pub fn detach(self) -> task::JoinHandle<T, ()> {
+    pub fn detach(self) -> task::JoinHandle<T> {
         self.0.detach()
     }
 

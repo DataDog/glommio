@@ -165,7 +165,7 @@ struct DmaStreamReaderState {
     buffer_size: u64,
     read_ahead: usize,
     wakermap: AHashMap<u64, Waker>,
-    pending: AHashMap<u64, task::JoinHandle<(), ()>>,
+    pending: AHashMap<u64, task::JoinHandle<()>>,
     error: Option<io::Error>,
     buffermap: AHashMap<u64, ReadResult>,
 }
@@ -264,7 +264,7 @@ impl DmaStreamReaderState {
         }
     }
 
-    fn cancel_all_in_flight(&mut self) -> Vec<task::JoinHandle<(), ()>> {
+    fn cancel_all_in_flight(&mut self) -> Vec<task::JoinHandle<()>> {
         let mut handles = Vec::new();
         for (_k, v) in self.pending.drain() {
             v.cancel();
@@ -678,7 +678,7 @@ struct DmaStreamWriterState {
     waker: Option<Waker>,
     file_status: FileStatus,
     error: Option<io::Error>,
-    pending: AHashMap<u64, task::JoinHandle<(), ()>>,
+    pending: AHashMap<u64, task::JoinHandle<()>>,
     current_buffer: Option<DmaBuffer>,
     file_pos: u64,
     flush_id: u64,
@@ -771,7 +771,7 @@ impl DmaStreamWriterState {
         }
     }
 
-    fn current_pending(&mut self) -> Vec<task::JoinHandle<(), ()>> {
+    fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
         let mut handles = Vec::new();
         for (_k, v) in self.pending.drain() {
             handles.push(v);

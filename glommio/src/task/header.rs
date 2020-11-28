@@ -3,13 +3,12 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use core::alloc::Layout;
 use core::fmt;
 use core::task::Waker;
 
 use crate::task::raw::TaskVTable;
 use crate::task::state::*;
-use crate::task::utils::{abort_on_panic, extend};
+use crate::task::utils::abort_on_panic;
 
 /// The header of a task.
 ///
@@ -77,15 +76,6 @@ impl Header {
         abort_on_panic(|| self.awaiter = Some(waker.clone()));
 
         self.state |= AWAITER;
-    }
-
-    /// Returns the offset at which the tag of type `T` is stored.
-    #[inline]
-    pub(crate) fn offset_tag<T>() -> usize {
-        let layout_header = Layout::new::<Header>();
-        let layout_t = Layout::new::<T>();
-        let (_, offset_t) = extend(layout_header, layout_t);
-        offset_t
     }
 }
 

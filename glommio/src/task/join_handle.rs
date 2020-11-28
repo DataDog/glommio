@@ -8,7 +8,7 @@ use core::future::Future;
 use core::marker::{PhantomData, Unpin};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::task::{Context, Poll, Waker};
+use core::task::{Context, Poll};
 
 use crate::task::header::Header;
 use crate::task::state::*;
@@ -19,17 +19,17 @@ use crate::task::state::*;
 ///
 /// * `None` indicates the task has panicked or was canceled.
 /// * `Some(result)` indicates the task has completed with `result` of type `R`.
-pub struct JoinHandle<R, T> {
+pub struct JoinHandle<R> {
     /// A raw task pointer.
     pub(crate) raw_task: NonNull<()>,
 
-    /// A marker capturing generic types `R` and `T`.
-    pub(crate) _marker: PhantomData<(R, T)>,
+    /// A marker capturing generic types `R`.
+    pub(crate) _marker: PhantomData<R>,
 }
 
-impl<R, T> Unpin for JoinHandle<R, T> {}
+impl<R> Unpin for JoinHandle<R> {}
 
-impl<R, T> JoinHandle<R, T> {
+impl<R> JoinHandle<R> {
     /// Cancels the task.
     ///
     /// If the task has already completed, calling this method will have no effect.
@@ -67,31 +67,9 @@ impl<R, T> JoinHandle<R, T> {
             }
         }
     }
-
-    /// Returns a reference to the tag stored inside the task.
-    pub fn tag(&self) -> &T {
-        let offset = Header::offset_tag::<T>();
-        let ptr = self.raw_task.as_ptr();
-
-        unsafe {
-            let raw = (ptr as *mut u8).add(offset) as *const T;
-            &*raw
-        }
-    }
-
-    /// Returns a waker associated with the task.
-    pub fn waker(&self) -> Waker {
-        let ptr = self.raw_task.as_ptr();
-        let header = ptr as *const Header;
-
-        unsafe {
-            let raw_waker = ((*header).vtable.clone_waker)(ptr);
-            Waker::from_raw(raw_waker)
-        }
-    }
 }
 
-impl<R, T> Drop for JoinHandle<R, T> {
+impl<R> Drop for JoinHandle<R> {
     fn drop(&mut self) {
         let ptr = self.raw_task.as_ptr();
         let header = ptr as *mut Header;
@@ -150,7 +128,7 @@ impl<R, T> Drop for JoinHandle<R, T> {
     }
 }
 
-impl<R, T> Future for JoinHandle<R, T> {
+impl<R> Future for JoinHandle<R> {
     type Output = Option<R>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -199,7 +177,7 @@ impl<R, T> Future for JoinHandle<R, T> {
     }
 }
 
-impl<R, T> fmt::Debug for JoinHandle<R, T> {
+impl<R> fmt::Debug for JoinHandle<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ptr = self.raw_task.as_ptr();
         let header = ptr as *const Header;
