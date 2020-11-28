@@ -31,7 +31,7 @@ use std::task::{Context, Poll};
 /// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken. When it's
 /// woken up, its schedule function is called, which means the `Runnable` gets pushed into a task
 /// queue in an executor.
-pub type Runnable = task_impl::Task;
+pub(crate) type Runnable = task_impl::Task;
 
 /// A spawned future.
 ///
@@ -47,7 +47,7 @@ pub type Runnable = task_impl::Task;
 /// ```
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
-pub struct Task<T>(Option<JoinHandle<T>>);
+pub(crate) struct Task<T>(Option<JoinHandle<T>>);
 
 impl<T> Task<T> {
     /// Detaches the task to let it keep running in the background.
@@ -153,7 +153,7 @@ impl LocalQueue {
 
 /// A single-threaded executor.
 #[derive(Debug)]
-pub struct LocalExecutor {
+pub(crate) struct LocalExecutor {
     local_queue: Rc<LocalQueue>,
 
     /// Callback invoked to wake the executor up.
