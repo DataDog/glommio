@@ -8,7 +8,6 @@ use core::future::Future;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering;
 
 use crate::task::header::Header;
 use crate::task::raw::RawTask;
@@ -119,7 +118,7 @@ impl Task {
 impl Drop for Task {
     fn drop(&mut self) {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *const Header;
+        let header = ptr as *mut Header;
 
         unsafe {
             // Cancel the task.
@@ -129,7 +128,8 @@ impl Drop for Task {
             ((*header).vtable.drop_future)(ptr);
 
             // Mark the task as unscheduled.
-            let state = (*header).state.fetch_and(!SCHEDULED, Ordering::AcqRel);
+            let state = (*header).state;
+            (*header).state &= !SCHEDULED;
 
             // Notify the awaiter that the future has been dropped.
             if state & AWAITER != 0 {
