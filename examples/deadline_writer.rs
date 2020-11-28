@@ -111,7 +111,7 @@ impl DeadlineSource for IntWriter {
 fn competing_cpu_hog(
     stop: Rc<Cell<bool>>,
     cpuhog_tq: TaskQueueHandle,
-) -> glommio::task::JoinHandle<(), ()> {
+) -> glommio::task::JoinHandle<()> {
     Local::local_into(
         async move {
             while !stop.get() {
