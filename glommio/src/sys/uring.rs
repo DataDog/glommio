@@ -357,7 +357,9 @@ where
         if !was_cancelled && try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
             w.result = Some(result);
-            wakers.extend_from_slice(&w.waiters.as_slice());
+            if let Some(waiter) = w.waiter.take() {
+                wakers.push(waiter);
+            }
         }
         return Some(());
     }
@@ -654,7 +656,7 @@ impl Source {
     }
     pub(crate) fn add_waiter(&self, waker: Waker) {
         let mut w = self.inner.wakers.borrow_mut();
-        w.waiters.push(waker);
+        w.waiter.replace(waker);
     }
 
     pub(crate) fn raw(&self) -> RawFd {
