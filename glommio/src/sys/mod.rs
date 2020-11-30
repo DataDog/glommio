@@ -3,7 +3,6 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
 use std::ffi::CString;
@@ -208,14 +207,14 @@ pub(crate) struct Wakers {
     pub(crate) result: Option<io::Result<usize>>,
 
     /// Tasks waiting for the next event.
-    pub(crate) waiters: SmallVec<[Waker; 4]>,
+    pub(crate) waiter: Option<Waker>,
 }
 
 impl Wakers {
     pub(crate) fn new() -> Self {
         Wakers {
             result: None,
-            waiters: SmallVec::new(),
+            waiter: None,
         }
     }
 }
