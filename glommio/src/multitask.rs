@@ -8,11 +8,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
+use crate::executor::{maybe_activate, TaskQueue};
 use crate::task::task_impl;
 use crate::task::JoinHandle;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::panic::{RefUnwindSafe, UnwindSafe};
@@ -136,17 +136,17 @@ struct LocalQueue {
 }
 
 impl LocalQueue {
-    fn new() -> Rc<Self> {
-        Rc::new(LocalQueue {
+    fn new() -> Self {
+        LocalQueue {
             queue: RefCell::new(VecDeque::new()),
-        })
+        }
     }
 
-    fn push(&self, runnable: Runnable) {
+    pub(crate) fn push(&self, runnable: Runnable) {
         self.queue.borrow_mut().push_back(runnable);
     }
 
-    fn pop(&self) -> Option<Runnable> {
+    pub(crate) fn pop(&self) -> Option<Runnable> {
         self.queue.borrow_mut().pop_front()
     }
 }
@@ -154,10 +154,7 @@ impl LocalQueue {
 /// A single-threaded executor.
 #[derive(Debug)]
 pub(crate) struct LocalExecutor {
-    local_queue: Rc<LocalQueue>,
-
-    /// Callback invoked to wake the executor up.
-    callback: Callback,
+    local_queue: LocalQueue,
 
     /// Make sure the type is `!Send` and `!Sync`.
     _marker: PhantomData<Rc<()>>,
@@ -168,24 +165,29 @@ impl RefUnwindSafe for LocalExecutor {}
 
 impl LocalExecutor {
     /// Creates a new single-threaded executor.
-    pub(crate) fn new(notify: impl Fn() + 'static) -> LocalExecutor {
+    pub(crate) fn new() -> LocalExecutor {
         LocalExecutor {
             local_queue: LocalQueue::new(),
-            callback: Callback::new(notify),
             _marker: PhantomData,
         }
     }
 
     /// Spawns a thread-local future onto this executor.
-    pub(crate) fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
-        let callback = self.callback.clone();
-        let queue_weak = Rc::downgrade(&self.local_queue);
+    pub(crate) fn spawn<T: 'static>(
+        &self,
+        tq: Rc<RefCell<TaskQueue>>,
+        future: impl Future<Output = T> + 'static,
+    ) -> Task<T> {
+        let tq = Rc::downgrade(&tq);
 
         // The function that schedules a runnable task when it gets woken up.
         let schedule = move |runnable: Runnable| {
-            let queue = queue_weak.upgrade().unwrap();
-            queue.push(runnable);
-            callback.call();
+            let tq = tq.upgrade().unwrap();
+            {
+                let queue = tq.borrow();
+                queue.ex.local_queue.push(runnable);
+            }
+            maybe_activate(tq);
         };
 
         // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
@@ -203,25 +205,5 @@ impl LocalExecutor {
 
     pub(crate) fn is_active(&self) -> bool {
         !self.local_queue.queue.borrow().is_empty()
-    }
-}
-
-/// A cloneable callback function.
-#[derive(Clone)]
-struct Callback(Rc<dyn Fn()>);
-
-impl Callback {
-    fn new(f: impl Fn() + 'static) -> Callback {
-        Callback(Rc::new(f))
-    }
-
-    fn call(&self) {
-        (self.0)();
-    }
-}
-
-impl fmt::Debug for Callback {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("<callback>").finish()
     }
 }

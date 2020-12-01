@@ -50,7 +50,7 @@ use crate::multitask;
 use crate::parking;
 use crate::task::{self, waker_fn::waker_fn};
 use crate::{IoRequirements, Latency};
-use crate::{Local, Reactor, Shares};
+use crate::{Reactor, Shares};
 use ahash::AHashMap;
 
 static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
@@ -114,8 +114,8 @@ impl Default for TaskQueueHandle {
 }
 
 #[derive(Debug)]
-struct TaskQueue {
-    ex: Rc<multitask::LocalExecutor>,
+pub(crate) struct TaskQueue {
+    pub(crate) ex: Rc<multitask::LocalExecutor>,
     active: bool,
     shares: Shares,
     vruntime: u64,
@@ -148,19 +148,12 @@ impl PartialEq for TaskQueue {
 impl Eq for TaskQueue {}
 
 impl TaskQueue {
-    fn new<F, S>(
-        index: usize,
-        name: S,
-        shares: Shares,
-        ioreq: IoRequirements,
-        notify: F,
-    ) -> Rc<RefCell<Self>>
+    fn new<S>(index: usize, name: S, shares: Shares, ioreq: IoRequirements) -> Rc<RefCell<Self>>
     where
-        F: Fn() + 'static,
         S: Into<String>,
     {
         Rc::new(RefCell::new(TaskQueue {
-            ex: Rc::new(multitask::LocalExecutor::new(notify)),
+            ex: Rc::new(multitask::LocalExecutor::new()),
             active: false,
             stats: TaskQueueStats::new(index, shares.reciprocal_shares()),
             shares,
@@ -353,13 +346,8 @@ impl ExecutorQueues {
             .min()
             .unwrap_or_else(|| Duration::from_secs(1))
     }
-    fn maybe_activate(&mut self, index: usize) {
-        let queue = self
-            .available_executors
-            .get(&index)
-            .expect("Trying to activate invalid queue! Index")
-            .clone();
 
+    fn maybe_activate(&mut self, queue: Rc<RefCell<TaskQueue>>) {
         let mut state = queue.borrow_mut();
         if !state.is_active() {
             state.vruntime = self.last_vruntime;
@@ -548,6 +536,19 @@ impl Default for LocalExecutorBuilder {
     }
 }
 
+pub(crate) fn maybe_activate(tq: Rc<RefCell<TaskQueue>>) {
+    // We have to check because it is currently legal to spawn() before
+    // we run(). I am strongly considering making that illegal, but many
+    // examples and code in the open would have to change. At the very least
+    // I will do it separately.
+    if LOCAL_EX.is_set() {
+        LOCAL_EX.with(|local_ex| {
+            let mut queues = local_ex.queues.borrow_mut();
+            queues.maybe_activate(tq)
+        })
+    }
+}
+
 /// Single-threaded executor.
 ///
 /// The executor can only be run on the thread that created it.
@@ -588,30 +589,10 @@ impl LocalExecutor {
     }
 
     fn init(&mut self) -> io::Result<()> {
-        let index = 0;
-        // This reference will be passed into the `notify` function. This `notify` function will
-        // then be owned by a `TaskQueue` which is in turn owned by `self.queues`, so this then
-        // creates a cycle. We use a weak reference here to break that cycle, allowing `self.queues`
-        // to be cleaned up when `self` is reclaimed.
-        let queues_weak = Rc::downgrade(&self.queues);
-
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
             0,
-            TaskQueue::new(
-                0,
-                "default",
-                Shares::Static(1000),
-                io_requirements,
-                move || {
-                    // Because this `notify` function is owned by `self.queues`, and this is a
-                    // reference to `self.queues`, it is guaranteed that this weak reference is
-                    // still alive.
-                    let q = queues_weak.upgrade().unwrap();
-                    let mut queues = q.borrow_mut();
-                    queues.maybe_activate(index);
-                },
-            ),
+            TaskQueue::new(0, "default", Shares::Static(1000), io_requirements),
         );
         Ok(())
     }
@@ -698,13 +679,8 @@ impl LocalExecutor {
             index
         };
 
-        let queues_weak = Rc::downgrade(&self.queues);
         let io_requirements = IoRequirements::new(latency, index);
-        let tq = TaskQueue::new(index, name, shares, io_requirements, move || {
-            let queues = queues_weak.upgrade().unwrap();
-            let mut queues = queues.borrow_mut();
-            queues.maybe_activate(index);
-        });
+        let tq = TaskQueue::new(index, name, shares, io_requirements);
 
         self.queues
             .borrow_mut()
@@ -743,10 +719,6 @@ impl LocalExecutor {
             .cloned()
     }
 
-    fn get_executor(&self, handle: &TaskQueueHandle) -> Option<Rc<multitask::LocalExecutor>> {
-        self.get_queue(handle).map(|x| x.borrow().ex.clone())
-    }
-
     fn current_task_queue(&self) -> TaskQueueHandle {
         TaskQueueHandle {
             index: self
@@ -781,15 +753,21 @@ impl LocalExecutor {
     /// });
     /// ```
     pub fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
-        let ex = self
+        let tq = self
             .queues
             .borrow()
             .active_executing
             .as_ref()
-            .map(|x| x.borrow().ex.clone())
-            .or_else(|| self.get_executor(&TaskQueueHandle { index: 0 }))
-            .unwrap();
-        Task(ex.spawn(future))
+            .map_or_else(
+                || self.get_queue(&TaskQueueHandle { index: 0 }),
+                |x| Some(x).cloned(),
+            )
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        let ex = tq.borrow().ex.clone();
+        Task(ex.spawn(tq, future))
     }
 
     /// Spawns a task onto the executor, to be run at a particular task queue indicated by the
@@ -816,9 +794,11 @@ impl LocalExecutor {
         T: 'static,
         F: Future<Output = T> + 'static,
     {
-        self.get_executor(&handle)
-            .map(|ex| Task(ex.spawn(future)))
-            .ok_or_else(|| QueueNotFoundError::new(handle))
+        let tq = self
+            .get_queue(&handle)
+            .ok_or_else(|| QueueNotFoundError::new(handle))?;
+        let ex = tq.borrow().ex.clone();
+        Ok(Task(ex.spawn(tq, future)))
     }
 
     fn preempt_timer_duration(&self) -> Duration {
@@ -915,6 +895,24 @@ impl LocalExecutor {
         }
     }
 
+    // this happens if we spawn() into the executor before we run().
+    // I am considering making this illegal, but in the meantime...
+    fn activate_pre_spawned_queues(&self) {
+        let queues = self.queues.borrow_mut();
+        let mut candidates = Vec::with_capacity(queues.available_executors.len());
+
+        for tq in queues.available_executors.values() {
+            if tq.borrow().ex.is_active() {
+                candidates.push(tq.clone());
+            }
+        }
+        drop(queues);
+
+        for tq in candidates.drain(..) {
+            maybe_activate(tq)
+        }
+    }
+
     /// Runs the executor until the given future completes.
     ///
     /// # Examples
@@ -939,41 +937,45 @@ impl LocalExecutor {
         let spin = spin_before_park.as_nanos() > 0;
         let mut spin_since: Option<Instant> = None;
 
-        LOCAL_EX.set(self, || loop {
-            if let Poll::Ready(t) = future.as_mut().poll(cx) {
-                break t;
-            }
+        LOCAL_EX.set(self, || {
+            self.activate_pre_spawned_queues();
 
-            // We want to do I/O before we call run_task_queues,
-            // for the benefit of the latency ring. If there are pending
-            // requests that are latency sensitive we want them out of the
-            // ring ASAP (before we run the task queues). We will also use
-            // the opportunity to install the timer.
-            let duration = self.preempt_timer_duration();
-            self.parker.poll_io(duration);
-            if !self.run_task_queues() {
-                // It may be that we just became ready now that the task queue
-                // is exhausted. But if we sleep (park) we'll never know so we
-                // test again here. We can't test *just* here because the main
-                // future is probably the one setting up the task queues and etc.
+            loop {
                 if let Poll::Ready(t) = future.as_mut().poll(cx) {
                     break t;
                 }
-                if spin {
-                    if let Some(t) = spin_since {
-                        if t.elapsed() < spin_before_park {
+
+                // We want to do I/O before we call run_task_queues,
+                // for the benefit of the latency ring. If there are pending
+                // requests that are latency sensitive we want them out of the
+                // ring ASAP (before we run the task queues). We will also use
+                // the opportunity to install the timer.
+                let duration = self.preempt_timer_duration();
+                self.parker.poll_io(duration);
+                if !self.run_task_queues() {
+                    // It may be that we just became ready now that the task queue
+                    // is exhausted. But if we sleep (park) we'll never know so we
+                    // test again here. We can't test *just* here because the main
+                    // future is probably the one setting up the task queues and etc.
+                    if let Poll::Ready(t) = future.as_mut().poll(cx) {
+                        break t;
+                    }
+                    if spin {
+                        if let Some(t) = spin_since {
+                            if t.elapsed() < spin_before_park {
+                                continue;
+                            }
+                            spin_since = None
+                        } else {
+                            spin_since = Some(Instant::now());
                             continue;
                         }
-                        spin_since = None
-                    } else {
-                        spin_since = Some(Instant::now());
-                        continue;
                     }
-                }
 
-                self.parker.park();
-            } else {
-                spin_since = None
+                    self.parker.park();
+                } else {
+                    spin_since = None
+                }
             }
         })
     }
@@ -1373,7 +1375,7 @@ mod test {
     use super::*;
     use crate::sync::Semaphore;
     use crate::timer::{self, Timer};
-    use crate::{enclose, SharesManager};
+    use crate::{enclose, Local, SharesManager};
     use core::mem::MaybeUninit;
     use futures::join;
     use std::cell::Cell;
