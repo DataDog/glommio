@@ -616,12 +616,6 @@ impl InnerSource {
 }
 
 impl Source {
-    fn cancel(&mut self) {
-        if let Some(EnqueuedSource { id, queue }) = self.inner.enqueued.take() {
-            queue.borrow_mut().cancel_request(id);
-        }
-    }
-
     fn latency_req(&self) -> Latency {
         self.inner.io_requirements.latency_req
     }
@@ -672,7 +666,9 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        self.cancel();
+        if let Some(EnqueuedSource { id, queue }) = self.inner.enqueued.take() {
+            queue.borrow_mut().cancel_request(id);
+        }
     }
 }
 
@@ -705,15 +701,17 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
-    fn arm_timer(&mut self, d: Duration, source: &mut Source) {
-        source.update_source_type(SourceType::Timeout(TimeSpec64::from(d)));
-
+    fn arm_timer(&mut self, d: Duration) -> Source {
+        let source = Source::new(
+            IoRequirements::default(),
+            -1,
+            SourceType::Timeout(TimeSpec64::from(d)),
+        );
+        let new_id = add_source(&source, self.submission_queue.clone());
         let op = match &*source.source_type() {
             SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
             _ => unreachable!(),
         };
-
-        let new_id = add_source(&source, self.submission_queue.clone());
 
         // This assumes SQEs will be processed in the order they are
         // seen. Because remove does not do anything asynchronously
@@ -728,6 +726,7 @@ impl SleepableRing {
         // No need to submit, the next ring enter will submit for us. Because
         // we just flushed and we got put in front of the queue we should get a SQE.
         // Still it would be nice to verify if we did.
+        source
     }
 
     fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
@@ -861,7 +860,7 @@ pub(crate) struct Reactor {
 
     link_rings_src: RefCell<Source>,
 
-    timeout_src: RefCell<Source>,
+    timeout_src: Cell<Option<Source>>,
 
     // This keeps the eventfd alive. Drop will close it when we're done
     _eventfd: std::fs::File,
@@ -974,8 +973,6 @@ impl Reactor {
             eventfd.as_raw_fd(),
             SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
         );
-
-        let timeout_src = Source::new(IoRequirements::default(), -1, SourceType::Invalid);
         assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
 
         Ok(Reactor {
@@ -983,7 +980,7 @@ impl Reactor {
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
             link_rings_src: RefCell::new(link_rings_src),
-            timeout_src: RefCell::new(timeout_src),
+            timeout_src: Cell::new(None),
             _eventfd: eventfd,
             eventfd_memory: Arc::new(AtomicUsize::new(0)),
             eventfd_src,
@@ -1152,19 +1149,17 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        let mut timeout_src = self.timeout_src.borrow_mut();
-
         // Cancel the old timer regardless of whether or not we can sleep:
         // if we won't sleep, we will register the new timer with its new
         // value.
         //
         // But if we will sleep, there might be a timer registered that needs
         // to be removed otherwise we'll wake up when it expires.
-        timeout_src.cancel();
+        drop(self.timeout_src.take());
         let mut should_sleep = match preempt_timer {
             None => true,
             Some(dur) => {
-                lat_ring.arm_timer(dur, &mut timeout_src);
+                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
                 false
             }
         };
@@ -1184,7 +1179,7 @@ impl Reactor {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
-                lat_ring.arm_timer(dur, &mut timeout_src);
+                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
                 flush_rings!(lat_ring)?;
             }
             // From this moment on the remote executors are aware that we are sleeping
