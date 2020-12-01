@@ -840,6 +840,8 @@ impl LocalExecutor {
                     let now = Instant::now();
                     let mut queue_ref = queue.borrow_mut();
                     queue_ref.prepare_to_run(now);
+                    self.reactor
+                        .inform_io_requirements(queue_ref.io_requirements);
                     now
                 };
 
@@ -851,7 +853,6 @@ impl LocalExecutor {
                     }
 
                     if let Some(r) = queue_ref.get_task() {
-                        Local::get_reactor().inform_io_requirements(queue_ref.io_requirements);
                         drop(queue_ref);
                         r.run();
                         tasks_executed_this_loop += 1;
