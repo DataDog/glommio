@@ -76,7 +76,15 @@ impl GlommioFile {
         mode: libc::c_int,
     ) -> io::Result<GlommioFile> {
         let reactor = Local::get_reactor();
-        let source = reactor.open_at(dir, path, flags, mode);
+        let path = if dir == -1 && path.is_relative() {
+            let mut pbuf = std::fs::canonicalize(".")?;
+            pbuf.push(path);
+            pbuf
+        } else {
+            path.to_owned()
+        };
+
+        let source = reactor.open_at(dir, &path, flags, mode);
         let fd = source.collect_rw().await?;
 
         let mut file = GlommioFile {
