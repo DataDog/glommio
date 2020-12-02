@@ -7,6 +7,7 @@ use crate::error::ErrorEnhancer;
 use crate::parking::Reactor;
 use crate::sys;
 use crate::Local;
+use log::debug;
 use std::convert::TryInto;
 use std::io;
 use std::mem;
@@ -20,7 +21,7 @@ use std::rc::Rc;
 /// It also implements some operations that are common among Buffered and non-Buffered files
 #[derive(Debug)]
 pub(crate) struct GlommioFile {
-    pub(crate) file: std::fs::File,
+    pub(crate) file: Option<std::fs::File>,
     // A file can appear in many paths, through renaming and linking.
     // If we do that, each path should have its own object. This is to
     // facilitate error displaying.
@@ -33,25 +34,31 @@ pub(crate) struct GlommioFile {
 
 impl Drop for GlommioFile {
     fn drop(&mut self) {
-        eprintln!(
-            "File dropped while still active. Should have been async closed ({:?} / fd {})
-I will close it and turn a leak bug into a performance bug. Please investigate",
+        if let Some(file) = self.file.take() {
+            let fd = file.as_raw_fd();
+            debug!(
+            "File dropped while still active. ({:?} / fd {}).
+That means that while the file is already out of scope, the file descriptor is still registered until the next I/O cycle.
+This is likely file, but in extreme situations can lead to resource exhaustion. An explicit asynchronous close is still preferred",
             self.path,
-            self.as_raw_fd()
-        );
+            fd);
+
+            std::mem::forget(file);
+            self.reactor.close(fd);
+        }
     }
 }
 
 impl AsRawFd for GlommioFile {
     fn as_raw_fd(&self) -> RawFd {
-        self.file.as_raw_fd()
+        self.file.as_ref().unwrap().as_raw_fd()
     }
 }
 
 impl FromRawFd for GlommioFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         GlommioFile {
-            file: std::fs::File::from_raw_fd(fd),
+            file: Some(std::fs::File::from_raw_fd(fd)),
             path: None,
             inode: 0,
             dev_major: 0,
@@ -73,8 +80,8 @@ impl GlommioFile {
         let fd = source.collect_rw().await?;
 
         let mut file = GlommioFile {
-            file: unsafe { std::fs::File::from_raw_fd(fd as _) },
-            path: Some(path.to_owned()),
+            file: Some(unsafe { std::fs::File::from_raw_fd(fd as _) }),
+            path: Some(path),
             inode: 0,
             dev_major: 0,
             dev_minor: 0,
