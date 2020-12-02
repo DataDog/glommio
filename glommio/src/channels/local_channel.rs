@@ -6,7 +6,6 @@
 use crate::channels::{ChannelCapacity, ChannelError};
 use futures_lite::future;
 use futures_lite::stream::Stream;
-use futures_lite::FutureExt;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io;
@@ -224,13 +223,11 @@ impl<T> LocalSender<T> {
     ///
     /// [`try_send`]: struct.LocalSender.html#method.try_send
     pub async fn send(&self, item: T) -> Result<(), ChannelError<T>> {
-        if !self.is_full() {
-            self.try_send(item)
-        } else {
+        if self.is_full() {
             let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
             waiter.await;
-            self.try_send(item)
         }
+        self.try_send(item)
     }
 
     /// Checks if there is room to send data in this channel
@@ -299,14 +296,13 @@ impl<T> Drop for LocalSender<T> {
         // wants to wake up anyway.
         state.send_waiters.take();
 
-        if state.recv_waiters.is_none() {
-            return;
-        }
-        let waiters = state.recv_waiters.replace(VecDeque::new()).unwrap();
-        drop(state);
+        if let Some(ref mut waiters) = &mut state.recv_waiters {
+            let waiters = core::mem::replace(waiters, VecDeque::new());
+            drop(state);
 
-        for w in waiters {
-            w.wake();
+            for w in waiters {
+                w.wake();
+            }
         }
     }
 }
@@ -316,15 +312,13 @@ impl<T> Drop for LocalReceiver<T> {
         let mut state = self.channel.state.borrow_mut();
         state.recv_waiters.take();
 
-        if state.send_waiters.is_none() {
-            return;
-        }
+        if let Some(ref mut waiters) = &mut state.send_waiters {
+            let waiters = core::mem::replace(waiters, VecDeque::new());
+            drop(state);
 
-        let waiters = state.send_waiters.replace(VecDeque::new()).unwrap();
-        drop(state);
-
-        for w in waiters {
-            w.wake();
+            for w in waiters {
+                w.wake();
+            }
         }
     }
 }
@@ -333,8 +327,7 @@ impl<T> Stream for LocalReceiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut waiter = future::poll_fn(|cx| self.recv_one(cx));
-        waiter.poll(cx)
+        self.recv_one(cx)
     }
 }
 
