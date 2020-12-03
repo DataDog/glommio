@@ -714,12 +714,16 @@ impl LocalExecutor {
 
         let available_executors = &mut self.queues.borrow_mut().available_executors;
 
-        if available_executors.len() == index {
-            available_executors.push(Some(tq));
-        } else if available_executors.len() > index {
-            available_executors[index] = Some(tq);
-        } else {
-            unreachable!()
+        match available_executors.len().cmp(&index) {
+            std::cmp::Ordering::Equal => {
+                available_executors.push(Some(tq));
+            }
+            std::cmp::Ordering::Greater => {
+                available_executors[index] = Some(tq);
+            }
+            std::cmp::Ordering::Less => {
+                unreachable!()
+            }
         }
 
         TaskQueueHandle { index }
