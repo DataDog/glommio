@@ -68,6 +68,21 @@ impl Directory {
         Ok(Directory { file })
     }
 
+    /// Opens a file under this directory, returns a DMA file
+    ///
+    /// NOTE: Path must not contain directories and just be a file name
+    pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
+        if path.as_ref().components().count() > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Path cannot contain directories",
+            ));
+        }
+
+        let path = self.file.path_required("open file")?.join(path.as_ref());
+        DmaFile::open(path).await
+    }
+
     /// Similar to create() in the standard library, but returns a DMA file
     pub fn sync_create<P: AsRef<Path>>(path: P) -> io::Result<Directory> {
         let path = path.as_ref().to_owned();
@@ -92,11 +107,7 @@ impl Directory {
     ///
     /// NOTE: Path must not contain directories and just be a file name
     pub async fn create_file<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
-        if path
-            .as_ref()
-            .to_string_lossy()
-            .contains(std::path::MAIN_SEPARATOR)
-        {
+        if path.as_ref().components().count() > 1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Path cannot contain directories",
