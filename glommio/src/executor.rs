@@ -31,7 +31,6 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::future::Future;
@@ -51,7 +50,7 @@ use crate::parking;
 use crate::task::{self, waker_fn::waker_fn};
 use crate::{IoRequirements, Latency};
 use crate::{Local, Reactor, Shares};
-use ahash::AHashMap;
+use smallvec::alloc::collections::VecDeque;
 
 static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -319,9 +318,9 @@ impl TaskQueueStats {
 #[derive(Debug)]
 struct ExecutorQueues {
     active_executors: BinaryHeap<Rc<RefCell<TaskQueue>>>,
-    available_executors: AHashMap<usize, Rc<RefCell<TaskQueue>>>,
+    available_executors: Vec<Option<Rc<RefCell<TaskQueue>>>>,
+    available_executors_ids: VecDeque<usize>,
     active_executing: Option<Rc<RefCell<TaskQueue>>>,
-    executor_index: usize,
     last_vruntime: u64,
     preempt_timer_duration: Duration,
     spin_before_park: Option<Duration>,
@@ -332,9 +331,9 @@ impl ExecutorQueues {
     fn new() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(ExecutorQueues {
             active_executors: BinaryHeap::new(),
-            available_executors: AHashMap::new(),
+            available_executors: Vec::new(),
+            available_executors_ids: VecDeque::new(),
             active_executing: None,
-            executor_index: 1, // 0 is the default
             last_vruntime: 0,
             preempt_timer_duration: Duration::from_millis(100),
             spin_before_park: None,
@@ -354,11 +353,13 @@ impl ExecutorQueues {
             .unwrap_or_else(|| Duration::from_secs(1))
     }
     fn maybe_activate(&mut self, index: usize) {
+        let err_msg = "Trying to activate invalid queue! Index";
         let queue = self
             .available_executors
-            .get(&index)
-            .expect("Trying to activate invalid queue! Index")
-            .clone();
+            .get(index)
+            .expect(err_msg)
+            .clone()
+            .expect(err_msg);
 
         let mut state = queue.borrow_mut();
         if !state.is_active() {
@@ -596,9 +597,10 @@ impl LocalExecutor {
         let queues_weak = Rc::downgrade(&self.queues);
 
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
-        self.queues.borrow_mut().available_executors.insert(
-            0,
-            TaskQueue::new(
+        self.queues
+            .borrow_mut()
+            .available_executors
+            .push(Some(TaskQueue::new(
                 0,
                 "default",
                 Shares::Static(1000),
@@ -611,8 +613,9 @@ impl LocalExecutor {
                     let mut queues = q.borrow_mut();
                     queues.maybe_activate(index);
                 },
-            ),
-        );
+            )));
+
+        debug_assert_eq!(self.queues.borrow().available_executors.len(), 1);
         Ok(())
     }
 
@@ -693,9 +696,12 @@ impl LocalExecutor {
     {
         let index = {
             let mut ex = self.queues.borrow_mut();
-            let index = ex.executor_index;
-            ex.executor_index += 1;
-            index
+            let index = ex.available_executors_ids.pop_back();
+            if let Some(index) = index {
+                index
+            } else {
+                ex.available_executors.len()
+            }
         };
 
         let queues_weak = Rc::downgrade(&self.queues);
@@ -706,10 +712,16 @@ impl LocalExecutor {
             queues.maybe_activate(index);
         });
 
-        self.queues
-            .borrow_mut()
-            .available_executors
-            .insert(index, tq);
+        let available_executors = &mut self.queues.borrow_mut().available_executors;
+
+        if available_executors.len() == index {
+            available_executors.push(Some(tq));
+        } else if available_executors.len() > index {
+            available_executors[index] = Some(tq);
+        } else {
+            unreachable!()
+        }
+
         TaskQueueHandle { index }
     }
 
@@ -722,16 +734,20 @@ impl LocalExecutor {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut queues = self.queues.borrow_mut();
 
-        let queue_entry = queues.available_executors.entry(handle.index);
-        if let Entry::Occupied(entry) = queue_entry {
-            let tq = entry.get();
-            if tq.borrow().is_active() {
-                return Err(Box::new(QueueStillActiveError::new(handle)));
-            }
+        let queue_entry = queues.available_executors.get(handle.index);
+        if let Some(entry) = queue_entry {
+            if let Some(tq) = entry {
+                if tq.borrow().is_active() {
+                    return Err(Box::new(QueueStillActiveError::new(handle)));
+                }
 
-            entry.remove();
-            return Ok(());
+                queues.available_executors[handle.index] = None;
+                queues.available_executors_ids.push_front(handle.index);
+
+                return Ok(());
+            }
         }
+
         Err(Box::new(QueueNotFoundError::new(handle)))
     }
 
@@ -739,8 +755,8 @@ impl LocalExecutor {
         self.queues
             .borrow()
             .available_executors
-            .get(&handle.index)
-            .cloned()
+            .get(handle.index)
+            .and_then(|opt| opt.clone())
     }
 
     fn get_executor(&self, handle: &TaskQueueHandle) -> Option<Rc<multitask::LocalExecutor>> {
@@ -896,9 +912,11 @@ impl LocalExecutor {
                 tq.last_vruntime = match last_vruntime {
                     Some(x) => x,
                     None => {
-                        for queue in tq.available_executors.values() {
-                            let mut q = queue.borrow_mut();
-                            q.vruntime = 0;
+                        for queue in &tq.available_executors {
+                            if let Some(queue) = queue {
+                                let mut q = queue.borrow_mut();
+                                q.vruntime = 0;
+                            }
                         }
                         0
                     }
@@ -1304,7 +1322,12 @@ impl<T> Task<T> {
     {
         LOCAL_EX.with(|local_ex| {
             let tq = local_ex.queues.borrow();
-            output.extend(tq.available_executors.values().map(|x| x.borrow().stats));
+            output.extend(
+                tq.available_executors
+                    .iter()
+                    .filter(|x| x.is_some())
+                    .map(|x| x.clone().unwrap().borrow().stats),
+            );
             output
         })
     }
@@ -1553,6 +1576,57 @@ mod test {
             .unwrap();
             futures::join!(j0, j1, j2);
         })
+    }
+
+    #[test]
+    fn remove_task_queues() {
+        let local_ex = Rc::new(LocalExecutor::make_default());
+        let local_ex_c = local_ex.clone();
+
+        let tq1 = local_ex.create_task_queue(Shares::default(), Latency::NotImportant, "test1");
+        let tq2 = local_ex.create_task_queue(Shares::default(), Latency::NotImportant, "test2");
+        let tq3 = local_ex.create_task_queue(Shares::default(), Latency::NotImportant, "test3");
+
+        local_ex.remove_task_queue(tq2).unwrap();
+        local_ex.remove_task_queue(tq3).unwrap();
+
+        assert!(local_ex.remove_task_queue(tq2).is_err());
+        assert!(local_ex.remove_task_queue(tq3).is_err());
+
+        let tq2 = local_ex.create_task_queue(Shares::default(), Latency::NotImportant, "test2");
+        let tq3 = local_ex.create_task_queue(Shares::default(), Latency::NotImportant, "test3");
+
+        assert_eq!(tq1.index, 1);
+        assert_eq!(tq2.index, 2);
+        assert_eq!(tq3.index, 3);
+
+        local_ex.run(async move {
+            let id1 = tq2.index;
+            let id2 = tq3.index;
+
+            let j0 = Local::local(async {
+                assert_eq!(Local::current_task_queue().index, 0);
+            });
+            let j1 = Local::local_into(
+                async move {
+                    assert_eq!(Local::current_task_queue().index, id1);
+                },
+                tq2,
+            )
+            .unwrap();
+            let j2 = Local::local_into(
+                async move {
+                    assert_eq!(Local::current_task_queue().index, id2);
+                },
+                tq3,
+            )
+            .unwrap();
+
+            assert!(local_ex_c.remove_task_queue(tq2).is_err());
+            assert!(local_ex_c.remove_task_queue(tq3).is_err());
+
+            futures::join!(j0, j1, j2);
+        });
     }
 
     #[test]
