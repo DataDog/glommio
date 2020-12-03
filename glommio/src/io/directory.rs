@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::io::dma_file::DmaFile;
 use crate::io::glommio_file::GlommioFile;
 use crate::sys;
 use crate::Local;
@@ -85,6 +86,25 @@ impl Directory {
             None
         )?;
         Self::sync_open(&path)
+    }
+
+    /// Creates a file under this directory, returns a DMA file
+    ///
+    /// NOTE: Path must not contain directories and just be a file name
+    pub async fn create_file<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
+        if path
+            .as_ref()
+            .to_string_lossy()
+            .contains(std::path::MAIN_SEPARATOR)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Path cannot contain directories",
+            ));
+        }
+
+        let path = self.file.path_required("create file")?.join(path.as_ref());
+        DmaFile::create(path).await
     }
 
     /// Returns an iterator to the contents of this directory
