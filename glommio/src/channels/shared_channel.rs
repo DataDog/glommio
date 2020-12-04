@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 //
-use crate::channels::spsc_queue::{make, Consumer, Producer};
+use crate::channels::spsc_queue::{make, BufferHalf, Consumer, Producer};
 use crate::channels::ChannelError;
 use crate::parking::Reactor;
 use crate::{enclose, Local};
