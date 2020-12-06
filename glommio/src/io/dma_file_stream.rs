@@ -711,7 +711,7 @@ impl DmaStreamWriterState {
                 self.file_pos = final_pos;
             }
         }
-        let mut drainers = std::mem::replace(&mut self.pending, AHashMap::new());
+        let mut drainers = std::mem::take(&mut self.pending);
         let flush_on_close = self.flush_on_close;
         self.file_status = FileStatus::Closing;
         Local::local(async move {

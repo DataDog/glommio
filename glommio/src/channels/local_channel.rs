@@ -308,11 +308,9 @@ impl<T> LocalSender<T> {
 
 fn wake_up_all(ws: &mut Option<VecDeque<Waker>>) {
     if let Some(ref mut waiters) = ws {
-        // replace core::mem::replace with core::mem::take,
-        // as soon as we drop support for rustc < 1.40.0
         // we assume here that wakes don't try to acquire a borrow on
         // the channel.state
-        for w in core::mem::replace(waiters, VecDeque::new()) {
+        for w in core::mem::take(waiters) {
             w.wake();
         }
     }

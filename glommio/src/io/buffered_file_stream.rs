@@ -183,7 +183,7 @@ impl Buffer {
     }
 
     fn consumed_bytes(&mut self) -> Vec<u8> {
-        std::mem::replace(&mut self.data, Vec::new())
+        std::mem::take(&mut self.data)
     }
 
     fn unconsumed_bytes(&self) -> &[u8] {
