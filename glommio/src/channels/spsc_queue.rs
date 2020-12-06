@@ -209,7 +209,7 @@ pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     )
 }
 
-fn allocate_buffer<T>(capacity: usize) -> Arc<Vec<T>> {
+fn allocate_buffer<T: Copy>(capacity: usize) -> Arc<Vec<Cell<T>>> {
     let size = capacity.next_power_of_two();
     let mut vec = Vec::with_capacity(size);
     unsafe {
