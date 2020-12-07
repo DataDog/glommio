@@ -711,14 +711,9 @@ impl LocalExecutor {
             .queues
             .borrow()
             .active_executing
-            .as_ref()
-            .map_or_else(
-                || self.get_queue(&TaskQueueHandle { index: 0 }),
-                |x| Some(x).cloned(),
-            )
-            .as_ref()
-            .unwrap()
-            .clone();
+            .clone() // this clone is cheap because we clone an `Option<Rc<_>>`
+            .or_else(|| self.get_queue(&TaskQueueHandle { index: 0 }))
+            .unwrap();
 
         let ex = tq.borrow().ex.clone();
         Task(ex.spawn(tq, future))
