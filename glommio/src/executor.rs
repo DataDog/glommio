@@ -1371,7 +1371,6 @@ impl<T> Future for Task<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::sync::Semaphore;
     use crate::timer::{self, Timer};
     use crate::{enclose, SharesManager};
     use core::mem::MaybeUninit;
@@ -1707,76 +1706,6 @@ mod test {
         let now = Instant::now();
         while now.elapsed().as_millis() < 2 {}
         Local::later().await;
-    }
-
-    async fn do_ping_pong_work(last: Rc<Cell<usize>>, counter: Rc<Cell<usize>>, me: usize) {
-        if last.get() == me {
-            counter.replace(counter.get() + 1);
-        } else {
-            counter.replace(1);
-        }
-        assert!(counter.get() < 10);
-        last.replace(me);
-        work_quanta().await;
-    }
-
-    #[test]
-    fn test_ping_pong_yield() {
-        test_executor!(async move {
-            let tq1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test1");
-            let tq2 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test2");
-
-            // We want to test that when we yield, we give other queues the chance to run.
-            // However this is not automatic: the scheduler still pick the queue with least
-            // vruntime which could be us. It should not be us if we are ping ponging, but it
-            // *could* be us if we were disturbed by some other task. This may happen often
-            // if the reactor is not pinned especially if we are running multiple tests in
-            // parallel.
-            //
-            // We employ two strategies to make this test robust:
-            // 1. Instead of just ping ponging we issue a work quanta cpu busy loop every time.
-            //    We'll run for a couple of microseconds instead of nanoseconds and therefore
-            //    be less subject to random noise
-            // 2. We tolerate if we run a couple of times in a row. In the broken version of this
-            //    test we ran *all 100 iterations* at once, so it's totally fine if we run a
-            //    couple.
-            let counter = Rc::new(Cell::new(0));
-            let last = Rc::new(Cell::new(0));
-            let sem = Rc::new(Semaphore::new(0));
-
-            let j1 = Local::local_into(
-                enclose! {(last, counter, sem) async move {
-                    let mut v = Vec::new();
-                    for _ in 0..100 {
-                        sem.acquire(1).await.unwrap();
-                        v.push(Local::local(enclose!{(last, counter) async move {
-                            do_ping_pong_work(last, counter, 0).await;
-                        }}).detach());
-                    }
-                    join_all(v).await;
-                }},
-                tq1,
-            )
-            .unwrap();
-
-            let j2 = Local::local_into(
-                enclose! {(last, counter, sem) async move {
-                    let mut v = Vec::new();
-                    for _ in 0..100 {
-                        sem.acquire(1).await.unwrap();
-                        v.push(Local::local(enclose!{(last, counter) async move {
-                            do_ping_pong_work(last, counter, 1).await;
-                        }}).detach());
-                    }
-                    join_all(v).await;
-                }},
-                tq2,
-            )
-            .unwrap();
-
-            sem.signal(200);
-            futures::join!(j1, j2);
-        });
     }
 
     macro_rules! test_static_shares {
