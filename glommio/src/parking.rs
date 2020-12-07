@@ -194,7 +194,7 @@ impl SharedChannels {
     }
 
     fn process_shared_channels(&mut self, wakers: &mut Vec<Waker>) -> usize {
-        let current_wakers = std::mem::replace(&mut self.wakers_map, BTreeMap::new());
+        let current_wakers = mem::take(&mut self.wakers_map);
         let mut added = 0;
         for (id, mut pending) in current_wakers.into_iter() {
             let room = self.check_map.get(&id).unwrap()();

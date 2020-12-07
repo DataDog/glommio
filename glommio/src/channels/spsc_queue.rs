@@ -16,7 +16,7 @@ const fn cacheline_pad(used: usize) -> usize {
 /// ring buffer, as well as a head and tail atomicUsize which the producer and consumer
 /// use to track location in the ring.
 #[repr(C)]
-struct Buffer<T: Copy> {
+pub(crate) struct Buffer<T: Copy> {
     buffer_storage: Arc<Vec<Cell<T>>>,
 
     /// The bounded size as specified by the user.  If the queue reaches capacity, it will block
@@ -151,6 +151,14 @@ impl<T: Copy> Buffer<T> {
     pub(crate) fn consumer_disconnected(&self) -> bool {
         self.consumer_disconnected.load(Ordering::Acquire) != 0
     }
+
+    /// Returns the current size of the queue
+    ///
+    /// This value represents the current size of the queue.  This value can be from 0-`capacity`
+    /// inclusive.
+    pub(crate) fn size(&self) -> usize {
+        self.tail.load(Ordering::Acquire) - self.head.load(Ordering::Acquire)
+    }
 }
 
 /// Handles deallocation of heap memory when the buffer is dropped
@@ -201,13 +209,66 @@ pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     )
 }
 
-fn allocate_buffer<T>(capacity: usize) -> Arc<Vec<T>> {
+fn allocate_buffer<T: Copy>(capacity: usize) -> Arc<Vec<Cell<T>>> {
     let size = capacity.next_power_of_two();
     let mut vec = Vec::with_capacity(size);
     unsafe {
         vec.set_len(size);
     }
     Arc::new(vec)
+}
+
+pub(crate) trait BufferHalf {
+    type Item: Copy;
+
+    fn buffer(&self) -> &Buffer<Self::Item>;
+    fn eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>>;
+    fn opposite_eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>>;
+
+    fn must_notify(&self) -> Option<RawFd> {
+        let eventfd = self.opposite_eventfd();
+        let mem = eventfd.take();
+        let ret = mem.as_ref().map(|x| x.load(Ordering::Acquire) as _);
+        eventfd.set(mem);
+        match ret {
+            None | Some(0) => None,
+            Some(x) => Some(x),
+        }
+    }
+
+    fn connect(&self, eventfd: Arc<AtomicUsize>) {
+        let old = self.eventfd().replace(Some(eventfd));
+        assert_eq!(old.is_none(), true);
+    }
+
+    /// Returns the total capacity of this queue
+    ///
+    /// This value represents the total capacity of the queue when it is full.  It does not
+    /// represent the current usage.  For that, call `size()`.
+    fn capacity(&self) -> usize {
+        self.buffer().capacity
+    }
+
+    /// Returns the current size of the queue
+    ///
+    /// This value represents the current size of the queue.  This value can be from 0-`capacity`
+    /// inclusive.
+    fn size(&self) -> usize {
+        self.buffer().size()
+    }
+}
+
+impl<T: Copy> BufferHalf for Producer<T> {
+    type Item = T;
+    fn buffer(&self) -> &Buffer<T> {
+        &*self.buffer
+    }
+    fn eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
+        &(*self.buffer).producer_eventfd
+    }
+    fn opposite_eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
+        &(*self.buffer).consumer_eventfd
+    }
 }
 
 impl<T: Copy> Producer<T> {
@@ -218,22 +279,6 @@ impl<T: Copy> Producer<T> {
     /// this method will return `Some(v)``, where `v` is your original value.
     pub(crate) fn try_push(&self, v: T) -> Option<T> {
         (*self.buffer).try_push(v)
-    }
-
-    pub(crate) fn must_notify(&self) -> Option<RawFd> {
-        let mem = (*self.buffer).consumer_eventfd.take();
-        let ret = mem.as_ref().map(|x| x.load(Ordering::Acquire) as _);
-        (*self.buffer).consumer_eventfd.set(mem);
-        match ret {
-            None => None,
-            Some(0) => None,
-            Some(x) => Some(x),
-        }
-    }
-
-    pub(crate) fn connect(&self, eventfd: Arc<AtomicUsize>) {
-        let old = (*self.buffer).producer_eventfd.replace(Some(eventfd));
-        assert_eq!(old.is_none(), true);
     }
 
     /// Disconnects the producer, signaling to the consumer that no new values are going to be
@@ -248,21 +293,6 @@ impl<T: Copy> Producer<T> {
     pub(crate) fn consumer_disconnected(&self) -> bool {
         (*self.buffer).consumer_disconnected()
     }
-    /// Returns the total capacity of this queue
-    ///
-    /// This value represents the total capacity of the queue when it is full.  It does not
-    /// represent the current usage.  For that, call `size()`.
-    pub(crate) fn capacity(&self) -> usize {
-        (*self.buffer).capacity
-    }
-
-    /// Returns the current size of the queue
-    ///
-    /// This value represents the current size of the queue.  This value can be from 0-`capacity`
-    /// inclusive.
-    pub(crate) fn size(&self) -> usize {
-        (*self.buffer).tail.load(Ordering::Acquire) - (*self.buffer).head.load(Ordering::Acquire)
-    }
 
     /// Returns the available space in the queue
     ///
@@ -273,23 +303,20 @@ impl<T: Copy> Producer<T> {
     }
 }
 
+impl<T: Copy> BufferHalf for Consumer<T> {
+    type Item = T;
+    fn buffer(&self) -> &Buffer<T> {
+        &(*self.buffer)
+    }
+    fn eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
+        &(*self.buffer).consumer_eventfd
+    }
+    fn opposite_eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
+        &(*self.buffer).producer_eventfd
+    }
+}
+
 impl<T: Copy> Consumer<T> {
-    pub(crate) fn connect(&self, eventfd: Arc<AtomicUsize>) {
-        let old = (*self.buffer).consumer_eventfd.replace(Some(eventfd));
-        assert_eq!(old.is_none(), true);
-    }
-
-    pub(crate) fn must_notify(&self) -> Option<RawFd> {
-        let mem = (*self.buffer).producer_eventfd.take();
-        let ret = mem.as_ref().map(|x| x.load(Ordering::Acquire) as _);
-        (*self.buffer).producer_eventfd.set(mem);
-        match ret {
-            None => None,
-            Some(0) => None,
-            Some(x) => Some(x),
-        }
-    }
-
     /// Disconnects the consumer, signaling to the producer that no new values are going to be
     /// consumed. After this is done, any attempt on the producer to try_push should fail
     ///
@@ -310,22 +337,6 @@ impl<T: Copy> Consumer<T> {
     /// being popped off the queue.
     pub(crate) fn try_pop(&self) -> Option<T> {
         (*self.buffer).try_pop()
-    }
-
-    /// Returns the total capacity of this queue
-    ///
-    /// This value represents the total capacity of the queue when it is full.  It does not
-    /// represent the current usage.  For that, call `size()`.
-    pub(crate) fn capacity(&self) -> usize {
-        (*self.buffer).capacity
-    }
-
-    /// Returns the current size of the queue
-    ///
-    /// This value represents the current size of the queue.  This value can be from 0-`capacity`
-    /// inclusive.
-    pub(crate) fn size(&self) -> usize {
-        (*self.buffer).tail.load(Ordering::Acquire) - (*self.buffer).head.load(Ordering::Acquire)
     }
 }
 

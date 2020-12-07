@@ -4,14 +4,9 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::channels::{ChannelCapacity, ChannelError};
-use futures_lite::future;
-use futures_lite::stream::Stream;
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::io;
-use std::pin::Pin;
-use std::rc::Rc;
+use futures_lite::{future, stream::Stream};
 use std::task::{Context, Poll, Waker};
+use std::{cell::RefCell, collections::VecDeque, io, pin::Pin, rc::Rc};
 
 #[derive(Debug)]
 /// Send endpoint to the `local_channel`
@@ -62,9 +57,68 @@ struct State<T> {
     send_waiters: Option<VecDeque<Waker>>,
 }
 
-#[derive(Debug, Clone)]
+impl<T> State<T> {
+    fn push(&mut self, item: T) -> Result<Option<Waker>, ChannelError<T>> {
+        if self.recv_waiters.is_none() {
+            Err(ChannelError::new(io::ErrorKind::BrokenPipe, item))
+        } else if self.is_full() {
+            Err(ChannelError::new(io::ErrorKind::WouldBlock, item))
+        } else {
+            self.channel.push_back(item);
+            Ok(self.recv_waiters.as_mut().and_then(|x| x.pop_front()))
+        }
+    }
+
+    fn is_full(&self) -> bool {
+        match self.capacity {
+            ChannelCapacity::Unbounded => false,
+            ChannelCapacity::Bounded(x) => self.channel.len() >= x,
+        }
+    }
+
+    fn wait_for_room(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if !self.is_full() {
+            Poll::Ready(())
+        } else {
+            self.send_waiters
+                .as_mut()
+                .unwrap()
+                .push_back(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+
+    fn recv_one(&mut self, cx: &mut Context<'_>) -> Poll<Option<(T, Option<Waker>)>> {
+        match self.channel.pop_front() {
+            Some(item) => Poll::Ready(Some((
+                item,
+                self.send_waiters.as_mut().and_then(|x| x.pop_front()),
+            ))),
+            None => match self.send_waiters.is_some() {
+                true => {
+                    self.recv_waiters
+                        .as_mut()
+                        .unwrap()
+                        .push_back(cx.waker().clone());
+                    Poll::Pending
+                }
+                false => Poll::Ready(None),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
 struct LocalChannel<T> {
     state: Rc<RefCell<State<T>>>,
+}
+
+impl<T> Clone for LocalChannel<T> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+        }
+    }
 }
 
 impl<T> LocalChannel<T> {
@@ -75,51 +129,21 @@ impl<T> LocalChannel<T> {
             ChannelCapacity::Bounded(x) => VecDeque::with_capacity(x),
         };
 
-        let state = Rc::new(RefCell::new(State {
-            capacity,
-            channel,
-            send_waiters: Some(VecDeque::new()),
-            recv_waiters: Some(VecDeque::new()),
-        }));
+        let channel = LocalChannel {
+            state: Rc::new(RefCell::new(State {
+                capacity,
+                channel,
+                send_waiters: Some(VecDeque::new()),
+                recv_waiters: Some(VecDeque::new()),
+            })),
+        };
 
         (
             LocalSender {
-                channel: LocalChannel {
-                    state: state.clone(),
-                },
+                channel: channel.clone(),
             },
-            LocalReceiver {
-                channel: LocalChannel { state },
-            },
+            LocalReceiver { channel },
         )
-    }
-
-    fn push(&self, item: T) -> Result<(), ChannelError<T>> {
-        let mut state = self.state.borrow_mut();
-        if state.recv_waiters.is_none() {
-            return Err(ChannelError::new(io::ErrorKind::BrokenPipe, item));
-        }
-
-        if let ChannelCapacity::Bounded(x) = state.capacity {
-            if state.channel.len() >= x {
-                return Err(ChannelError::new(io::ErrorKind::WouldBlock, item));
-            }
-        }
-
-        state.channel.push_back(item);
-        if let Some(w) = state.recv_waiters.as_mut().and_then(|x| x.pop_front()) {
-            drop(state);
-            w.wake();
-        }
-        Ok(())
-    }
-
-    fn is_full(&self) -> bool {
-        let state = self.state.borrow();
-        match state.capacity {
-            ChannelCapacity::Unbounded => false,
-            ChannelCapacity::Bounded(x) => state.channel.len() >= x,
-        }
     }
 }
 
@@ -197,7 +221,10 @@ impl<T> LocalSender<T> {
     /// [`Other`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.Other
     /// [`io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
     pub fn try_send(&self, item: T) -> Result<(), ChannelError<T>> {
-        self.channel.push(item)
+        if let Some(w) = self.channel.state.borrow_mut().push(item)? {
+            w.wake();
+        }
+        Ok(())
     }
 
     /// Sends data into this channel when it is ready to receive it
@@ -223,10 +250,7 @@ impl<T> LocalSender<T> {
     ///
     /// [`try_send`]: struct.LocalSender.html#method.try_send
     pub async fn send(&self, item: T) -> Result<(), ChannelError<T>> {
-        if self.is_full() {
-            let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
-            waiter.await;
-        }
+        future::poll_fn(|cx| self.wait_for_room(cx)).await;
         self.try_send(item)
     }
 
@@ -246,8 +270,9 @@ impl<T> LocalSender<T> {
     ///     drop(receiver);
     /// });
     /// ```
+    #[inline]
     pub fn is_full(&self) -> bool {
-        self.channel.is_full()
+        self.channel.state.borrow().is_full()
     }
 
     /// Returns the number of items still queued in this channel
@@ -269,22 +294,24 @@ impl<T> LocalSender<T> {
     ///     drop(receiver);
     /// });
     /// ```
+    #[inline]
     pub fn len(&self) -> usize {
-        let state = self.channel.state.borrow();
-        state.channel.len()
+        self.channel.state.borrow().channel.len()
     }
 
     fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if !self.channel.is_full() {
-            Poll::Ready(())
-        } else {
-            let mut state = self.channel.state.borrow_mut();
-            state
-                .send_waiters
-                .as_mut()
-                .unwrap()
-                .push_back(cx.waker().clone());
-            Poll::Pending
+        // NOTE: it is important that the borrow is dropped
+        // if Poll::Pending is returned
+        self.channel.state.borrow_mut().wait_for_room(cx)
+    }
+}
+
+fn wake_up_all(ws: &mut Option<VecDeque<Waker>>) {
+    if let Some(ref mut waiters) = ws {
+        // we assume here that wakes don't try to acquire a borrow on
+        // the channel.state
+        for w in core::mem::take(waiters) {
+            w.wake();
         }
     }
 }
@@ -295,15 +322,7 @@ impl<T> Drop for LocalSender<T> {
         // Will not wake up senders, but we are dropping the sender so nobody
         // wants to wake up anyway.
         state.send_waiters.take();
-
-        if let Some(ref mut waiters) = &mut state.recv_waiters {
-            let waiters = core::mem::replace(waiters, VecDeque::new());
-            drop(state);
-
-            for w in waiters {
-                w.wake();
-            }
-        }
+        wake_up_all(&mut state.recv_waiters);
     }
 }
 
@@ -311,21 +330,14 @@ impl<T> Drop for LocalReceiver<T> {
     fn drop(&mut self) {
         let mut state = self.channel.state.borrow_mut();
         state.recv_waiters.take();
-
-        if let Some(ref mut waiters) = &mut state.send_waiters {
-            let waiters = core::mem::replace(waiters, VecDeque::new());
-            drop(state);
-
-            for w in waiters {
-                w.wake();
-            }
-        }
+        wake_up_all(&mut state.send_waiters);
     }
 }
 
 impl<T> Stream for LocalReceiver<T> {
     type Item = T;
 
+    #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.recv_one(cx)
     }
@@ -362,32 +374,18 @@ impl<T> LocalReceiver<T> {
     /// [`next`]: https://docs.rs/futures-lite/1.11.2/futures_lite/stream/trait.StreamExt.html#method.next
     /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
     pub async fn recv(&self) -> Option<T> {
-        let waiter = future::poll_fn(|cx| self.recv_one(cx));
-        waiter.await
+        future::poll_fn(|cx| self.recv_one(cx)).await
     }
 
     fn recv_one(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        let mut state = self.channel.state.borrow_mut();
-        match state.channel.pop_front() {
-            Some(item) => {
-                if let Some(w) = state.send_waiters.as_mut().and_then(|x| x.pop_front()) {
-                    drop(state);
+        self.channel.state.borrow_mut().recv_one(cx).map(|opt| {
+            opt.map(|(ret, mw)| {
+                if let Some(w) = mw {
                     w.wake();
                 }
-                Poll::Ready(Some(item))
-            }
-            None => match state.send_waiters.is_some() {
-                true => {
-                    state
-                        .recv_waiters
-                        .as_mut()
-                        .unwrap()
-                        .push_back(cx.waker().clone());
-                    Poll::Pending
-                }
-                false => Poll::Ready(None),
-            },
-        }
+                ret
+            })
+        })
     }
 }
 
