@@ -34,15 +34,9 @@ async fn server(conns: usize) {
 
     let mut servers = vec![];
     for _ in 0..conns {
-        let l = listener.clone();
+        let (stream, _) = listener.accept().await.unwrap();
         servers.push(Local::local(async move {
-            let (stream, _) = l.accept().await.unwrap();
-            loop {
-                let x = copy(&stream, &mut &stream).await.unwrap();
-                if x == 0 {
-                    break;
-                }
-            }
+            while 0 != copy(&stream, &mut &stream).await.unwrap() {}
         }));
     }
     join_all(servers).await;
