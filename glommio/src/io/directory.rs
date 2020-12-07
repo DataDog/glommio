@@ -72,7 +72,7 @@ impl Directory {
     ///
     /// NOTE: Path must not contain directories and just be a file name
     pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
-        if contains_dir(&path) {
+        if contains_dir(path.as_ref()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Path cannot contain directories",
@@ -107,7 +107,7 @@ impl Directory {
     ///
     /// NOTE: Path must not contain directories and just be a file name
     pub async fn create_file<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
-        if contains_dir(&path) {
+        if contains_dir(path.as_ref()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Path cannot contain directories",
@@ -137,8 +137,8 @@ impl Directory {
     }
 }
 
-fn contains_dir<P: AsRef<Path>>(path: P) -> bool {
-    let mut iter = path.as_ref().components();
+fn contains_dir(path: &Path) -> bool {
+    let mut iter = path.components();
     match iter.next() {
         Some(std::path::Component::Normal(_)) => iter.next().is_some(),
         _ => true,
