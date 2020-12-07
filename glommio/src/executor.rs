@@ -978,32 +978,9 @@ impl<T> Task<T> {
             }
         });
 
-        if !need_yield {
-            return;
+        if need_yield {
+            futures_lite::future::yield_now().await;
         }
-
-        struct Yield {
-            done: Option<()>,
-        }
-
-        // Returns pending once, so we are taken away from the execution queue.
-        // The next time returns Ready, so we can proceed. We don't want to pay
-        // the cost of calling schedule functions
-        impl Future for Yield {
-            type Output = ();
-
-            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                match self.done.take() {
-                    Some(_) => {
-                        cx.waker().clone().wake();
-                        Poll::Pending
-                    }
-                    None => Poll::Ready(()),
-                }
-            }
-        }
-        let y = Yield { done: Some(()) };
-        y.await;
     }
 
     /// checks if this task has ran for too long and need to be preempted. This is useful for
