@@ -50,7 +50,7 @@ use crate::multitask;
 use crate::parking;
 use crate::task::{self, waker_fn::waker_fn};
 use crate::{IoRequirements, Latency};
-use crate::{Local, Reactor, Shares};
+use crate::{Reactor, Shares};
 use ahash::AHashMap;
 
 static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
@@ -114,8 +114,8 @@ impl Default for TaskQueueHandle {
 }
 
 #[derive(Debug)]
-struct TaskQueue {
-    ex: Rc<multitask::LocalExecutor>,
+pub(crate) struct TaskQueue {
+    pub(crate) ex: Rc<multitask::LocalExecutor>,
     active: bool,
     shares: Shares,
     vruntime: u64,
@@ -148,19 +148,12 @@ impl PartialEq for TaskQueue {
 impl Eq for TaskQueue {}
 
 impl TaskQueue {
-    fn new<F, S>(
-        index: usize,
-        name: S,
-        shares: Shares,
-        ioreq: IoRequirements,
-        notify: F,
-    ) -> Rc<RefCell<Self>>
+    fn new<S>(index: usize, name: S, shares: Shares, ioreq: IoRequirements) -> Rc<RefCell<Self>>
     where
-        F: Fn() + 'static,
         S: Into<String>,
     {
         Rc::new(RefCell::new(TaskQueue {
-            ex: Rc::new(multitask::LocalExecutor::new(notify)),
+            ex: Rc::new(multitask::LocalExecutor::new()),
             active: false,
             stats: TaskQueueStats::new(index, shares.reciprocal_shares()),
             shares,
@@ -353,13 +346,8 @@ impl ExecutorQueues {
             .min()
             .unwrap_or_else(|| Duration::from_secs(1))
     }
-    fn maybe_activate(&mut self, index: usize) {
-        let queue = self
-            .available_executors
-            .get(&index)
-            .expect("Trying to activate invalid queue! Index")
-            .clone();
 
+    fn maybe_activate(&mut self, queue: Rc<RefCell<TaskQueue>>) {
         let mut state = queue.borrow_mut();
         if !state.is_active() {
             state.vruntime = self.last_vruntime;
@@ -548,6 +536,13 @@ impl Default for LocalExecutorBuilder {
     }
 }
 
+pub(crate) fn maybe_activate(tq: Rc<RefCell<TaskQueue>>) {
+    LOCAL_EX.with(|local_ex| {
+        let mut queues = local_ex.queues.borrow_mut();
+        queues.maybe_activate(tq)
+    })
+}
+
 /// Single-threaded executor.
 ///
 /// The executor can only be run on the thread that created it.
@@ -588,30 +583,10 @@ impl LocalExecutor {
     }
 
     fn init(&mut self) -> io::Result<()> {
-        let index = 0;
-        // This reference will be passed into the `notify` function. This `notify` function will
-        // then be owned by a `TaskQueue` which is in turn owned by `self.queues`, so this then
-        // creates a cycle. We use a weak reference here to break that cycle, allowing `self.queues`
-        // to be cleaned up when `self` is reclaimed.
-        let queues_weak = Rc::downgrade(&self.queues);
-
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
             0,
-            TaskQueue::new(
-                0,
-                "default",
-                Shares::Static(1000),
-                io_requirements,
-                move || {
-                    // Because this `notify` function is owned by `self.queues`, and this is a
-                    // reference to `self.queues`, it is guaranteed that this weak reference is
-                    // still alive.
-                    let q = queues_weak.upgrade().unwrap();
-                    let mut queues = q.borrow_mut();
-                    queues.maybe_activate(index);
-                },
-            ),
+            TaskQueue::new(0, "default", Shares::Static(1000), io_requirements),
         );
         Ok(())
     }
@@ -660,34 +635,7 @@ impl LocalExecutor {
         self.id
     }
 
-    /// Creates a task queue in the executor.
-    ///
-    /// Each task queue is scheduled based on the [`Shares`] and [`Latency`] system, and tasks
-    /// within a queue will be scheduled in serial.
-    ///
-    /// Returns an opaque handle that can later be used to launch tasks into that queue with
-    /// [`spawn_into`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::time::Duration;
-    /// use glommio::{LocalExecutor, Latency, Shares};
-    ///
-    /// let local_ex = LocalExecutor::make_default();
-    ///
-    /// let task_queue = local_ex.create_task_queue(Shares::default(), Latency::Matters(Duration::from_secs(1)), "my_tq");
-    /// let task = local_ex.spawn_into(async {
-    ///     println!("Hello world");
-    /// }, task_queue).expect("failed to spawn task");
-    /// ```
-    ///
-    /// [`spawn_into`]: struct.LocalExecutor.html#method.spawn_into
-    ///
-    /// [`Shares`]: enum.Shares.html
-    ///
-    /// [`Latency`]: enum.Latency.html
-    pub fn create_task_queue<S>(&self, shares: Shares, latency: Latency, name: S) -> TaskQueueHandle
+    fn create_task_queue<S>(&self, shares: Shares, latency: Latency, name: S) -> TaskQueueHandle
     where
         S: Into<String>,
     {
@@ -698,13 +646,8 @@ impl LocalExecutor {
             index
         };
 
-        let queues_weak = Rc::downgrade(&self.queues);
         let io_requirements = IoRequirements::new(latency, index);
-        let tq = TaskQueue::new(index, name, shares, io_requirements, move || {
-            let queues = queues_weak.upgrade().unwrap();
-            let mut queues = queues.borrow_mut();
-            queues.maybe_activate(index);
-        });
+        let tq = TaskQueue::new(index, name, shares, io_requirements);
 
         self.queues
             .borrow_mut()
@@ -743,10 +686,6 @@ impl LocalExecutor {
             .cloned()
     }
 
-    fn get_executor(&self, handle: &TaskQueueHandle) -> Option<Rc<multitask::LocalExecutor>> {
-        self.get_queue(handle).map(|x| x.borrow().ex.clone())
-    }
-
     fn current_task_queue(&self) -> TaskQueueHandle {
         TaskQueueHandle {
             index: self
@@ -767,47 +706,25 @@ impl LocalExecutor {
         me.yielded = true;
     }
 
-    /// Spawns a task onto the executor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::LocalExecutor;
-    ///
-    /// let local_ex = LocalExecutor::make_default();
-    ///
-    /// let task = local_ex.spawn(async {
-    ///     println!("Hello world");
-    /// });
-    /// ```
-    pub fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
-        let ex = self
+    fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
+        let tq = self
             .queues
             .borrow()
             .active_executing
             .as_ref()
-            .map(|x| x.borrow().ex.clone())
-            .or_else(|| self.get_executor(&TaskQueueHandle { index: 0 }))
-            .unwrap();
-        Task(ex.spawn(future))
+            .map_or_else(
+                || self.get_queue(&TaskQueueHandle { index: 0 }),
+                |x| Some(x).cloned(),
+            )
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        let ex = tq.borrow().ex.clone();
+        Task(ex.spawn(tq, future))
     }
 
-    /// Spawns a task onto the executor, to be run at a particular task queue indicated by the
-    /// TaskQueueHandle
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::{LocalExecutor, Shares};
-    ///
-    /// let local_ex = LocalExecutor::make_default();
-    /// let handle = local_ex.create_task_queue(Shares::default(), glommio::Latency::NotImportant, "test_queue");
-    ///
-    /// let task = local_ex.spawn_into(async {
-    ///     println!("Hello world");
-    /// }, handle).expect("failed to spawn task");
-    /// ```
-    pub fn spawn_into<T, F>(
+    fn spawn_into<T, F>(
         &self,
         future: F,
         handle: TaskQueueHandle,
@@ -816,9 +733,11 @@ impl LocalExecutor {
         T: 'static,
         F: Future<Output = T> + 'static,
     {
-        self.get_executor(&handle)
-            .map(|ex| Task(ex.spawn(future)))
-            .ok_or_else(|| QueueNotFoundError::new(handle))
+        let tq = self
+            .get_queue(&handle)
+            .ok_or_else(|| QueueNotFoundError::new(handle))?;
+        let ex = tq.borrow().ex.clone();
+        Ok(Task(ex.spawn(tq, future)))
     }
 
     fn preempt_timer_duration(&self) -> Duration {
@@ -860,6 +779,8 @@ impl LocalExecutor {
                     let now = Instant::now();
                     let mut queue_ref = queue.borrow_mut();
                     queue_ref.prepare_to_run(now);
+                    self.reactor
+                        .inform_io_requirements(queue_ref.io_requirements);
                     now
                 };
 
@@ -871,7 +792,6 @@ impl LocalExecutor {
                     }
 
                     if let Some(r) = queue_ref.get_task() {
-                        Local::get_reactor().inform_io_requirements(queue_ref.io_requirements);
                         drop(queue_ref);
                         r.run();
                         tasks_executed_this_loop += 1;
@@ -920,12 +840,14 @@ impl LocalExecutor {
     /// # Examples
     ///
     /// ```
-    /// use glommio::LocalExecutor;
+    /// use glommio::{LocalExecutor, Task};
     ///
     /// let local_ex = LocalExecutor::make_default();
     ///
-    /// let task = local_ex.spawn(async { 1 + 2 });
-    /// let res = local_ex.run(async { task.await * 2 });
+    /// let res = local_ex.run(async {
+    ///     let task = Task::<usize>::local(async { 1 + 2 });
+    ///     task.await * 2
+    /// });
     ///
     /// assert_eq!(res, 6);
     /// ```
@@ -939,41 +861,43 @@ impl LocalExecutor {
         let spin = spin_before_park.as_nanos() > 0;
         let mut spin_since: Option<Instant> = None;
 
-        LOCAL_EX.set(self, || loop {
-            if let Poll::Ready(t) = future.as_mut().poll(cx) {
-                break t;
-            }
-
-            // We want to do I/O before we call run_task_queues,
-            // for the benefit of the latency ring. If there are pending
-            // requests that are latency sensitive we want them out of the
-            // ring ASAP (before we run the task queues). We will also use
-            // the opportunity to install the timer.
-            let duration = self.preempt_timer_duration();
-            self.parker.poll_io(duration);
-            if !self.run_task_queues() {
-                // It may be that we just became ready now that the task queue
-                // is exhausted. But if we sleep (park) we'll never know so we
-                // test again here. We can't test *just* here because the main
-                // future is probably the one setting up the task queues and etc.
+        LOCAL_EX.set(self, || {
+            loop {
                 if let Poll::Ready(t) = future.as_mut().poll(cx) {
                     break t;
                 }
-                if spin {
-                    if let Some(t) = spin_since {
-                        if t.elapsed() < spin_before_park {
+
+                // We want to do I/O before we call run_task_queues,
+                // for the benefit of the latency ring. If there are pending
+                // requests that are latency sensitive we want them out of the
+                // ring ASAP (before we run the task queues). We will also use
+                // the opportunity to install the timer.
+                let duration = self.preempt_timer_duration();
+                self.parker.poll_io(duration);
+                if !self.run_task_queues() {
+                    // It may be that we just became ready now that the task queue
+                    // is exhausted. But if we sleep (park) we'll never know so we
+                    // test again here. We can't test *just* here because the main
+                    // future is probably the one setting up the task queues and etc.
+                    if let Poll::Ready(t) = future.as_mut().poll(cx) {
+                        break t;
+                    }
+                    if spin {
+                        if let Some(t) = spin_since {
+                            if t.elapsed() < spin_before_park {
+                                continue;
+                            }
+                            spin_since = None
+                        } else {
+                            spin_since = Some(Instant::now());
                             continue;
                         }
-                        spin_since = None
-                    } else {
-                        spin_since = Some(Instant::now());
-                        continue;
                     }
-                }
 
-                self.parker.park();
-            } else {
-                spin_since = None
+                    self.parker.park();
+                } else {
+                    spin_since = None
+                }
             }
         })
     }
@@ -1151,15 +1075,14 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Task, Shares};
+    /// use glommio::{LocalExecutor, Task, Shares, Local};
     ///
     /// let local_ex = LocalExecutor::make_default();
-    /// let handle = local_ex.create_task_queue(Shares::default(), glommio::Latency::NotImportant, "test_queue");
-    ///
-    /// local_ex.spawn_into(async {
-    ///     let task = Task::local(async { 1 + 2 });
+    /// local_ex.run(async {
+    ///     let handle = Local::create_task_queue(Shares::default(), glommio::Latency::NotImportant, "test_queue");
+    ///     let task = Task::<usize>::local_into(async { 1 + 2 }, handle).expect("failed to spawn task");
     ///     assert_eq!(task.await, 3);
-    /// }, handle).expect("failed to spawn task");
+    /// })
     /// ```
     pub fn local_into(
         future: impl Future<Output = T> + 'static,
@@ -1200,27 +1123,55 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Task};
+    /// use glommio::{LocalExecutor, Local};
     /// use glommio::timer::Timer;
     /// use futures_lite::future;
     ///
     /// let ex = LocalExecutor::make_default();
+    /// ex.run(async {
     ///
-    /// ex.spawn(async {
-    ///     loop {
-    ///         println!("I'm a background task looping forever.");
-    ///         Task::<()>::later().await;
-    ///     }
+    ///     Local::local(async {
+    ///         loop {
+    ///             println!("I'm a background task looping forever.");
+    ///             Local::later().await;
+    ///         }
+    ///     }).detach();
+    ///     Timer::new(std::time::Duration::from_micros(100)).await;
     /// })
-    /// .detach();
-    ///
-    /// ex.run(async { Timer::new(std::time::Duration::from_micros(100)).await; });
     /// ```
     pub fn detach(self) -> task::JoinHandle<T> {
         self.0.detach()
     }
 
     /// Creates a new task queue, with a given latency hint and the provided name
+    ///
+    /// Each task queue is scheduled based on the [`Shares`] and [`Latency`] system, and tasks
+    /// within a queue will be scheduled in serial.
+    ///
+    /// Returns an opaque handle that can later be used to launch tasks into that queue with
+    /// [`spawn_into`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use glommio::{LocalExecutor, Latency, Shares, Local};
+    ///
+    /// let local_ex = LocalExecutor::make_default();
+    /// local_ex.run(async move {
+    ///     let task_queue = Local::create_task_queue(Shares::default(), Latency::Matters(Duration::from_secs(1)), "my_tq");
+    ///     let task = Local::local_into(async {
+    ///         println!("Hello world");
+    ///     }, task_queue).expect("failed to spawn task");
+    /// });
+    /// ```
+    ///
+    /// [`spawn_into`]: struct.LocalExecutor.html#method.spawn_into
+    ///
+    /// [`Shares`]: enum.Shares.html
+    ///
+    /// [`Latency`]: enum.Latency.html
+
     pub fn create_task_queue(shares: Shares, latency: Latency, name: &str) -> TaskQueueHandle {
         LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
     }
@@ -1339,19 +1290,19 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Task};
+    /// use glommio::{LocalExecutor, Local};
     /// use futures_lite::future;
     ///
     /// let ex = LocalExecutor::make_default();
     ///
-    /// let task = ex.spawn(async {
-    ///     loop {
-    ///         println!("Even though I'm in an infinite loop, you can still cancel me!");
-    ///         future::yield_now().await;
-    ///     }
-    /// });
-    ///
     /// ex.run(async {
+    ///     let task = Local::local(async {
+    ///         loop {
+    ///             println!("Even though I'm in an infinite loop, you can still cancel me!");
+    ///             future::yield_now().await;
+    ///         }
+    ///     });
+    ///
     ///     task.cancel().await;
     /// });
     /// ```
@@ -1372,7 +1323,7 @@ impl<T> Future for Task<T> {
 mod test {
     use super::*;
     use crate::timer::{self, Timer};
-    use crate::{enclose, SharesManager};
+    use crate::{enclose, Local, SharesManager};
     use core::mem::MaybeUninit;
     use futures::join;
     use std::cell::Cell;
@@ -1616,15 +1567,14 @@ mod test {
     fn test_detach() {
         let ex = LocalExecutor::make_default();
 
-        ex.spawn(async {
-            loop {
-                //   println!("I'm a background task looping forever.");
-                Local::later().await;
-            }
-        })
-        .detach();
-
         ex.run(async {
+            Local::local(async {
+                loop {
+                    Local::later().await;
+                }
+            })
+            .detach();
+
             Timer::new(Duration::from_micros(100)).await;
         });
     }
@@ -1656,13 +1606,14 @@ mod test {
             "my_tq",
         );
         let start = getrusage_utime();
-        let task = ex
-            .spawn_into(
+        ex.run(async {
+            Local::local_into(
                 async { timer::sleep(Duration::from_secs(1)).await },
                 task_queue,
             )
-            .expect("failed to spawn task");
-        ex.run(async { task.await });
+            .expect("failed to spawn task")
+            .await;
+        });
 
         assert!(
             getrusage_utime() - start < Duration::from_millis(2),
@@ -1684,8 +1635,9 @@ mod test {
             .make()
             .unwrap();
         let ex_ru_start = getrusage_utime();
-        let task = ex.spawn(async move { timer::sleep(dur).await });
-        ex.run(async { task.await });
+        ex.run(async {
+            Local::local(async move { timer::sleep(dur).await }).await;
+        });
         let ex_ru_finish = getrusage_utime();
 
         assert!(

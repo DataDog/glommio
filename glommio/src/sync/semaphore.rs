@@ -619,17 +619,17 @@ mod test {
         let semaphore = Rc::new(Semaphore::new(0));
         let semaphore_c = semaphore.clone();
 
-        ex.spawn(async move {
-            for _ in 0..100 {
-                Timer::new(Duration::from_micros(100)).await;
-            }
-            assert_eq!(1, semaphore_c.state.borrow().list.len());
-
-            semaphore_c.signal(1);
-        })
-        .detach();
-
         ex.run(async move {
+            Local::local(async move {
+                for _ in 0..100 {
+                    Timer::new(Duration::from_micros(100)).await;
+                }
+                assert_eq!(1, semaphore_c.state.borrow().list.len());
+
+                semaphore_c.signal(1);
+            })
+            .detach();
+
             let _ = semaphore.acquire(1).await.unwrap();
         });
     }
