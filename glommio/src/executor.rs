@@ -711,14 +711,9 @@ impl LocalExecutor {
             .queues
             .borrow()
             .active_executing
-            .as_ref()
-            .map_or_else(
-                || self.get_queue(&TaskQueueHandle { index: 0 }),
-                |x| Some(x).cloned(),
-            )
-            .as_ref()
-            .unwrap()
-            .clone();
+            .clone() // this clone is cheap because we clone an `Option<Rc<_>>`
+            .or_else(|| self.get_queue(&TaskQueueHandle { index: 0 }))
+            .unwrap();
 
         let ex = tq.borrow().ex.clone();
         Task(ex.spawn(tq, future))
@@ -874,29 +869,24 @@ impl LocalExecutor {
                 // the opportunity to install the timer.
                 let duration = self.preempt_timer_duration();
                 self.parker.poll_io(duration);
-                if !self.run_task_queues() {
+                if self.run_task_queues() {
+                    spin_since = None
+                } else if let Poll::Ready(t) = future.as_mut().poll(cx) {
                     // It may be that we just became ready now that the task queue
                     // is exhausted. But if we sleep (park) we'll never know so we
                     // test again here. We can't test *just* here because the main
                     // future is probably the one setting up the task queues and etc.
-                    if let Poll::Ready(t) = future.as_mut().poll(cx) {
-                        break t;
-                    }
-                    if spin {
-                        if let Some(t) = spin_since {
-                            if t.elapsed() < spin_before_park {
-                                continue;
-                            }
-                            spin_since = None
-                        } else {
-                            spin_since = Some(Instant::now());
-                            continue;
-                        }
-                    }
-
-                    self.parker.park();
+                    break t;
                 } else {
-                    spin_since = None
+                    spin_since = match spin_since {
+                        _ if !spin => None,
+                        Some(t) if t.elapsed() < spin_before_park => Some(t),
+                        Some(_) => None,
+                        None => Some(Instant::now()),
+                    };
+                    if spin_since.is_none() {
+                        self.parker.park();
+                    }
                 }
             }
         })
@@ -978,32 +968,9 @@ impl<T> Task<T> {
             }
         });
 
-        if !need_yield {
-            return;
+        if need_yield {
+            futures_lite::future::yield_now().await;
         }
-
-        struct Yield {
-            done: Option<()>,
-        }
-
-        // Returns pending once, so we are taken away from the execution queue.
-        // The next time returns Ready, so we can proceed. We don't want to pay
-        // the cost of calling schedule functions
-        impl Future for Yield {
-            type Output = ();
-
-            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                match self.done.take() {
-                    Some(_) => {
-                        cx.waker().clone().wake();
-                        Poll::Pending
-                    }
-                    None => Poll::Ready(()),
-                }
-            }
-        }
-        let y = Yield { done: Some(()) };
-        y.await;
     }
 
     /// checks if this task has ran for too long and need to be preempted. This is useful for
