@@ -8,9 +8,8 @@ use crate::channels::spsc_queue::{make, Consumer, Producer};
 use crate::channels::ChannelError;
 use crate::parking::Reactor;
 use crate::{enclose, Local};
+use futures_lite::future;
 use futures_lite::stream::Stream;
-use futures_lite::FutureExt;
-use futures_lite::{future, ready};
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -163,13 +162,14 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
                 }
                 Ok(())
             }
-            Some(item) => {
+            Some(item) => Err(ChannelError::new(
                 if self.state.buffer.consumer_disconnected() {
-                    Err(ChannelError::new(io::ErrorKind::BrokenPipe, item))
+                    io::ErrorKind::BrokenPipe
                 } else {
-                    Err(ChannelError::new(io::ErrorKind::WouldBlock, item))
-                }
-            }
+                    io::ErrorKind::WouldBlock
+                },
+                item,
+            )),
         }
     }
 
@@ -268,24 +268,19 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     }
 
     fn recv_one(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        let res = ready!(match self.state.buffer.try_pop() {
-            Some(item) => {
-                Poll::Ready(Some(item))
+        match self.state.buffer.try_pop() {
+            None if !self.state.buffer.producer_disconnected() => {
+                self.reactor
+                    .add_shared_channel_waker(self.id, cx.waker().clone());
+                Poll::Pending
             }
-            None => {
-                if self.state.buffer.producer_disconnected() {
-                    Poll::Ready(None)
-                } else {
-                    self.reactor
-                        .add_shared_channel_waker(self.id, cx.waker().clone());
-                    Poll::Pending
+            res => {
+                if let Some(fd) = self.state.buffer.must_notify() {
+                    self.reactor.notify(fd);
                 }
+                Poll::Ready(res)
             }
-        });
-        if let Some(fd) = self.state.buffer.must_notify() {
-            self.reactor.notify(fd);
         }
-        Poll::Ready(res)
     }
 }
 
@@ -293,8 +288,7 @@ impl<T: Send + Sized + Copy> Stream for ConnectedReceiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut waiter = future::poll_fn(|cx| self.recv_one(cx));
-        waiter.poll(cx)
+        self.recv_one(cx)
     }
 }
 

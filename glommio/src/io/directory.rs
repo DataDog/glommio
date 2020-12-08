@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::io::dma_file::DmaFile;
 use crate::io::glommio_file::GlommioFile;
 use crate::sys;
 use crate::Local;
@@ -67,6 +68,21 @@ impl Directory {
         Ok(Directory { file })
     }
 
+    /// Opens a file under this directory, returns a DMA file
+    ///
+    /// NOTE: Path must not contain directories and just be a file name
+    pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
+        if contains_dir(path.as_ref()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Path cannot contain directories",
+            ));
+        }
+
+        let path = self.file.path_required("open file")?.join(path.as_ref());
+        DmaFile::open(path).await
+    }
+
     /// Similar to create() in the standard library, but returns a DMA file
     pub fn sync_create<P: AsRef<Path>>(path: P) -> io::Result<Directory> {
         let path = path.as_ref().to_owned();
@@ -87,6 +103,21 @@ impl Directory {
         Self::sync_open(&path)
     }
 
+    /// Creates a file under this directory, returns a DMA file
+    ///
+    /// NOTE: Path must not contain directories and just be a file name
+    pub async fn create_file<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
+        if contains_dir(path.as_ref()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Path cannot contain directories",
+            ));
+        }
+
+        let path = self.file.path_required("create file")?.join(path.as_ref());
+        DmaFile::create(path).await
+    }
+
     /// Returns an iterator to the contents of this directory
     pub fn sync_read_dir(&self) -> io::Result<std::fs::ReadDir> {
         let path = self.file.path_required("read directory")?;
@@ -103,5 +134,13 @@ impl Directory {
     /// Closes this DMA file.
     pub async fn close(self) -> io::Result<()> {
         self.file.close().await
+    }
+}
+
+fn contains_dir(path: &Path) -> bool {
+    let mut iter = path.components();
+    match iter.next() {
+        Some(std::path::Component::Normal(_)) => iter.next().is_some(),
+        _ => true,
     }
 }
