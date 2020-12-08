@@ -475,7 +475,7 @@ impl<T> RwLock<T> {
     ///
     /// ```
     /// use glommio::sync::RwLock;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{Local, LocalExecutor};
     /// use std::rc::Rc;
     /// use futures::future::join;
     ///
@@ -484,17 +484,17 @@ impl<T> RwLock<T> {
     ///
     /// let ex = LocalExecutor::make_default();
     ///
-    /// let first_reader = ex.spawn(async move {
-    ///     let n = lock.read().await.unwrap();
-    ///     assert_eq!(*n, 1);
-    /// });
-    ///
-    /// let second_reader = ex.spawn(async move {
-    ///     let r = c_lock.read().await;
-    ///     assert!(r.is_ok());
-    /// });
-    ///
     /// ex.run(async move {
+    ///     let first_reader = Local::local(async move {
+    ///         let n = lock.read().await.unwrap();
+    ///         assert_eq!(*n, 1);
+    ///     }).detach();
+    ///
+    ///     let second_reader = Local::local(async move {
+    ///         let r = c_lock.read().await;
+    ///         assert!(r.is_ok());
+    ///     }).detach();
+    ///
     ///     join(first_reader, second_reader).await;
     /// });
     /// ```
@@ -694,27 +694,26 @@ impl<T> RwLock<T> {
     /// let c_semaphore = semaphore.clone();
     ///
     /// let ex = LocalExecutor::make_default();
-    ///
-    /// let closer = ex.spawn(async move {
-    ///      //await till read lock will be acquired
-    ///      c_semaphore.acquire(1).await.unwrap();
-    ///      c_lock.close();
-    ///
-    ///      assert!(c_lock.try_write().is_err());
-    /// });
-    ///
-    /// let dead_locker = ex.spawn(async move {
-    ///    let _r = lock.read().await.unwrap();
-    ///
-    ///    //allow another fiber close RwLock
-    ///    semaphore.signal(1);
-    ///
-    ///    // this situation leads to deadlock unless lock is closed
-    ///    let lock_result = lock.write().await;
-    ///    assert!(lock_result.is_err());
-    /// });
-    ///
     /// ex.run(async move {
+    ///      let closer = Local::local(async move {
+    ///          //await till read lock will be acquired
+    ///         c_semaphore.acquire(1).await.unwrap();
+    ///         c_lock.close();
+    ///
+    ///         assert!(c_lock.try_write().is_err());
+    ///     }).detach();
+    ///
+    ///     let dead_locker = Local::local(async move {
+    ///         let _r = lock.read().await.unwrap();
+    ///
+    ///         //allow another fiber close RwLock
+    ///         semaphore.signal(1);
+    ///
+    ///         // this situation leads to deadlock unless lock is closed
+    ///         let lock_result = lock.write().await;
+    ///         assert!(lock_result.is_err());
+    ///     }).detach();
+    ///
     ///     dead_locker.await;
     /// });
     /// ```
@@ -1256,21 +1255,21 @@ mod test {
         let semaphore = Rc::new(Semaphore::new(0));
         let c_semaphore = semaphore.clone();
 
-        ex.spawn(async move {
-            c_semaphore.acquire(1).await.unwrap();
-
-            let _g = c_lock.read().await.unwrap();
-            wait_on_cond!(c_cond, 1);
-
-            for _ in 0..100 {
-                Timer::new(Duration::from_micros(100)).await;
-            }
-
-            assert_eq!(c_lock.rw.borrow().waiters.len(), 1);
-        })
-        .detach();
-
         ex.run(async move {
+            Local::local(async move {
+                c_semaphore.acquire(1).await.unwrap();
+
+                let _g = c_lock.read().await.unwrap();
+                wait_on_cond!(c_cond, 1);
+
+                for _ in 0..100 {
+                    Timer::new(Duration::from_micros(100)).await;
+                }
+
+                assert_eq!(c_lock.rw.borrow().waiters.len(), 1);
+            })
+            .detach();
+
             semaphore.signal(1);
             *cond.borrow_mut() = 1;
             let _ = lock.write().await.unwrap();

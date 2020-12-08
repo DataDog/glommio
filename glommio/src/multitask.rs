@@ -51,58 +51,11 @@ pub(crate) struct Task<T>(Option<JoinHandle<T>>);
 
 impl<T> Task<T> {
     /// Detaches the task to let it keep running in the background.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::time::Duration;
-    /// use glommio::LocalExecutor;
-    /// use glommio::timer::Timer;
-    ///
-    /// let ex = LocalExecutor::make_default();
-    ///
-    /// // Spawn a deamon future.
-    /// ex.spawn(async {
-    ///     for i in 0..10 {
-    ///         println!("I'm a daemon task looping ({}/{})).", i+1, 10);
-    ///         Timer::new(Duration::from_secs(1)).await;
-    ///     }
-    /// })
-    /// .detach();
-    /// ```
     pub(crate) fn detach(mut self) -> JoinHandle<T> {
         self.0.take().unwrap()
     }
 
     /// Cancels the task and waits for it to stop running.
-    ///
-    /// Returns the task's output if it was completed just before it got canceled, or [`None`] if
-    /// it didn't complete.
-    ///
-    /// While it's possible to simply drop the [`Task`] to cancel it, this is a cleaner way of
-    /// canceling because it also waits for the task to stop running.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::thread;
-    /// use std::time::Duration;
-    /// use glommio::LocalExecutor;
-    /// use glommio::timer::Timer;
-    /// use futures_lite::future::block_on;
-    ///
-    /// let ex = LocalExecutor::make_default();
-    ///
-    /// let task = ex.spawn(async {
-    ///     Timer::new(std::time::Duration::from_millis(100)).await;
-    ///     println!("jello, world!");
-    /// });
-    ///
-    /// // task may or may not print
-    /// ex.run(async {
-    ///     task.cancel().await;
-    /// });
-    /// ```
     pub(crate) async fn cancel(self) -> Option<T> {
         let mut task = self;
         let handle = task.0.take().unwrap();
