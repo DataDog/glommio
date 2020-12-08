@@ -306,14 +306,12 @@ impl<T> LocalSender<T> {
     }
 }
 
-fn wake_up_all(ws: &mut Option<VecDeque<Waker>>) {
-    if let Some(ref mut waiters) = ws {
-        // we assume here that wakes don't try to acquire a borrow on
-        // the channel.state
-        for w in core::mem::take(waiters) {
-            w.wake();
-        }
-    }
+fn take_wakers(ws: &mut Option<VecDeque<Waker>>) -> VecDeque<Waker> {
+    ws.take().unwrap_or_else(VecDeque::new)
+}
+
+fn wake_up_all(ws: VecDeque<Waker>) {
+    ws.into_iter().for_each(Waker::wake);
 }
 
 impl<T> Drop for LocalSender<T> {
@@ -322,7 +320,9 @@ impl<T> Drop for LocalSender<T> {
         // Will not wake up senders, but we are dropping the sender so nobody
         // wants to wake up anyway.
         state.send_waiters.take();
-        wake_up_all(&mut state.recv_waiters);
+        let wakers = take_wakers(&mut state.recv_waiters);
+        drop(state);
+        wake_up_all(wakers);
     }
 }
 
@@ -330,7 +330,9 @@ impl<T> Drop for LocalReceiver<T> {
     fn drop(&mut self) {
         let mut state = self.channel.state.borrow_mut();
         state.recv_waiters.take();
-        wake_up_all(&mut state.send_waiters);
+        let wakers = take_wakers(&mut state.send_waiters);
+        drop(state);
+        wake_up_all(wakers);
     }
 }
 

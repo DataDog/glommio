@@ -110,8 +110,7 @@ impl UringBufferAllocator {
     }
 
     fn free(&self, ptr: ptr::NonNull<u8>) {
-        let mut allocator = self.allocator.borrow_mut();
-        allocator.free(ptr.as_ptr() as *mut u8);
+        self.allocator.borrow_mut().free(ptr.as_ptr() as *mut u8);
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -119,8 +118,7 @@ impl UringBufferAllocator {
     }
 
     fn new_buffer(self: &Rc<Self>, size: usize) -> Option<DmaBuffer> {
-        let mut alloc = self.allocator.borrow_mut();
-        match ptr::NonNull::new(alloc.malloc(size)) {
+        match ptr::NonNull::new(self.allocator.borrow_mut().malloc(size)) {
             Some(data) => {
                 let ub = UringBuffer {
                     allocator: self.clone(),
@@ -203,7 +201,7 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
     }
 }
 
-static SCIPIO_URING_OPS: &[IoRingOp] = &[
+static GLOMMIO_URING_OPS: &[IoRingOp] = &[
     IoRingOp::IORING_OP_NOP,
     IoRingOp::IORING_OP_READV,
     IoRingOp::IORING_OP_WRITEV,
@@ -229,7 +227,7 @@ static SCIPIO_URING_OPS: &[IoRingOp] = &[
 ];
 
 lazy_static! {
-    static ref IO_URING_RECENT_ENOUGH: bool = check_supported_operations(SCIPIO_URING_OPS);
+    static ref IO_URING_RECENT_ENOUGH: bool = check_supported_operations(GLOMMIO_URING_OPS);
 }
 
 fn fill_sqe<F>(sqe: &mut iou::SubmissionQueueEvent<'_>, op: &UringDescriptor, buffer_allocation: F)
@@ -342,28 +340,27 @@ fn process_one_event<F>(
 where
     F: FnOnce(&InnerSource) -> Option<()>,
 {
-    if let Some(value) = cqe {
-        // No user data is POLL_REMOVE or CANCEL, we won't process.
-        if value.user_data() == 0 {
-            return Some(());
-        }
+    let value = cqe?;
 
-        let src = consume_source(from_user_data(value.user_data()));
-
-        let result = value.result();
-        let was_cancelled =
-            matches!(&result, Err(err) if err.raw_os_error() == Some(libc::ECANCELED));
-
-        if !was_cancelled && try_process(&*src).is_none() {
-            let mut w = src.wakers.borrow_mut();
-            w.result = Some(result);
-            if let Some(waiter) = w.waiter.take() {
-                wakers.push(waiter);
-            }
-        }
+    // No user data is POLL_REMOVE or CANCEL, we won't process.
+    if value.user_data() == 0 {
         return Some(());
     }
-    None
+
+    let src = consume_source(from_user_data(value.user_data()));
+
+    let result = value.result();
+    let was_cancelled = matches!(&result, Err(err) if err.raw_os_error() == Some(libc::ECANCELED));
+
+    if !was_cancelled && try_process(&*src).is_none() {
+        let mut w = src.wakers.borrow_mut();
+        w.result = Some(result);
+        if let Some(waiter) = w.waiter.take() {
+            wakers.push(waiter);
+        }
+    }
+
+    Some(())
 }
 
 type SourceMap = FreeList<Rc<InnerSource>>;
@@ -464,8 +461,8 @@ trait UringCommon {
                     dispatch = true;
                     break;
                 }
-                Some(true) => {}
                 Some(false) => break,
+                Some(true) => {}
             }
         }
 
@@ -491,14 +488,7 @@ trait UringCommon {
     }
 
     fn consume_completion_queue(&mut self, wakers: &mut Vec<Waker>) -> usize {
-        let mut completed: usize = 0;
-        loop {
-            if self.consume_one_event(wakers).is_none() {
-                break;
-            }
-            completed += 1;
-        }
-        completed
+        std::iter::from_fn(|| self.consume_one_event(wakers)).count()
     }
 
     // It is important to process cancellations as soon as we see them,
@@ -579,9 +569,10 @@ impl UringCommon for PollRing {
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
         if self.submitted != self.completed {
-            return self.ring.submit_sqes();
+            self.ring.submit_sqes()
+        } else {
+            Ok(0)
         }
-        Ok(0)
     }
 
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
@@ -593,11 +584,8 @@ impl UringCommon for PollRing {
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         if queue.is_empty() {
-            return Some(false);
-        }
-
-        //let buffers = self.buffers.clone();
-        if let Some(mut sqe) = self.ring.next_sqe() {
+            Some(false)
+        } else if let Some(mut sqe) = self.ring.next_sqe() {
             self.submitted += 1;
             let op = queue.pop_front().unwrap();
             let allocator = self.allocator.clone();
@@ -633,8 +621,7 @@ impl Source {
     }
 
     pub(crate) fn extract_dma_buffer(&mut self) -> DmaBuffer {
-        let stype = self.extract_source_type();
-        match stype {
+        match self.extract_source_type() {
             SourceType::Read(_, Some(IOBuffer::Dma(buffer))) => buffer,
             SourceType::Write(_, IOBuffer::Dma(buffer)) => buffer,
             x => panic!("Could not extract buffer. Source: {:?}", x),
@@ -642,8 +629,7 @@ impl Source {
     }
 
     pub(crate) fn extract_buffer(&mut self) -> Vec<u8> {
-        let stype = self.extract_source_type();
-        match stype {
+        match self.extract_source_type() {
             SourceType::Read(_, Some(IOBuffer::Buffered(buffer))) => buffer,
             SourceType::Write(_, IOBuffer::Buffered(buffer)) => buffer,
             x => panic!("Could not extract buffer. Source: {:?}", x),
@@ -651,12 +637,11 @@ impl Source {
     }
 
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.result.take()
+        self.inner.wakers.borrow_mut().result.take()
     }
+
     pub(crate) fn add_waiter(&self, waker: Waker) {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.waiter.replace(waker);
+        self.inner.wakers.borrow_mut().waiter.replace(waker);
     }
 
     pub(crate) fn raw(&self) -> RawFd {

@@ -28,13 +28,11 @@ impl Future for Waiter {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut state = self.sem_state.borrow_mut();
-        match state.try_acquire(self.units) {
-            Err(x) => Poll::Ready(Err(x)),
-            Ok(true) => Poll::Ready(Ok(())),
-            Ok(false) => {
-                state.add_waker(self.id, self.units, cx.waker().clone());
-                Poll::Pending
-            }
+        if state.try_acquire(self.units)? {
+            Poll::Ready(Ok(()))
+        } else {
+            state.add_waker(self.id, self.units, cx.waker().clone());
+            Poll::Pending
         }
     }
 }
@@ -66,8 +64,8 @@ impl State {
     }
 
     fn new_waiter(&mut self, units: u64, state: Rc<RefCell<State>>) -> Waiter {
-        self.idgen += 1;
         let id = self.idgen;
+        self.idgen += 1;
         Waiter::new(WaiterId(id), units, state)
     }
 
@@ -92,14 +90,13 @@ impl State {
 
     fn try_acquire(&mut self, units: u64) -> Result<bool> {
         if self.closed {
-            return Err(Error::new(ErrorKind::BrokenPipe, "Semaphore Broken"));
-        }
-
-        if self.avail >= units {
+            Err(Error::new(ErrorKind::BrokenPipe, "Semaphore Broken"))
+        } else if self.avail >= units {
             self.avail -= units;
-            return Ok(true);
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(false)
     }
 
     fn close(&mut self) {
@@ -307,12 +304,7 @@ impl Semaphore {
     /// ```
     pub fn try_acquire(&self, units: u64) -> Result<bool> {
         let mut state = self.state.borrow_mut();
-
-        if state.list.is_empty() && state.try_acquire(units)? {
-            return Ok(true);
-        }
-
-        Ok(false)
+        Ok(state.list.is_empty() && state.try_acquire(units)?)
     }
 
     /// Acquires the given number of units, if they are available, and
@@ -407,8 +399,7 @@ impl Semaphore {
     /// });
     /// ```
     pub fn close(&self) {
-        let mut state = self.state.borrow_mut();
-        state.close();
+        self.state.borrow_mut().close();
     }
 }
 

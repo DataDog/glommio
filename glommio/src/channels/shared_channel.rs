@@ -189,8 +189,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// });
     /// ```
     pub async fn send(&self, item: T) -> Result<(), ChannelError<T>> {
-        let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
-        waiter.await;
+        future::poll_fn(|cx| self.wait_for_room(cx)).await;
         let res = self.try_send(item);
         if let Err(x) = &res {
             assert_ne!(x.kind, io::ErrorKind::WouldBlock);
@@ -199,13 +198,12 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     }
 
     fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
-        match self.state.buffer.free_space() > 0 {
-            true => Poll::Ready(()),
-            false => {
-                self.reactor
-                    .add_shared_channel_waker(self.id, cx.waker().clone());
-                Poll::Pending
-            }
+        if self.state.buffer.free_space() > 0 {
+            Poll::Ready(())
+        } else {
+            self.reactor
+                .add_shared_channel_waker(self.id, cx.waker().clone());
+            Poll::Pending
         }
     }
 }
@@ -263,8 +261,7 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     /// [`next`]: https://docs.rs/futures-lite/1.11.2/futures_lite/stream/trait.StreamExt.html#method.next
     /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
     pub async fn recv(&self) -> Option<T> {
-        let waiter = future::poll_fn(|cx| self.recv_one(cx));
-        waiter.await
+        future::poll_fn(|cx| self.recv_one(cx)).await
     }
 
     fn recv_one(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
