@@ -874,29 +874,24 @@ impl LocalExecutor {
                 // the opportunity to install the timer.
                 let duration = self.preempt_timer_duration();
                 self.parker.poll_io(duration);
-                if !self.run_task_queues() {
+                if self.run_task_queues() {
+                    spin_since = None
+                } else if let Poll::Ready(t) = future.as_mut().poll(cx) {
                     // It may be that we just became ready now that the task queue
                     // is exhausted. But if we sleep (park) we'll never know so we
                     // test again here. We can't test *just* here because the main
                     // future is probably the one setting up the task queues and etc.
-                    if let Poll::Ready(t) = future.as_mut().poll(cx) {
-                        break t;
-                    }
-                    if spin {
-                        if let Some(t) = spin_since {
-                            if t.elapsed() < spin_before_park {
-                                continue;
-                            }
-                            spin_since = None
-                        } else {
-                            spin_since = Some(Instant::now());
-                            continue;
-                        }
-                    }
-
-                    self.parker.park();
+                    break t;
                 } else {
-                    spin_since = None
+                    spin_since = match spin_since {
+                        _ if !spin => None,
+                        Some(t) if t.elapsed() < spin_before_park => Some(t),
+                        Some(_) => None,
+                        None => Some(Instant::now()),
+                    };
+                    if spin_since.is_none() {
+                        self.parker.park();
+                    }
                 }
             }
         })
