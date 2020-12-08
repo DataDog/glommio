@@ -14,6 +14,9 @@ use crate::task::header::Header;
 use crate::task::state::*;
 use crate::task::utils::{abort, abort_on_panic, extend};
 use crate::task::Task;
+use std::thread::ThreadId;
+
+thread_local!(static THREAD_ID : ThreadId = std::thread::current().id());
 
 /// The vtable for a task.
 pub(crate) struct TaskVTable {
@@ -110,6 +113,7 @@ where
 
             // Write the header as the first field of the task.
             (raw.header as *mut Header).write(Header {
+                thread_id: Self::thread_id(),
                 state: SCHEDULED | HANDLE | REFERENCE,
                 awaiter: None,
                 vtable: &TaskVTable {
@@ -130,6 +134,12 @@ where
 
             raw_task
         }
+    }
+
+    fn thread_id() -> ThreadId {
+        THREAD_ID
+            .try_with(|id| *id)
+            .unwrap_or_else(|_e| std::thread::current().id())
     }
 
     /// Creates a `RawTask` from a raw task pointer.
@@ -183,25 +193,31 @@ where
         // we'll do less reference counting if we wake the waker by reference and then drop it.
         if mem::size_of::<S>() > 0 {
             Self::wake_by_ref(ptr);
-            Self::drop_waker(ptr);
+            Self::drop_waker_reference(ptr);
             return;
         }
 
         let raw = Self::from_ptr(ptr);
+        assert_eq!(
+            Self::thread_id(),
+            (*raw.header).thread_id,
+            "Waker::wake is called outside of working thread. \
+                   Waker instances can not be moved to or work with multiple threads"
+        );
 
         let state = (*raw.header).state;
 
         // If the task is completed or closed, it can't be woken up.
         if state & (COMPLETED | CLOSED) != 0 {
             // Drop the waker.
-            Self::drop_waker(ptr);
+            Self::drop_waker_reference(ptr);
             return;
         }
 
         // If the task is already scheduled do nothing.
         if state & SCHEDULED != 0 {
             // Drop the waker.
-            Self::drop_waker(ptr);
+            Self::drop_waker_reference(ptr);
         } else {
             // Mark the task as scheduled.
             (*(raw.header as *mut Header)).state = state | SCHEDULED;
@@ -210,7 +226,7 @@ where
                 Self::schedule(ptr);
             } else {
                 // Drop the waker.
-                Self::drop_waker(ptr);
+                Self::drop_waker_reference(ptr);
             }
         }
     }
@@ -218,6 +234,13 @@ where
     /// Wakes a waker by reference.
     unsafe fn wake_by_ref(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
+
+        assert_eq!(
+            Self::thread_id(),
+            (*raw.header).thread_id,
+            "Waker::wake_by_ref is called outside of working thread. \
+                   Waker instances can not be moved to or work with multiple threads"
+        );
 
         let state = (*raw.header).state;
 
@@ -261,17 +284,27 @@ where
     unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
         let raw = Self::from_ptr(ptr);
 
-        // Increment the reference count. With any kind of reference-counted data structure,
-        // relaxed ordering is appropriate when incrementing the counter.
-        let state = (*raw.header).state;
-        (*(raw.header as *mut Header)).state += REFERENCE;
+        assert_eq!(
+            Self::thread_id(),
+            (*raw.header).thread_id,
+            "Waker::clone is called outside of working thread. \
+                   Waker instances can not be moved to or work with multiple threads"
+        );
+
+        Self::increment_references(&mut *(raw.header as *mut Header));
+
+        RawWaker::new(ptr, &Self::RAW_WAKER_VTABLE)
+    }
+
+    #[inline]
+    fn increment_references(header: &mut Header) {
+        let state = header.state;
+        header.state += REFERENCE;
 
         // If the reference count overflowed, abort.
         if state > isize::max_value() as usize {
             abort();
         }
-
-        RawWaker::new(ptr, &Self::RAW_WAKER_VTABLE)
     }
 
     /// Drops a waker.
@@ -281,8 +314,20 @@ where
     /// scheduled one more time so that its future gets dropped by the executor.
     #[inline]
     unsafe fn drop_waker(ptr: *const ()) {
-        let raw = Self::from_ptr(ptr);
+        let header = ptr as *const Header;
+        assert_eq!(
+            Self::thread_id(),
+            (*header).thread_id,
+            "Waker::drop is called outside of working thread. \
+                   Waker instances can not be moved to or work with multiple threads"
+        );
 
+        <RawTask<F, R, S>>::drop_waker_reference(ptr)
+    }
+
+    #[inline]
+    unsafe fn drop_waker_reference(ptr: *const ()) {
+        let raw = Self::from_ptr(ptr);
         // Decrement the reference count.
         let new = (*raw.header).state - REFERENCE;
         (*(raw.header as *mut Header)).state = new;
@@ -328,11 +373,36 @@ where
     unsafe fn schedule(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
 
-        // If the schedule function has captured variables, create a temporary waker that prevents
-        // the task from getting deallocated while the function is being invoked.
-        let _waker;
+        struct Guard<'a, F, R, S>(&'a RawTask<F, R, S>)
+        where
+            F: Future<Output = R> + 'static,
+            S: Fn(Task) + 'static;
+
+        impl<'a, F, R, S> Drop for Guard<'a, F, R, S>
+        where
+            F: Future<Output = R> + 'static,
+            S: Fn(Task) + 'static,
+        {
+            fn drop(&mut self) {
+                let raw = self.0;
+                let ptr = raw.header as *const ();
+
+                unsafe {
+                    RawTask::<F, R, S>::drop_waker_reference(ptr);
+                }
+            }
+        }
+
+        let guard;
+        // Calling of schedule functions itself does not increment references,
+        // if the schedule function has captured variables, increment references
+        // so if task being dropped inside schedule function , function itself
+        // will keep valid data till the end of execution.
         if mem::size_of::<S>() > 0 {
-            _waker = Waker::from_raw(Self::clone_waker(ptr));
+            Self::increment_references(&mut *(raw.header as *mut Header));
+            guard = Some(Guard(&raw));
+        } else {
+            guard = None;
         }
 
         let task = Task {
@@ -340,6 +410,7 @@ where
         };
 
         (*raw.schedule)(task);
+        drop(guard);
     }
 
     /// Drops the future inside a task.
