@@ -23,6 +23,7 @@
 //!
 
 use ahash::AHashMap;
+use iou::{SockAddr, SockAddrStorage};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
@@ -219,7 +220,7 @@ impl SharedChannels {
 /// There is only one global instance of this type, accessible by [`Local::get_reactor()`].
 pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
-    sys: sys::Reactor,
+    pub(crate) sys: sys::Reactor,
 
     timers: RefCell<Timers>,
 
@@ -324,6 +325,19 @@ impl Reactor {
             ),
         );
         self.sys.write_buffered(&source, pos);
+        source
+    }
+
+    pub(crate) fn connect(&self, raw: RawFd, addr: SockAddr) -> Source {
+        let source = self.new_source(raw, SourceType::Connect(addr));
+        self.sys.connect(&source);
+        source
+    }
+
+    pub(crate) fn accept(&self, raw: RawFd) -> Source {
+        let addr = SockAddrStorage::uninit();
+        let source = self.new_source(raw, SourceType::Accept(addr));
+        self.sys.accept(&source);
         source
     }
 
@@ -448,6 +462,17 @@ impl Reactor {
     fn process_shared_channels(&self, wakers: &mut Vec<Waker>) -> usize {
         let mut channels = self.shared_channels.borrow_mut();
         channels.process_shared_channels(wakers)
+    }
+
+    pub(crate) fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
+        let mut wakers = self.wakers.borrow_mut();
+        self.sys.rush_dispatch(source.latency_req(), &mut wakers)?;
+        // Wake up ready tasks.
+        for waker in wakers.drain(..) {
+            // Don't let a panicking waker blow everything up.
+            let _ = panic::catch_unwind(|| waker.wake());
+        }
+        Ok(())
     }
 
     /// Processes new events, blocking until the first event or the timeout.

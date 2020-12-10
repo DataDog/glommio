@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use iou::{SockAddr, SockAddrStorage};
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
 use std::ffi::CString;
@@ -98,6 +99,14 @@ pub(crate) fn write_eventfd(eventfd: RawFd) {
     assert_eq!(ret, 8);
 }
 
+pub(crate) fn send_syscall(fd: RawFd, buf: *const u8, len: usize, flags: i32) -> io::Result<usize> {
+    syscall!(send(fd, buf as _, len, flags)).map(|x| x as usize)
+}
+
+pub(crate) fn recv_syscall(fd: RawFd, buf: *mut u8, len: usize, flags: i32) -> io::Result<usize> {
+    syscall!(recv(fd, buf as _, len, flags)).map(|x| x as usize)
+}
+
 fn cstr(path: &Path) -> io::Result<CString> {
     Ok(CString::new(path.as_os_str().as_bytes())?)
 }
@@ -144,6 +153,8 @@ pub(crate) enum LinkStatus {
 pub(crate) enum SourceType {
     Write(PollableStatus, IOBuffer),
     Read(PollableStatus, Option<IOBuffer>),
+    SockSend(DmaBuffer),
+    SockRecv(Option<DmaBuffer>),
     PollableFd,
     Open(CString),
     FdataSync,
@@ -152,6 +163,8 @@ pub(crate) enum SourceType {
     LinkRings(LinkStatus),
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(TimeSpec64),
+    Connect(SockAddr),
+    Accept(SockAddrStorage),
     Invalid,
 }
 

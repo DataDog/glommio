@@ -228,22 +228,20 @@
 //! Connect to `example.com:80`, or time out after 10 seconds:
 //!
 //! ```
-//! use glommio::{Async, LocalExecutor};
+//! use glommio::LocalExecutor;
+//! use glommio::net::TcpStream;
 //! use glommio::timer::Timer;
 //! use futures_lite::{future::FutureExt, io};
 //!
-//! use std::net::{TcpStream, ToSocketAddrs};
 //! use std::time::Duration;
 //!
 //! let local_ex = LocalExecutor::make_default();
 //! local_ex.run(async {
-//!     let addr = "::80".to_socket_addrs()?.next().unwrap();
-//!
 //!     let timeout = async {
 //!         Timer::new(Duration::from_secs(10)).await;
 //!         Err(io::ErrorKind::TimedOut.into())
 //!     };
-//!     let stream = Async::<TcpStream>::connect(addr).or(timeout).await?;
+//!     let stream = TcpStream::connect("::80").or(timeout).await?;
 //!
 //!     // Read or write from stream
 //!
@@ -349,6 +347,7 @@ mod error;
 mod executor;
 pub mod io;
 mod multitask;
+pub mod net;
 mod networking;
 mod pollable;
 mod shares;
