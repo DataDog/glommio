@@ -270,15 +270,15 @@ impl Source {
     }
 }
 
-/// Shuts down the write side of a socket.
+/// Shuts down the requested side of a socket.
 ///
 /// If this source is not a socket, the `shutdown()` syscall error is ignored.
-pub fn shutdown_write(raw: RawFd) -> io::Result<()> {
+pub(crate) fn shutdown(raw: RawFd, how: Shutdown) -> io::Result<()> {
     // This may not be a TCP stream, but that's okay. All we do is call `shutdown()` on the raw
     // descriptor and ignore errors if it's not a socket.
     let res = unsafe {
         let stream = ManuallyDrop::new(TcpStream::from_raw_fd(raw));
-        stream.shutdown(Shutdown::Write)
+        stream.shutdown(how)
     };
 
     // The only actual error may be ENOTCONN, ignore everything else.

@@ -422,7 +422,7 @@ impl<T: Write> AsyncWrite for Async<T> {
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown_write(self.source.raw()))
+        Poll::Ready(sys::shutdown(self.source.raw(), std::net::Shutdown::Write))
     }
 }
 
@@ -451,7 +451,7 @@ where
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown_write(self.source.raw()))
+        Poll::Ready(sys::shutdown(self.source.raw(), std::net::Shutdown::Write))
     }
 }
 
