@@ -3,36 +3,90 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use ahash::AHashMap;
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
-use std::collections::VecDeque;
 use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-struct WaiterId(u64);
+use intrusive_collections::intrusive_adapter;
+use intrusive_collections::{LinkedList, LinkedListLink};
 
 #[derive(Debug)]
 struct Waiter {
-    id: WaiterId,
+    node: Rc<WaiterNode>,
+    sem_state: Rc<RefCell<SemaphoreState>>,
+}
+
+#[derive(Debug)]
+struct WaiterNode {
+    link: LinkedListLink,
+    state: RefCell<WaiterState>,
+}
+
+#[derive(Debug)]
+struct WaiterState {
     units: u64,
-    sem_state: Rc<RefCell<State>>,
+    waker: Option<Waker>,
+}
+
+intrusive_adapter!(WaiterAdapter = Rc<WaiterNode> : WaiterNode {link : LinkedListLink});
+
+impl Waiter {
+    fn new(units: u64, sem_state: Rc<RefCell<SemaphoreState>>) -> Waiter {
+        Waiter {
+            sem_state,
+            node: Rc::new(WaiterNode {
+                link: LinkedListLink::default(),
+                state: RefCell::new(WaiterState { units, waker: None }),
+            }),
+        }
+    }
+
+    fn remove_from_waiting_queue(&self, sem_state: &mut SemaphoreState) {
+        if self.node.link.is_linked() {
+            let mut cursor = unsafe {
+                sem_state
+                    .waiters_list
+                    .cursor_mut_from_ptr(self.node.as_ref())
+            };
+
+            if !cursor.remove().is_some() {
+                panic!("Waiter has to be linked into the list of waiting futures");
+            }
+        }
+    }
+
+    fn register_in_waiting_queue(&self, sem_state: &mut SemaphoreState, waker: Waker) {
+        self.node.state.borrow_mut().waker = Some(waker);
+
+        if self.node.link.is_linked() {
+            return;
+        }
+
+        sem_state.waiters_list.push_front(self.node.clone());
+    }
 }
 
 impl Future for Waiter {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.sem_state.borrow_mut();
-        match state.try_acquire(self.units) {
-            Err(x) => Poll::Ready(Err(x)),
-            Ok(true) => Poll::Ready(Ok(())),
+        let mut sem_state = self.sem_state.borrow_mut();
+
+        let units = self.node.state.borrow().units;
+        match sem_state.try_acquire(units) {
+            Err(x) => {
+                self.remove_from_waiting_queue(&mut sem_state);
+                Poll::Ready(Err(x))
+            }
+            Ok(true) => {
+                self.remove_from_waiting_queue(&mut sem_state);
+                Poll::Ready(Ok(()))
+            }
             Ok(false) => {
-                state.add_waker(self.id, self.units, cx.waker().clone());
+                self.register_in_waiting_queue(&mut sem_state, cx.waker().clone());
                 Poll::Pending
             }
         }
@@ -40,54 +94,23 @@ impl Future for Waiter {
 }
 
 #[derive(Debug)]
-struct State {
-    idgen: u64,
+struct SemaphoreState {
     avail: u64,
-    virtual_consumed: u64,
-    waiterset: AHashMap<WaiterId, (u64, Waker)>,
-    list: VecDeque<WaiterId>,
     closed: bool,
+    waiters_list: LinkedList<WaiterAdapter>,
 }
 
-impl State {
+impl SemaphoreState {
     fn new(avail: u64) -> Self {
-        State {
+        SemaphoreState {
             avail,
-            virtual_consumed: 0,
-            list: VecDeque::new(),
-            waiterset: AHashMap::new(),
             closed: false,
-            idgen: 0,
+            waiters_list: LinkedList::new(WaiterAdapter::new()),
         }
     }
 
     fn available(&self) -> u64 {
         self.avail
-    }
-
-    fn new_waiter(&mut self, units: u64, state: Rc<RefCell<State>>) -> Waiter {
-        self.idgen += 1;
-        let id = self.idgen;
-        Waiter::new(WaiterId(id), units, state)
-    }
-
-    fn add_waker(&mut self, id: WaiterId, units: u64, waker: Waker) {
-        let entry = self.waiterset.entry(id);
-
-        match entry {
-            Entry::Vacant(entry) => {
-                self.list.push_back(id);
-                entry.insert((units, waker));
-            }
-            Entry::Occupied(mut entry) => {
-                if cfg!(debug_assertions) {
-                    let (stored_units, _) = entry.get();
-                    assert_eq!(*stored_units, units);
-                }
-
-                *entry.get_mut() = (units, waker);
-            }
-        }
     }
 
     fn try_acquire(&mut self, units: u64) -> Result<bool> {
@@ -104,40 +127,20 @@ impl State {
 
     fn close(&mut self) {
         self.closed = true;
-        for (_, (_, waiter)) in self.waiterset.drain() {
-            waiter.wake();
+
+        for node in &self.waiters_list {
+            if let Some(waker) = node.state.borrow_mut().waker.take() {
+                waker.wake();
+            } else {
+                panic!("Future is linked into the waiting list without a waker")
+            }
         }
+
+        self.waiters_list.fast_clear();
     }
 
     fn signal(&mut self, units: u64) {
         self.avail += units;
-    }
-
-    fn try_wake_one(&mut self) -> Option<Waker> {
-        let id = *self.list.front()?;
-        let waiterset_entry = match self.waiterset.entry(id) {
-            Entry::Occupied(entry) => entry,
-            Entry::Vacant(_) => unreachable!(),
-        };
-        let units = waiterset_entry.get().0;
-        let expected_units = self.avail - self.virtual_consumed;
-        if units <= expected_units {
-            self.list.pop_front();
-            let (units, waker) = waiterset_entry.remove();
-            self.virtual_consumed += units;
-            return Some(waker);
-        }
-        None
-    }
-}
-
-impl Waiter {
-    fn new(id: WaiterId, units: u64, sem_state: Rc<RefCell<State>>) -> Waiter {
-        Waiter {
-            id,
-            units,
-            sem_state,
-        }
     }
 }
 
@@ -149,24 +152,52 @@ impl Waiter {
 #[must_use = "units are only held while the permit is alive. If unused then semaphore will immediately release units"]
 pub struct Permit {
     units: u64,
-    sem: Rc<RefCell<State>>,
+    sem: Rc<RefCell<SemaphoreState>>,
 }
 
 impl Permit {
-    fn new(units: u64, sem: Rc<RefCell<State>>) -> Permit {
+    fn new(units: u64, sem: Rc<RefCell<SemaphoreState>>) -> Permit {
         Permit { units, sem }
     }
 }
 
-fn process_wakes(sem: Rc<RefCell<State>>, units: u64) {
+fn process_wakes(sem: Rc<RefCell<SemaphoreState>>, units: u64) {
     let mut state = sem.borrow_mut();
     state.signal(units);
-    while let Some(waiter) = state.try_wake_one() {
-        drop(state);
-        waiter.wake();
-        state = sem.borrow_mut();
+
+    let mut available_units = state.avail;
+
+    let mut cursor = state.waiters_list.cursor_mut();
+    cursor.move_next();
+
+    //only tasks which will be able to proceed will be awaken
+    while available_units > 0 {
+        let mut waker = None;
+        if let Some(node) = cursor.get() {
+            let mut waiter_state = node.state.borrow_mut();
+
+            if waiter_state.units <= available_units {
+                let w = waiter_state.waker.take();
+
+                if let Some(_) = w {
+                    waker = w;
+                } else {
+                    panic!("Future was linked into the waiting list without a waker");
+                }
+
+                available_units -= waiter_state.units;
+            }
+        } else {
+            break;
+        }
+
+        if let Some(waker) = waker {
+            waker.wake();
+            cursor.remove();
+        } else {
+            cursor.move_next();
+        }
     }
-    state.virtual_consumed = 0;
 }
 
 impl Drop for Permit {
@@ -179,7 +210,7 @@ impl Drop for Permit {
 /// condition variables, and is friendly to single-threaded execution.
 #[derive(Debug)]
 pub struct Semaphore {
-    state: Rc<RefCell<State>>,
+    state: Rc<RefCell<SemaphoreState>>,
 }
 
 impl Semaphore {
@@ -195,7 +226,7 @@ impl Semaphore {
     /// ```
     pub fn new(avail: u64) -> Semaphore {
         Semaphore {
-            state: Rc::new(RefCell::new(State::new(avail))),
+            state: Rc::new(RefCell::new(SemaphoreState::new(avail))),
         }
     }
 
@@ -265,11 +296,12 @@ impl Semaphore {
             let mut state = self.state.borrow_mut();
             // Try acquiring first without paying the price to construct a waker.
             // If that fails then we construct a waker and wait on it.
-            if state.list.is_empty() && state.try_acquire(units)? {
+            if state.waiters_list.is_empty() && state.try_acquire(units)? {
                 return Ok(());
             }
-            state.new_waiter(units, self.state.clone())
+            Waiter::new(units, self.state.clone())
         };
+
         waiter.await
     }
 
@@ -308,7 +340,7 @@ impl Semaphore {
     pub fn try_acquire(&self, units: u64) -> Result<bool> {
         let mut state = self.state.borrow_mut();
 
-        if state.list.is_empty() && state.try_acquire(units)? {
+        if state.waiters_list.is_empty() && state.try_acquire(units)? {
             return Ok(true);
         }
 
@@ -347,7 +379,7 @@ impl Semaphore {
     pub fn try_acquire_permit(&self, units: u64) -> Result<Permit> {
         let mut state = self.state.borrow_mut();
 
-        if state.list.is_empty() && state.try_acquire(units)? {
+        if state.waiters_list.is_empty() && state.try_acquire(units)? {
             return Ok(Permit::new(units, self.state.clone()));
         }
 
@@ -624,7 +656,13 @@ mod test {
                 for _ in 0..100 {
                     Timer::new(Duration::from_micros(100)).await;
                 }
-                assert_eq!(1, semaphore_c.state.borrow().list.len());
+
+                let mut waiters_count = 0;
+                for _ in &semaphore_c.state.borrow().waiters_list {
+                    waiters_count += 1;
+                }
+
+                assert_eq!(1, waiters_count);
 
                 semaphore_c.signal(1);
             })
