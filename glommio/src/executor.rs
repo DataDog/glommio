@@ -1133,7 +1133,7 @@ impl<T> Task<T> {
     /// });
     /// ```
     ///
-    /// [`spawn_into`]: struct.LocalExecutor.html#method.spawn_into
+    /// [`spawn_into`]: Task::spawn_into
     ///
     /// [`Shares`]: enum.Shares.html
     ///
