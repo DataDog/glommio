@@ -23,7 +23,7 @@
 //!
 
 use ahash::AHashMap;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
 use std::fmt;
@@ -226,7 +226,7 @@ pub(crate) struct Reactor {
     shared_channels: RefCell<SharedChannels>,
 
     /// I/O Requirements of the task currently executing.
-    current_io_requirements: RefCell<IoRequirements>,
+    current_io_requirements: Cell<IoRequirements>,
 
     wakers: RefCell<Vec<Waker>>,
 
@@ -252,7 +252,7 @@ impl Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
-            current_io_requirements: RefCell::new(IoRequirements::default()),
+            current_io_requirements: Cell::new(IoRequirements::default()),
             wakers: RefCell::new(Vec::with_capacity(256)),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
@@ -272,14 +272,13 @@ impl Reactor {
         sys::write_eventfd(remote);
     }
 
-    fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
-        let ioreq = self.current_io_requirements.borrow();
-        sys::Source::new(*ioreq, raw, stype)
+    pub(crate) fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
+        let ioreq = self.current_io_requirements.get();
+        sys::Source::new(ioreq, raw, stype)
     }
 
     pub(crate) fn inform_io_requirements(&self, req: IoRequirements) {
-        let mut ioreq = self.current_io_requirements.borrow_mut();
-        *ioreq = req;
+        self.current_io_requirements.set(req);
     }
 
     pub(crate) fn register_shared_channel<F>(&self, test_function: Box<F>) -> u64
