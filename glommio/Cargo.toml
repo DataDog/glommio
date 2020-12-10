@@ -37,6 +37,7 @@ ahash = "0.5.7"
 [dev-dependencies]
 futures = "0.3.5"
 fastrand = "1.4.0"
+tokio = { version = "0.3.5", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time"] }
 
 [[bench]]
 name = "executor"
@@ -56,4 +57,12 @@ harness = false
 
 [[bench]]
 name = "preempt"
+harness = false
+
+[[bench]]
+name = "tcp"
+harness = false
+
+[[bench]]
+name = "tokio_tcp"
 harness = false
