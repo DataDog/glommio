@@ -52,7 +52,7 @@ impl Waiter {
                     .cursor_mut_from_ptr(self.node.as_ref())
             };
 
-            if !cursor.remove().is_some() {
+            if cursor.remove().is_none() {
                 panic!("Waiter has to be linked into the list of waiting futures");
             }
         }
@@ -179,7 +179,7 @@ fn process_wakes(sem: Rc<RefCell<SemaphoreState>>, units: u64) {
             if waiter_state.units <= available_units {
                 let w = waiter_state.waker.take();
 
-                if let Some(_) = w {
+                if w.is_some() {
                     waker = w;
                 } else {
                     panic!("Future was linked into the waiting list without a waker");
