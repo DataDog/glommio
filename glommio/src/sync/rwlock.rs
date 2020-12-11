@@ -129,7 +129,6 @@ enum WaiterKind {
     WRITER,
 }
 
-
 #[derive(Debug)]
 struct Waiter {
     rw: Rc<RefCell<State>>,
@@ -213,32 +212,25 @@ struct State {
 
     waiters_queue: LinkedList<WaiterAdapter>,
     closed: bool,
-
 }
 
 impl Waiter {
     fn new(kind: WaiterKind, rw: Rc<RefCell<State>>) -> Self {
         Waiter {
             rw,
-            node: Rc::new(
-                WaiterNode {
-                    kind,
-                    waker: RefCell::new(None),
-                    link: LinkedListLink::default(),
-                }
-            ),
+            node: Rc::new(WaiterNode {
+                kind,
+                waker: RefCell::new(None),
+                link: LinkedListLink::default(),
+            }),
         }
     }
 
     fn remove_from_waiting_queue(&self, rw: &mut State) {
         if self.node.link.is_linked() {
-            let mut cursor = unsafe {
-                rw
-                    .waiters_queue
-                    .cursor_mut_from_ptr(self.node.as_ref())
-            };
+            let mut cursor = unsafe { rw.waiters_queue.cursor_mut_from_ptr(self.node.as_ref()) };
 
-            if !cursor.remove().is_some() {
+            if cursor.remove().is_none() {
                 panic!("Waiter has to be linked into the list of waiting futures");
             }
         }
@@ -1306,7 +1298,7 @@ mod test {
 
                 assert_eq!(waiters_count, 1);
             })
-                .detach();
+            .detach();
 
             semaphore.signal(1);
             *cond.borrow_mut() = 1;
