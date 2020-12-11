@@ -6,7 +6,10 @@
 use crate::channels::{ChannelCapacity, ChannelError};
 use futures_lite::{future, stream::Stream};
 use std::task::{Context, Poll, Waker};
-use std::{cell::RefCell, collections::VecDeque, io, pin::Pin, rc::Rc};
+use std::{cell::RefCell, io, pin::Pin, rc::Rc};
+
+use intrusive_collections::intrusive_adapter;
+use intrusive_collections::{LinkedList, LinkedListLink};
 
 #[derive(Debug)]
 /// Send endpoint to the `local_channel`
@@ -50,11 +53,27 @@ pub struct LocalReceiver<T> {
 }
 
 #[derive(Debug)]
+struct WaiterNode {
+    waker: Waker,
+    link: LinkedListLink,
+}
+
+#[derive(Debug)]
+struct ChannelNode<T> {
+    value: T,
+    link: LinkedListLink,
+}
+
+intrusive_adapter!(WaiterAdapter = Rc<WaiterNode> : WaiterNode {link : LinkedListLink});
+intrusive_adapter!(ChannelAdapter<T> = Rc<ChannelNode<T>> : ChannelNode<T> {link : LinkedListLink});
+
+#[derive(Debug)]
 struct State<T> {
     capacity: ChannelCapacity,
-    channel: VecDeque<T>,
-    recv_waiters: Option<VecDeque<Waker>>,
-    send_waiters: Option<VecDeque<Waker>>,
+    channel: LinkedList<ChannelAdapter<T>>,
+    channel_len: usize,
+    recv_waiters: Option<LinkedList<WaiterAdapter>>,
+    send_waiters: Option<LinkedList<WaiterAdapter>>,
 }
 
 impl<T> State<T> {
@@ -64,15 +83,26 @@ impl<T> State<T> {
         } else if self.is_full() {
             Err(ChannelError::new(io::ErrorKind::WouldBlock, item))
         } else {
-            self.channel.push_back(item);
-            Ok(self.recv_waiters.as_mut().and_then(|x| x.pop_front()))
+            self.channel.push_back(Rc::new(ChannelNode {
+                value: item,
+                link: LinkedListLink::new(),
+            }));
+            self.channel_len += 1;
+
+            Ok(self.recv_waiters.as_mut().and_then(|x| {
+                x.pop_front().map(|n| {
+                    Rc::try_unwrap(n)
+                        .expect("Wake is shared between several containers")
+                        .waker
+                })
+            }))
         }
     }
 
     fn is_full(&self) -> bool {
         match self.capacity {
             ChannelCapacity::Unbounded => false,
-            ChannelCapacity::Bounded(x) => self.channel.len() >= x,
+            ChannelCapacity::Bounded(x) => self.channel_len >= x,
         }
     }
 
@@ -83,23 +113,39 @@ impl<T> State<T> {
             self.send_waiters
                 .as_mut()
                 .unwrap()
-                .push_back(cx.waker().clone());
+                .push_back(Rc::new(WaiterNode {
+                    waker: cx.waker().clone(),
+                    link: LinkedListLink::new(),
+                }));
             Poll::Pending
         }
     }
 
     fn recv_one(&mut self, cx: &mut Context<'_>) -> Poll<Option<(T, Option<Waker>)>> {
         match self.channel.pop_front() {
-            Some(item) => Poll::Ready(Some((
-                item,
-                self.send_waiters.as_mut().and_then(|x| x.pop_front()),
-            ))),
+            Some(item) => {
+                self.channel_len -= 1;
+
+                Poll::Ready(Some((
+                    Rc::try_unwrap(item).ok().unwrap().value,
+                    self.send_waiters.as_mut().and_then(|x| {
+                        x.pop_front().map(|node| {
+                            Rc::try_unwrap(node)
+                                .expect("Waker is stored in several containers")
+                                .waker
+                        })
+                    }),
+                )))
+            }
             None => match self.send_waiters.is_some() {
                 true => {
                     self.recv_waiters
                         .as_mut()
                         .unwrap()
-                        .push_back(cx.waker().clone());
+                        .push_back(Rc::new(WaiterNode {
+                            waker: cx.waker().clone(),
+                            link: LinkedListLink::new(),
+                        }));
                     Poll::Pending
                 }
                 false => Poll::Ready(None),
@@ -124,17 +170,15 @@ impl<T> Clone for LocalChannel<T> {
 impl<T> LocalChannel<T> {
     #[allow(clippy::new_ret_no_self)]
     fn new(capacity: ChannelCapacity) -> (LocalSender<T>, LocalReceiver<T>) {
-        let channel = match capacity {
-            ChannelCapacity::Unbounded => VecDeque::new(),
-            ChannelCapacity::Bounded(x) => VecDeque::with_capacity(x),
-        };
+        let channel = LinkedList::new(ChannelAdapter::new());
 
         let channel = LocalChannel {
             state: Rc::new(RefCell::new(State {
                 capacity,
                 channel,
-                send_waiters: Some(VecDeque::new()),
-                recv_waiters: Some(VecDeque::new()),
+                channel_len: 0,
+                send_waiters: Some(LinkedList::new(WaiterAdapter::NEW)),
+                recv_waiters: Some(LinkedList::new(WaiterAdapter::NEW)),
             })),
         };
 
@@ -296,7 +340,7 @@ impl<T> LocalSender<T> {
     /// ```
     #[inline]
     pub fn len(&self) -> usize {
-        self.channel.state.borrow().channel.len()
+        self.channel.state.borrow().channel_len
     }
 
     fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
@@ -306,12 +350,15 @@ impl<T> LocalSender<T> {
     }
 }
 
-fn wake_up_all(ws: &mut Option<VecDeque<Waker>>) {
+fn wake_up_all(ws: &mut Option<LinkedList<WaiterAdapter>>) {
     if let Some(ref mut waiters) = ws {
         // we assume here that wakes don't try to acquire a borrow on
         // the channel.state
         for w in core::mem::take(waiters) {
-            w.wake();
+            Rc::try_unwrap(w)
+                .expect("Waker is stored in several containers")
+                .waker
+                .wake();
         }
     }
 }
