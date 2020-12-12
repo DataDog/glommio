@@ -1189,20 +1189,23 @@ impl Reactor {
         Ok(())
     }
 
-    pub(crate) fn rush_dispatch(
-        &self,
-        latency: Latency,
-        wakers: &mut Vec<Waker>,
-    ) -> io::Result<()> {
-        let ring = match latency {
-            Latency::NotImportant => &self.main_ring,
-            Latency::Matters(_) => &self.latency_ring,
-        };
-
+    fn simple_poll(ring: &RefCell<dyn UringCommon>, wakers: &mut Vec<Waker>) -> io::Result<()> {
         let mut ring = ring.borrow_mut();
         ring.consume_submission_queue()?;
         ring.consume_completion_queue(wakers);
         Ok(())
+    }
+
+    pub(crate) fn rush_dispatch(
+        &self,
+        latency: Option<Latency>,
+        wakers: &mut Vec<Waker>,
+    ) -> io::Result<()> {
+        match latency {
+            None => Self::simple_poll(&self.poll_ring, wakers),
+            Some(Latency::NotImportant) => Self::simple_poll(&self.main_ring, wakers),
+            Some(Latency::Matters(_)) => Self::simple_poll(&self.latency_ring, wakers),
+        }
     }
 
     // This function can be passed two timers. Because they play different roles we keep them
