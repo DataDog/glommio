@@ -7,7 +7,7 @@ use alloc::alloc::Layout;
 use iou::PollFlags;
 use log::warn;
 use rlimit::Resource;
-use std::cell::{Cell, Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::fmt;
@@ -26,6 +26,7 @@ use crate::sys::{
 };
 use crate::{IoRequirements, Latency};
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
+use iou::{MsgFlags, SockAddr, SockAddrStorage, SockFlag};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -33,6 +34,8 @@ use std::sync::Arc;
 use uring_sys::IoRingOp;
 
 use super::{EnqueuedSource, TimeSpec64};
+
+const MSG_ZEROCOPY: i32 = 0x4000000;
 
 pub(crate) fn add_flag(fd: RawFd, flag: libc::c_int) -> io::Result<()> {
     let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
@@ -53,10 +56,14 @@ enum UringOpDescriptor {
     Open(*const u8, libc::c_int, u32),
     Close,
     FDataSync,
+    Connect(*const iou::SockAddr),
+    Accept(*mut iou::SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
     Timeout(*const uring_sys::__kernel_timespec),
     TimeoutRemove(u64),
+    SockSend(*const u8, usize, i32),
+    SockRecv(usize, i32),
 }
 
 #[derive(Debug)]
@@ -279,6 +286,14 @@ where
             UringOpDescriptor::FDataSync => {
                 sqe.prep_fsync(op.fd, iou::FsyncFlags::FSYNC_DATASYNC);
             }
+            UringOpDescriptor::Connect(addr) => {
+                sqe.prep_connect(op.fd, &*addr);
+            }
+
+            UringOpDescriptor::Accept(addr) => {
+                sqe.prep_accept(op.fd, Some(&mut *addr), SockFlag::SOCK_CLOEXEC);
+            }
+
             UringOpDescriptor::Fallocate(offset, size, flags) => {
                 let flags = iou::FallocateFlags::from_bits_truncate(flags);
                 sqe.prep_fallocate(op.fd, offset, size, flags);
@@ -327,6 +342,32 @@ where
             UringOpDescriptor::WriteFixed(ptr, len, pos, buf_index) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
                 sqe.prep_write_fixed(op.fd, buf, pos, buf_index);
+            }
+
+            UringOpDescriptor::SockSend(ptr, len, flags) => {
+                let buf = std::slice::from_raw_parts(ptr, len);
+                sqe.prep_send(
+                    op.fd,
+                    buf,
+                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
+                );
+            }
+
+            UringOpDescriptor::SockRecv(len, flags) => {
+                let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
+                sqe.prep_recv(
+                    op.fd,
+                    buf.as_bytes_mut(),
+                    MsgFlags::from_bits_unchecked(flags),
+                );
+
+                let src = peek_source(from_user_data(op.user_data));
+                match &mut *src.source_type.borrow_mut() {
+                    SourceType::SockRecv(slot) => {
+                        *slot = Some(buf);
+                    }
+                    _ => unreachable!(),
+                };
             }
         }
     }
@@ -616,7 +657,7 @@ impl InnerSource {
 }
 
 impl Source {
-    fn latency_req(&self) -> Latency {
+    pub(crate) fn latency_req(&self) -> Latency {
         self.inner.io_requirements.latency_req
     }
 
@@ -624,7 +665,11 @@ impl Source {
         self.inner.source_type.borrow()
     }
 
-    fn update_source_type(&self, source_type: SourceType) -> SourceType {
+    pub(crate) fn source_type_mut(&self) -> RefMut<'_, SourceType> {
+        self.inner.source_type.borrow_mut()
+    }
+
+    pub(crate) fn update_source_type(&self, source_type: SourceType) -> SourceType {
         self.inner.update_source_type(source_type)
     }
 
@@ -654,6 +699,12 @@ impl Source {
         let mut w = self.inner.wakers.borrow_mut();
         w.result.take()
     }
+
+    pub(crate) fn has_result(&self) -> bool {
+        let w = self.inner.wakers.borrow();
+        w.result.is_some()
+    }
+
     pub(crate) fn add_waiter(&self, waker: Waker) {
         let mut w = self.inner.wakers.borrow_mut();
         w.waiter.replace(waker);
@@ -1046,6 +1097,42 @@ impl Reactor {
         self.queue_standard_request(source, op);
     }
 
+    pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
+        match &*source.source_type() {
+            SourceType::SockSend(buf) => {
+                let op =
+                    UringOpDescriptor::SockSend(buf.as_ptr() as *const u8, buf.len(), flags.bits());
+                self.queue_standard_request(source, op);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn recv(&self, source: &Source, len: usize, flags: MsgFlags) {
+        let op = UringOpDescriptor::SockRecv(len, flags.bits());
+        self.queue_standard_request(source, op);
+    }
+
+    pub(crate) fn connect(&self, source: &Source) {
+        match &*source.source_type() {
+            SourceType::Connect(addr) => {
+                let op = UringOpDescriptor::Connect(addr as *const SockAddr);
+                self.queue_standard_request(source, op);
+            }
+            x => panic!("Unexpected source type for connect: {:?}", x),
+        }
+    }
+
+    pub(crate) fn accept(&self, source: &Source) {
+        match &mut *source.source_type_mut() {
+            SourceType::Accept(addr) => {
+                let op = UringOpDescriptor::Accept(addr as *mut SockAddrStorage);
+                self.queue_standard_request(source, op);
+            }
+            x => panic!("Unexpected source type for accept: {:?}", x),
+        }
+    }
+
     pub(crate) fn fdatasync(&self, source: &Source) {
         self.queue_standard_request(source, UringOpDescriptor::FDataSync);
     }
@@ -1099,6 +1186,22 @@ impl Reactor {
     ) -> io::Result<()> {
         let mut link_rings = self.link_rings_src.borrow_mut();
         ring.sleep(&mut link_rings, eventfd_src)?;
+        Ok(())
+    }
+
+    pub(crate) fn rush_dispatch(
+        &self,
+        latency: Latency,
+        wakers: &mut Vec<Waker>,
+    ) -> io::Result<()> {
+        let ring = match latency {
+            Latency::NotImportant => &self.main_ring,
+            Latency::Matters(_) => &self.latency_ring,
+        };
+
+        let mut ring = ring.borrow_mut();
+        ring.consume_submission_queue()?;
+        ring.consume_completion_queue(wakers);
         Ok(())
     }
 

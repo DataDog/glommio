@@ -3,20 +3,19 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use futures::future::join_all;
-use futures::io::{copy, AsyncReadExt, AsyncWriteExt};
+use futures_lite::{AsyncReadExt, AsyncWriteExt};
+use glommio::net::{TcpListener, TcpStream};
 use glommio::prelude::*;
-use glommio::Async;
+use glommio::Task;
 use std::io::Result;
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::rc::Rc;
 use std::time::Instant;
 
-async fn server(conns: usize) {
-    let listener = Rc::new(Async::<TcpListener>::bind(([127, 0, 0, 1], 10000)).unwrap());
+async fn server(conns: usize) -> Result<()> {
+    let listener = Rc::new(TcpListener::bind("127.0.0.1:10000").unwrap());
     println!(
         "Server Listening on {} on {} connections",
-        listener.get_ref().local_addr().unwrap(),
+        listener.local_addr()?,
         conns
     );
 
@@ -27,49 +26,60 @@ async fn server(conns: usize) {
     let client_handle = LocalExecutorBuilder::new()
         .pin_to_cpu(2)
         .name("client")
-        .spawn(move || async move {
-            client(conns).await;
-        })
-        .unwrap();
+        .spawn(move || async move { client(conns).await })?;
 
     let mut servers = vec![];
     for _ in 0..conns {
         let l = listener.clone();
-        servers.push(Local::local(async move {
-            let (stream, _) = l.accept().await.unwrap();
-            loop {
-                let x = copy(&stream, &mut &stream).await.unwrap();
-                if x == 0 {
-                    break;
+        servers.push(
+            Task::<Result<()>>::local(async move {
+                let mut stream = l.accept().await.unwrap();
+                loop {
+                    let mut buf = [0u8; 1];
+                    let b = stream.read(&mut buf).await?;
+                    if b == 0 {
+                        break;
+                    } else {
+                        stream.write(&buf).await?;
+                    }
                 }
-            }
-        }));
+                Ok(())
+            })
+            .detach(),
+        );
     }
-    join_all(servers).await;
+
+    for s in servers {
+        s.await.unwrap()?;
+    }
+
     client_handle.join().unwrap();
+    Ok(())
 }
 
-async fn client(clients: usize) {
+async fn client(clients: usize) -> Result<()> {
     let msgs: usize = 300_000;
     let msg_per_client = msgs / clients;
 
     let now = Instant::now();
     let mut tasks = vec![];
     for _ in 0..clients {
-        tasks.push(Local::local(async move {
-            let addr = "127.0.0.1:10000".to_socket_addrs().unwrap().next().unwrap();
-            let mut stream = Async::<TcpStream>::connect(addr).await.unwrap();
-            let mut buf = [0u8; 4096];
-
+        tasks.push(Task::<Result<()>>::local(async move {
+            let mut stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
             for _ in 0..msg_per_client {
-                stream.write(b"a").await.unwrap();
-                stream.read(&mut buf).await.unwrap();
+                stream.write(b"a").await?;
+                let mut buf = [0u8; 1];
+                stream.read(&mut buf).await?;
+                assert_eq!(&buf, b"a");
             }
-            stream.flush().await.unwrap();
-            stream.close().await.unwrap();
+            stream.flush().await?;
+            stream.close().await
         }));
     }
-    join_all(tasks).await;
+    for c in tasks {
+        c.await?;
+    }
+
     let delta = now.elapsed();
     println!(
         "Sent {} messages in {} ms. {:.2} msg/s",
@@ -77,6 +87,7 @@ async fn client(clients: usize) {
         delta.as_millis(),
         msgs as f64 / delta.as_secs_f64()
     );
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -88,12 +99,15 @@ fn main() -> Result<()> {
         // If you try `top` during the execution of the first batch, you
         // will see that the CPUs should not be at 100%. A single connection will
         // not be enough to extract all the performance available in the cores.
-        server(1).await;
+        server(1).await?;
         // This should drive the CPU utilization to 100%.
         // Asynchronous execution needs parallelism to thrive!
-        server(5).await;
+        server(5).await
     })?;
 
+    // Congrats for getting to the end of this example!
+    //
+    // Now can you adapt it so it uses multiple executors and all CPUs in your system?
     server_handle.join().unwrap();
     Ok(())
 }

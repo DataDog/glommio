@@ -23,7 +23,8 @@
 //!
 
 use ahash::AHashMap;
-use std::cell::RefCell;
+use iou::{SockAddr, SockAddrStorage};
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
 use std::fmt;
@@ -219,14 +220,14 @@ impl SharedChannels {
 /// There is only one global instance of this type, accessible by [`Local::get_reactor()`].
 pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
-    sys: sys::Reactor,
+    pub(crate) sys: sys::Reactor,
 
     timers: RefCell<Timers>,
 
     shared_channels: RefCell<SharedChannels>,
 
     /// I/O Requirements of the task currently executing.
-    current_io_requirements: RefCell<IoRequirements>,
+    current_io_requirements: Cell<IoRequirements>,
 
     wakers: RefCell<Vec<Waker>>,
 
@@ -252,7 +253,7 @@ impl Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
-            current_io_requirements: RefCell::new(IoRequirements::default()),
+            current_io_requirements: Cell::new(IoRequirements::default()),
             wakers: RefCell::new(Vec::with_capacity(256)),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
@@ -272,14 +273,13 @@ impl Reactor {
         sys::write_eventfd(remote);
     }
 
-    fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
-        let ioreq = self.current_io_requirements.borrow();
-        sys::Source::new(*ioreq, raw, stype)
+    pub(crate) fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
+        let ioreq = self.current_io_requirements.get();
+        sys::Source::new(ioreq, raw, stype)
     }
 
     pub(crate) fn inform_io_requirements(&self, req: IoRequirements) {
-        let mut ioreq = self.current_io_requirements.borrow_mut();
-        *ioreq = req;
+        self.current_io_requirements.set(req);
     }
 
     pub(crate) fn register_shared_channel<F>(&self, test_function: Box<F>) -> u64
@@ -325,6 +325,19 @@ impl Reactor {
             ),
         );
         self.sys.write_buffered(&source, pos);
+        source
+    }
+
+    pub(crate) fn connect(&self, raw: RawFd, addr: SockAddr) -> Source {
+        let source = self.new_source(raw, SourceType::Connect(addr));
+        self.sys.connect(&source);
+        source
+    }
+
+    pub(crate) fn accept(&self, raw: RawFd) -> Source {
+        let addr = SockAddrStorage::uninit();
+        let source = self.new_source(raw, SourceType::Accept(addr));
+        self.sys.accept(&source);
         source
     }
 
@@ -449,6 +462,17 @@ impl Reactor {
     fn process_shared_channels(&self, wakers: &mut Vec<Waker>) -> usize {
         let mut channels = self.shared_channels.borrow_mut();
         channels.process_shared_channels(wakers)
+    }
+
+    pub(crate) fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
+        let mut wakers = self.wakers.borrow_mut();
+        self.sys.rush_dispatch(source.latency_req(), &mut wakers)?;
+        // Wake up ready tasks.
+        for waker in wakers.drain(..) {
+            // Don't let a panicking waker blow everything up.
+            let _ = panic::catch_unwind(|| waker.wake());
+        }
+        Ok(())
     }
 
     /// Processes new events, blocking until the first event or the timeout.

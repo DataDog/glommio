@@ -15,16 +15,16 @@ use std::time::Duration;
 ///
 /// The difference is akin to a constant versus variable in your favorite programming language.
 ///
-/// [`TaskQueue`]: struct.LocalExecutor.html#method.create_task_queue
+/// [`TaskQueue`]: Task::create_task_queue
 pub trait SharesManager {
     /// The amount of shares that this [`TaskQueue`] should receive in the next adjustment period
     ///
-    /// [`TaskQueue`]: struct.LocalExecutor.html#method.create_task_queue
+    /// [`TaskQueue`]: Task::create_task_queue
     fn shares(&self) -> usize;
 
     /// How often to recompute the amount of shares for this [`TaskQueue`]
     ///
-    /// [`TaskQueue`]: struct.LocalExecutor.html#method.create_task_queue
+    /// [`TaskQueue`]: Task::create_task_queue
     fn adjustment_period(&self) -> Duration {
         Duration::from_millis(250)
     }
@@ -68,7 +68,7 @@ impl Debug for dyn SharesManager {
 /// to say it wants to use more than the others: it is only possible for the other task queues to
 /// say they are okay with using less (by reducing their shares)
 ///
-/// [`TaskQueue`]: struct.LocalExecutor.html#method.create_task_queue
+/// [`TaskQueue`]: Task::create_task_queue
 pub enum Shares {
     /// Static shares never change over the course of a lifetime of the application, therefore they
     /// never have to be recomputed

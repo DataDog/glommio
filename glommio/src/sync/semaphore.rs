@@ -337,6 +337,8 @@ impl Semaphore {
     ///     sem.signal(1); // Has to be signaled explicitly. Be careful
     /// });
     /// ```
+    ///
+    /// [`try_acquire_permit`]: Semaphore::try_acquire_permit
     pub fn try_acquire(&self, units: u64) -> Result<bool> {
         let mut state = self.state.borrow_mut();
 

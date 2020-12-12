@@ -15,54 +15,8 @@ use futures_lite::{future, pin};
 use crate::sys::{self, Source};
 use crate::Local;
 
-/// Async I/O.
-///
-/// This type converts a blocking I/O type into an async type, provided it is supported by
-/// [epoll]/[kqueue]/[wepoll].
-///
-/// **NOTE:** Do not use this type with [`File`][`std::fs::File`], [`Stdin`][`std::io::Stdin`],
-/// [`Stdout`][`std::io::Stdout`], or [`Stderr`][`std::io::Stderr`] because they're not
-/// supported.
-///
-/// [epoll]: https://en.wikipedia.org/wiki/Epoll
-/// [kqueue]: https://en.wikipedia.org/wiki/Kqueue
-/// [wepoll]: https://github.com/piscisaureus/wepoll
-///
-/// # Examples
-///
-/// Connect to a server and echo incoming messages back to the server:
-///
-/// ```no_run
-/// use glommio::Async;
-/// use futures_lite::io;
-/// use std::net::TcpStream;
-///
-/// # futures_lite::future::block_on(async {
-/// // Connect to a local server.
-/// let stream = Async::<TcpStream>::connect(([127, 0, 0, 1], 8000)).await?;
-///
-/// // Echo all messages from the read side of the stream into the write side.
-/// io::copy(&stream, &stream).await?;
-/// # std::io::Result::Ok(()) });
-/// ```
-///
-/// You can use predefined async methods or wrap blocking I/O operations in
-/// [`Async::read_with()`], [`Async::read_with_mut()`], [`Async::write_with()`], and
-/// [`Async::write_with_mut()`]:
-///
-/// ```no_run
-/// use glommio::Async;
-/// use std::net::TcpListener;
-///
-/// # futures_lite::future::block_on(async {
-/// let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
-///
-/// // These two lines are equivalent:
-/// let (stream, addr) = listener.accept().await?;
-/// let (stream, addr) = listener.read_with(|inner| inner.accept()).await?;
-/// # std::io::Result::Ok(()) });
-/// ```
 #[derive(Debug)]
+/// A Pollable file descriptor
 pub struct Async<T> {
     /// A source registered in the reactor.
     source: Source,
@@ -73,23 +27,6 @@ pub struct Async<T> {
 
 impl<T: AsRawFd> Async<T> {
     /// Creates an async I/O handle.
-    ///
-    /// This function will put the handle in non-blocking mode and register it in
-    /// `AsRawSocket`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::Async;
-    /// use std::net::{SocketAddr, TcpListener};
-    /// use glommio::LocalExecutor;
-    ///
-    /// let ex = LocalExecutor::make_default();
-    /// ex.run(async move {
-    ///     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
-    ///     let listener = Async::new(listener).unwrap();
-    /// });
-    /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
             source: Local::get_reactor().insert_pollable_io(io.as_raw_fd())?,
@@ -106,130 +43,32 @@ impl<T: AsRawFd> AsRawFd for Async<T> {
 
 impl<T> Async<T> {
     /// Gets a reference to the inner I/O handle.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::Async;
-    /// use std::net::TcpListener;
-    /// use glommio::LocalExecutor;
-    ///
-    /// let ex = LocalExecutor::make_default();
-    /// ex.run(async move {
-    ///     let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
-    ///     let inner = listener.get_ref();
-    /// });
-    /// ```
     pub fn get_ref(&self) -> &T {
         self.io.as_ref().unwrap()
     }
 
     /// Gets a mutable reference to the inner I/O handle.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::Async;
-    /// use std::net::TcpListener;
-    /// use glommio::LocalExecutor;
-    ///
-    /// let ex = LocalExecutor::make_default();
-    /// ex.run(async move {
-    ///     let mut listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
-    ///     let inner = listener.get_mut();
-    /// });
-    /// ```
     pub fn get_mut(&mut self) -> &mut T {
         self.io.as_mut().unwrap()
     }
 
     /// Unwraps the inner non-blocking I/O handle.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::Async;
-    /// use std::net::TcpListener;
-    /// use glommio::LocalExecutor;
-    ///
-    /// let ex = LocalExecutor::make_default();
-    /// ex.run(async move {
-    ///     let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
-    ///     let inner = listener.into_inner().unwrap();
-    /// });
-    /// ```
     pub fn into_inner(mut self) -> io::Result<T> {
         let io = *self.io.take().unwrap();
         Ok(io)
     }
 
     /// Waits until the I/O handle is readable.
-    ///
-    /// This function completes when a read operation on this I/O handle wouldn't block.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use glommio::Async;
-    /// use std::net::TcpListener;
-    /// use glommio::LocalExecutor;
-    ///
-    /// let ex = LocalExecutor::make_default();
-    /// ex.run(async move {
-    ///     let mut listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0)).unwrap();
-    ///
-    ///     // Wait until a client can be accepted.
-    ///     listener.readable().await.unwrap();
-    /// });
-    /// ```
     pub async fn readable(&self) -> io::Result<()> {
         self.source.readable().await
     }
 
     /// Waits until the I/O handle is writable.
-    ///
-    /// This function completes when a write operation on this I/O handle wouldn't block.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::Async;
-    /// use std::net::{TcpStream, ToSocketAddrs};
-    ///
-    /// # futures_lite::future::block_on(async {
-    /// let addr = "::80".to_socket_addrs()?.next().unwrap();
-    /// let stream = Async::<TcpStream>::connect(addr).await?;
-    ///
-    /// // Wait until the stream is writable.
-    /// stream.writable().await?;
-    /// # std::io::Result::Ok(()) });
-    /// ```
     pub async fn writable(&self) -> io::Result<()> {
         self.source.writable().await
     }
 
     /// Performs a read operation asynchronously.
-    ///
-    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
-    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
-    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
-    /// sends a notification that the I/O handle is readable.
-    ///
-    /// The closure receives a shared reference to the I/O handle.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use glommio::Async;
-    /// use std::net::TcpListener;
-    ///
-    /// # futures_lite::future::block_on(async {
-    /// let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
-    ///
-    /// // Accept a new client asynchronously.
-    /// let (stream, addr) = listener.read_with(|l| l.accept()).await?;
-    /// # std::io::Result::Ok(()) });
-    /// ```
     pub async fn read_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
         loop {
@@ -242,27 +81,6 @@ impl<T> Async<T> {
     }
 
     /// Performs a read operation asynchronously.
-    ///
-    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
-    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
-    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
-    /// sends a notification that the I/O handle is readable.
-    ///
-    /// The closure receives a mutable reference to the I/O handle.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use glommio::Async;
-    /// use std::net::TcpListener;
-    ///
-    /// # futures_lite::future::block_on(async {
-    /// let mut listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 0))?;
-    ///
-    /// // Accept a new client asynchronously.
-    /// let (stream, addr) = listener.read_with_mut(|l| l.accept()).await?;
-    /// # std::io::Result::Ok(()) });
-    /// ```
     pub async fn read_with_mut<R>(
         &mut self,
         op: impl FnMut(&mut T) -> io::Result<R>,
@@ -281,28 +99,6 @@ impl<T> Async<T> {
     }
 
     /// Performs a write operation asynchronously.
-    ///
-    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
-    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
-    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
-    /// sends a notification that the I/O handle is writable.
-    ///
-    /// The closure receives a shared reference to the I/O handle.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use glommio::Async;
-    /// use std::net::UdpSocket;
-    ///
-    /// # futures_lite::future::block_on(async {
-    /// let socket = Async::<UdpSocket>::bind(([127, 0, 0, 1], 8000))?;
-    /// socket.get_ref().connect("127.0.0.1:9000")?;
-    ///
-    /// let msg = b"hello";
-    /// let len = socket.write_with(|s| s.send(msg)).await?;
-    /// # std::io::Result::Ok(()) });
-    /// ```
     pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
         loop {
@@ -315,28 +111,6 @@ impl<T> Async<T> {
     }
 
     /// Performs a write operation asynchronously.
-    ///
-    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
-    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
-    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
-    /// sends a notification that the I/O handle is writable.
-    ///
-    /// The closure receives a mutable reference to the I/O handle.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use glommio::Async;
-    /// use std::net::UdpSocket;
-    ///
-    /// # futures_lite::future::block_on(async {
-    /// let mut socket = Async::<UdpSocket>::bind(([127, 0, 0, 1], 8000))?;
-    /// socket.get_ref().connect("127.0.0.1:9000")?;
-    ///
-    /// let msg = b"hello";
-    /// let len = socket.write_with_mut(|s| s.send(msg)).await?;
-    /// # std::io::Result::Ok(()) });
-    /// ```
     pub async fn write_with_mut<R>(
         &mut self,
         op: impl FnMut(&mut T) -> io::Result<R>,
@@ -422,7 +196,7 @@ impl<T: Write> AsyncWrite for Async<T> {
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown_write(self.source.raw()))
+        Poll::Ready(sys::shutdown(self.source.raw(), std::net::Shutdown::Write))
     }
 }
 
@@ -451,7 +225,7 @@ where
     }
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown_write(self.source.raw()))
+        Poll::Ready(sys::shutdown(self.source.raw(), std::net::Shutdown::Write))
     }
 }
 
