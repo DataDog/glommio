@@ -853,8 +853,6 @@ impl LocalExecutor {
         let cx = &mut Context::from_waker(&waker);
 
         let spin_before_park = self.spin_before_park().unwrap_or_default();
-        let spin = spin_before_park.as_nanos() > 0;
-        let mut spin_since: Option<Instant> = None;
 
         LOCAL_EX.set(self, || {
             loop {
@@ -869,23 +867,21 @@ impl LocalExecutor {
                 // the opportunity to install the timer.
                 let duration = self.preempt_timer_duration();
                 self.parker.poll_io(duration);
-                if self.run_task_queues() {
-                    spin_since = None
-                } else if let Poll::Ready(t) = future.as_mut().poll(cx) {
-                    // It may be that we just became ready now that the task queue
-                    // is exhausted. But if we sleep (park) we'll never know so we
-                    // test again here. We can't test *just* here because the main
-                    // future is probably the one setting up the task queues and etc.
-                    break t;
-                } else {
-                    spin_since = match spin_since {
-                        _ if !spin => None,
-                        Some(t) if t.elapsed() < spin_before_park => Some(t),
-                        Some(_) => None,
-                        None => Some(Instant::now()),
-                    };
-                    if spin_since.is_none() {
-                        self.parker.park();
+                if !self.run_task_queues() {
+                    if let Poll::Ready(t) = future.as_mut().poll(cx) {
+                        // It may be that we just became ready now that the task queue
+                        // is exhausted. But if we sleep (park) we'll never know so we
+                        // test again here. We can't test *just* here because the main
+                        // future is probably the one setting up the task queues and etc.
+                        break t;
+                    } else {
+                        let spin_start = Instant::now();
+                        while !self.reactor.spin_poll_io().unwrap() {
+                            if spin_start.elapsed() > spin_before_park {
+                                self.parker.park();
+                                break;
+                            }
+                        }
                     }
                 }
             }

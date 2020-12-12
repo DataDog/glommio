@@ -44,8 +44,8 @@ use futures_lite::*;
 
 use crate::sys;
 use crate::sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
-use crate::IoRequirements;
 use crate::Local;
+use crate::{IoRequirements, Latency};
 
 /// Waits for a notification.
 pub(crate) struct Parker {
@@ -466,13 +466,36 @@ impl Reactor {
 
     pub(crate) fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
         let mut wakers = self.wakers.borrow_mut();
-        self.sys.rush_dispatch(source.latency_req(), &mut wakers)?;
+        self.sys
+            .rush_dispatch(Some(source.latency_req()), &mut wakers)?;
         // Wake up ready tasks.
         for waker in wakers.drain(..) {
             // Don't let a panicking waker blow everything up.
             let _ = panic::catch_unwind(|| waker.wake());
         }
         Ok(())
+    }
+
+    /// polls for I/O, but does not change any timer registration.
+    ///
+    /// This doesn't ever sleep, and does not touch the preempt timer.
+    pub(crate) fn spin_poll_io(&self) -> io::Result<bool> {
+        let mut wakers = self.wakers.borrow_mut();
+        // any duration, just so we land in the latency ring
+        self.sys
+            .rush_dispatch(Some(Latency::Matters(Duration::from_secs(1))), &mut wakers)?;
+        self.sys
+            .rush_dispatch(Some(Latency::NotImportant), &mut wakers)?;
+        self.sys.rush_dispatch(None, &mut wakers)?;
+        self.process_timers(&mut wakers);
+        self.process_shared_channels(&mut wakers);
+
+        let woke = wakers.len();
+        for waker in wakers.drain(..) {
+            // Don't let a panicking waker blow everything up.
+            let _ = panic::catch_unwind(|| waker.wake());
+        }
+        Ok(woke > 0)
     }
 
     /// Processes new events, blocking until the first event or the timeout.
