@@ -1116,7 +1116,7 @@ impl<T> Task<T> {
     /// within a queue will be scheduled in serial.
     ///
     /// Returns an opaque handle that can later be used to launch tasks into that queue with
-    /// [`spawn_into`].
+    /// [`local_into`].
     ///
     /// # Examples
     ///
@@ -1133,12 +1133,9 @@ impl<T> Task<T> {
     /// });
     /// ```
     ///
-    /// [`spawn_into`]: Task::spawn_into
-    ///
+    /// [`local_into`]: Task::local_into
     /// [`Shares`]: enum.Shares.html
-    ///
     /// [`Latency`]: enum.Latency.html
-
     pub fn create_task_queue(shares: Shares, latency: Latency, name: &str) -> TaskQueueHandle {
         LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
     }
