@@ -58,7 +58,7 @@ static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 #[derive(Debug, Clone)]
 /// Error thrown when a Task Queue is not found.
 pub struct QueueNotFoundError {
-    index: usize,
+    pub(crate) index: usize,
 }
 
 impl QueueNotFoundError {
@@ -77,7 +77,7 @@ impl fmt::Display for QueueNotFoundError {
 #[derive(Debug, Clone)]
 /// Error thrown when a Task Queue is still active and one attempts to remove it
 pub struct QueueStillActiveError {
-    index: usize,
+    pub(crate) index: usize,
 }
 impl std::error::Error for QueueStillActiveError {}
 

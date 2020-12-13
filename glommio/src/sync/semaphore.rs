@@ -3,15 +3,18 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::error::GlommioError;
+use crate::error::ResourceType;
 use std::cell::RefCell;
 use std::future::Future;
-use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use intrusive_collections::intrusive_adapter;
 use intrusive_collections::{LinkedList, LinkedListLink};
+
+type Result<T> = crate::error::Result<T, ()>;
 
 #[derive(Debug)]
 struct Waiter {
@@ -115,7 +118,7 @@ impl SemaphoreState {
 
     fn try_acquire(&mut self, units: u64) -> Result<bool> {
         if self.closed {
-            return Err(Error::new(ErrorKind::BrokenPipe, "Semaphore Broken"));
+            return Err(GlommioError::SemaphoreClosed);
         }
 
         if self.avail >= units {
@@ -359,9 +362,16 @@ impl Semaphore {
     /// This method does not suspend.
     ///
     /// # Errors
-    ///  If semaphore is closed `Err(io::Error(BrokenPipe))` will be returned.
+    ///  If semaphore is closed `Err(GlommioError::SemaphoreBroken)` will be returned.
     ///  If semaphore does not have sufficient amount of units
-    ///  `Err(io::Error(WouldBlock))` will be returned.
+    ///  `
+    ///  Err(GlommioError::WouldBlock(ResourceType::Semaphore {
+    ///      requested: u64,
+    ///      available: u64
+    ///  }))
+    ///  `
+    ///  will be returned.
+    ///
     /// # Examples
     ///
     /// ```
@@ -384,15 +394,10 @@ impl Semaphore {
         if state.waiters_list.is_empty() && state.try_acquire(units)? {
             return Ok(Permit::new(units, self.state.clone()));
         }
-
-        Err(Error::new(
-            ErrorKind::WouldBlock,
-            format!(
-                "There are no suficient units, requested {} but available {} ",
-                units,
-                state.available()
-            ),
-        ))
+        Err(GlommioError::WouldBlock(ResourceType::Semaphore {
+            requested: units,
+            available: state.available(),
+        }))
     }
 
     /// Signals the semaphore to release the specified amount of units.
@@ -541,8 +546,8 @@ mod test {
             sem.close();
             match sem.acquire(0).await {
                 Ok(_) => panic!("Should have failed"),
-                Err(e) => match e.kind() {
-                    ErrorKind::BrokenPipe => {}
+                Err(e) => match e {
+                    GlommioError::SemaphoreClosed => {}
                     _ => panic!("Wrong Error"),
                 },
             }
@@ -574,7 +579,10 @@ mod test {
         assert!(result.is_err());
 
         let err = result.err().unwrap();
-        if !matches!(err.kind(), ErrorKind::WouldBlock) {
+        if !matches!(
+            err,
+            GlommioError::WouldBlock(ResourceType::Semaphore { .. })
+        ) {
             panic!("Incorrect error type is returned from try_acquire_permit method");
         }
     }
@@ -588,7 +596,7 @@ mod test {
         assert!(result.is_err());
 
         let err = result.err().unwrap();
-        if !matches!(err.kind(), ErrorKind::BrokenPipe) {
+        if !matches!(err, GlommioError::SemaphoreClosed) {
             panic!("Incorrect error type is returned from try_acquire method");
         }
     }
@@ -602,7 +610,7 @@ mod test {
         assert!(result.is_err());
 
         let err = result.err().unwrap();
-        if !matches!(err.kind(), ErrorKind::BrokenPipe) {
+        if !matches!(err, GlommioError::SemaphoreClosed) {
             panic!("Incorrect error type is returned from try_acquire_permit method");
         }
     }

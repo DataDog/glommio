@@ -142,7 +142,7 @@ pub mod local_channel;
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
 pub mod shared_channel;
 
-use std::fmt;
+use std::fmt::{self, Debug, Display};
 use std::io;
 
 #[derive(Debug)]
@@ -177,8 +177,19 @@ pub struct ChannelError<T> {
     pub item: T,
 }
 
+impl<T: Debug> Display for ChannelError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&format!(
+            "ChannelError {{ kind: {:?} item: {:?} }}",
+            self.kind, self.item,
+        ))
+    }
+}
+
+impl<T: Debug> std::error::Error for ChannelError<T> {}
+
 impl<T> ChannelError<T> {
-    fn new(kind: io::ErrorKind, item: T) -> ChannelError<T> {
+    pub(crate) fn new(kind: io::ErrorKind, item: T) -> ChannelError<T> {
         ChannelError { kind, item }
     }
 }

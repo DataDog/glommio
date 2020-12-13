@@ -3,9 +3,60 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use std::fmt;
+use crate::{channels, executor, sync};
+use std::fmt::{self, Debug};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
+use thiserror::Error;
+
+pub type Result<T, V> = std::result::Result<T, GlommioError<V>>;
+
+#[derive(Debug)]
+pub enum ResourceType {
+    Semaphore { requested: u64, available: u64 },
+}
+
+impl fmt::Display for ResourceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResourceType::Semaphore {
+                requested,
+                available,
+            } => f.write_str(&format!(
+                "Semaphore requested {} but only {} available",
+                requested, available
+            )),
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+/// Composite error type to encompass all error types glommio produces.
+pub enum GlommioError<T: Debug + 'static> {
+    #[error("IO error occurred: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Lock closed error: {0}")]
+    LockClosedError(#[from] sync::LockClosedError),
+
+    #[error("Channel error: {0}")]
+    ChannelError(#[from] channels::ChannelError<T>),
+
+    #[error("Queue not found error: {0}")]
+    QueueNotFoundError(#[from] executor::QueueNotFoundError),
+
+    #[error("Queue still active error: {0}")]
+    QueueStillActiveError(#[from] executor::QueueStillActiveError),
+
+    #[error("Try lock error: {0}")]
+    TryLockError(#[from] sync::TryLockError),
+
+    #[error("Semaphore closed")]
+    SemaphoreClosed,
+
+    #[error("Resource would block. {0}")]
+    WouldBlock(ResourceType),
+}
 
 /// Augments an `io::Error` with more information about what was happening
 /// and to which file when the error ocurred.
@@ -46,6 +97,17 @@ impl From<ErrorEnhancer> for std::io::Error {
 mod test {
     use super::*;
     use std::io;
+
+    #[test]
+    fn composite_error_from_into() {
+        let _: GlommioError<()> =
+            std::io::Error::new(io::ErrorKind::Other, "test other io-error").into();
+        let _: GlommioError<()> = sync::LockClosedError {}.into();
+        let _: GlommioError<()> = channels::ChannelError::new(io::ErrorKind::NotFound, ()).into();
+        let _: GlommioError<()> = executor::QueueNotFoundError { index: 0 }.into();
+        let _: GlommioError<()> = executor::QueueStillActiveError { index: 0 }.into();
+        let _: GlommioError<()> = sync::TryLockError::Closed(sync::LockClosedError).into();
+    }
 
     #[test]
     fn enhance_error() {
