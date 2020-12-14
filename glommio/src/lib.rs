@@ -249,6 +249,7 @@
 //! });
 //! ```
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+#![cfg_attr(doc, deny(broken_intra_doc_links))]
 #[macro_use]
 extern crate nix;
 extern crate alloc;
