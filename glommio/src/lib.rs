@@ -267,6 +267,30 @@ mod parking;
 mod sys;
 pub mod task;
 
+// unwraps a Result to Poll<T>: if error returns right away.
+//
+// usage is similar to future_lite::ready!
+macro_rules! poll_err {
+    ($e:expr $(,)?) => {
+        match $e {
+            Ok(t) => t,
+            Err(x) => return std::task::Poll::Ready(Err(x)),
+        }
+    };
+}
+
+// unwraps an Option to Poll<T>: if Some returns right away.
+//
+// usage is similar to future_lite::ready!
+macro_rules! poll_some {
+    ($e:expr $(,)?) => {
+        match $e {
+            Some(t) => return std::task::Poll::Ready(t),
+            None => {}
+        }
+    };
+}
+
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
