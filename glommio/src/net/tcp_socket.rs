@@ -382,7 +382,7 @@ impl TcpStream {
         })
     }
 
-    fn consume_receive_buffer(&mut self, buf: &mut [u8]) -> Option<usize> {
+    fn consume_receive_buffer(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
         if let Some(src) = self.rx_buf.as_mut() {
             let sz = std::cmp::min(src.len(), buf.len());
             buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
@@ -390,7 +390,7 @@ impl TcpStream {
             if src.is_empty() {
                 self.rx_buf.take();
             }
-            Some(sz)
+            Some(Ok(sz))
         } else {
             None
         }
@@ -433,10 +433,8 @@ impl TcpStream {
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         let source = self
             .reactor
-            .new_source(self.stream.as_raw_fd(), SourceType::SockRecv(None));
-        self.reactor
-            .sys
-            .recv(&source, buf.len(), iou::MsgFlags::MSG_PEEK);
+            .recv(self.stream.as_raw_fd(), buf.len(), iou::MsgFlags::MSG_PEEK);
+
         let sz = source.collect_rw().await?;
         match source.extract_source_type() {
             SourceType::SockRecv(mut src) => {
@@ -518,62 +516,37 @@ impl TcpStream {
         cx: &mut Context<'_>,
         size: usize,
     ) -> Poll<io::Result<usize>> {
-        let source = self.source_rx.take();
-        match source {
-            None => {
-                let source = self
-                    .reactor
-                    .new_source(self.stream.as_raw_fd(), SourceType::SockRecv(None));
-                self.reactor.sys.recv(&source, size, iou::MsgFlags::empty());
-                if let Err(err) = self.reactor.rush_dispatch(&source) {
-                    return Poll::Ready(Err(err));
-                }
-                if !source.has_result() {
-                    source.add_waiter(cx.waker().clone());
-                    self.source_rx = Some(source);
-                    Poll::Pending
-                } else {
-                    let buf = poll_err!(RecvBuffer::try_from(source));
-                    self.rx_yolo = true;
-                    self.rx_buf = Some(buf.buf);
-                    Poll::Ready(Ok(self.rx_buf.as_ref().unwrap().len()))
-                }
-            }
-            Some(source) => {
-                let buf = poll_err!(RecvBuffer::try_from(source));
-                self.rx_yolo = true;
-                self.rx_buf = Some(buf.buf);
-                Poll::Ready(Ok(self.rx_buf.as_ref().unwrap().len()))
-            }
+        let source = match self.source_rx.take() {
+            Some(source) => source,
+            None => poll_err!(self.reactor.rushed_recv(self.stream.as_raw_fd(), size)),
+        };
+
+        if !source.has_result() {
+            source.add_waiter(cx.waker().clone());
+            self.source_rx = Some(source);
+            Poll::Pending
+        } else {
+            let buf = poll_err!(RecvBuffer::try_from(source));
+            self.rx_yolo = true;
+            self.rx_buf = Some(buf.buf);
+            Poll::Ready(Ok(self.rx_buf.as_ref().unwrap().len()))
         }
     }
 
     fn write_dma(&mut self, cx: &mut Context<'_>, buf: DmaBuffer) -> Poll<io::Result<usize>> {
-        let source = self.source_tx.take();
-        match source {
+        let source = match self.source_tx.take() {
+            Some(source) => source,
+            None => poll_err!(self.reactor.rushed_send(self.stream.as_raw_fd(), buf)),
+        };
+
+        match source.take_result() {
             None => {
-                let source = self
-                    .reactor
-                    .new_source(self.stream.as_raw_fd(), SourceType::SockSend(buf));
-                self.reactor.sys.send(&source, iou::MsgFlags::empty());
-                if let Err(err) = self.reactor.rush_dispatch(&source) {
-                    return Poll::Ready(Err(err));
-                }
-                match source.take_result() {
-                    None => {
-                        source.add_waiter(cx.waker().clone());
-                        self.source_tx = Some(source);
-                        Poll::Pending
-                    }
-                    Some(res) => {
-                        self.tx_yolo = true;
-                        Poll::Ready(res)
-                    }
-                }
+                source.add_waiter(cx.waker().clone());
+                self.source_tx = Some(source);
+                Poll::Pending
             }
-            Some(source) => {
+            Some(res) => {
                 self.tx_yolo = true;
-                let res = source.take_result().unwrap();
                 Poll::Ready(res)
             }
         }
@@ -609,14 +582,11 @@ impl AsyncRead for TcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        if let Some(sz) = self.consume_receive_buffer(buf) {
-            return Poll::Ready(Ok(sz));
-        }
+        poll_some!(self.consume_receive_buffer(buf));
         poll_some!(self.yolo_rx(buf));
-        let ret = poll_err!(ready!(self.poll_replenish_buffer(cx, buf.len())));
-        let sz = self.consume_receive_buffer(buf).unwrap();
-        assert_eq!(ret, sz);
-        Poll::Ready(Ok(sz))
+        poll_err!(ready!(self.poll_replenish_buffer(cx, buf.len())));
+        poll_some!(self.consume_receive_buffer(buf));
+        unreachable!();
     }
 }
 
