@@ -9,11 +9,21 @@ use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Result type alias that all Glommio public API functions can use.
 pub type Result<T, V> = std::result::Result<T, GlommioError<V>>;
 
+/// Resource Type used for errors that `WouldBlock` and includes extra
+/// diagnostic data for richer error messages.
 #[derive(Debug)]
 pub enum ResourceType {
-    Semaphore { requested: u64, available: u64 },
+    /// Semaphore resource that includes the requested and available shares
+    /// as debugging metadata.
+    Semaphore {
+        /// Requested shares
+        requested: u64,
+        /// Available semaphore shares
+        available: u64,
+    },
 }
 
 impl fmt::Display for ResourceType {
@@ -33,27 +43,39 @@ impl fmt::Display for ResourceType {
 #[derive(Error, Debug)]
 /// Composite error type to encompass all error types glommio produces.
 pub enum GlommioError<T: Debug + 'static> {
+    /// IO error from standard library functions
     #[error("IO error occurred: {0}")]
     IoError(#[from] std::io::Error),
 
+    /// Error indicating the lock is closed
     #[error("Lock closed error: {0}")]
     LockClosedError(#[from] sync::LockClosedError),
 
+    /// Error encapsulating a channel error
     #[error("Channel error: {0}")]
     ChannelError(#[from] channels::ChannelError<T>),
 
+    /// Queue could not be found error variant
     #[error("Queue not found error: {0}")]
     QueueNotFoundError(#[from] executor::QueueNotFoundError),
 
+    /// Queue still active error variant
     #[error("Queue still active error: {0}")]
     QueueStillActiveError(#[from] executor::QueueStillActiveError),
 
+    /// try_lock error variant
     #[error("Try lock error: {0}")]
     TryLockError(#[from] sync::TryLockError),
 
+    /// Error variant that indicates that the semaphore is closed
     #[error("Semaphore closed")]
     SemaphoreClosed,
 
+    /// Error encapsulating the `WouldBlock` error for types that don't have
+    /// errors originating in the standard library. Glommio also has
+    /// nonblocking types that need to indicate if they are blocking or not.
+    /// This type allows for signaling when a function would otherwise block
+    /// for a specific `ResourceType`.
     #[error("Resource would block. {0}")]
     WouldBlock(ResourceType),
 }

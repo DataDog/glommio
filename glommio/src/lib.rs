@@ -354,7 +354,7 @@ mod shares;
 pub mod sync;
 pub mod timer;
 
-pub use crate::error::GlommioError;
+pub use crate::error::{GlommioError, ResourceType, Result};
 pub use crate::executor::{
     ExecutorStats, LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
     TaskQueueStats,
