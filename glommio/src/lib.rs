@@ -354,6 +354,7 @@ mod shares;
 pub mod sync;
 pub mod timer;
 
+pub use crate::error::GlommioError;
 pub use crate::executor::{
     ExecutorStats, LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
     TaskQueueStats,
@@ -367,7 +368,10 @@ pub use scopeguard::defer;
 /// Provides common imports that almost all Glommio applications will need
 pub mod prelude {
     #[doc(no_inline)]
-    pub use crate::{Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares, TaskQueueHandle};
+    pub use crate::{
+        error::GlommioError, Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares,
+        TaskQueueHandle,
+    };
 }
 
 /// Local is an ergonomic way to access the local executor.
