@@ -141,6 +141,17 @@ impl<'a> Waiter<'a> {
     }
 }
 
+impl<'a> Drop for Waiter<'a> {
+    fn drop(&mut self) {
+        if self.node.link.is_linked() {
+            //if node is linked that is for sure is pinned so that is safe
+            //to make it pinned directly
+            let waiter_node = unsafe { Pin::new_unchecked(&mut self.node) };
+            Self::remove_from_waiting_queue(waiter_node, &mut self.semaphore.state.borrow_mut())
+        }
+    }
+}
+
 impl<'a> Future for Waiter<'a> {
     type Output = Result<()>;
 
