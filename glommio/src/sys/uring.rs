@@ -1407,11 +1407,11 @@ mod tests {
     #[test]
     fn allocator() {
         let l = Layout::from_size_align(10 << 20, 4 << 10).unwrap();
-        let mut allocator = unsafe {
+        let (data, mut allocator) = unsafe {
             let data = alloc::alloc::alloc(l) as *mut u8;
             assert_eq!(data as usize & 4095, 0);
             let data = std::ptr::NonNull::new(data).unwrap();
-            BuddyAlloc::new(BuddyAllocParam::new(data.as_ptr(), l.size(), l.align()))
+            (data, BuddyAlloc::new(BuddyAllocParam::new(data.as_ptr(), l.size(), l.align())))
         };
         let x = allocator.malloc(4096);
         assert_eq!(x as usize & 4095, 0);
@@ -1419,6 +1419,7 @@ mod tests {
         assert_eq!(x as usize & 4095, 0);
         let x = allocator.malloc(1);
         assert_eq!(x as usize & 4095, 0);
+        unsafe {  alloc::alloc::dealloc(data.as_ptr(), l) }
     }
 
     #[test]
