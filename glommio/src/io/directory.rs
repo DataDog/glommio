@@ -126,7 +126,12 @@ impl Directory {
 
     /// Issues fdatasync into the underlying file.
     pub async fn sync(&self) -> io::Result<()> {
-        let source = self.file.reactor.fdatasync(self.as_raw_fd());
+        let source = self
+            .file
+            .reactor
+            .upgrade()
+            .unwrap()
+            .fdatasync(self.as_raw_fd());
         source.collect_rw().await?;
         Ok(())
     }

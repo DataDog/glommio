@@ -1411,7 +1411,10 @@ mod tests {
             let data = alloc::alloc::alloc(l) as *mut u8;
             assert_eq!(data as usize & 4095, 0);
             let data = std::ptr::NonNull::new(data).unwrap();
-            (data, BuddyAlloc::new(BuddyAllocParam::new(data.as_ptr(), l.size(), l.align())))
+            (
+                data,
+                BuddyAlloc::new(BuddyAllocParam::new(data.as_ptr(), l.size(), l.align())),
+            )
         };
         let x = allocator.malloc(4096);
         assert_eq!(x as usize & 4095, 0);
@@ -1419,7 +1422,7 @@ mod tests {
         assert_eq!(x as usize & 4095, 0);
         let x = allocator.malloc(1);
         assert_eq!(x as usize & 4095, 0);
-        unsafe {  alloc::alloc::dealloc(data.as_ptr(), l) }
+        unsafe { alloc::alloc::dealloc(data.as_ptr(), l) }
     }
 
     #[test]

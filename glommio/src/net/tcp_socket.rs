@@ -19,7 +19,7 @@ use std::net::{self, Shutdown, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::RawFd;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
 const DEFAULT_BUFFER_SIZE: usize = 8192;
@@ -61,7 +61,7 @@ const DEFAULT_BUFFER_SIZE: usize = 8192;
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
 /// [`shared_channel`]: ../channels/shared_channel/index.html
 pub struct TcpListener {
-    reactor: Rc<Reactor>,
+    reactor: Weak<Reactor>,
     listener: net::TcpListener,
 }
 
@@ -102,7 +102,7 @@ impl TcpListener {
         }?;
 
         Ok(TcpListener {
-            reactor: Local::get_reactor(),
+            reactor: Rc::downgrade(&Local::get_reactor()),
             listener,
         })
     }
@@ -136,7 +136,7 @@ impl TcpListener {
     /// [`TcpStream`]: struct.TcpStream.html
     /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
     pub async fn shared_accept(&self) -> io::Result<AcceptedTcpStream> {
-        let reactor = self.reactor.clone();
+        let reactor = self.reactor.upgrade().unwrap();
         let source = reactor.accept(self.listener.as_raw_fd());
         let fd = source.collect_rw().await?;
         Ok(AcceptedTcpStream { fd: fd as RawFd })
@@ -270,7 +270,7 @@ impl AcceptedTcpStream {
         let source_tx = None;
         let source_rx = None;
         TcpStream {
-            reactor,
+            reactor: Rc::downgrade(&reactor),
             stream,
             source_tx,
             source_rx,
@@ -292,7 +292,7 @@ pin_project! {
     /// [`AsyncBufRead`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncBufRead.html
     /// [`AsyncWrite`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncWrite.html
     pub struct TcpStream {
-        reactor: Rc<Reactor>,
+        reactor: Weak<Reactor>,
         stream: net::TcpStream,
         source_tx: Option<Source>,
         source_rx: Option<Source>,
@@ -370,7 +370,7 @@ impl TcpStream {
         let source_tx = None;
         let source_rx = None;
         Ok(Self {
-            reactor,
+            reactor: Rc::downgrade(&reactor),
             stream,
             source_rx,
             source_tx,
@@ -431,9 +431,11 @@ impl TcpStream {
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        let source = self
-            .reactor
-            .recv(self.stream.as_raw_fd(), buf.len(), iou::MsgFlags::MSG_PEEK);
+        let source = self.reactor.upgrade().unwrap().recv(
+            self.stream.as_raw_fd(),
+            buf.len(),
+            iou::MsgFlags::MSG_PEEK,
+        );
 
         let sz = source.collect_rw().await?;
         match source.extract_source_type() {
@@ -484,7 +486,7 @@ impl TcpStream {
     }
 
     fn allocate_buffer(&self, size: usize) -> DmaBuffer {
-        self.reactor.alloc_dma_buffer(size)
+        self.reactor.upgrade().unwrap().alloc_dma_buffer(size)
     }
 
     fn yolo_rx(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
@@ -518,7 +520,11 @@ impl TcpStream {
     ) -> Poll<io::Result<usize>> {
         let source = match self.source_rx.take() {
             Some(source) => source,
-            None => poll_err!(self.reactor.rushed_recv(self.stream.as_raw_fd(), size)),
+            None => poll_err!(self
+                .reactor
+                .upgrade()
+                .unwrap()
+                .rushed_recv(self.stream.as_raw_fd(), size)),
         };
 
         if !source.has_result() {
@@ -536,7 +542,11 @@ impl TcpStream {
     fn write_dma(&mut self, cx: &mut Context<'_>, buf: DmaBuffer) -> Poll<io::Result<usize>> {
         let source = match self.source_tx.take() {
             Some(source) => source,
-            None => poll_err!(self.reactor.rushed_send(self.stream.as_raw_fd(), buf)),
+            None => poll_err!(self
+                .reactor
+                .upgrade()
+                .unwrap()
+                .rushed_send(self.stream.as_raw_fd(), buf)),
         };
 
         match source.take_result() {
