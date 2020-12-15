@@ -543,7 +543,7 @@ mod test {
     use crate::timer::Timer;
     use crate::{enclose, Local, LocalExecutor};
 
-    use futures::future::join3;
+    use futures_lite::future::or;
     use std::cell::Cell;
     use std::rc::Rc;
     use std::time::{Duration, Instant};
@@ -820,7 +820,7 @@ mod test {
             })
             .detach();
 
-            join3(t3, t2, t1).await;
+            or(or(t1, t2), t3).await;
         });
     }
 }
