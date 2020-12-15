@@ -312,6 +312,28 @@ pin_project! {
     }
 }
 
+use std::convert::TryFrom;
+
+struct RecvBuffer {
+    buf: DmaBuffer,
+}
+
+impl TryFrom<Source> for RecvBuffer {
+    type Error = io::Error;
+
+    fn try_from(source: Source) -> io::Result<RecvBuffer> {
+        match source.extract_source_type() {
+            SourceType::SockRecv(mut buf) => {
+                let sz = source.take_result().unwrap()?;
+                let mut buf = buf.take().unwrap();
+                buf.trim_to_size(sz);
+                Ok(RecvBuffer { buf })
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl TcpStream {
     /// Creates a TCP connection to the specified address.
     ///
@@ -360,7 +382,7 @@ impl TcpStream {
         })
     }
 
-    fn consume_receive_buffer(&mut self, buf: &mut [u8]) -> Option<usize> {
+    fn consume_receive_buffer(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
         if let Some(src) = self.rx_buf.as_mut() {
             let sz = std::cmp::min(src.len(), buf.len());
             buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
@@ -368,7 +390,7 @@ impl TcpStream {
             if src.is_empty() {
                 self.rx_buf.take();
             }
-            Some(sz)
+            Some(Ok(sz))
         } else {
             None
         }
@@ -411,10 +433,8 @@ impl TcpStream {
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         let source = self
             .reactor
-            .new_source(self.stream.as_raw_fd(), SourceType::SockRecv(None));
-        self.reactor
-            .sys
-            .recv(&source, buf.len(), iou::MsgFlags::MSG_PEEK);
+            .recv(self.stream.as_raw_fd(), buf.len(), iou::MsgFlags::MSG_PEEK);
+
         let sz = source.collect_rw().await?;
         match source.extract_source_type() {
             SourceType::SockRecv(mut src) => {
@@ -467,124 +487,66 @@ impl TcpStream {
         self.reactor.alloc_dma_buffer(size)
     }
 
-    fn yolo_rx(&mut self, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn yolo_rx(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
         if self.rx_yolo {
-            match sys::recv_syscall(
-                self.stream.as_raw_fd(),
-                buf.as_mut_ptr(),
-                buf.len(),
-                iou::MsgFlags::MSG_DONTWAIT.bits(),
-            ) {
-                Ok(x) => Poll::Ready(Ok(x)),
-                Err(err) => match err.kind() {
-                    io::ErrorKind::WouldBlock => {
-                        self.rx_yolo = false;
-                        Poll::Pending
-                    }
-                    _ => Poll::Ready(Err(err)),
-                },
-            }
+            super::yolo_recv(self.stream.as_raw_fd(), buf)
         } else {
-            Poll::Pending
+            None
         }
+        .or_else(|| {
+            self.rx_yolo = false;
+            None
+        })
     }
 
-    fn yolo_tx(&mut self, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn yolo_tx(&mut self, buf: &[u8]) -> Option<io::Result<usize>> {
         if self.tx_yolo {
-            match sys::send_syscall(
-                self.stream.as_raw_fd(),
-                buf.as_ptr(),
-                buf.len(),
-                iou::MsgFlags::MSG_DONTWAIT.bits(),
-            ) {
-                Ok(x) => Poll::Ready(Ok(x)),
-                Err(err) => match err.kind() {
-                    io::ErrorKind::WouldBlock => {
-                        self.tx_yolo = false;
-                        Poll::Pending
-                    }
-                    _ => Poll::Ready(Err(err)),
-                },
-            }
+            super::yolo_send(self.stream.as_raw_fd(), buf)
         } else {
-            Poll::Pending
+            None
         }
+        .or_else(|| {
+            self.tx_yolo = false;
+            None
+        })
     }
+
     fn poll_replenish_buffer(
         &mut self,
         cx: &mut Context<'_>,
         size: usize,
     ) -> Poll<io::Result<usize>> {
-        loop {
-            let source = self.source_rx.take();
-            match source {
-                None => {
-                    let source = self
-                        .reactor
-                        .new_source(self.stream.as_raw_fd(), SourceType::SockRecv(None));
-                    self.reactor.sys.recv(&source, size, iou::MsgFlags::empty());
-                    if let Err(err) = self.reactor.rush_dispatch(&source) {
-                        return Poll::Ready(Err(err));
-                    }
-                    self.source_rx = Some(source);
-                    if !self.source_rx.as_ref().unwrap().has_result() {
-                        self.source_rx
-                            .as_ref()
-                            .unwrap()
-                            .add_waiter(cx.waker().clone());
-                        return Poll::Pending;
-                    } else {
-                        self.rx_yolo = true;
-                    }
-                }
-                Some(source) => {
-                    self.rx_yolo = true;
-                    match source.extract_source_type() {
-                        SourceType::SockRecv(mut buf) => {
-                            let bytes = source.take_result().unwrap();
-                            match bytes {
-                                Err(x) => return Poll::Ready(Err(x)),
-                                Ok(sz) => {
-                                    let mut buf = buf.take();
-                                    buf.as_mut().unwrap().trim_to_size(sz);
-                                    self.rx_buf = buf;
-                                    return Poll::Ready(Ok(sz));
-                                }
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            }
+        let source = match self.source_rx.take() {
+            Some(source) => source,
+            None => poll_err!(self.reactor.rushed_recv(self.stream.as_raw_fd(), size)),
+        };
+
+        if !source.has_result() {
+            source.add_waiter(cx.waker().clone());
+            self.source_rx = Some(source);
+            Poll::Pending
+        } else {
+            let buf = poll_err!(RecvBuffer::try_from(source));
+            self.rx_yolo = true;
+            self.rx_buf = Some(buf.buf);
+            Poll::Ready(Ok(self.rx_buf.as_ref().unwrap().len()))
         }
     }
 
     fn write_dma(&mut self, cx: &mut Context<'_>, buf: DmaBuffer) -> Poll<io::Result<usize>> {
-        let source = self.source_tx.take();
-        match source {
+        let source = match self.source_tx.take() {
+            Some(source) => source,
+            None => poll_err!(self.reactor.rushed_send(self.stream.as_raw_fd(), buf)),
+        };
+
+        match source.take_result() {
             None => {
-                let source = self
-                    .reactor
-                    .new_source(self.stream.as_raw_fd(), SourceType::SockSend(buf));
-                self.reactor.sys.send(&source, iou::MsgFlags::empty());
-                if let Err(err) = self.reactor.rush_dispatch(&source) {
-                    return Poll::Ready(Err(err));
-                }
-                match source.take_result() {
-                    None => {
-                        source.add_waiter(cx.waker().clone());
-                        self.source_tx = Some(source);
-                        Poll::Pending
-                    }
-                    Some(res) => {
-                        self.tx_yolo = true;
-                        Poll::Ready(res)
-                    }
-                }
+                source.add_waiter(cx.waker().clone());
+                self.source_tx = Some(source);
+                Poll::Pending
             }
-            Some(source) => {
+            Some(res) => {
                 self.tx_yolo = true;
-                let res = source.take_result().unwrap();
                 Poll::Ready(res)
             }
         }
@@ -597,14 +559,11 @@ impl AsyncBufRead for TcpStream {
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
         let buf_size = self.rx_buf_size;
-        loop {
-            if self.rx_buf.as_ref().is_some() {
-                let this = self.project();
-                return Poll::Ready(Ok(this.rx_buf.as_ref().unwrap().as_bytes()));
-            } else if let Err(err) = ready!(self.poll_replenish_buffer(cx, buf_size)) {
-                return Poll::Ready(Err(err));
-            }
+        if self.rx_buf.as_ref().is_none() {
+            poll_err!(ready!(self.poll_replenish_buffer(cx, buf_size)));
         }
+        let this = self.project();
+        Poll::Ready(Ok(this.rx_buf.as_ref().unwrap().as_bytes()))
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
@@ -623,20 +582,11 @@ impl AsyncRead for TcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        if let Some(sz) = self.consume_receive_buffer(buf) {
-            return Poll::Ready(Ok(sz));
-        }
-        match self.yolo_rx(buf) {
-            Poll::Ready(x) => Poll::Ready(x),
-            Poll::Pending => match ready!(self.poll_replenish_buffer(cx, buf.len())) {
-                Ok(sz) => {
-                    let ret = self.consume_receive_buffer(buf).unwrap();
-                    assert_eq!(ret, sz);
-                    Poll::Ready(Ok(sz))
-                }
-                Err(x) => Poll::Ready(Err(x)),
-            },
-        }
+        poll_some!(self.consume_receive_buffer(buf));
+        poll_some!(self.yolo_rx(buf));
+        poll_err!(ready!(self.poll_replenish_buffer(cx, buf.len())));
+        poll_some!(self.consume_receive_buffer(buf));
+        unreachable!();
     }
 }
 
@@ -646,14 +596,10 @@ impl AsyncWrite for TcpStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        match self.yolo_tx(buf) {
-            Poll::Ready(x) => Poll::Ready(x),
-            Poll::Pending => {
-                let mut dma = self.allocate_buffer(buf.len());
-                assert_eq!(dma.write_at(0, buf), buf.len());
-                self.write_dma(cx, dma)
-            }
-        }
+        poll_some!(self.yolo_tx(buf));
+        let mut dma = self.allocate_buffer(buf.len());
+        assert_eq!(dma.write_at(0, buf), buf.len());
+        self.write_dma(cx, dma)
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {

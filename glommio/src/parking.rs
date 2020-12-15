@@ -273,7 +273,7 @@ impl Reactor {
         sys::write_eventfd(remote);
     }
 
-    pub(crate) fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
+    fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
         let ioreq = self.current_io_requirements.get();
         sys::Source::new(ioreq, raw, stype)
     }
@@ -338,6 +338,26 @@ impl Reactor {
         let addr = SockAddrStorage::uninit();
         let source = self.new_source(raw, SourceType::Accept(addr));
         self.sys.accept(&source);
+        source
+    }
+
+    pub(crate) fn rushed_send(&self, fd: RawFd, buf: DmaBuffer) -> io::Result<Source> {
+        let source = self.new_source(fd, SourceType::SockSend(buf));
+        self.sys.send(&source, iou::MsgFlags::empty());
+        self.rush_dispatch(&source)?;
+        Ok(source)
+    }
+
+    pub(crate) fn rushed_recv(&self, fd: RawFd, size: usize) -> io::Result<Source> {
+        let source = self.new_source(fd, SourceType::SockRecv(None));
+        self.sys.recv(&source, size, iou::MsgFlags::empty());
+        self.rush_dispatch(&source)?;
+        Ok(source)
+    }
+
+    pub(crate) fn recv(&self, fd: RawFd, size: usize, flags: iou::MsgFlags) -> Source {
+        let source = self.new_source(fd, SourceType::SockRecv(None));
+        self.sys.recv(&source, size, flags);
         source
     }
 
@@ -464,7 +484,7 @@ impl Reactor {
         channels.process_shared_channels(wakers)
     }
 
-    pub(crate) fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
+    fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
         let mut wakers = self.wakers.borrow_mut();
         self.sys
             .rush_dispatch(Some(source.latency_req()), &mut wakers)?;
