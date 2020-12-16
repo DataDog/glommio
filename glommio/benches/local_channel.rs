@@ -10,7 +10,7 @@ fn main() {
             let runs: u32 = 10_000_000;
             let (sender, receiver) = local_channel::new_bounded(1);
             let receiver = Local::local(async move {
-                receiver.fold(0, |acc, x| acc + x).await;
+                receiver.stream().fold(0, |acc, x| acc + x).await;
             })
             .detach();
 
@@ -34,7 +34,7 @@ fn main() {
             let runs: u32 = 10_000_000;
             let (sender, receiver) = local_channel::new_bounded(10_000_000);
             let receiver = Local::local(async move {
-                receiver.fold(0, |acc, x| acc + x).await;
+                receiver.stream().fold(0, |acc, x| acc + x).await;
             })
             .detach();
 
