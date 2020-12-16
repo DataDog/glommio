@@ -359,12 +359,28 @@ impl<T> Clone for LocalChannel<T> {
     }
 }
 
-impl <T> Drop for LocalChannel<T> {
+impl<T> Drop for LocalChannel<T> {
     fn drop(&mut self) {
-        assert!(self.state.borrow().recv_waiters.is_none() ||
-            self.state.borrow().recv_waiters.unwrap().is_empty());
-        assert!(self.state.borrow().send_waiters.is_none() ||
-            self.state.borrow().send_waiters.unwrap().is_empty());
+        assert!(
+            self.state.borrow().recv_waiters.is_none()
+                || self
+                    .state
+                    .borrow()
+                    .recv_waiters
+                    .as_ref()
+                    .unwrap()
+                    .is_empty()
+        );
+        assert!(
+            self.state.borrow().send_waiters.is_none()
+                || self
+                    .state
+                    .borrow()
+                    .send_waiters
+                    .as_ref()
+                    .unwrap()
+                    .is_empty()
+        );
     }
 }
 
