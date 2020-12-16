@@ -3,10 +3,11 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::channels::{ChannelCapacity, ChannelError};
+use crate::channels::ChannelCapacity;
+use crate::{GlommioError, ResourceType};
 use futures_lite::{future, stream::Stream};
 use std::task::{Context, Poll, Waker};
-use std::{cell::RefCell, io, pin::Pin, rc::Rc};
+use std::{cell::RefCell, pin::Pin, rc::Rc};
 
 use intrusive_collections::intrusive_adapter;
 use intrusive_collections::{LinkedList, LinkedListLink};
@@ -77,11 +78,11 @@ struct State<T> {
 }
 
 impl<T> State<T> {
-    fn push(&mut self, item: T) -> Result<Option<Waker>, ChannelError<T>> {
+    fn push(&mut self, item: T) -> Result<Option<Waker>, GlommioError<T>> {
         if self.recv_waiters.is_none() {
-            Err(ChannelError::new(io::ErrorKind::BrokenPipe, item))
+            Err(GlommioError::Closed(ResourceType::Channel(item)))
         } else if self.is_full() {
-            Err(ChannelError::new(io::ErrorKind::WouldBlock, item))
+            Err(GlommioError::WouldBlock(ResourceType::Channel(item)))
         } else {
             self.channel.push_back(Rc::new(ChannelNode {
                 value: item,
@@ -264,7 +265,7 @@ impl<T> LocalSender<T> {
     /// [`WouldBlock`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.WouldBlock
     /// [`Other`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.Other
     /// [`io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
-    pub fn try_send(&self, item: T) -> Result<(), ChannelError<T>> {
+    pub fn try_send(&self, item: T) -> Result<(), GlommioError<T>> {
         if let Some(w) = self.channel.state.borrow_mut().push(item)? {
             w.wake();
         }
@@ -293,7 +294,7 @@ impl<T> LocalSender<T> {
     /// ```
     ///
     /// [`try_send`]: struct.LocalSender.html#method.try_send
-    pub async fn send(&self, item: T) -> Result<(), ChannelError<T>> {
+    pub async fn send(&self, item: T) -> Result<(), GlommioError<T>> {
         future::poll_fn(|cx| self.wait_for_room(cx)).await;
         self.try_send(item)
     }
@@ -524,9 +525,8 @@ mod test {
             loop {
                 match sender.try_send(1) {
                     Ok(_) => Local::later().await,
-                    Err(x) => {
-                        assert_eq!(x.item, 1);
-                        assert_eq!(x.kind, io::ErrorKind::BrokenPipe);
+                    err => {
+                        matches!(err, Err(GlommioError::WouldBlock(ResourceType::Channel(1))));
                         break;
                     }
                 }

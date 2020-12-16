@@ -239,7 +239,7 @@
 //! local_ex.run(async {
 //!     let timeout = async {
 //!         Timer::new(Duration::from_secs(10)).await;
-//!         Err(io::ErrorKind::TimedOut.into())
+//!         Err(io::Error::new(io::ErrorKind::TimedOut, "").into())
 //!     };
 //!     let stream = TcpStream::connect("::80").or(timeout).await?;
 //!
@@ -356,8 +356,7 @@ pub mod timer;
 
 pub use crate::error::{GlommioError, ResourceType, Result};
 pub use crate::executor::{
-    ExecutorStats, LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
-    TaskQueueStats,
+    ExecutorStats, LocalExecutor, LocalExecutorBuilder, Task, TaskQueueHandle, TaskQueueStats,
 };
 pub use crate::networking::*;
 pub use crate::pollable::Async;

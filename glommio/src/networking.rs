@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use std::io;
+
 use std::net::{SocketAddr, UdpSocket};
 use std::{
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
@@ -14,6 +14,8 @@ use futures_lite::stream::{self, Stream};
 use socket2::{Domain, Socket, Type};
 
 use crate::pollable::Async;
+
+type Result<T> = crate::Result<T, ()>;
 
 impl Async<UdpSocket> {
     /// Creates a UDP socket bound to the specified address.
@@ -33,7 +35,7 @@ impl Async<UdpSocket> {
     ///     println!("Bound to {}", socket.get_ref().local_addr().unwrap());
     /// });
     /// ```
-    pub fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Async<UdpSocket>> {
+    pub fn bind<A: Into<SocketAddr>>(addr: A) -> Result<Async<UdpSocket>> {
         let addr = addr.into();
         Ok(Async::new(UdpSocket::bind(addr)?)?)
     }
@@ -58,8 +60,10 @@ impl Async<UdpSocket> {
     /// let (len, addr) = socket.recv_from(&mut buf).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|io| io.recv_from(buf)).await
+    pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        self.read_with(|io| io.recv_from(buf))
+            .await
+            .map_err(Into::into)
     }
 
     /// Receives a single datagram message without removing it from the queue.
@@ -82,8 +86,10 @@ impl Async<UdpSocket> {
     /// let (len, addr) = socket.peek_from(&mut buf).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|io| io.peek_from(buf)).await
+    pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        self.read_with(|io| io.peek_from(buf))
+            .await
+            .map_err(Into::into)
     }
 
     /// Sends data to the specified address.
@@ -104,9 +110,11 @@ impl Async<UdpSocket> {
     /// let len = socket.send_to(msg, addr).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> Result<usize> {
         let addr = addr.into();
-        self.write_with(|io| io.send_to(buf, addr)).await
+        self.write_with(|io| io.send_to(buf, addr))
+            .await
+            .map_err(Into::into)
     }
 
     /// Receives a single datagram message from the connected peer.
@@ -133,8 +141,8 @@ impl Async<UdpSocket> {
     /// let len = socket.recv(&mut buf).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|io| io.recv(buf)).await
+    pub async fn recv(&self, buf: &mut [u8]) -> Result<usize> {
+        self.read_with(|io| io.recv(buf)).await.map_err(Into::into)
     }
 
     /// Receives a single datagram message from the connected peer without removing it from the
@@ -162,8 +170,8 @@ impl Async<UdpSocket> {
     /// let len = socket.peek(&mut buf).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|io| io.peek(buf)).await
+    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
+        self.read_with(|io| io.peek(buf)).await.map_err(Into::into)
     }
 
     /// Sends data to the connected peer.
@@ -187,8 +195,8 @@ impl Async<UdpSocket> {
     /// let len = socket.send(msg).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.write_with(|io| io.send(buf)).await
+    pub async fn send(&self, buf: &[u8]) -> Result<usize> {
+        self.write_with(|io| io.send(buf)).await.map_err(Into::into)
     }
 }
 
@@ -206,7 +214,7 @@ impl Async<UnixListener> {
     /// println!("Listening on {:?}", listener.get_ref().local_addr()?);
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
+    pub fn bind<P: AsRef<Path>>(path: P) -> Result<Async<UnixListener>> {
         let path = path.as_ref().to_owned();
         Ok(Async::new(UnixListener::bind(path)?)?)
     }
@@ -228,7 +236,7 @@ impl Async<UnixListener> {
     /// println!("Accepted client: {:?}", addr);
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
+    pub async fn accept(&self) -> Result<(Async<UnixStream>, UnixSocketAddr)> {
         let (stream, addr) = self.read_with(|io| io.accept()).await?;
         Ok((Async::new(stream)?, addr))
     }
@@ -254,9 +262,13 @@ impl Async<UnixListener> {
     /// }
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<UnixStream>>> + Unpin + '_ {
+    pub fn incoming(&self) -> impl Stream<Item = Result<Async<UnixStream>>> + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
-            let res = listener.accept().await.map(|(stream, _)| stream);
+            let res = listener
+                .accept()
+                .await
+                .map(|(stream, _)| stream)
+                .map_err(Into::into);
             Some((res, listener))
         }))
     }
@@ -275,7 +287,7 @@ impl Async<UnixStream> {
     /// let stream = Async::<UnixStream>::connect("/tmp/socket").await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
+    pub async fn connect<P: AsRef<Path>>(path: P) -> Result<Async<UnixStream>> {
         // Create a socket.
         let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
 
@@ -310,7 +322,7 @@ impl Async<UnixStream> {
     /// let (stream1, stream2) = Async::<UnixStream>::pair()?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn pair() -> io::Result<(Async<UnixStream>, Async<UnixStream>)> {
+    pub fn pair() -> Result<(Async<UnixStream>, Async<UnixStream>)> {
         let (stream1, stream2) = UnixStream::pair()?;
         Ok((Async::new(stream1)?, Async::new(stream2)?))
     }
@@ -329,7 +341,7 @@ impl Async<UnixDatagram> {
     /// let socket = Async::<UnixDatagram>::bind("/tmp/socket")?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
+    pub fn bind<P: AsRef<Path>>(path: P) -> Result<Async<UnixDatagram>> {
         let path = path.as_ref().to_owned();
         Ok(Async::new(UnixDatagram::bind(path)?)?)
     }
@@ -346,7 +358,7 @@ impl Async<UnixDatagram> {
     /// let socket = Async::<UnixDatagram>::unbound()?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn unbound() -> io::Result<Async<UnixDatagram>> {
+    pub fn unbound() -> Result<Async<UnixDatagram>> {
         Ok(Async::new(UnixDatagram::unbound()?)?)
     }
 
@@ -362,7 +374,7 @@ impl Async<UnixDatagram> {
     /// let (socket1, socket2) = Async::<UnixDatagram>::pair()?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn pair() -> io::Result<(Async<UnixDatagram>, Async<UnixDatagram>)> {
+    pub fn pair() -> Result<(Async<UnixDatagram>, Async<UnixDatagram>)> {
         let (socket1, socket2) = UnixDatagram::pair()?;
         Ok((Async::new(socket1)?, Async::new(socket2)?))
     }
@@ -384,8 +396,10 @@ impl Async<UnixDatagram> {
     /// let (len, addr) = socket.recv_from(&mut buf).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
-        self.read_with(|io| io.recv_from(buf)).await
+    pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, UnixSocketAddr)> {
+        self.read_with(|io| io.recv_from(buf))
+            .await
+            .map_err(Into::into)
     }
 
     /// Sends data to the specified address.
@@ -406,8 +420,10 @@ impl Async<UnixDatagram> {
     /// let len = socket.send_to(msg, addr).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
-        self.write_with(|io| io.send_to(buf, &path)).await
+    pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> Result<usize> {
+        self.write_with(|io| io.send_to(buf, &path))
+            .await
+            .map_err(Into::into)
     }
 
     /// Receives data from the connected peer.
@@ -431,8 +447,8 @@ impl Async<UnixDatagram> {
     /// let len = socket.recv(&mut buf).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|io| io.recv(buf)).await
+    pub async fn recv(&self, buf: &mut [u8]) -> Result<usize> {
+        self.read_with(|io| io.recv(buf)).await.map_err(Into::into)
     }
 
     /// Sends data to the connected peer.
@@ -456,7 +472,7 @@ impl Async<UnixDatagram> {
     /// let len = socket.send(msg).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.write_with(|io| io.send(buf)).await
+    pub async fn send(&self, buf: &[u8]) -> Result<usize> {
+        self.write_with(|io| io.send(buf)).await.map_err(Into::into)
     }
 }

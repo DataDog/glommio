@@ -24,6 +24,8 @@ use std::task::{Context, Poll};
 
 const DEFAULT_BUFFER_SIZE: usize = 8192;
 
+type Result<T> = crate::Result<T, ()>;
+
 #[derive(Debug)]
 /// A TCP socket server, listening for connections.
 ///
@@ -85,7 +87,7 @@ impl TcpListener {
     ///     println!("Listening on {}", listener.local_addr().unwrap());
     /// });
     /// ```
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> Result<TcpListener> {
         let addr = addr
             .to_socket_addrs()
             .unwrap()
@@ -135,7 +137,7 @@ impl TcpListener {
     /// [`AcceptedTcpStream`]: struct.AcceptedTcpStream.html
     /// [`TcpStream`]: struct.TcpStream.html
     /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-    pub async fn shared_accept(&self) -> io::Result<AcceptedTcpStream> {
+    pub async fn shared_accept(&self) -> Result<AcceptedTcpStream> {
         let reactor = self.reactor.clone();
         let source = reactor.accept(self.listener.as_raw_fd());
         let fd = source.collect_rw().await?;
@@ -167,7 +169,7 @@ impl TcpListener {
     ///
     /// [`shared_accept`]: TcpListener::accept
     /// [`bind_to_executor`]: AcceptedTcpStream::bind_to_executor
-    pub async fn accept(&self) -> io::Result<TcpStream> {
+    pub async fn accept(&self) -> Result<TcpStream> {
         let a = self.shared_accept().await?;
         Ok(a.bind_to_executor())
     }
@@ -190,7 +192,7 @@ impl TcpListener {
     ///     }
     /// });
     /// ```
-    pub fn incoming(&self) -> impl Stream<Item = io::Result<TcpStream>> + Unpin + '_ {
+    pub fn incoming(&self) -> impl Stream<Item = Result<TcpStream>> + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
             let res = listener.accept().await;
             Some((res, listener))
@@ -210,8 +212,8 @@ impl TcpListener {
     ///     println!("Listening on {}", listener.local_addr().unwrap());
     /// });
     /// ```
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.listener.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        Ok(self.listener.local_addr()?)
     }
 }
 
@@ -326,7 +328,7 @@ impl TcpStream {
     ///     TcpStream::connect("127.0.0.1:10000").await.unwrap();
     /// })
     /// ```
-    pub async fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
+    pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<TcpStream> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
 
         let reactor = Local::get_reactor();
@@ -378,20 +380,20 @@ impl TcpStream {
     // Even with my "let's use latest" policy it would be crazy to mandate a kernel
     // that doesn't even exist. So in preparation for that we'll sync-emulate this but
     // already on an async wrapper
-    fn poll_shutdown(&self, _cx: &mut Context<'_>, how: Shutdown) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), how))
+    fn poll_shutdown(&self, _cx: &mut Context<'_>, how: Shutdown) -> Poll<Result<()>> {
+        Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), how).map_err(Into::into))
     }
 
     /// Shuts down the read, write, or both halves of this connection.
-    pub async fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+    pub async fn shutdown(&self, how: Shutdown) -> Result<()> {
         poll_fn(|cx| self.poll_shutdown(cx, how)).await
     }
 
     /// Sets the `TCP_NODELAY` option to this socket.
     ///
     /// Setting this to true disabled the Nagle algorithm.
-    pub fn set_nodelay(&mut self, value: bool) -> io::Result<()> {
-        self.stream.set_nodelay(value)
+    pub fn set_nodelay(&mut self, value: bool) -> Result<()> {
+        Ok(self.stream.set_nodelay(value)?)
     }
 
     /// Sets the buffer size used on the receive path
@@ -408,7 +410,7 @@ impl TcpStream {
     ///
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
-    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
         let source = self
             .reactor
             .new_source(self.stream.as_raw_fd(), SourceType::SockRecv(None));
@@ -441,8 +443,8 @@ impl TcpStream {
     ///     println!("My peer: {:?}", stream.peer_addr());
     /// })
     /// ```
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.peer_addr()
+    pub fn peer_addr(&self) -> Result<SocketAddr> {
+        Ok(self.stream.peer_addr()?)
     }
 
     /// Returns the socket address of the local half of this TCP connection.
@@ -459,15 +461,15 @@ impl TcpStream {
     ///     println!("My peer: {:?}", stream.local_addr());
     /// })
     /// ```
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        Ok(self.stream.local_addr()?)
     }
 
     fn allocate_buffer(&self, size: usize) -> DmaBuffer {
         self.reactor.alloc_dma_buffer(size)
     }
 
-    fn yolo_rx(&mut self, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn yolo_rx(&mut self, buf: &mut [u8]) -> Poll<Result<usize>> {
         if self.rx_yolo {
             match sys::recv_syscall(
                 self.stream.as_raw_fd(),
@@ -481,7 +483,7 @@ impl TcpStream {
                         self.rx_yolo = false;
                         Poll::Pending
                     }
-                    _ => Poll::Ready(Err(err)),
+                    _ => Poll::Ready(Err(err.into())),
                 },
             }
         } else {
@@ -489,7 +491,7 @@ impl TcpStream {
         }
     }
 
-    fn yolo_tx(&mut self, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn yolo_tx(&mut self, buf: &[u8]) -> Poll<Result<usize>> {
         if self.tx_yolo {
             match sys::send_syscall(
                 self.stream.as_raw_fd(),
@@ -503,18 +505,14 @@ impl TcpStream {
                         self.tx_yolo = false;
                         Poll::Pending
                     }
-                    _ => Poll::Ready(Err(err)),
+                    _ => Poll::Ready(Err(err.into())),
                 },
             }
         } else {
             Poll::Pending
         }
     }
-    fn poll_replenish_buffer(
-        &mut self,
-        cx: &mut Context<'_>,
-        size: usize,
-    ) -> Poll<io::Result<usize>> {
+    fn poll_replenish_buffer(&mut self, cx: &mut Context<'_>, size: usize) -> Poll<Result<usize>> {
         loop {
             let source = self.source_rx.take();
             match source {
@@ -524,7 +522,7 @@ impl TcpStream {
                         .new_source(self.stream.as_raw_fd(), SourceType::SockRecv(None));
                     self.reactor.sys.recv(&source, size, iou::MsgFlags::empty());
                     if let Err(err) = self.reactor.rush_dispatch(&source) {
-                        return Poll::Ready(Err(err));
+                        return Poll::Ready(Err(err.into()));
                     }
                     self.source_rx = Some(source);
                     if !self.source_rx.as_ref().unwrap().has_result() {
@@ -543,7 +541,7 @@ impl TcpStream {
                         SourceType::SockRecv(mut buf) => {
                             let bytes = source.take_result().unwrap();
                             match bytes {
-                                Err(x) => return Poll::Ready(Err(x)),
+                                Err(x) => return Poll::Ready(Err(x.into())),
                                 Ok(sz) => {
                                     let mut buf = buf.take();
                                     buf.as_mut().unwrap().trim_to_size(sz);
@@ -559,7 +557,7 @@ impl TcpStream {
         }
     }
 
-    fn write_dma(&mut self, cx: &mut Context<'_>, buf: DmaBuffer) -> Poll<io::Result<usize>> {
+    fn write_dma(&mut self, cx: &mut Context<'_>, buf: DmaBuffer) -> Poll<Result<usize>> {
         let source = self.source_tx.take();
         match source {
             None => {
@@ -568,7 +566,7 @@ impl TcpStream {
                     .new_source(self.stream.as_raw_fd(), SourceType::SockSend(buf));
                 self.reactor.sys.send(&source, iou::MsgFlags::empty());
                 if let Err(err) = self.reactor.rush_dispatch(&source) {
-                    return Poll::Ready(Err(err));
+                    return Poll::Ready(Err(err.into()));
                 }
                 match source.take_result() {
                     None => {
@@ -578,14 +576,14 @@ impl TcpStream {
                     }
                     Some(res) => {
                         self.tx_yolo = true;
-                        Poll::Ready(res)
+                        Poll::Ready(res.map_err(Into::into))
                     }
                 }
             }
             Some(source) => {
                 self.tx_yolo = true;
                 let res = source.take_result().unwrap();
-                Poll::Ready(res)
+                Poll::Ready(res.map_err(Into::into))
             }
         }
     }
@@ -602,7 +600,7 @@ impl AsyncBufRead for TcpStream {
                 let this = self.project();
                 return Poll::Ready(Ok(this.rx_buf.as_ref().unwrap().as_bytes()));
             } else if let Err(err) = ready!(self.poll_replenish_buffer(cx, buf_size)) {
-                return Poll::Ready(Err(err));
+                return Poll::Ready(Err(err.into()));
             }
         }
     }
@@ -627,14 +625,14 @@ impl AsyncRead for TcpStream {
             return Poll::Ready(Ok(sz));
         }
         match self.yolo_rx(buf) {
-            Poll::Ready(x) => Poll::Ready(x),
+            Poll::Ready(x) => Poll::Ready(x.map_err(Into::into)),
             Poll::Pending => match ready!(self.poll_replenish_buffer(cx, buf.len())) {
                 Ok(sz) => {
                     let ret = self.consume_receive_buffer(buf).unwrap();
                     assert_eq!(ret, sz);
                     Poll::Ready(Ok(sz))
                 }
-                Err(x) => Poll::Ready(Err(x)),
+                Err(x) => Poll::Ready(Err(x.into())),
             },
         }
     }
@@ -647,11 +645,11 @@ impl AsyncWrite for TcpStream {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.yolo_tx(buf) {
-            Poll::Ready(x) => Poll::Ready(x),
+            Poll::Ready(x) => Poll::Ready(x.map_err(Into::into)),
             Poll::Pending => {
                 let mut dma = self.allocate_buffer(buf.len());
                 assert_eq!(dma.write_at(0, buf), buf.len());
-                self.write_dma(cx, dma)
+                self.write_dma(cx, dma).map_err(Into::into)
             }
         }
     }
@@ -687,7 +685,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle: Task<io::Result<SocketAddr>> =
+            let listener_handle: Task<Result<SocketAddr>> =
                 Task::local(enclose! { (coord) async move {
                     coord.set(1);
                     let stream = listener.accept().await?;
@@ -772,13 +770,12 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle: Task<io::Result<()>> =
-                Task::local(enclose! { (coord) async move {
-                    coord.set(1);
-                    listener.incoming().take(4).try_for_each(|addr| {
-                        addr.map(|_| ())
-                    }).await
-                }});
+            let listener_handle: Task<Result<()>> = Task::local(enclose! { (coord) async move {
+                coord.set(1);
+                listener.incoming().take(4).try_for_each(|addr| {
+                    addr.map(|_| ())
+                }).await
+            }});
 
             while coord.get() != 1 {
                 Local::later().await;
@@ -842,7 +839,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle = Task::<io::Result<u8>>::local(enclose! { (coord) async move {
+            let listener_handle = Task::<Result<u8>>::local(enclose! { (coord) async move {
                 coord.set(1);
                 let mut stream = listener.accept().await?;
                 let mut byte = [0u8; 1];
@@ -870,7 +867,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = Vec::new();
                 stream.read_until(10, &mut buf).await?;
@@ -893,7 +890,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = String::new();
                 stream.read_line(&mut buf).await?;
@@ -915,7 +912,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let stream = listener.accept().await?;
                 Ok(stream.lines().count().await)
             })
@@ -936,7 +933,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<()>>::local(async move {
+            let listener_handle = Task::<Result<()>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 // likely both messages were coalesced together
@@ -968,7 +965,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<()>>::local(async move {
+            let listener_handle = Task::<Result<()>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf.len(), 4);
@@ -993,7 +990,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<()>>::local(async move {
+            let listener_handle = Task::<Result<()>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf, b"msg1");
@@ -1020,7 +1017,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = [0u8; 64];
                 for _ in 0..10 {

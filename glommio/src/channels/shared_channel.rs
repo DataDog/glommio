@@ -4,16 +4,19 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 //
-use crate::channels::spsc_queue::{make, BufferHalf, Consumer, Producer};
-use crate::channels::ChannelError;
 use crate::parking::Reactor;
+use crate::{
+    channels::spsc_queue::{make, BufferHalf, Consumer, Producer},
+    GlommioError, ResourceType,
+};
 use crate::{enclose, Local};
 use futures_lite::future;
 use futures_lite::stream::Stream;
-use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
+
+type Result<T, V> = crate::Result<T, V>;
 
 #[derive(Debug)]
 /// The `SharedReceiver` is the receiving end of the Shared Channel.
@@ -143,7 +146,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// [`WouldBlock`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.WouldBlock
     /// [`Other`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.Other
     /// [`ChannelError`]: ../struct.ChannelError.html
-    pub fn try_send(&self, item: T) -> Result<(), ChannelError<T>> {
+    pub fn try_send(&self, item: T) -> Result<(), T> {
         // This is a shared channel so state can change under our noses.
         // We test if the buffer is disconnected before sending to avoid
         // sending a value that will not be received (otherwise we would only
@@ -153,7 +156,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
         // disconnected between now and then. That's okay as all we're trying to
         // do here is prevent unnecessary sends.
         if self.state.buffer.consumer_disconnected() {
-            return Err(ChannelError::new(io::ErrorKind::BrokenPipe, item));
+            return Err(GlommioError::Closed(ResourceType::Channel(item)));
         }
         match self.state.buffer.try_push(item) {
             None => {
@@ -162,14 +165,14 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
                 }
                 Ok(())
             }
-            Some(item) => Err(ChannelError::new(
-                if self.state.buffer.consumer_disconnected() {
-                    io::ErrorKind::BrokenPipe
+            Some(item) => {
+                let res = if self.state.buffer.consumer_disconnected() {
+                    GlommioError::Closed(ResourceType::Channel(item))
                 } else {
-                    io::ErrorKind::WouldBlock
-                },
-                item,
-            )),
+                    GlommioError::WouldBlock(ResourceType::Channel(item))
+                };
+                Err(res)
+            }
         }
     }
 
@@ -188,12 +191,12 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     ///     sender.send(0).await.unwrap();
     /// });
     /// ```
-    pub async fn send(&self, item: T) -> Result<(), ChannelError<T>> {
+    pub async fn send(&self, item: T) -> Result<(), T> {
         let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
         waiter.await;
         let res = self.try_send(item);
-        if let Err(x) = &res {
-            assert_ne!(x.kind, io::ErrorKind::WouldBlock);
+        if let Err(GlommioError::WouldBlock(_)) = &res {
+            panic!("operation would block")
         }
         res
     }
@@ -488,7 +491,15 @@ mod test {
                 let sender: ConnectedSender<usize> = sender.connect();
                 match sender.send(0).await {
                     Ok(_) => panic!("Should not have sent"),
-                    Err(x) => assert_eq!(x.kind, io::ErrorKind::BrokenPipe),
+                    Err(GlommioError::Closed(ResourceType::Channel(_))) => {
+                        // all good
+                    }
+                    Err(other_err) => {
+                        panic!(
+                            "incorrect error type: '{}' for channel send",
+                            other_err.to_string()
+                        )
+                    }
                 }
             })
             .unwrap();

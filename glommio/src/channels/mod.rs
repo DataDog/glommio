@@ -142,8 +142,7 @@ pub mod local_channel;
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
 pub mod shared_channel;
 
-use std::fmt::{self, Debug, Display};
-use std::io;
+use std::fmt::Debug;
 
 #[derive(Debug)]
 /// Establishes the capacity of this channel.
@@ -152,50 +151,4 @@ use std::io;
 enum ChannelCapacity {
     Unbounded,
     Bounded(usize),
-}
-
-#[derive(Debug)]
-/// This is the error that is returned from channel operations if something goes wrong.
-///
-/// It encapsulates an [`ErrorKind`], which will be different for each kind of error and
-/// also makes the item sent through the channel available through the public attribute `item`.
-///
-/// You can convert between this and [`io::Error`] (losing information on `item`) so the
-/// ? constructs around [`io::Error`] should all work. Another possible way of doing this
-/// is returning an [`io::Error`] and encapsulating `item` on its inner field. However that
-/// adds [`Send`] and [`Sync`] requirements plus an allocation to the inner field (or to a
-/// helper struct around the inner field) that we'd like to avoid.
-///
-/// [`ErrorKind`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html
-/// [`io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
-/// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-/// [`Sync`]: https://doc.rust-lang.org/std/marker/trait.Sync.html
-pub struct ChannelError<T> {
-    kind: io::ErrorKind,
-    /// The `ChannelError` encapsulates the item we originally tried to send into the channel
-    /// in case you need to do something with it upon failure.
-    pub item: T,
-}
-
-impl<T: Debug> Display for ChannelError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&format!(
-            "ChannelError {{ kind: {:?} item: {:?} }}",
-            self.kind, self.item,
-        ))
-    }
-}
-
-impl<T: Debug> std::error::Error for ChannelError<T> {}
-
-impl<T> ChannelError<T> {
-    pub(crate) fn new(kind: io::ErrorKind, item: T) -> ChannelError<T> {
-        ChannelError { kind, item }
-    }
-}
-
-impl<T: fmt::Debug> From<ChannelError<T>> for io::Error {
-    fn from(error: ChannelError<T>) -> Self {
-        io::Error::new(error.kind, format!("item: {:?}", error.item))
-    }
 }

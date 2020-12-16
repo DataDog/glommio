@@ -118,7 +118,10 @@ impl SemaphoreState {
 
     fn try_acquire(&mut self, units: u64) -> Result<bool> {
         if self.closed {
-            return Err(GlommioError::SemaphoreClosed);
+            return Err(GlommioError::Closed(ResourceType::Semaphore {
+                requested: units,
+                available: self.avail,
+            }));
         }
 
         if self.avail >= units {
@@ -362,7 +365,7 @@ impl Semaphore {
     /// This method does not suspend.
     ///
     /// # Errors
-    ///  If semaphore is closed `Err(GlommioError::SemaphoreBroken)` will be returned.
+    ///  If semaphore is closed `Err(GlommioError::Closed(ResourceType::Semaphore { .. }))` will be returned.
     ///  If semaphore does not have sufficient amount of units
     ///  `
     ///  Err(GlommioError::WouldBlock(ResourceType::Semaphore {
@@ -547,7 +550,7 @@ mod test {
             match sem.acquire(0).await {
                 Ok(_) => panic!("Should have failed"),
                 Err(e) => match e {
-                    GlommioError::SemaphoreClosed => {}
+                    GlommioError::Closed(ResourceType::Semaphore { .. }) => {}
                     _ => panic!("Wrong Error"),
                 },
             }
@@ -596,7 +599,7 @@ mod test {
         assert!(result.is_err());
 
         let err = result.err().unwrap();
-        if !matches!(err, GlommioError::SemaphoreClosed) {
+        if !matches!(err, GlommioError::Closed(ResourceType::Semaphore { .. })) {
             panic!("Incorrect error type is returned from try_acquire method");
         }
     }
@@ -610,7 +613,7 @@ mod test {
         assert!(result.is_err());
 
         let err = result.err().unwrap();
-        if !matches!(err, GlommioError::SemaphoreClosed) {
+        if !matches!(err, GlommioError::Closed(ResourceType::Semaphore { .. })) {
             panic!("Incorrect error type is returned from try_acquire_permit method");
         }
     }
