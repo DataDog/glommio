@@ -10,7 +10,6 @@ use crate::Local;
 use log::debug;
 use std::convert::TryInto;
 use std::io;
-use std::mem;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
@@ -21,7 +20,7 @@ use std::rc::{Rc, Weak};
 /// It also implements some operations that are common among Buffered and non-Buffered files
 #[derive(Debug)]
 pub(crate) struct GlommioFile {
-    pub(crate) file: Option<std::fs::File>,
+    pub(crate) file: Option<RawFd>,
     // A file can appear in many paths, through renaming and linking.
     // If we do that, each path should have its own object. This is to
     // facilitate error displaying.
@@ -35,30 +34,27 @@ pub(crate) struct GlommioFile {
 impl Drop for GlommioFile {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
-            let fd = file.as_raw_fd();
             debug!(
             "File dropped while still active. ({:?} / fd {}).
 That means that while the file is already out of scope, the file descriptor is still registered until the next I/O cycle.
 This is likely file, but in extreme situations can lead to resource exhaustion. An explicit asynchronous close is still preferred",
             self.path,
-            fd);
-
-            std::mem::forget(file);
-            self.reactor.upgrade().map(|r| r.close(fd));
+            file);
+            self.reactor.upgrade().map(|r| r.close(file));
         }
     }
 }
 
 impl AsRawFd for GlommioFile {
     fn as_raw_fd(&self) -> RawFd {
-        self.file.as_ref().unwrap().as_raw_fd()
+        self.file.as_ref().copied().unwrap()
     }
 }
 
 impl FromRawFd for GlommioFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         GlommioFile {
-            file: Some(std::fs::File::from_raw_fd(fd)),
+            file: Some(fd),
             path: None,
             inode: 0,
             dev_major: 0,
@@ -88,7 +84,7 @@ impl GlommioFile {
         let fd = source.collect_rw().await?;
 
         let mut file = GlommioFile {
-            file: Some(unsafe { std::fs::File::from_raw_fd(fd as _) }),
+            file: Some(fd as _),
             path: Some(path),
             inode: 0,
             dev_major: 0,
@@ -110,10 +106,9 @@ impl GlommioFile {
     }
 
     pub(crate) fn discard(mut self) -> (RawFd, Option<PathBuf>) {
-        // Destruct `self` into components skipping Drop.
-        let fd = self.as_raw_fd();
+        // Destruct `self` signalling to `Drop` that there is no need to async close
+        let fd = self.file.take().unwrap();
         let path = self.path.take();
-        mem::forget(self);
         (fd, path)
     }
 
