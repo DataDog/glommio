@@ -31,7 +31,6 @@
 //! });
 //! ```
 //!
-use alloc::rc::Rc;
 use core::fmt::Debug;
 use std::cell::{Ref, RefCell, RefMut};
 use std::error::Error;
@@ -43,8 +42,12 @@ use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 
-use intrusive_collections::intrusive_adapter;
+use intrusive_collections::linked_list::LinkOps;
+use intrusive_collections::{container_of, offset_of, Adapter, PointerOps};
 use intrusive_collections::{LinkedList, LinkedListLink};
+
+use std::marker::PhantomPinned;
+use std::ptr::NonNull;
 
 /// A type alias for the result of a lock method which can be suspended.
 pub type LockResult<T> = Result<T, LockClosedError>;
@@ -123,6 +126,12 @@ impl From<TryLockError> for io::Error {
     }
 }
 
+#[derive(Debug)]
+struct Waiter<'a, T> {
+    node: WaiterNode,
+    rw: &'a RwLock<T>,
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum WaiterKind {
     READER,
@@ -130,19 +139,79 @@ enum WaiterKind {
 }
 
 #[derive(Debug)]
-struct Waiter {
-    rw: Rc<RefCell<State>>,
-    node: Rc<WaiterNode>,
-}
-
-#[derive(Debug)]
 struct WaiterNode {
     kind: WaiterKind,
     link: LinkedListLink,
     waker: RefCell<Option<Waker>>,
+
+    //waiter node can not be Unpin so its pointer could be used inside of intrusive
+    //collection, it also can not outlive the container which is guaranteed by the
+    //Waiter lifetime bound to the RwLock which is container of all Waiters.
+    _p: PhantomPinned,
 }
 
-intrusive_adapter!(WaiterAdapter = Rc<WaiterNode> : WaiterNode {link : LinkedListLink});
+struct WaiterPointerOps;
+
+unsafe impl PointerOps for WaiterPointerOps {
+    type Value = WaiterNode;
+    type Pointer = NonNull<WaiterNode>;
+
+    unsafe fn from_raw(&self, value: *const Self::Value) -> Self::Pointer {
+        NonNull::new_unchecked(value as *mut Self::Value)
+    }
+
+    fn into_raw(&self, ptr: Self::Pointer) -> *const Self::Value {
+        ptr.as_ptr() as *const Self::Value
+    }
+}
+
+struct WaiterAdapter {
+    pointers_ops: WaiterPointerOps,
+    link_ops: LinkOps,
+}
+
+impl WaiterAdapter {
+    fn new() -> Self {
+        WaiterAdapter {
+            pointers_ops: WaiterPointerOps,
+            link_ops: LinkOps,
+        }
+    }
+}
+
+///adapter which converts pointer to link to the pointer to the object which is hold
+///in collection and vice versa
+unsafe impl Adapter for WaiterAdapter {
+    type LinkOps = LinkOps;
+    type PointerOps = WaiterPointerOps;
+
+    unsafe fn get_value(
+        &self,
+        link: <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr,
+    ) -> *const <Self::PointerOps as PointerOps>::Value {
+        container_of!(link.as_ptr(), WaiterNode, link)
+    }
+
+    unsafe fn get_link(
+        &self,
+        value: *const <Self::PointerOps as PointerOps>::Value,
+    ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
+        let ptr = (value as *const u8).add(offset_of!(WaiterNode, link));
+        core::ptr::NonNull::new_unchecked(ptr as *mut _)
+    }
+
+    fn link_ops(&self) -> &Self::LinkOps {
+        &self.link_ops
+    }
+
+    fn link_ops_mut(&mut self) -> &mut Self::LinkOps {
+        &mut self.link_ops
+    }
+
+    fn pointer_ops(&self) -> &Self::PointerOps {
+        &self.pointers_ops
+    }
+}
 
 /// A reader-writer lock
 ///
@@ -194,8 +263,10 @@ intrusive_adapter!(WaiterAdapter = Rc<WaiterNode> : WaiterNode {link : LinkedLis
 ///
 #[derive(Debug)]
 pub struct RwLock<T> {
-    rw: Rc<RefCell<State>>,
-    value: Rc<RefCell<T>>,
+    state: RefCell<State>,
+    //option is needed only to implement into_inner method so that is absolutely safe
+    //to unwrap it by ref. during the execution
+    value: RefCell<Option<T>>,
 }
 
 #[derive(Debug)]
@@ -214,21 +285,25 @@ struct State {
     closed: bool,
 }
 
-impl Waiter {
-    fn new(kind: WaiterKind, rw: Rc<RefCell<State>>) -> Self {
+impl<'a, T> Waiter<'a, T> {
+    fn new(kind: WaiterKind, rw: &'a RwLock<T>) -> Self {
         Waiter {
             rw,
-            node: Rc::new(WaiterNode {
+            node: WaiterNode {
                 kind,
+                link: LinkedListLink::new(),
                 waker: RefCell::new(None),
-                link: LinkedListLink::default(),
-            }),
+                _p: PhantomPinned,
+            },
         }
     }
 
-    fn remove_from_waiting_queue(&self, rw: &mut State) {
-        if self.node.link.is_linked() {
-            let mut cursor = unsafe { rw.waiters_queue.cursor_mut_from_ptr(self.node.as_ref()) };
+    fn remove_from_waiting_queue(node: Pin<&mut WaiterNode>, rw: &mut State) {
+        if node.link.is_linked() {
+            let mut cursor = unsafe {
+                rw.waiters_queue
+                    .cursor_mut_from_ptr(node.get_unchecked_mut())
+            };
 
             if cursor.remove().is_none() {
                 panic!("Waiter has to be linked into the list of waiting futures");
@@ -236,10 +311,15 @@ impl Waiter {
         }
     }
 
-    fn register_in_waiting_queue(&self, rw: &mut State, waker: Waker, kind: WaiterKind) {
-        *self.node.waker.borrow_mut() = Some(waker);
+    fn register_in_waiting_queue(
+        node: Pin<&mut WaiterNode>,
+        rw: &mut State,
+        waker: Waker,
+        kind: WaiterKind,
+    ) {
+        *node.waker.borrow_mut() = Some(waker);
 
-        if self.node.link.is_linked() {
+        if node.link.is_linked() {
             return;
         }
 
@@ -247,36 +327,59 @@ impl Waiter {
             rw.queued_writers += 1;
         }
 
-        rw.waiters_queue.push_back(self.node.clone());
+        rw.waiters_queue
+            .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
     }
 }
 
-impl Future for Waiter {
+impl<'a, T> Future for Waiter<'a, T> {
     type Output = LockResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut rw = self.rw.borrow_mut();
+        let mut rw = self.rw.state.borrow_mut();
+        let future_mut = unsafe { self.get_unchecked_mut() };
+        let pinned_node = unsafe { Pin::new_unchecked(&mut future_mut.node) };
 
-        match self.node.kind {
+        match pinned_node.kind {
             WaiterKind::WRITER => {
                 if rw.try_write()? {
-                    self.remove_from_waiting_queue(&mut rw);
+                    Self::remove_from_waiting_queue(pinned_node, &mut rw);
                     Poll::Ready(Ok(()))
                 } else {
-                    self.register_in_waiting_queue(&mut rw, cx.waker().clone(), WaiterKind::WRITER);
+                    Self::register_in_waiting_queue(
+                        pinned_node,
+                        &mut rw,
+                        cx.waker().clone(),
+                        WaiterKind::WRITER,
+                    );
                     Poll::Pending
                 }
             }
 
             WaiterKind::READER => {
                 if rw.try_read()? {
-                    self.remove_from_waiting_queue(&mut rw);
+                    Self::remove_from_waiting_queue(pinned_node, &mut rw);
                     Poll::Ready(Ok(()))
                 } else {
-                    self.register_in_waiting_queue(&mut rw, cx.waker().clone(), WaiterKind::READER);
+                    Self::register_in_waiting_queue(
+                        pinned_node,
+                        &mut rw,
+                        cx.waker().clone(),
+                        WaiterKind::READER,
+                    );
                     Poll::Pending
                 }
             }
+        }
+    }
+}
+
+impl<'a, T> Drop for Waiter<'a, T> {
+    fn drop(&mut self) {
+        if self.node.link.is_linked() {
+            //if node is lined them future is already pinned
+            let pinned_node = unsafe { Pin::new_unchecked(&mut self.node) };
+            Self::remove_from_waiting_queue(pinned_node, &mut self.rw.state.borrow_mut())
         }
     }
 }
@@ -335,26 +438,26 @@ impl State {
 #[derive(Debug)]
 #[must_use = "if unused the RwLock will immediately unlock"]
 pub struct RwLockReadGuard<'a, T> {
-    rw: Rc<RefCell<State>>,
-    value_ref: Ref<'a, T>,
+    rw: &'a RwLock<T>,
+    value_ref: Ref<'a, Option<T>>,
 }
 
 impl<'a, T> Deref for RwLockReadGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        let state = (*self.rw).borrow();
+        let state = self.rw.state.borrow();
         if state.closed {
             panic!("Related RwLock is already closed");
         }
 
-        &self.value_ref
+        self.value_ref.as_ref().unwrap()
     }
 }
 
 impl<'a, T> Drop for RwLockReadGuard<'a, T> {
     fn drop(&mut self) {
-        let mut state = self.rw.borrow_mut();
+        let mut state = self.rw.state.borrow_mut();
 
         if !state.closed {
             debug_assert!(state.readers > 0);
@@ -376,39 +479,39 @@ impl<'a, T> Drop for RwLockReadGuard<'a, T> {
 #[must_use = "if unused the RwLock will immediately unlock"]
 #[derive(Debug)]
 pub struct RwLockWriteGuard<'a, T> {
-    rw: Rc<RefCell<State>>,
-    value_ref: RefMut<'a, T>,
+    rw: &'a RwLock<T>,
+    value_ref: RefMut<'a, Option<T>>,
 }
 
 impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        let state = (*self.rw).borrow();
+        let state = self.rw.state.borrow();
 
         if state.closed {
             panic!("Related RwLock is already closed");
         }
 
-        &self.value_ref
+        self.value_ref.as_ref().unwrap()
     }
 }
 
 impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let state = (*self.rw).borrow();
+        let state = (*self.rw).state.borrow();
 
         if state.closed {
             panic!("Related RwLock is already closed");
         }
 
-        &mut self.value_ref
+        self.value_ref.as_mut().unwrap()
     }
 }
 
 impl<'a, T> Drop for RwLockWriteGuard<'a, T> {
     fn drop(&mut self) {
-        let mut state = self.rw.borrow_mut();
+        let mut state = self.rw.state.borrow_mut();
 
         if !state.closed {
             debug_assert!(state.writers > 0);
@@ -431,8 +534,8 @@ impl<T> RwLock<T> {
     /// ```
     pub fn new(value: T) -> Self {
         RwLock {
-            rw: Rc::new(RefCell::new(State::new())),
-            value: Rc::new(RefCell::new(value)),
+            state: RefCell::new(State::new()),
+            value: RefCell::new(Some(value)),
         }
     }
 
@@ -460,12 +563,12 @@ impl<T> RwLock<T> {
     /// });
     /// ```
     pub fn get_mut(&mut self) -> LockResult<&mut T> {
-        let state = (*self.rw).borrow();
+        let state = self.state.borrow();
         if state.closed {
             return Err(LockClosedError);
         }
 
-        Ok(unsafe { &mut (*self.value.as_ptr()) })
+        Ok(unsafe { &mut *(self.value.borrow_mut().as_mut().unwrap() as *mut _) })
     }
 
     /// Locks this RwLock with shared read access, suspending the current fiber
@@ -511,21 +614,21 @@ impl<T> RwLock<T> {
     /// ```
     pub async fn read(&self) -> LockResult<RwLockReadGuard<'_, T>> {
         let waiter = {
-            let mut state = self.rw.borrow_mut();
+            let mut state = self.state.borrow_mut();
             let try_result = state.try_read()?;
 
             if try_result {
                 return Ok(RwLockReadGuard {
-                    rw: self.rw.clone(),
+                    rw: self,
                     value_ref: self.value.borrow(),
                 });
             }
 
-            Waiter::new(WaiterKind::READER, self.rw.clone())
+            Waiter::new(WaiterKind::READER, self)
         };
 
         waiter.await.map(|_| RwLockReadGuard {
-            rw: self.rw.clone(),
+            rw: self,
             value_ref: self.value.borrow(),
         })
     }
@@ -561,22 +664,22 @@ impl<T> RwLock<T> {
     /// ```
     pub async fn write(&self) -> LockResult<RwLockWriteGuard<'_, T>> {
         let waiter = {
-            let mut state = self.rw.borrow_mut();
+            let mut state = self.state.borrow_mut();
             let try_result = state.try_write()?;
 
             if try_result {
                 return Ok(RwLockWriteGuard {
-                    rw: self.rw.clone(),
+                    rw: self,
                     value_ref: self.value.borrow_mut(),
                 });
             }
 
-            Waiter::new(WaiterKind::WRITER, self.rw.clone())
+            Waiter::new(WaiterKind::WRITER, self)
         };
         waiter.await?;
 
         Ok(RwLockWriteGuard {
-            rw: self.rw.clone(),
+            rw: self,
             value_ref: self.value.borrow_mut(),
         })
     }
@@ -606,12 +709,12 @@ impl<T> RwLock<T> {
     /// };
     /// ```
     pub fn try_read(&self) -> TryLockResult<RwLockReadGuard<'_, T>> {
-        let mut state = self.rw.borrow_mut();
+        let mut state = self.state.borrow_mut();
         let try_result = state.try_read()?;
 
         if try_result {
             return Ok(RwLockReadGuard {
-                rw: self.rw.clone(),
+                rw: self,
                 value_ref: self.value.borrow(),
             });
         }
@@ -648,12 +751,12 @@ impl<T> RwLock<T> {
     /// });
     /// ```
     pub fn try_write(&self) -> TryLockResult<RwLockWriteGuard<'_, T>> {
-        let mut state = self.rw.borrow_mut();
+        let mut state = self.state.borrow_mut();
         let try_result = state.try_write()?;
 
         if try_result {
             return Ok(RwLockWriteGuard {
-                rw: self.rw.clone(),
+                rw: self,
                 value_ref: self.value.borrow_mut(),
             });
         }
@@ -676,7 +779,7 @@ impl<T> RwLock<T> {
     /// assert!(lock.is_closed());
     /// ```
     pub fn is_closed(&self) -> bool {
-        (*self.rw).borrow().closed
+        self.state.borrow().closed
     }
 
     ///Closes current RwLock. Once lock is closed all being hold accesses will be released
@@ -723,7 +826,7 @@ impl<T> RwLock<T> {
     /// });
     /// ```
     pub fn close(&self) {
-        let mut state = self.rw.borrow_mut();
+        let mut state = self.state.borrow_mut();
         if state.closed {
             return;
         }
@@ -761,7 +864,7 @@ impl<T> RwLock<T> {
     /// });
     /// ```
     pub fn into_inner(self) -> LockResult<T> {
-        let state = (*self.rw).borrow();
+        let state = self.state.borrow();
         if state.closed {
             return Err(LockClosedError {});
         }
@@ -770,14 +873,8 @@ impl<T> RwLock<T> {
 
         self.close();
 
-        let value = self.value.clone();
-        drop(self);
-
-        //it is safe operation because we own lock and because non of the guards can outlive lock
-        Ok(Rc::try_unwrap(value)
-            .ok()
-            .expect("There are dangling references on lock's value")
-            .into_inner())
+        let value = self.value.borrow_mut().take().unwrap();
+        Ok(value)
     }
 
     fn wake_up_fibers(rw: &mut State) {
@@ -829,13 +926,18 @@ impl<T> RwLock<T> {
                     panic!("Future was linked in waiting list without an a waker");
                 }
             }
-            cursor.move_next();
+
+            cursor.remove();
         }
     }
 
     fn wake_up_readers_and_first_writer(rw: &mut State) {
         let mut cursor = rw.waiters_queue.front_mut();
-        while !cursor.is_null() {
+        //we need to remove writer from the list too
+        //so we use flag instead of execution of break
+        let mut only_readers = true;
+
+        while !cursor.is_null() && only_readers {
             {
                 let node = cursor.get().unwrap();
 
@@ -848,11 +950,11 @@ impl<T> RwLock<T> {
 
                 if node.kind == WaiterKind::WRITER {
                     rw.queued_writers -= 1;
-                    break;
+                    only_readers = false;
                 }
             }
 
-            cursor.move_next();
+            cursor.remove();
         }
     }
 
@@ -860,7 +962,7 @@ impl<T> RwLock<T> {
         let mut cursor = rw.waiters_queue.front_mut();
         while !cursor.is_null() {
             let node = cursor.remove().unwrap();
-            let waker = node.waker.borrow_mut().take();
+            let waker = (unsafe { node.as_ref() }).waker.borrow_mut().take();
             if let Some(waker) = waker {
                 waker.wake();
             } else {
@@ -873,6 +975,7 @@ impl<T> RwLock<T> {
 impl<T> Drop for RwLock<T> {
     fn drop(&mut self) {
         self.close();
+        assert!(self.state.borrow().waiters_queue.is_empty());
     }
 }
 
@@ -1292,7 +1395,7 @@ mod test {
                 }
 
                 let mut waiters_count = 0;
-                for _ in &c_lock.rw.borrow().waiters_queue {
+                for _ in &c_lock.state.borrow().waiters_queue {
                     waiters_count += 1;
                 }
 
