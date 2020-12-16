@@ -11,7 +11,6 @@ use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use futures_lite::ready;
 use futures_lite::stream::{self, Stream};
 use iou::{InetAddr, SockAddr};
-use nix::sys::socket::{self, sockopt::ReusePort};
 use pin_project_lite::pin_project;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
@@ -91,15 +90,18 @@ impl TcpListener {
             .unwrap()
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
-        let listener = net::TcpListener::bind(addr)?;
-        match socket::setsockopt(listener.as_raw_fd(), ReusePort, &true) {
-            Err(nix::Error::Sys(errno)) => Err(io::Error::from_raw_os_error(errno as i32)),
-            Err(x) => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("setting socket option: {:?}", x),
-            )),
-            Ok(_) => Ok(()),
-        }?;
+
+        let domain = if addr.is_ipv6() {
+            Domain::ipv6()
+        } else {
+            Domain::ipv4()
+        };
+        let sk = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
+        let addr = socket2::SockAddr::from(addr);
+        sk.set_reuse_port(true)?;
+        sk.bind(&addr)?;
+        sk.listen(128)?;
+        let listener = sk.into_tcp_listener();
 
         Ok(TcpListener {
             reactor: Rc::downgrade(&Local::get_reactor()),
@@ -660,20 +662,38 @@ mod tests {
 
     #[test]
     fn multi_executor_bind_works() {
-        let ex1 = LocalExecutorBuilder::new()
-            .spawn(move || async move {
-                let _ = TcpListener::bind("127.0.0.1:10000").unwrap();
-            })
-            .unwrap();
+        test_executor!(async move {
+            let addr_getter = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = addr_getter.local_addr().unwrap();
+            let (first_sender, first_receiver) = shared_channel::new_bounded(1);
+            let (second_sender, second_receiver) = shared_channel::new_bounded(1);
 
-        let ex2 = LocalExecutorBuilder::new()
-            .spawn(move || async move {
-                let _ = TcpListener::bind("127.0.0.1:10000").unwrap();
-            })
-            .unwrap();
+            let ex1 = LocalExecutorBuilder::new()
+                .spawn(move || async move {
+                    let receiver = first_receiver.connect();
+                    let _ = TcpListener::bind(addr).unwrap();
+                    receiver.recv().await.unwrap();
+                })
+                .unwrap();
 
-        ex1.join().unwrap();
-        ex2.join().unwrap();
+            let ex2 = LocalExecutorBuilder::new()
+                .spawn(move || async move {
+                    let receiver = second_receiver.connect();
+                    let _ = TcpListener::bind(addr).unwrap();
+                    receiver.recv().await.unwrap();
+                })
+                .unwrap();
+
+            Timer::new(Duration::from_millis(100)).await;
+
+            let sender = first_sender.connect();
+            sender.try_send(0).unwrap();
+            let sender = second_sender.connect();
+            sender.try_send(0).unwrap();
+
+            ex1.join().unwrap();
+            ex2.join().unwrap();
+        });
     }
 
     #[test]
