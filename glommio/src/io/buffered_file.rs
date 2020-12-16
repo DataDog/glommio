@@ -123,7 +123,12 @@ impl BufferedFile {
     /// });
     /// ```
     pub async fn write_at(&self, buf: Vec<u8>, pos: u64) -> io::Result<usize> {
-        let source = self.file.reactor.write_buffered(self.as_raw_fd(), buf, pos);
+        let source =
+            self.file
+                .reactor
+                .upgrade()
+                .unwrap()
+                .write_buffered(self.as_raw_fd(), buf, pos);
         enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
@@ -136,7 +141,12 @@ impl BufferedFile {
     /// [`DmaFile`]: struct.DmaFile.html
     /// Reads from a specific position in the file and returns the buffer.
     pub async fn read_at(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
-        let mut source = self.file.reactor.read_buffered(self.as_raw_fd(), pos, size);
+        let mut source =
+            self.file
+                .reactor
+                .upgrade()
+                .unwrap()
+                .read_buffered(self.as_raw_fd(), pos, size);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let mut buffer = source.extract_dma_buffer();
         buffer.trim_to_size(read_size);

@@ -12,7 +12,7 @@ use futures_lite::future;
 use futures_lite::stream::Stream;
 use std::io;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
 #[derive(Debug)]
@@ -57,7 +57,7 @@ unsafe impl<T: Send + Sized + Copy> Send for SharedSender<T> {}
 pub struct ConnectedReceiver<T: Send + Sized + Copy> {
     id: u64,
     state: Rc<ReceiverState<T>>,
-    reactor: Rc<Reactor>,
+    reactor: Weak<Reactor>,
 }
 
 #[derive(Debug)]
@@ -65,7 +65,7 @@ pub struct ConnectedReceiver<T: Send + Sized + Copy> {
 pub struct ConnectedSender<T: Send + Sized + Copy> {
     id: u64,
     state: Rc<SenderState<T>>,
-    reactor: Rc<Reactor>,
+    reactor: Weak<Reactor>,
 }
 
 #[derive(Debug)]
@@ -110,6 +110,7 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
             }
         }}));
 
+        let reactor = Rc::downgrade(&reactor);
         ConnectedSender { state, id, reactor }
     }
 }
@@ -158,7 +159,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
         match self.state.buffer.try_push(item) {
             None => {
                 if let Some(fd) = self.state.buffer.must_notify() {
-                    self.reactor.notify(fd);
+                    self.reactor.upgrade().unwrap().notify(fd);
                 }
                 Ok(())
             }
@@ -203,6 +204,8 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
             true => Poll::Ready(()),
             false => {
                 self.reactor
+                    .upgrade()
+                    .unwrap()
                     .add_shared_channel_waker(self.id, cx.waker().clone());
                 Poll::Pending
             }
@@ -226,6 +229,8 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
                 state.buffer.size()
             }
         }}));
+
+        let reactor = Rc::downgrade(&reactor);
         ConnectedReceiver { state, id, reactor }
     }
 }
@@ -271,12 +276,14 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
         match self.state.buffer.try_pop() {
             None if !self.state.buffer.producer_disconnected() => {
                 self.reactor
+                    .upgrade()
+                    .unwrap()
                     .add_shared_channel_waker(self.id, cx.waker().clone());
                 Poll::Pending
             }
             res => {
                 if let Some(fd) = self.state.buffer.must_notify() {
-                    self.reactor.notify(fd);
+                    self.reactor.upgrade().unwrap().notify(fd);
                 }
                 Poll::Ready(res)
             }
@@ -320,7 +327,9 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.state.buffer.must_notify() {
-            self.reactor.notify(fd);
+            if let Some(r) = self.reactor.upgrade() {
+                r.notify(fd);
+            }
         }
     }
 }
@@ -329,7 +338,9 @@ impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.state.buffer.must_notify() {
-            self.reactor.notify(fd);
+            if let Some(r) = self.reactor.upgrade() {
+                r.notify(fd);
+            }
         }
     }
 }
