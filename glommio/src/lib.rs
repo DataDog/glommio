@@ -453,3 +453,61 @@ impl IoRequirements {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use super::*;
+    use nix::sys::statfs::*;
+    use std::path::{Path, PathBuf};
+
+    #[derive(Copy, Clone)]
+    pub(crate) enum TestDirectoryKind {
+        TempFs,
+        PollMedia,
+        NonPollMedia,
+    }
+
+    pub(crate) struct TestDirectory {
+        pub(crate) path: PathBuf,
+        pub(crate) kind: TestDirectoryKind,
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    pub(crate) fn make_poll_test_directory<P: AsRef<Path>>(
+        path: P,
+        test_name: &str,
+    ) -> TestDirectory {
+        let mut dir = path.as_ref().to_owned();
+        std::assert!(dir.exists());
+
+        dir.push(test_name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        TestDirectory {
+            path: dir,
+            kind: TestDirectoryKind::PollMedia,
+        }
+    }
+
+    pub(crate) fn make_tmp_test_directory(test_name: &str) -> TestDirectory {
+        let mut dir = std::env::temp_dir();
+        dir.push(test_name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let buf = statfs(&dir).unwrap();
+        let fstype = buf.filesystem_type();
+
+        let kind = if fstype == TMPFS_MAGIC {
+            TestDirectoryKind::TempFs
+        } else {
+            TestDirectoryKind::NonPollMedia
+        };
+        TestDirectory { path: dir, kind }
+    }
+}
