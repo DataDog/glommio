@@ -463,6 +463,7 @@ impl<T: 'static> TimerActionOnce<T> {
     ///         println!("hello");
     ///     });
     ///     action.rearm_in(Duration::from_millis(100));
+    ///     action.join().await
     /// }).unwrap();
     /// handle.join().unwrap();
     /// ```
