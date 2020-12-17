@@ -11,7 +11,7 @@
 //! use glommio::sync::RwLock;
 //! use glommio::LocalExecutor;
 //! let lock = RwLock::new(5);
-//! let ex = LocalExecutor::make_default();
+//! let ex = LocalExecutor::default();
 //!
 //! ex.run( async move {
 //!    // many reader locks can be held at once
@@ -172,7 +172,7 @@ intrusive_adapter!(WaiterAdapter = Rc<WaiterNode> : WaiterNode {link : LinkedLis
 ///use glommio::LocalExecutor;
 ///
 /// let lock = RwLock::new(5);
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 ///
 /// ex.run( async move {
 ///    // many reader locks can be held at once
@@ -452,7 +452,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let mut lock = RwLock::new(0);
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     *lock.get_mut().unwrap() = 10;
@@ -493,7 +493,7 @@ impl<T> RwLock<T> {
     /// let lock = Rc::new(RwLock::new(1));
     /// let c_lock = lock.clone();
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     let first_reader = Local::local(async move {
@@ -550,7 +550,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let lock = RwLock::new(1);
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     let mut n = lock.write().await.unwrap();
@@ -638,7 +638,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let lock = RwLock::new(1);
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///   let n = lock.read().await.unwrap();
@@ -698,7 +698,7 @@ impl<T> RwLock<T> {
     /// let semaphore = Rc::new(Semaphore::new(0));
     /// let c_semaphore = semaphore.clone();
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///      let closer = Local::local(async move {
     ///          //await till read lock will be acquired
@@ -749,7 +749,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let lock = RwLock::new(String::new());
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     {
@@ -1269,7 +1269,7 @@ mod test {
 
     #[test]
     fn rwlock_overflow() {
-        let ex = LocalExecutor::make_default();
+        let ex = LocalExecutor::default();
 
         let lock = Rc::new(RwLock::new(()));
         let c_lock = lock.clone();

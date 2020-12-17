@@ -163,7 +163,7 @@ impl DmaBuffer {
     /// use glommio::LocalExecutor;
     /// use glommio::io::DmaFile;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("test.txt").await.unwrap();
     ///     let buf = file.alloc_dma_buffer(4096);
@@ -199,7 +199,7 @@ impl DmaBuffer {
     /// use glommio::LocalExecutor;
     /// use glommio::io::DmaFile;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("test.txt").await.unwrap();
     ///     let mut buf = file.alloc_dma_buffer(4096);

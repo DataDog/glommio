@@ -342,7 +342,7 @@ impl<T: 'static> DeadlineQueue<T> {
     /// use glommio::controllers::DeadlineQueue;
     /// use std::time::Duration;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async {
     ///     DeadlineQueue::<usize>::new("example", Duration::from_millis(250));
@@ -451,7 +451,7 @@ impl<T: 'static> DeadlineQueue<T> {
     ///     }
     /// }
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async {
     ///     let mut queue = DeadlineQueue::new("example", Duration::from_millis(250));

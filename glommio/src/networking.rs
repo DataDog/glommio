@@ -27,7 +27,7 @@ impl Async<UdpSocket> {
     /// use std::net::UdpSocket;
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let socket = Async::<UdpSocket>::bind(([127, 0, 0, 1], 0)).unwrap();
     ///     println!("Bound to {}", socket.get_ref().local_addr().unwrap());

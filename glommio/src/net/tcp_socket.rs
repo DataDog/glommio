@@ -78,7 +78,7 @@ impl TcpListener {
     /// use glommio::net::TcpListener;
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     ///     println!("Listening on {}", listener.local_addr().unwrap());
@@ -126,7 +126,7 @@ impl TcpListener {
     /// use glommio::net::TcpListener;
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     ///     let stream = listener.shared_accept().await.unwrap();
@@ -159,7 +159,7 @@ impl TcpListener {
     /// use glommio::LocalExecutor;
     /// use futures_lite::stream::StreamExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     ///     let stream = listener.accept().await.unwrap();
@@ -183,7 +183,7 @@ impl TcpListener {
     /// use glommio::LocalExecutor;
     /// use futures_lite::stream::StreamExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     ///     let mut incoming = listener.incoming();
@@ -206,7 +206,7 @@ impl TcpListener {
     /// use glommio::net::TcpListener;
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     ///     println!("Listening on {}", listener.local_addr().unwrap());
@@ -244,7 +244,7 @@ impl AcceptedTcpStream {
     /// use glommio::{LocalExecutorBuilder, LocalExecutor};
     /// use glommio::channels::shared_channel;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///
     ///    let (sender, receiver) = shared_channel::new_bounded(1);
@@ -345,7 +345,7 @@ impl TcpStream {
     /// use glommio::net::TcpStream;
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     TcpStream::connect("127.0.0.1:10000").await.unwrap();
     /// })
@@ -459,7 +459,7 @@ impl TcpStream {
     /// use glommio::net::TcpStream;
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
     ///     println!("My peer: {:?}", stream.peer_addr());
@@ -477,7 +477,7 @@ impl TcpStream {
     /// use glommio::net::TcpStream;
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
     ///     println!("My peer: {:?}", stream.local_addr());

@@ -32,7 +32,7 @@ mod spsc_queue;
 /// use glommio::channels::local_channel;
 /// use futures_lite::stream::StreamExt;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let task_queue =
 ///         Local::create_task_queue(

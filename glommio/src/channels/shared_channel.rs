@@ -127,7 +127,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// use glommio::channels::shared_channel;
     /// use futures_lite::StreamExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, receiver) = shared_channel::new_bounded(1);
     ///     let sender = sender.connect();
@@ -181,7 +181,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// use glommio::prelude::*;
     /// use glommio::channels::shared_channel;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, receiver) = shared_channel::new_bounded(1);
     ///     let sender = sender.connect();
@@ -251,7 +251,7 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     /// use glommio::prelude::*;
     /// use glommio::channels::shared_channel;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, receiver) = shared_channel::new_bounded(1);
     ///     let sender = sender.connect();
