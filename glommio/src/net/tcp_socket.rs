@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::io::ByteSliceMutExt;
 use crate::parking::Reactor;
 use crate::sys::{self, DmaBuffer, Source, SourceType};
 use crate::Local;

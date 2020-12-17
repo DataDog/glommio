@@ -2,104 +2,145 @@
 // mit/apache-2.0 license, at your convenience
 //
 // this product includes software developed at datadog (https://www.datadoghq.com/). copyright 2020 datadog, inc.
-//
 use crate::sys::DmaBuffer;
-use std::io;
+use core::num::NonZeroUsize;
 use std::rc::Rc;
 
-#[derive(Debug, Clone)]
-/// ReadResult encapsulates a buffer, returned by read operations like [`get_buffer_aligned`] and
-/// [`read_at`]
-///
-/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
-/// [`read_at`]: struct.DmaFile.html#method.read_at
-pub struct ReadResult {
-    buffer: Option<Rc<DmaBuffer>>,
-    offset: usize,
-    end: usize,
+#[derive(Clone, Debug)]
+/// ReadResult encapsulates a buffer, returned by read operations like
+/// [`get_buffer_aligned`](super::DmaStreamReader::get_buffer_aligned) and
+/// [`read_at`](super::DmaFile::read_at)
+pub struct ReadResult(Option<ReadResultInner>);
+
+impl core::ops::Deref for ReadResult {
+    type Target = [u8];
+
+    /// Allows accessing the contents of this buffer as a byte slice
+    fn deref(&self) -> &[u8] {
+        self.0.as_deref().unwrap_or(&[])
+    }
 }
 
-static EMPTY: [u8; 0] = [0; 0];
+#[derive(Clone, Debug)]
+struct ReadResultInner {
+    buffer: Rc<DmaBuffer>,
+    offset: usize,
 
-#[allow(clippy::len_without_is_empty)]
+    // This (usage of `NonZeroUsize`) is probably needed to make sure that rustc
+    // doesn't need to reserve additional memory for the surrounding Option enum tag.
+    // see also `self::test::equal_struct_size`
+    //
+    // The additionally `ReadResultInner` structure is a good idea as it allows
+    // a cleaner implementation (offset and end/len don't have any meaning if buffer.is_none()).
+    len: NonZeroUsize,
+}
+
+impl core::ops::Deref for ReadResultInner {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.buffer.as_bytes()[self.offset..][..self.len.get()]
+    }
+}
+
 impl ReadResult {
-    pub(crate) fn empty_buffer() -> ReadResult {
-        ReadResult {
-            end: 0,
-            offset: 0,
-            buffer: None,
-        }
+    pub(crate) fn empty_buffer() -> Self {
+        Self(None)
     }
 
-    pub(crate) fn from_whole_buffer(buffer: DmaBuffer) -> ReadResult {
-        ReadResult {
-            end: buffer.len(),
+    pub(crate) fn from_whole_buffer(buffer: DmaBuffer) -> Self {
+        Self(NonZeroUsize::new(buffer.len()).map(|len| ReadResultInner {
+            buffer: Rc::new(buffer),
             offset: 0,
-            buffer: Some(Rc::new(buffer)),
-        }
-    }
-
-    /// Copies the contents of this [`ReadResult`] into the byte-slice `dst`.
-    ///
-    /// The copy starts at position `offset` into the [`ReadResult`] and copies
-    /// as many bytes as possible until either we don't have more bytes to copy
-    /// or `dst` doesn't have more space to hold them.
-    ///
-    /// [`ReadResult`]: struct.ReadResult.html
-    pub fn read_at(&self, offset: usize, dst: &mut [u8]) -> usize {
-        let offset = self.offset + offset;
-        self.buffer.as_ref().unwrap().read_at(offset, dst)
+            len,
+        }))
     }
 
     /// Creates a slice of this ReadResult with the given offset and length.
     ///
-    /// Returns an [`std::io::Error`] with `[std::io::ErrorKind`] `[InvalidInput`] if
-    /// either offset or offset + len would not fit in the original buffer.
+    /// Returns `None` if either offset or offset + len would not fit in the original buffer.
+    pub fn slice(this: &Self, extra_offset: usize, len: usize) -> Option<Self> {
+        Some(Self(if let Some(len) = NonZeroUsize::new(len) {
+            Some(ReadResultInner::slice(this.0.as_ref()?, extra_offset, len)?)
+        } else {
+            // This branch is needed to make sure that calls to `slice` with `len = 0` are handled.
+            // If they aren't valid, then `len` should be changed to `NonZeroUsize`.
+            None
+        }))
+    }
+
+    /// Creates a slice of this ReadResult with the given offset and length.
+    /// Similiar to [`ReadResult::slice`], but does not check if the offset and length are correct.
     ///
-    /// [`std::io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
-    /// [`std::io::ErrorKind`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html
-    /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/struct.ErrorKind.html#variant.InvalidInput
-    pub fn slice(&self, extra_offset: usize, len: usize) -> io::Result<ReadResult> {
-        let offset = self.offset + extra_offset;
-        let end = offset + len;
+    /// # Safety
+    ///
+    /// Any user of this function must guarantee that the offset and length are correct (not out of bounds).
+    pub unsafe fn slice_unchecked(this: &Self, extra_offset: usize, len: usize) -> Self {
+        Self(NonZeroUsize::new(len).map(|len| {
+            ReadResultInner::slice_unchecked(this.0.as_ref().unwrap(), extra_offset, len)
+        }))
+    }
+}
 
-        if offset > self.buffer.as_ref().unwrap().len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "offset {} ({} + {}) is more than the length of the buffer",
-                    offset, self.offset, extra_offset
-                ),
-            ));
+impl ReadResultInner {
+    fn check_invariants(this: &Self) {
+        if cfg!(debug_assertions) {
+            let max_len = this.buffer.len();
+            assert!(
+                (this.offset + this.len.get()) <= max_len,
+                "a ReadResult contains an out-of-range 'end': offset ({} + {}) > buffer length ({})",
+                this.offset,
+                this.len,
+                max_len,
+            );
         }
-
-        if end > self.buffer.as_ref().unwrap().len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "length {} would cross past the end of the buffer ({} + {})",
-                    end, offset, len
-                ),
-            ));
-        }
-
-        Ok(ReadResult {
-            buffer: self.buffer.clone(),
-            offset,
-            end,
-        })
     }
 
-    /// The length of this buffer
-    pub fn len(&self) -> usize {
-        self.end - self.offset
+    fn slice(this: &Self, extra_offset: usize, len: NonZeroUsize) -> Option<Self> {
+        Self::check_invariants(this);
+        if extra_offset > this.len.get() || len.get() > (this.len.get() - extra_offset) {
+            None
+        } else {
+            Some(ReadResultInner {
+                buffer: this.buffer.clone(),
+                offset: this.offset + extra_offset,
+                len,
+            })
+        }
     }
 
-    /// Allows accessing the contents of this buffer as a byte slice
-    pub fn as_bytes(&self) -> &[u8] {
-        match self.buffer.as_ref() {
-            None => &EMPTY,
-            Some(buffer) => &buffer.as_bytes()[self.offset..self.end],
+    unsafe fn slice_unchecked(this: &Self, extra_offset: usize, len: NonZeroUsize) -> Self {
+        Self::check_invariants(this);
+        if cfg!(debug_assertions) {
+            assert!(
+                extra_offset <= this.len.get(),
+                "offset {} is more than the length ({}) of the slice",
+                extra_offset,
+                this.len,
+            );
+            assert!(
+                len.get() <= (this.len.get() - extra_offset),
+                "length {} would cross past the end ({}) of the slice",
+                len.get() + extra_offset,
+                this.len,
+            );
         }
+
+        Self {
+            buffer: this.buffer.clone(),
+            offset: this.offset + extra_offset,
+            len,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equal_struct_size() {
+        use core::mem::size_of;
+        assert_eq!(size_of::<ReadResult>(), size_of::<ReadResultInner>());
     }
 }

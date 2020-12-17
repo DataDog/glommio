@@ -110,7 +110,7 @@ async fn stream_scan_alt_api<S: Into<String>>(
         if buffer.len() < buffer_size {
             break;
         }
-        assert_eq!(expected, buffer.as_bytes());
+        assert_eq!(*expected, *buffer);
     }
     let time = start.elapsed();
     let name = name.into();
@@ -138,11 +138,11 @@ impl Reader {
         match &self {
             Reader::Direct(file) => {
                 let res = file.read_at_aligned(pos, io_size as _).await.unwrap();
-                assert_eq!(expected, res.as_bytes());
+                assert_eq!(*expected, *res);
             }
             Reader::Buffered(file) => {
                 let res = file.read_at(pos, io_size as _).await.unwrap();
-                assert_eq!(expected, res.as_bytes());
+                assert_eq!(*expected, *res);
             }
         }
     }
