@@ -235,7 +235,7 @@
 //!
 //! use std::time::Duration;
 //!
-//! let local_ex = LocalExecutor::make_default();
+//! let local_ex = LocalExecutor::default();
 //! local_ex.run(async {
 //!     let timeout = async {
 //!         Timer::new(Duration::from_secs(10)).await;
@@ -297,7 +297,7 @@ macro_rules! test_executor {
     use crate::executor::{LocalExecutor, Task};
     use futures::future::join_all;
 
-    let local_ex = LocalExecutor::make_default();
+    let local_ex = LocalExecutor::default();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(

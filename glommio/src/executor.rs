@@ -66,6 +66,7 @@ impl QueueNotFoundError {
         QueueNotFoundError { index: h.index }
     }
 }
+
 impl std::error::Error for QueueNotFoundError {}
 
 impl fmt::Display for QueueNotFoundError {
@@ -79,6 +80,7 @@ impl fmt::Display for QueueNotFoundError {
 pub struct QueueStillActiveError {
     index: usize,
 }
+
 impl std::error::Error for QueueStillActiveError {}
 
 impl QueueStillActiveError {
@@ -121,7 +123,8 @@ pub(crate) struct TaskQueue {
     vruntime: u64,
     io_requirements: IoRequirements,
     name: String,
-    last_adjustment: Instant, // for dynamic shares classes
+    last_adjustment: Instant,
+    // for dynamic shares classes
     yielded: bool,
     stats: TaskQueueStats,
 }
@@ -266,7 +269,8 @@ impl ExecutorStats {
 /// Allows information about the current state of a particular task queue to be consumed
 /// by applications.
 pub struct TaskQueueStats {
-    index: usize, // so we can easily produce a handle
+    index: usize,
+    // so we can easily produce a handle
     reciprocal_shares: u64,
     queue_selected: u64,
     runtime: Duration,
@@ -367,11 +371,11 @@ impl ExecutorQueues {
 /// The [`spawn`] method will take ownership of the builder and create an `io::Result` to the
 /// [`LocalExecutor`] handle with the given configuration.
 ///
-/// The [`LocalExecutor::make_default`] free function uses a Builder with default configuration and
+/// The [`LocalExecutor::default`] free function uses a Builder with default configuration and
 /// unwraps its return value.
 ///
-/// You may want to use [`LocalExecutorBuilder::spawn`] instead of [`LocalExecutor::make_default`],
-/// when you want to recover from a failure to launch a thread. The [`LocalExecutor::make_default`]
+/// You may want to use [`LocalExecutorBuilder::spawn`] instead of [`LocalExecutor::default`],
+/// when you want to recover from a failure to launch a thread. The [`LocalExecutor::default`]
 /// function will panic where the Builder method will return a `io::Result`.
 ///
 /// # Examples
@@ -385,7 +389,7 @@ impl ExecutorQueues {
 ///
 /// [`LocalExecutor`]: struct.LocalExecutor.html
 ///
-/// [`LocalExecutor::make_default`]: struct.LocalExecutor.html#method.make_default
+/// [`LocalExecutor::default`]: struct.LocalExecutor.html#method.default
 ///
 /// [`LocalExecutorBuilder::spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 ///
@@ -552,7 +556,7 @@ pub(crate) fn maybe_activate(tq: Rc<RefCell<TaskQueue>>) {
 /// ```
 /// use glommio::LocalExecutor;
 ///
-/// let local_ex = LocalExecutor::make_default();
+/// let local_ex = LocalExecutor::default();
 ///
 /// local_ex.run(async {
 ///     println!("Hello world!");
@@ -591,27 +595,6 @@ impl LocalExecutor {
         Ok(())
     }
 
-    /// Spawns a single-threaded executor with default settings on the current thread.
-    ///
-    /// This will create a executor using default parameters of `LocalExecutorBuilder`, if you
-    /// want to further customize it, use this API instead.
-    ///
-    /// # Panics
-    ///
-    /// Panics if creating the executor fails; use `LocalExecutorBuilder::make` to recover
-    /// from such errors.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::LocalExecutor;
-    ///
-    /// let local_ex = LocalExecutor::make_default();
-    /// ```
-    pub fn make_default() -> LocalExecutor {
-        LocalExecutorBuilder::new().make().unwrap()
-    }
-
     fn new(id: usize, io_memory: usize) -> LocalExecutor {
         let p = parking::Parker::new();
         LocalExecutor {
@@ -628,7 +611,7 @@ impl LocalExecutor {
     /// ```
     /// use glommio::LocalExecutor;
     ///
-    /// let local_ex = LocalExecutor::make_default();
+    /// let local_ex = LocalExecutor::default();
     /// println!("My ID: {}", local_ex.id());
     /// ```
     pub fn id(&self) -> usize {
@@ -837,7 +820,7 @@ impl LocalExecutor {
     /// ```
     /// use glommio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::make_default();
+    /// let local_ex = LocalExecutor::default();
     ///
     /// let res = local_ex.run(async {
     ///     let task = Task::<usize>::local(async { 1 + 2 });
@@ -889,6 +872,29 @@ impl LocalExecutor {
     }
 }
 
+/// Spawns a single-threaded executor with default settings on the current thread.
+///
+/// This will create a executor using default parameters of `LocalExecutorBuilder`, if you
+/// want to further customize it, use this API instead.
+///
+/// # Panics
+///
+/// Panics if creating the executor fails; use `LocalExecutorBuilder::make` to recover
+/// from such errors.
+///
+/// # Examples
+///
+/// ```
+/// use glommio::LocalExecutor;
+///
+/// let local_ex = LocalExecutor::default();
+/// ```
+impl Default for LocalExecutor {
+    fn default() -> Self {
+        LocalExecutorBuilder::new().make().unwrap()
+    }
+}
+
 /// A spawned future.
 ///
 /// Tasks are also futures themselves and yield the output of the spawned future.
@@ -903,7 +909,7 @@ impl LocalExecutor {
 /// ```
 /// use glommio::{LocalExecutor, Task};
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 ///
 /// ex.run(async {
 ///     let task = Task::local(async {
@@ -930,7 +936,7 @@ impl<T> Task<T> {
     /// ```
     /// use glommio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::make_default();
+    /// let local_ex = LocalExecutor::default();
     ///
     /// local_ex.run(async {
     ///     let task = Task::local(async { 1 + 2 });
@@ -1040,7 +1046,7 @@ impl<T> Task<T> {
     /// ```
     /// use glommio::{LocalExecutor, Task, Shares, Local};
     ///
-    /// let local_ex = LocalExecutor::make_default();
+    /// let local_ex = LocalExecutor::default();
     /// local_ex.run(async {
     ///     let handle = Local::create_task_queue(Shares::default(), glommio::Latency::NotImportant, "test_queue");
     ///     let task = Task::<usize>::local_into(async { 1 + 2 }, handle).expect("failed to spawn task");
@@ -1068,7 +1074,7 @@ impl<T> Task<T> {
     /// ```
     /// use glommio::{LocalExecutor, Task};
     ///
-    /// let local_ex = LocalExecutor::make_default();
+    /// let local_ex = LocalExecutor::default();
     ///
     /// local_ex.run(async {
     ///     println!("my ID: {}", Task::<()>::id());
@@ -1090,7 +1096,7 @@ impl<T> Task<T> {
     /// use glommio::timer::Timer;
     /// use futures_lite::future;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///
     ///     Local::local(async {
@@ -1120,7 +1126,7 @@ impl<T> Task<T> {
     /// use std::time::Duration;
     /// use glommio::{LocalExecutor, Latency, Shares, Local};
     ///
-    /// let local_ex = LocalExecutor::make_default();
+    /// let local_ex = LocalExecutor::default();
     /// local_ex.run(async move {
     ///     let task_queue = Local::create_task_queue(Shares::default(), Latency::Matters(Duration::from_secs(1)), "my_tq");
     ///     let task = Local::local_into(async {
@@ -1253,7 +1259,7 @@ impl<T> Task<T> {
     /// use glommio::{LocalExecutor, Local};
     /// use futures_lite::future;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async {
     ///     let task = Local::local(async {
@@ -1291,7 +1297,7 @@ mod test {
     #[test]
     fn create_and_destroy_executor() {
         let mut var = Rc::new(RefCell::new(0));
-        let local_ex = LocalExecutor::make_default();
+        let local_ex = LocalExecutor::default();
 
         let varclone = var.clone();
         local_ex.run(async move {
@@ -1323,13 +1329,13 @@ mod test {
     #[test]
     #[should_panic]
     fn spawn_without_executor() {
-        let _ = LocalExecutor::make_default();
+        let _ = LocalExecutor::default();
         let _ = Task::local(async move {});
     }
 
     #[test]
     fn invalid_task_queue() {
-        let local_ex = LocalExecutor::make_default();
+        let local_ex = LocalExecutor::default();
         local_ex.run(async {
             let task = Task::local_into(
                 async move {
@@ -1346,7 +1352,7 @@ mod test {
 
     #[test]
     fn ten_yielding_queues() {
-        let local_ex = LocalExecutor::make_default();
+        let local_ex = LocalExecutor::default();
 
         // 0 -> no one
         // 1 -> t1
@@ -1372,7 +1378,7 @@ mod test {
 
     #[test]
     fn task_with_latency_requirements() {
-        let local_ex = LocalExecutor::make_default();
+        let local_ex = LocalExecutor::default();
 
         local_ex.run(async {
             let not_latency =
@@ -1437,7 +1443,7 @@ mod test {
 
     #[test]
     fn current_task_queue_matches() {
-        let local_ex = LocalExecutor::make_default();
+        let local_ex = LocalExecutor::default();
         local_ex.run(async {
             let tq1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test1");
             let tq2 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test2");
@@ -1467,7 +1473,7 @@ mod test {
 
     #[test]
     fn task_optimized_for_throughput() {
-        let local_ex = LocalExecutor::make_default();
+        let local_ex = LocalExecutor::default();
 
         local_ex.run(async {
             let tq1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
@@ -1525,7 +1531,7 @@ mod test {
 
     #[test]
     fn test_detach() {
-        let ex = LocalExecutor::make_default();
+        let ex = LocalExecutor::default();
 
         ex.run(async {
             Local::local(async {
@@ -1559,7 +1565,7 @@ mod test {
 
     #[test]
     fn test_no_spin() {
-        let ex = LocalExecutor::make_default();
+        let ex = LocalExecutor::default();
         let task_queue = ex.create_task_queue(
             Shares::default(),
             Latency::Matters(Duration::from_millis(10)),
@@ -1622,7 +1628,7 @@ mod test {
 
     macro_rules! test_static_shares {
         ( $s1:expr, $s2:expr, $work:block ) => {
-            let local_ex = LocalExecutor::make_default();
+            let local_ex = LocalExecutor::default();
 
             local_ex.run(async {
                 // Run a latency queue, otherwise a queue will run for too long uninterrupted
@@ -1718,7 +1724,7 @@ mod test {
 
     #[test]
     fn test_dynamic_shares() {
-        let local_ex = LocalExecutor::make_default();
+        let local_ex = LocalExecutor::default();
 
         local_ex.run(async {
             let bm = DynamicSharesTest::new();

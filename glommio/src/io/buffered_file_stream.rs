@@ -61,7 +61,7 @@ pin_project! {
 /// use glommio::LocalExecutor;
 /// use futures_lite::AsyncBufReadExt;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 /// ex.run(async {
 ///     let mut sin = stdin();
 ///     loop {
@@ -223,7 +223,7 @@ impl StreamReaderBuilder {
     /// use glommio::io::{BufferedFile, StreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = BufferedFile::open("myfile.txt").await.unwrap();
     ///     let _reader = StreamReaderBuilder::new(file).build();
@@ -294,7 +294,7 @@ impl StreamWriterBuilder {
     /// use glommio::io::{BufferedFile, StreamWriterBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = BufferedFile::create("myfile.txt").await.unwrap();
     ///     let _reader = StreamWriterBuilder::new(file).build();

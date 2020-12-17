@@ -53,7 +53,7 @@ impl BufferedFile {
     /// use glommio::io::BufferedFile;
     /// use std::os::unix::io::AsRawFd;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let mut wfile = BufferedFile::create("myfile.txt").await.unwrap();
     ///     let mut rfile = BufferedFile::open("myfile.txt").await.unwrap();
@@ -113,7 +113,7 @@ impl BufferedFile {
     /// use glommio::LocalExecutor;
     /// use glommio::io::BufferedFile;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = BufferedFile::create("test.txt").await.unwrap();
     ///

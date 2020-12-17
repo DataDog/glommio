@@ -15,7 +15,7 @@ pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
 /// use glommio::timer::sleep;
 /// use std::time::Duration;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 ///
 /// ex.run(async {
 ///     sleep(Duration::from_millis(100)).await;

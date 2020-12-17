@@ -56,7 +56,7 @@ impl DmaStreamReaderBuilder {
     /// use glommio::{LocalExecutor, Local};
     /// use std::rc::Rc;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = Rc::new(DmaFile::open("myfile.txt").await.unwrap());
     ///     let _reader = DmaStreamReaderBuilder::from_rc(file.clone()).build();
@@ -95,7 +95,7 @@ impl DmaStreamReaderBuilder {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let _reader = DmaStreamReaderBuilder::new(file).build();
@@ -334,7 +334,7 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
@@ -402,7 +402,7 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
@@ -440,7 +440,7 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
@@ -476,7 +476,7 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
@@ -609,7 +609,7 @@ impl DmaStreamWriterBuilder {
     /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///     let _reader = DmaStreamWriterBuilder::new(file).build();
@@ -866,7 +866,7 @@ impl DmaStreamWriter {
     /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///     let mut writer = DmaStreamWriterBuilder::new(file).build();
@@ -899,7 +899,7 @@ impl DmaStreamWriter {
     /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///     let mut writer = DmaStreamWriterBuilder::new(file).build();
@@ -936,7 +936,7 @@ impl DmaStreamWriter {
     /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///        let mut writer = DmaStreamWriterBuilder::new(file)

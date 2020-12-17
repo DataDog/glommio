@@ -74,7 +74,7 @@ impl DmaFile {
     /// use glommio::io::DmaFile;
     /// use std::os::unix::io::AsRawFd;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let mut wfile = DmaFile::create("myfile.txt").await.unwrap();
     ///     let mut rfile = DmaFile::open("myfile.txt").await.unwrap();
@@ -186,7 +186,7 @@ impl DmaFile {
     /// use glommio::LocalExecutor;
     /// use glommio::io::DmaFile;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("test.txt").await.unwrap();
     ///
