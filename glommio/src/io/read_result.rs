@@ -7,6 +7,8 @@ use crate::sys::DmaBuffer;
 use std::io;
 use std::rc::Rc;
 
+type Result<T> = crate::Result<T, ()>;
+
 #[derive(Debug, Clone)]
 /// ReadResult encapsulates a buffer, returned by read operations like [`get_buffer_aligned`] and
 /// [`read_at`]
@@ -59,7 +61,7 @@ impl ReadResult {
     /// [`std::io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
     /// [`std::io::ErrorKind`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html
     /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/struct.ErrorKind.html#variant.InvalidInput
-    pub fn slice(&self, extra_offset: usize, len: usize) -> io::Result<ReadResult> {
+    pub fn slice(&self, extra_offset: usize, len: usize) -> Result<ReadResult> {
         let offset = self.offset + extra_offset;
         let end = offset + len;
 
@@ -70,7 +72,8 @@ impl ReadResult {
                     "offset {} ({} + {}) is more than the length of the buffer",
                     offset, self.offset, extra_offset
                 ),
-            ));
+            )
+            .into());
         }
 
         if end > self.buffer.as_ref().unwrap().len() {
@@ -80,7 +83,8 @@ impl ReadResult {
                     "length {} would cross past the end of the buffer ({} + {})",
                     end, offset, len
                 ),
-            ));
+            )
+            .into());
         }
 
         Ok(ReadResult {

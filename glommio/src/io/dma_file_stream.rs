@@ -22,6 +22,8 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::vec::Vec;
 
+type Result<T> = crate::Result<T, ()>;
+
 macro_rules! current_error {
     ( $state:expr ) => {
         $state.error.take().map(|err| Err(err.into()))
@@ -518,7 +520,7 @@ impl DmaStreamReader {
         cx: &mut Context<'_>,
         len: u64,
         buffer_id: u64,
-    ) -> Poll<io::Result<ReadResult>> {
+    ) -> Poll<Result<ReadResult>> {
         let mut state = self.state.borrow_mut();
         if let Some(err) = current_error!(state) {
             return Poll::Ready(err);
@@ -1413,7 +1415,7 @@ mod test {
     });
 
     #[track_caller]
-    fn expect_specific_error<T>(op: Result<T, io::Error>, expected_err: &'static str) {
+    fn expect_specific_error<T>(op: std::result::Result<T, io::Error>, expected_err: &'static str) {
         match op {
             Ok(_) => panic!("should have failed"),
             Err(err) => {

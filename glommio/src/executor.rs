@@ -629,17 +629,13 @@ impl LocalExecutor {
         if let Entry::Occupied(entry) = queue_entry {
             let tq = entry.get();
             if tq.borrow().is_active() {
-                return Err(GlommioError::QueueStillActiveError {
-                    index: handle.index,
-                });
+                return Err(GlommioError::queue_still_active(handle.index));
             }
 
             entry.remove();
             return Ok(());
         }
-        Err(GlommioError::QueueNotFoundError {
-            index: handle.index,
-        })
+        Err(GlommioError::queue_not_found(handle.index))
     }
 
     fn get_queue(&self, handle: &TaskQueueHandle) -> Option<Rc<RefCell<TaskQueue>>> {
@@ -690,9 +686,7 @@ impl LocalExecutor {
     {
         let tq = self
             .get_queue(&handle)
-            .ok_or_else(|| GlommioError::QueueNotFoundError {
-                index: handle.index,
-            })?;
+            .ok_or_else(|| GlommioError::queue_not_found(handle.index))?;
         let ex = tq.borrow().ex.clone();
         Ok(Task(ex.spawn(tq, future)))
     }
@@ -1145,9 +1139,7 @@ impl<T> Task<T> {
     pub fn task_queue_stats(handle: TaskQueueHandle) -> Result<TaskQueueStats> {
         LOCAL_EX.with(|local_ex| match local_ex.get_queue(&handle) {
             Some(x) => Ok(x.borrow().stats),
-            None => Err(GlommioError::QueueNotFoundError {
-                index: handle.index,
-            }),
+            None => Err(GlommioError::queue_not_found(handle.index)),
         })
     }
 

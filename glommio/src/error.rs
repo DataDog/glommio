@@ -34,6 +34,71 @@ pub enum ResourceType<T> {
     Channel(T),
 }
 
+/// Error variant for executor queues.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum QueueErrorKind {
+    /// Queue is still active
+    StillActive,
+    /// Queue is not found
+    NotFound,
+}
+
+#[derive(Error)]
+/// Composite error type to encompass all error types glommio produces.
+pub enum GlommioError<T> {
+    /// IO error from standard library functions
+    #[error("IO error occurred: {0}")]
+    IoError(#[from] io::Error),
+
+    /// Executor queue error variant(s)
+    #[error("Queue #{index} is {kind}")]
+    QueueError {
+        /// index of the queue
+        index: usize,
+
+        /// the kind of error encountered
+        kind: QueueErrorKind,
+    },
+
+    /// The resource in question is closed. Generic because the channel
+    /// variant needs to return the actual item sent into the channel.
+    #[error("{0} is closed")]
+    Closed(ResourceType<T>),
+
+    /// Error encapsulating the `WouldBlock` error for types that don't have
+    /// errors originating in the standard library. Glommio also has
+    /// nonblocking types that need to indicate if they are blocking or not.
+    /// This type allows for signaling when a function would otherwise block
+    /// for a specific `ResourceType`.
+    #[error("{0} would block")]
+    WouldBlock(ResourceType<T>),
+}
+
+impl<T> GlommioError<T> {
+    pub(crate) fn queue_still_active(index: usize) -> GlommioError<T> {
+        GlommioError::QueueError {
+            index,
+            kind: QueueErrorKind::StillActive,
+        }
+    }
+
+    pub(crate) fn queue_not_found(index: usize) -> GlommioError<T> {
+        GlommioError::QueueError {
+            index,
+            kind: QueueErrorKind::NotFound,
+        }
+    }
+}
+
+impl fmt::Display for QueueErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            QueueErrorKind::StillActive => f.write_str("still active"),
+            QueueErrorKind::NotFound => f.write_str("not found"),
+        }
+    }
+}
+
 impl<T> fmt::Display for ResourceType<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fmt_str = match self {
@@ -52,41 +117,6 @@ impl<T> fmt::Display for ResourceType<T> {
     }
 }
 
-#[derive(Error)]
-/// Composite error type to encompass all error types glommio produces.
-pub enum GlommioError<T> {
-    /// IO error from standard library functions
-    #[error("IO error occurred: {0}")]
-    IoError(#[from] io::Error),
-
-    /// Queue could not be found error variant
-    #[error("Queue #{index} not found")]
-    QueueNotFoundError {
-        /// index of the queue in question
-        index: usize,
-    },
-
-    /// Queue still active error variant
-    #[error("Queue #{index} is still active")]
-    QueueStillActiveError {
-        /// index of the queue
-        index: usize,
-    },
-
-    /// The resource in question is closed. Generic because the channel
-    /// variant needs to return the actual item sent into the channel.
-    #[error("{0} is closed")]
-    Closed(ResourceType<T>),
-
-    /// Error encapsulating the `WouldBlock` error for types that don't have
-    /// errors originating in the standard library. Glommio also has
-    /// nonblocking types that need to indicate if they are blocking or not.
-    /// This type allows for signaling when a function would otherwise block
-    /// for a specific `ResourceType`.
-    #[error("{0} would block")]
-    WouldBlock(ResourceType<T>),
-}
-
 #[doc(hidden)]
 /// This `Debug` implementation is required, otherwise we'd be required to
 /// place a bound on the generic `T` in GlommioError. This causes the `Debug`
@@ -96,21 +126,21 @@ impl<T> Debug for GlommioError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GlommioError::IoError(err) => f.write_fmt(format_args!("{:?}", err)),
-            GlommioError::QueueNotFoundError { index }
-            | GlommioError::QueueStillActiveError { index } => {
-                f.write_fmt(format_args!("Queue {{ index: {} }}", index))
-            }
             GlommioError::Closed(resource) | GlommioError::WouldBlock(resource) => match resource {
                 ResourceType::Semaphore {
                     requested,
                     available,
                 } => f.write_fmt(format_args!(
-                    "Semaphore {{ requested {}, available: {} }}",
+                    "SemaphoreError {{ requested {}, available: {} }}",
                     requested, available
                 )),
-                ResourceType::RwLock => f.write_str("RwLock {{ .. }}"),
-                ResourceType::Channel(_) => f.write_str("Channel {{ .. }}"),
+                ResourceType::RwLock => f.write_str("RwLockError {{ .. }}"),
+                ResourceType::Channel(_) => f.write_str("ChannelError {{ .. }}"),
             },
+            GlommioError::QueueError { index, kind } => f.write_fmt(format_args!(
+                "QueueError {{ index: {}, kind: {:?} }}",
+                index, kind
+            )),
         }
     }
 }
@@ -120,14 +150,6 @@ impl<T> From<GlommioError<T>> for io::Error {
     fn from(err: GlommioError<T>) -> Self {
         match err {
             GlommioError::IoError(io_err) => io_err,
-            GlommioError::QueueNotFoundError { index } => io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("Queue #{} not found", index),
-            ),
-            GlommioError::QueueStillActiveError { index } => io::Error::new(
-                io::ErrorKind::Other,
-                format!("Queue #{} still active", index),
-            ),
             GlommioError::WouldBlock(resource) => io::Error::new(
                 io::ErrorKind::WouldBlock,
                 format!("{} would block", resource),
@@ -135,6 +157,16 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::Closed(resource) => {
                 io::Error::new(io::ErrorKind::BrokenPipe, format!("{} is closed", resource))
             }
+            GlommioError::QueueError { index, kind } => match kind {
+                QueueErrorKind::StillActive => io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Queue #{} still active", index),
+                ),
+                QueueErrorKind::NotFound => io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Queue #{} not found", index),
+                ),
+            },
         }
     }
 }
@@ -182,14 +214,14 @@ mod test {
     #[test]
     #[should_panic(expected = "Queue #0 is still active")]
     fn queue_still_active_err_msg() {
-        let err: Result<(), ()> = Err(GlommioError::QueueStillActiveError { index: 0 });
+        let err: Result<(), ()> = Err(GlommioError::queue_still_active(0));
         panic!(err.unwrap_err().to_string());
     }
 
     #[test]
-    #[should_panic(expected = "Queue #0 not found")]
+    #[should_panic(expected = "Queue #0 is not found")]
     fn queue_not_found_err_msg() {
-        let err: Result<(), ()> = Err(GlommioError::QueueNotFoundError { index: 0 });
+        let err: Result<(), ()> = Err(GlommioError::queue_not_found(0));
         panic!(err.unwrap_err().to_string());
     }
 
