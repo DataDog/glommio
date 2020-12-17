@@ -67,3 +67,8 @@ harness = false
 [[bench]]
 name = "tokio_tcp"
 harness = false
+
+[[bench]]
+name = "udp"
+harness = false
+

@@ -7,7 +7,7 @@ use iou::{SockAddr, SockAddrStorage};
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
 use std::ffi::CString;
-use std::mem::ManuallyDrop;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{FromRawFd, RawFd};
@@ -107,6 +107,78 @@ pub(crate) fn recv_syscall(fd: RawFd, buf: *mut u8, len: usize, flags: i32) -> i
     syscall!(recv(fd, buf as _, len, flags)).map(|x| x as usize)
 }
 
+// This essentially converts the nix errors into something we can integrate with the rest of the
+// crate.
+pub(crate) unsafe fn ssptr_to_sockaddr(
+    ss: MaybeUninit<nix::sys::socket::sockaddr_storage>,
+    len: usize,
+) -> io::Result<nix::sys::socket::SockAddr> {
+    nix::sys::socket::sockaddr_storage_to_addr(&ss.assume_init(), len).map_err(|e| {
+        let err_no = e.as_errno();
+        match err_no {
+            Some(err_no) => io::Error::from_raw_os_error(err_no as _),
+            None => io::Error::new(io::ErrorKind::Other, "Unknown error"),
+        }
+    })
+}
+
+pub(crate) fn recvmsg_syscall(
+    fd: RawFd,
+    buf: *mut u8,
+    len: usize,
+    flags: i32,
+) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
+    let mut iov = libc::iovec {
+        iov_base: buf as *mut libc::c_void,
+        iov_len: len,
+    };
+
+    let mut msg_name = MaybeUninit::<nix::sys::socket::sockaddr_storage>::uninit();
+    let msg_namelen = std::mem::size_of::<nix::sys::socket::sockaddr_storage>() as libc::socklen_t;
+
+    let mut hdr = libc::msghdr {
+        msg_name: msg_name.as_mut_ptr() as *mut libc::c_void,
+        msg_namelen,
+        msg_iov: &mut iov as *mut libc::iovec,
+        msg_iovlen: 1,
+        msg_control: std::ptr::null_mut(),
+        msg_controllen: 0,
+        msg_flags: 0,
+    };
+
+    let x = syscall!(recvmsg(fd, &mut hdr, flags)).map(|x| x as usize)?;
+    let addr = unsafe { ssptr_to_sockaddr(msg_name, hdr.msg_namelen as _)? };
+    Ok((x, addr))
+}
+
+pub(crate) fn sendmsg_syscall(
+    fd: RawFd,
+    buf: *const u8,
+    len: usize,
+    addr: &mut nix::sys::socket::SockAddr,
+    flags: i32,
+) -> io::Result<usize> {
+    let mut iov = libc::iovec {
+        iov_base: buf as *mut libc::c_void,
+        iov_len: len,
+    };
+
+    let (msg_name, msg_namelen) = addr.as_ffi_pair();
+    let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
+
+    let hdr = libc::msghdr {
+        msg_name,
+        msg_namelen,
+        msg_iov: &mut iov as *mut libc::iovec,
+        msg_iovlen: 1,
+        msg_control: std::ptr::null_mut(),
+        msg_controllen: 0,
+        msg_flags: 0,
+    };
+
+    syscall!(sendmsg(fd, &hdr, flags)).map(|x| x as usize)
+}
+
 fn cstr(path: &Path) -> io::Result<CString> {
     Ok(CString::new(path.as_os_str().as_bytes())?)
 }
@@ -155,6 +227,18 @@ pub(crate) enum SourceType {
     Read(PollableStatus, Option<IOBuffer>),
     SockSend(DmaBuffer),
     SockRecv(Option<DmaBuffer>),
+    SockRecvMsg(
+        Option<DmaBuffer>,
+        libc::iovec,
+        libc::msghdr,
+        MaybeUninit<nix::sys::socket::sockaddr_storage>,
+    ),
+    SockSendMsg(
+        DmaBuffer,
+        libc::iovec,
+        libc::msghdr,
+        nix::sys::socket::SockAddr,
+    ),
     PollableFd,
     Open(CString),
     FdataSync,

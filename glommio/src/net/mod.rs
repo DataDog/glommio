@@ -38,5 +38,46 @@ fn yolo_recv(fd: RawFd, buf: &mut [u8]) -> Option<io::Result<usize>> {
     }
 }
 
+fn yolo_recvmsg(
+    fd: RawFd,
+    buf: &mut [u8],
+    flags: iou::MsgFlags,
+) -> Option<io::Result<(usize, nix::sys::socket::SockAddr)>> {
+    match sys::recvmsg_syscall(
+        fd,
+        buf.as_mut_ptr(),
+        buf.len(),
+        (flags | iou::MsgFlags::MSG_DONTWAIT).bits(),
+    ) {
+        Ok(x) => Some(Ok(x)),
+        Err(err) => match err.kind() {
+            io::ErrorKind::WouldBlock => None,
+            _ => Some(Err(err)),
+        },
+    }
+}
+
+fn yolo_sendmsg(
+    fd: RawFd,
+    buf: &[u8],
+    addr: &mut nix::sys::socket::SockAddr,
+) -> Option<io::Result<usize>> {
+    match sys::sendmsg_syscall(
+        fd,
+        buf.as_ptr(),
+        buf.len(),
+        addr,
+        iou::MsgFlags::MSG_DONTWAIT.bits(),
+    ) {
+        Ok(x) => Some(Ok(x)),
+        Err(err) => match err.kind() {
+            io::ErrorKind::WouldBlock => None,
+            _ => Some(Err(err)),
+        },
+    }
+}
+
 mod tcp_socket;
+mod udp_socket;
 pub use self::tcp_socket::{AcceptedTcpStream, TcpListener, TcpStream};
+pub use self::udp_socket::UdpSocket;

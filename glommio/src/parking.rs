@@ -348,6 +348,66 @@ impl Reactor {
         Ok(source)
     }
 
+    pub(crate) fn rushed_sendmsg(
+        &self,
+        fd: RawFd,
+        buf: DmaBuffer,
+        addr: nix::sys::socket::SockAddr,
+    ) -> io::Result<Source> {
+        let iov = libc::iovec {
+            iov_base: buf.as_ptr() as *mut libc::c_void,
+            iov_len: 1,
+        };
+        // note that the iov and addresses we have above are stack addresses. We will leave it blank and the io_uring callee will fill that up
+        let hdr = libc::msghdr {
+            msg_name: std::ptr::null_mut(),
+            msg_namelen: 0,
+            msg_iov: std::ptr::null_mut(),
+            msg_iovlen: 0,
+            msg_control: std::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
+        };
+
+        let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr));
+        self.sys.sendmsg(&source, iou::MsgFlags::empty());
+        self.rush_dispatch(&source)?;
+        Ok(source)
+    }
+
+    pub(crate) fn rushed_recvmsg(
+        &self,
+        fd: RawFd,
+        size: usize,
+        flags: iou::MsgFlags,
+    ) -> io::Result<Source> {
+        let hdr = libc::msghdr {
+            msg_name: std::ptr::null_mut(),
+            msg_namelen: 0,
+            msg_iov: std::ptr::null_mut(),
+            msg_iovlen: 0,
+            msg_control: std::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
+        };
+        let iov = libc::iovec {
+            iov_base: std::ptr::null_mut(),
+            iov_len: 0,
+        };
+        let source = self.new_source(
+            fd,
+            SourceType::SockRecvMsg(
+                None,
+                iov,
+                hdr,
+                std::mem::MaybeUninit::<nix::sys::socket::sockaddr_storage>::uninit(),
+            ),
+        );
+        self.sys.recvmsg(&source, size, flags);
+        self.rush_dispatch(&source)?;
+        Ok(source)
+    }
+
     pub(crate) fn rushed_recv(&self, fd: RawFd, size: usize) -> io::Result<Source> {
         let source = self.new_source(fd, SourceType::SockRecv(None));
         self.sys.recv(&source, size, iou::MsgFlags::empty());
