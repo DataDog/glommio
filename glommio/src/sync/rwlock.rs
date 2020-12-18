@@ -157,7 +157,7 @@ unsafe impl PointerOps for WaiterPointerOps {
     type Pointer = NonNull<WaiterNode>;
 
     unsafe fn from_raw(&self, value: *const Self::Value) -> Self::Pointer {
-        NonNull::new_unchecked(value as *mut Self::Value)
+        NonNull::new(value as *mut Self::Value).expect("Pointer to the value can not be null")
     }
 
     fn into_raw(&self, ptr: Self::Pointer) -> *const Self::Value {
@@ -196,7 +196,12 @@ unsafe impl Adapter for WaiterAdapter {
         &self,
         value: *const <Self::PointerOps as PointerOps>::Value,
     ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
+        if value.is_null() {
+            panic!("Passed in pointer to the value can not be null");
+        }
+
         let ptr = (value as *const u8).add(offset_of!(WaiterNode, link));
+        //null check is performed above
         core::ptr::NonNull::new_unchecked(ptr as *mut _)
     }
 
@@ -327,6 +332,7 @@ impl<'a, T> Waiter<'a, T> {
             rw.queued_writers += 1;
         }
 
+        //it is safe to skip null check here because we use object reference
         rw.waiters_queue
             .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
     }
@@ -914,7 +920,7 @@ impl<T> RwLock<T> {
         let mut cursor = rw.waiters_queue.front_mut();
         while !cursor.is_null() {
             {
-                let node = cursor.get().unwrap();
+                let node = unsafe { Pin::new_unchecked(cursor.get().unwrap()) };
                 if node.kind == WaiterKind::WRITER {
                     break;
                 }
@@ -939,7 +945,7 @@ impl<T> RwLock<T> {
 
         while !cursor.is_null() && only_readers {
             {
-                let node = cursor.get().unwrap();
+                let node = unsafe { Pin::new_unchecked(cursor.get().unwrap()) };
 
                 let waker = node.waker.borrow_mut().take();
                 if let Some(waker) = waker {
