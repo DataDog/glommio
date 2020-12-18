@@ -40,7 +40,7 @@ unsafe impl PointerOps for WaiterPointerOps {
     type Pointer = NonNull<WaiterNode>;
 
     unsafe fn from_raw(&self, value: *const Self::Value) -> Self::Pointer {
-        NonNull::new_unchecked(value as *mut Self::Value)
+        NonNull::new(value as *mut Self::Value).expect("Passed in Pointer can not be null")
     }
 
     fn into_raw(&self, ptr: Self::Pointer) -> *const Self::Value {
@@ -77,7 +77,12 @@ unsafe impl Adapter for WaiterAdapter {
         &self,
         value: *const <Self::PointerOps as PointerOps>::Value,
     ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
+        if value.is_null() {
+            panic!("Passed in pointer to the value can not be null");
+        }
+
         let ptr = (value as *const u8).add(offset_of!(WaiterNode, link));
+        //we call unchecked method because of safety check above
         core::ptr::NonNull::new_unchecked(ptr as *mut _)
     }
 
@@ -136,6 +141,8 @@ impl<'a> Waiter<'a> {
         }
 
         sem_state.waiters_list.push_back(unsafe {
+            //it is safe to use unchecked call here because we convert passed in reference which
+            //can not be null
             NonNull::new_unchecked(Pin::into_inner_unchecked(waiter_node) as *mut _)
         });
     }
@@ -218,8 +225,9 @@ impl SemaphoreState {
         while !cursor.is_null() {
             let node = cursor.remove().unwrap();
 
-            let node = unsafe { &*node.as_ptr() };
-            if let Some(waker) = node.waker.borrow_mut().take() {
+            let node = unsafe { Pin::new_unchecked(&*node.as_ptr()) };
+            let waker = node.waker.borrow_mut().take();
+            if let Some(waker) = waker {
                 waker.wake();
             } else {
                 panic!("Future is linked into the waiting list without a waker");
@@ -267,6 +275,8 @@ fn process_wakes(sem: &Semaphore, units: u64) {
     while available_units > 0 {
         let mut waker = None;
         if let Some(node) = cursor.get() {
+            let node = unsafe { Pin::new_unchecked(node) };
+
             if node.units <= available_units {
                 let w = node.waker.borrow_mut().take();
 
