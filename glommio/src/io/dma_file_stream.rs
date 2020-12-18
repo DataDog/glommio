@@ -211,7 +211,7 @@ impl DmaStreamReaderState {
                     state.buffermap.insert(buffer_id, buf);
                 }
                 Err(x) => {
-                    state.error = Some(x);
+                    state.error = Some(x.into());
                 }
             }
             state.pending.remove(&buffer_id);

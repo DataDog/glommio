@@ -13,6 +13,8 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
 
+type Result<T> = crate::Result<T, ()>;
+
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
 }
@@ -142,7 +144,7 @@ impl DmaFile {
     }
 
     /// Similar to `create()` in the standard library, but returns a DMA file
-    pub async fn create<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
+    pub async fn create<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags =
             libc::O_DIRECT | libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
@@ -154,7 +156,7 @@ impl DmaFile {
     }
 
     /// Similar to `open()` in the standard library, but returns a DMA file
-    pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags = libc::O_DIRECT | libc::O_CLOEXEC | libc::O_RDONLY;
         let res = DmaFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await;
@@ -198,21 +200,21 @@ impl DmaFile {
     /// ```
     ///
     /// [`alloc_dma_buffer`]: struct.DmaFile.html#method.alloc_dma_buffer
-    pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> io::Result<usize> {
+    pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> Result<usize> {
         let source = self.file.reactor.upgrade().unwrap().write_dma(
             self.as_raw_fd(),
             buf,
             pos,
             self.pollable,
         );
-        enhanced_try!(source.collect_rw().await, "Writing", self.file)
+        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
     }
 
     /// Reads from a specific position in the file and returns the buffer.
     ///
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
-    pub async fn read_at_aligned(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
+    pub async fn read_at_aligned(&self, pos: u64, size: usize) -> Result<ReadResult> {
         let mut source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             pos,
@@ -231,7 +233,7 @@ impl DmaFile {
     /// API will internally convert the positions and sizes to match, at a cost.
     ///
     /// If you can guarantee proper alignment, prefer read_at_aligned instead
-    pub async fn read_at(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
+    pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
         let eff_pos = self.align_down(pos);
         let b = (pos - eff_pos) as usize;
 
@@ -255,12 +257,12 @@ impl DmaFile {
     ///
     /// As this is a DMA file, the OS will not be caching this file; however, there may be caches on
     /// the drive itself.
-    pub async fn fdatasync(&self) -> io::Result<()> {
-        self.file.fdatasync().await
+    pub async fn fdatasync(&self) -> Result<()> {
+        self.file.fdatasync().await.map_err(Into::into)
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as the size argument.
-    pub async fn pre_allocate(&self, size: u64) -> io::Result<()> {
+    pub async fn pre_allocate(&self, size: u64) -> Result<()> {
         self.file.pre_allocate(size).await
     }
 
@@ -284,14 +286,14 @@ impl DmaFile {
     /// Truncates a file to the specified size.
     ///
     /// **Warning:** synchronous operation, will block the reactor
-    pub async fn truncate(&self, size: u64) -> io::Result<()> {
+    pub async fn truncate(&self, size: u64) -> Result<()> {
         self.file.truncate(size).await
     }
 
     /// rename this file.
     ///
     /// **Warning:** synchronous operation, will block the reactor
-    pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
+    pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
         self.file.rename(new_path).await
     }
 
@@ -302,26 +304,27 @@ impl DmaFile {
     /// as long as it is open.
     ///
     /// **Warning:** synchronous operation, will block the reactor
-    pub async fn remove(&self) -> io::Result<()> {
+    pub async fn remove(&self) -> Result<()> {
         self.file.remove().await
     }
 
     /// Returns the size of a file, in bytes
-    pub async fn file_size(&self) -> io::Result<u64> {
+    pub async fn file_size(&self) -> Result<u64> {
         self.file.file_size().await
     }
 
     /// Closes this DMA file.
-    pub async fn close(self) -> io::Result<()> {
+    pub async fn close(self) -> Result<()> {
         self.file.close().await
     }
 
-    pub(crate) async fn close_rc(self: Rc<DmaFile>) -> io::Result<()> {
+    pub(crate) async fn close_rc(self: Rc<DmaFile>) -> Result<()> {
         match Rc::try_unwrap(self) {
             Err(file) => Err(io::Error::new(
                 io::ErrorKind::Other,
                 format!("{} references to file still held", Rc::strong_count(&file)),
-            )),
+            )
+            .into()),
             Ok(file) => file.close().await,
         }
     }

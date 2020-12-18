@@ -189,7 +189,7 @@ mod uring;
 
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::uring::*;
-use crate::IoRequirements;
+use crate::{error::ReactorErrorVariant, GlommioError, IoRequirements};
 
 #[derive(Debug)]
 pub(crate) enum IOBuffer {
@@ -253,12 +253,14 @@ pub(crate) enum SourceType {
 }
 
 impl TryFrom<SourceType> for libc::statx {
-    type Error = io::Error;
+    type Error = GlommioError<()>;
 
     fn try_from(value: SourceType) -> Result<Self, Self::Error> {
         match value {
             SourceType::Statx(_, buf) => Ok(buf.into_inner()),
-            _ => Err(io::Error::new(io::ErrorKind::Other, "Wrong source Type!")),
+            _ => Err(GlommioError::ReactorError(
+                ReactorErrorVariant::IncorrectSourceType,
+            )),
         }
     }
 }

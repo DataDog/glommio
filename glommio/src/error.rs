@@ -43,7 +43,7 @@ pub enum ResourceType<T> {
     },
 }
 
-/// Error variant for executor queues.
+/// Error variants for executor queues.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum QueueErrorKind {
@@ -51,6 +51,40 @@ pub enum QueueErrorKind {
     StillActive,
     /// Queue is not found
     NotFound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactorErrorKind {
+    IncorrectSourceType,
+}
+
+impl fmt::Display for ReactorErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReactorErrorKind::IncorrectSourceType => write!(f, "Incorrect source type!"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutorErrorKind {
+    QueueError {
+        /// index of the queue
+        index: usize,
+
+        /// the kind of error encountered
+        kind: QueueErrorKind,
+    },
+}
+
+impl fmt::Display for ExecutorErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExecutorErrorKind::QueueError { index, kind } => {
+                write!(f, "Queue #{} is {}", index, kind)
+            }
+        }
+    }
 }
 
 /// Composite error type to encompass all error types glommio produces.
@@ -84,16 +118,19 @@ pub enum GlommioError<T> {
     #[error("IO error occurred: {0}")]
     IoError(#[from] io::Error),
 
-    /// Executor queue error variant(s) for signaling certain error conditions
-    /// inside of the executor.
-    #[error("Queue #{index} is {kind}")]
-    QueueError {
-        /// index of the queue
-        index: usize,
-
-        /// the kind of error encountered
-        kind: QueueErrorKind,
+    #[error("{source}, op: {op} path: {path:?} with fd: {fd:?}")]
+    EnhancedIoError {
+        #[source]
+        source: io::Error,
+        op: &'static str,
+        path: Option<PathBuf>,
+        fd: Option<RawFd>,
     },
+
+    /// Executor error variant(s) for signaling certain error conditions
+    /// inside of the executor.
+    #[error("Executor error: {0}")]
+    ExecutorError(ExecutorErrorKind),
 
     /// The resource in question is closed. Generic because the channel
     /// variant needs to return the actual item sent into the channel.
@@ -107,21 +144,24 @@ pub enum GlommioError<T> {
     /// for a specific `ResourceType`.
     #[error("{0} operation would block")]
     WouldBlock(ResourceType<T>),
+
+    #[error("Reactor error: {0}")]
+    ReactorError(ReactorErrorKind),
 }
 
 impl<T> GlommioError<T> {
     pub(crate) fn queue_still_active(index: usize) -> GlommioError<T> {
-        GlommioError::QueueError {
+        GlommioError::ExecutorError(QueueError {
             index,
             kind: QueueErrorKind::StillActive,
-        }
+        })
     }
 
     pub(crate) fn queue_not_found(index: usize) -> GlommioError<T> {
-        GlommioError::QueueError {
+        GlommioError::ExecutorError(QueueError {
             index,
             kind: QueueErrorKind::NotFound,
-        }
+        })
     }
 }
 
@@ -172,6 +212,24 @@ impl<T> Debug for GlommioError<T> {
                 "QueueError {{ index: {}, kind: {:?} }}",
                 index, kind
             )),
+            GlommioError::EnhancedIoError {
+                source,
+                op,
+                path,
+                fd,
+            } => {
+                write!(
+                    f,
+                    "EnhancedIoError {{ source: {:?}, op: {:?}, path: {:?}, fd: {:?} }}",
+                    source, op, path, fd
+                )
+            }
+            GlommioError::ReactorError(kind) => {
+                let kind = match kind {
+                    ReactorErrorKind::IncorrectSourceType => "IncorrectSourceType",
+                };
+                write!(f, "ReactorError {{ kind: '{}' }}", kind)
+            }
         }
     }
 }
@@ -187,7 +245,10 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::Closed(resource) => {
                 io::Error::new(io::ErrorKind::BrokenPipe, format!("{} is closed", resource))
             }
-            GlommioError::QueueError { index, kind } => match kind {
+            GlommioError::ExecutorError(ExecutorErrorKind::QueueError(QueueError {
+                index,
+                kind,
+            })) => match kind {
                 QueueErrorKind::StillActive => io::Error::new(
                     io::ErrorKind::Other,
                     format!("Queue #{} still active", index),
@@ -197,6 +258,15 @@ impl<T> From<GlommioError<T>> for io::Error {
                     format!("Queue #{} not found", index),
                 ),
             },
+            GlommioError::EnhancedIoError {
+                source,
+                op,
+                path,
+                fd,
+            } => io::Error::new(source.kind(), source),
+            GlommioError::ReactorError(kind) => {
+                io::Error::new(io::ErrorKind::InvalidData, "Incorrect source type!")
+            }
         }
     }
 }
@@ -383,11 +453,5 @@ mod test {
             s,
             "Bad file descriptor (os error 9), op: testing enhancer with fd 32"
         );
-    }
-
-    fn will_error() -> Result<(), GlommioError<()>> {
-        Err(GlommioError::WouldBlock(ResourceType::File {
-            msg: "".to_string(),
-        }))?
     }
 }
