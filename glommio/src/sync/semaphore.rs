@@ -779,7 +779,7 @@ mod test {
 
     #[test]
     fn semaphore_ensure_execution_order() {
-        let ex = LocalExecutor::make_default();
+        let ex = LocalExecutor::default();
         let semaphore = Rc::new(Semaphore::new(0));
 
         let semaphore_c1 = semaphore.clone();
