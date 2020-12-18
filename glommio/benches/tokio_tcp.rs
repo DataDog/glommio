@@ -64,7 +64,7 @@ async fn main() -> io::Result<()> {
     // round trips
     let mut stream = TcpStream::connect("127.0.0.1:8001").await?;
     let t = Instant::now();
-    for i in 0..runs {
+    for _ in 0..runs {
         let mut byte = [65u8; 1];
         assert_eq!(1, stream.write(&byte).await.unwrap());
         assert_eq!(1, stream.read(&mut byte).await.unwrap());
