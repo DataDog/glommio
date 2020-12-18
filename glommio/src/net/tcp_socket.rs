@@ -283,6 +283,27 @@ pin_project! {
     }
 }
 
+impl From<socket2::Socket> for TcpStream {
+    fn from(socket: socket2::Socket) -> TcpStream {
+        Self {
+            stream: GlommioStream::<net::TcpStream>::from(socket),
+        }
+    }
+}
+
+impl AsRawFd for TcpStream {
+    fn as_raw_fd(&self) -> RawFd {
+        self.stream.as_raw_fd()
+    }
+}
+
+impl FromRawFd for TcpStream {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        let socket = socket2::Socket::from_raw_fd(fd);
+        TcpStream::from(socket)
+    }
+}
+
 impl TcpStream {
     /// Creates a TCP connection to the specified address.
     ///

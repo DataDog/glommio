@@ -8,12 +8,33 @@ use iou::{InetAddr, SockAddr};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 #[derive(Debug)]
 /// An Udp Socket.
 pub struct UdpSocket {
     socket: GlommioDatagram<net::UdpSocket>,
+}
+
+impl From<socket2::Socket> for UdpSocket {
+    fn from(socket: socket2::Socket) -> UdpSocket {
+        Self {
+            socket: GlommioDatagram::<net::UdpSocket>::from(socket),
+        }
+    }
+}
+
+impl AsRawFd for UdpSocket {
+    fn as_raw_fd(&self) -> RawFd {
+        self.socket.as_raw_fd()
+    }
+}
+
+impl FromRawFd for UdpSocket {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        let socket = socket2::Socket::from_raw_fd(fd);
+        UdpSocket::from(socket)
+    }
 }
 
 impl UdpSocket {
