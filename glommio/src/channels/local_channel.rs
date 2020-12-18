@@ -143,6 +143,7 @@ fn register_into_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut State<
                 .send_waiters
                 .as_mut()
                 .expect("There should be active sender instance for the channel")
+                //it is safe to use unchecked call here because we convert from reference
                 .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
         }
         WaiterKind::RECEIVER => {
@@ -150,6 +151,7 @@ fn register_into_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut State<
                 .recv_waiters
                 .as_mut()
                 .expect("There should be active receiver instance for the channel")
+                //it is safe to use unchecked call here because we convert from reference
                 .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
         }
     }
@@ -230,7 +232,7 @@ unsafe impl PointerOps for WaiterPointerOps {
     type Pointer = NonNull<WaiterNode>;
 
     unsafe fn from_raw(&self, value: *const Self::Value) -> Self::Pointer {
-        NonNull::new_unchecked(value as *mut Self::Value)
+        NonNull::new(value as *mut Self::Value).expect("Pointer to the value can not be null")
     }
 
     fn into_raw(&self, ptr: Self::Pointer) -> *const Self::Value {
@@ -265,6 +267,9 @@ unsafe impl Adapter for WaiterAdapter {
         &self,
         value: *const <Self::PointerOps as PointerOps>::Value,
     ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
+        if value.is_null() {
+            panic!("Value pointer can not be null");
+        }
         let ptr = (value as *const u8).add(offset_of!(WaiterNode, link));
         core::ptr::NonNull::new_unchecked(ptr as *mut _)
     }
@@ -585,7 +590,9 @@ fn wake_up_all(ws: &mut Option<LinkedList<WaiterAdapter>>) {
         let mut cursor = waiters.front_mut();
         while !cursor.is_null() {
             {
-                let node = cursor.get().expect("Waiter queue can not be empty");
+                let node = unsafe {
+                    Pin::new_unchecked(cursor.get().expect("Waiter queue can not be empty"))
+                };
                 node.waker
                     .borrow_mut()
                     .take()
