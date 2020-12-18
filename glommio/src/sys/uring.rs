@@ -37,12 +37,6 @@ use super::{EnqueuedSource, TimeSpec64};
 
 const MSG_ZEROCOPY: i32 = 0x4000000;
 
-pub(crate) fn add_flag(fd: RawFd, flag: libc::c_int) -> io::Result<()> {
-    let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
-    syscall!(fcntl(fd, libc::F_SETFL, flags | flag))?;
-    Ok(())
-}
-
 #[allow(dead_code)]
 #[derive(Debug)]
 enum UringOpDescriptor {
@@ -967,11 +961,6 @@ fn read_flags() -> PollFlags {
     PollFlags::POLLIN | PollFlags::POLLPRI
 }
 
-/// Epoll flags for all possible writability events.
-fn write_flags() -> PollFlags {
-    PollFlags::POLLOUT
-}
-
 macro_rules! consume_rings {
     (into $output:expr; $( $ring:expr ),+ ) => {{
         let mut consumed = 0;
@@ -1081,18 +1070,6 @@ impl Reactor {
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         let mut poll_ring = self.poll_ring.borrow_mut();
         poll_ring.alloc_dma_buffer(size)
-    }
-
-    pub(crate) fn interest(&self, source: &Source, read: bool, write: bool) {
-        let mut flags = common_flags();
-        if read {
-            flags |= read_flags();
-        }
-        if write {
-            flags |= write_flags();
-        }
-
-        self.queue_standard_request(source, UringOpDescriptor::PollAdd(flags));
     }
 
     pub(crate) fn write_dma(&self, source: &Source, pos: u64) {
@@ -1225,10 +1202,6 @@ impl Reactor {
         };
         let op = UringOpDescriptor::Open(pathptr as _, flags, mode as _);
         self.queue_standard_request(source, op);
-    }
-
-    pub(crate) fn insert(&self, fd: RawFd) -> io::Result<()> {
-        add_flag(fd, libc::O_NONBLOCK)
     }
 
     // We want to go to sleep but we can only go to sleep in one of the rings,

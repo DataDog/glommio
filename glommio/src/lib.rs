@@ -374,8 +374,6 @@ mod executor;
 pub mod io;
 mod multitask;
 pub mod net;
-mod networking;
-mod pollable;
 mod shares;
 pub mod sync;
 pub mod timer;
@@ -385,8 +383,6 @@ pub use crate::executor::{
     ExecutorStats, LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
     TaskQueueStats,
 };
-pub use crate::networking::*;
-pub use crate::pollable::Async;
 pub use crate::shares::{Shares, SharesManager};
 pub use enclose::enclose;
 pub use scopeguard::defer;

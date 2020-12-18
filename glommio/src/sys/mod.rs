@@ -248,7 +248,6 @@ pub(crate) enum SourceType {
         libc::msghdr,
         nix::sys::socket::SockAddr,
     ),
-    PollableFd,
     Open(CString),
     FdataSync,
     Fallocate,
