@@ -77,6 +77,7 @@ fn yolo_sendmsg(
     }
 }
 
+mod datagram;
 mod stream;
 mod tcp_socket;
 mod udp_socket;
