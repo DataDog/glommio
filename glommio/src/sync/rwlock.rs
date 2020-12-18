@@ -11,7 +11,7 @@
 //! use glommio::sync::RwLock;
 //! use glommio::LocalExecutor;
 //! let lock = RwLock::new(5);
-//! let ex = LocalExecutor::make_default();
+//! let ex = LocalExecutor::default();
 //!
 //! ex.run( async move {
 //!    // many reader locks can be held at once
@@ -31,20 +31,18 @@
 //! });
 //! ```
 //!
-use crate::{GlommioError, ResourceType};
-use ahash::AHashMap;
 use alloc::rc::Rc;
 use core::fmt::Debug;
 use std::cell::{Ref, RefCell, RefMut};
-use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::collections::VecDeque;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-struct WaiterId(u64);
+use intrusive_collections::intrusive_adapter;
+use intrusive_collections::{LinkedList, LinkedListLink};
+
+use crate::{GlommioError, ResourceType};
 
 /// A type alias for the result of a lock method which can be suspended.
 pub type LockResult<T> = Result<T, GlommioError<()>>;
@@ -59,10 +57,18 @@ enum WaiterKind {
 }
 
 struct Waiter {
-    kind: WaiterKind,
-    id: WaiterId,
     rw: Rc<RefCell<State>>,
+    node: Rc<WaiterNode>,
 }
+
+#[derive(Debug)]
+struct WaiterNode {
+    kind: WaiterKind,
+    link: LinkedListLink,
+    waker: RefCell<Option<Waker>>,
+}
+
+intrusive_adapter!(WaiterAdapter = Rc<WaiterNode> : WaiterNode {link : LinkedListLink});
 
 /// A reader-writer lock
 ///
@@ -92,7 +98,7 @@ struct Waiter {
 ///use glommio::LocalExecutor;
 ///
 /// let lock = RwLock::new(5);
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 ///
 /// ex.run( async move {
 ///    // many reader locks can be held at once
@@ -120,7 +126,6 @@ pub struct RwLock<T> {
 
 #[derive(Debug)]
 struct State {
-    id_gen: u64,
     //number of granted write access
     //there can be only single writer, but we use u32 type to support reentrancy fot the lock
     //in future
@@ -131,15 +136,44 @@ struct State {
     //number of queued requests to get write access
     queued_writers: u32,
 
+    waiters_queue: LinkedList<WaiterAdapter>,
     closed: bool,
-
-    waiters_map: AHashMap<WaiterId, (WaiterKind, Waker)>,
-    waiters: VecDeque<WaiterId>,
 }
 
 impl Waiter {
-    fn new(id: WaiterId, kind: WaiterKind, rw: Rc<RefCell<State>>) -> Self {
-        Waiter { id, kind, rw }
+    fn new(kind: WaiterKind, rw: Rc<RefCell<State>>) -> Self {
+        Waiter {
+            rw,
+            node: Rc::new(WaiterNode {
+                kind,
+                waker: RefCell::new(None),
+                link: LinkedListLink::default(),
+            }),
+        }
+    }
+
+    fn remove_from_waiting_queue(&self, rw: &mut State) {
+        if self.node.link.is_linked() {
+            let mut cursor = unsafe { rw.waiters_queue.cursor_mut_from_ptr(self.node.as_ref()) };
+
+            if cursor.remove().is_none() {
+                panic!("Waiter has to be linked into the list of waiting futures");
+            }
+        }
+    }
+
+    fn register_in_waiting_queue(&self, rw: &mut State, waker: Waker, kind: WaiterKind) {
+        *self.node.waker.borrow_mut() = Some(waker);
+
+        if self.node.link.is_linked() {
+            return;
+        }
+
+        if kind == WaiterKind::WRITER {
+            rw.queued_writers += 1;
+        }
+
+        rw.waiters_queue.push_back(self.node.clone());
     }
 }
 
@@ -147,22 +181,25 @@ impl Future for Waiter {
     type Output = LockResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.rw.borrow_mut();
-        match self.kind {
+        let mut rw = self.rw.borrow_mut();
+
+        match self.node.kind {
             WaiterKind::WRITER => {
-                if state.try_write()? {
+                if rw.try_write()? {
+                    self.remove_from_waiting_queue(&mut rw);
                     Poll::Ready(Ok(()))
                 } else {
-                    state.add_waker(self.id, self.kind, cx.waker().clone());
+                    self.register_in_waiting_queue(&mut rw, cx.waker().clone(), WaiterKind::WRITER);
                     Poll::Pending
                 }
             }
 
             WaiterKind::READER => {
-                if state.try_read()? {
+                if rw.try_read()? {
+                    self.remove_from_waiting_queue(&mut rw);
                     Poll::Ready(Ok(()))
                 } else {
-                    state.add_waker(self.id, self.kind, cx.waker().clone());
+                    self.register_in_waiting_queue(&mut rw, cx.waker().clone(), WaiterKind::READER);
                     Poll::Pending
                 }
             }
@@ -173,14 +210,12 @@ impl Future for Waiter {
 impl State {
     fn new() -> Self {
         State {
-            id_gen: 0,
             writers: 0,
             readers: 0,
             queued_writers: 0,
             closed: false,
 
-            waiters: VecDeque::new(),
-            waiters_map: AHashMap::new(),
+            waiters_queue: LinkedList::new(WaiterAdapter::new()),
         }
     }
 
@@ -212,30 +247,6 @@ impl State {
         }
 
         Ok(false)
-    }
-
-    fn add_waker(&mut self, id: WaiterId, kind: WaiterKind, waker: Waker) {
-        debug_assert!(!(self.readers > 0 && self.writers > 0));
-
-        let entry = self.waiters_map.entry(id);
-        match entry {
-            Vacant(entry) => {
-                entry.insert((kind, waker));
-                self.waiters.push_back(id);
-
-                if kind == WaiterKind::WRITER {
-                    self.queued_writers += 1;
-                }
-            }
-            Occupied(mut entry) => {
-                if cfg!(debug_assert) {
-                    let (stored_kind, _) = entry.get();
-                    assert_eq!(*stored_kind, kind);
-                }
-
-                *entry.get_mut() = (kind, waker);
-            }
-        }
     }
 }
 
@@ -367,7 +378,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let mut lock = RwLock::new(0);
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     *lock.get_mut().unwrap() = 10;
@@ -408,7 +419,7 @@ impl<T> RwLock<T> {
     /// let lock = Rc::new(RwLock::new(1));
     /// let c_lock = lock.clone();
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     let first_reader = Local::local(async move {
@@ -436,10 +447,7 @@ impl<T> RwLock<T> {
                 });
             }
 
-            let waiter_id = state.id_gen;
-            state.id_gen += 1;
-
-            Waiter::new(WaiterId(waiter_id), WaiterKind::READER, self.rw.clone())
+            Waiter::new(WaiterKind::READER, self.rw.clone())
         };
 
         waiter.await.map(|_| RwLockReadGuard {
@@ -468,7 +476,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let lock = RwLock::new(1);
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     let mut n = lock.write().await.unwrap();
@@ -489,10 +497,7 @@ impl<T> RwLock<T> {
                 });
             }
 
-            let waiter_id = state.id_gen;
-            state.id_gen += 1;
-
-            Waiter::new(WaiterId(waiter_id), WaiterKind::WRITER, self.rw.clone())
+            Waiter::new(WaiterKind::WRITER, self.rw.clone())
         };
         waiter.await?;
 
@@ -559,7 +564,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let lock = RwLock::new(1);
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///   let n = lock.read().await.unwrap();
@@ -619,7 +624,7 @@ impl<T> RwLock<T> {
     /// let semaphore = Rc::new(Semaphore::new(0));
     /// let c_semaphore = semaphore.clone();
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///      let closer = Local::local(async move {
     ///          //await till read lock will be acquired
@@ -670,7 +675,7 @@ impl<T> RwLock<T> {
     /// use glommio::LocalExecutor;
     ///
     /// let lock = RwLock::new(String::new());
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     {
@@ -705,69 +710,89 @@ impl<T> RwLock<T> {
         //created with assumption in mind that waker will trigger delayed execution of fibers
         //such behaviour supports users intuition about fibers.
 
-        //all fibers waked up in the fair order (in the order of acquiring of the ) if that matters.
-        // That allows to avoid lock starvation as much as possible.
+        //All fibers waked up in the fair order (in the order of acquiring of the lock) if that matters.
+        //That allows to avoid lock starvation as much as possible.
         if rw.readers == 0 && rw.writers == 0 {
             if rw.queued_writers == 0 {
+                //only readers are waiting in the queue and no one holding a lock
+                //wake up all of them
                 Self::wake_up_all_fibers(rw);
             } else {
+                //there are some writers waiting into the queue
+                //so wake up all readers and single writer
+                //no one holding the lock so likely they will be executed in order
+                //so all will have a chance to proceed
                 Self::wake_up_readers_and_first_writer(rw);
             }
         } else if rw.writers == 0 {
             if rw.queued_writers == 0 {
+                //only readers in the waiting queue and some readers holding the lock
+                //wake up all of them
                 Self::wake_up_all_fibers(rw);
             } else {
+                //there are both readers and writers in the queue
+                //so only readers are waken up
                 Self::wake_up_all_readers_till_first_writer(rw);
             }
         }
+        //the only option left that some writers still holding the lock
+        //so no reason to try to wake up any one.
     }
 
     fn wake_up_all_readers_till_first_writer(rw: &mut State) {
-        loop {
-            let waiter_id = rw.waiters.front();
+        let mut cursor = rw.waiters_queue.front_mut();
+        while !cursor.is_null() {
+            {
+                let node = cursor.get().unwrap();
+                if node.kind == WaiterKind::WRITER {
+                    break;
+                }
 
-            if let Some(waiter_id) = waiter_id {
-                let entry = rw.waiters_map.entry(*waiter_id);
-                match entry {
-                    Occupied(entry) => {
-                        let (waiter_kind, _) = entry.get();
-                        if *waiter_kind == WaiterKind::WRITER {
-                            break;
-                        }
-
-                        let (_, waker) = entry.remove();
-                        waker.wake();
-
-                        rw.waiters.pop_front().unwrap();
-                    }
-                    Vacant(_) => unreachable!(),
+                let waker = node.waker.borrow_mut().take();
+                if let Some(waker) = waker {
+                    waker.wake();
+                } else {
+                    panic!("Future was linked in waiting list without an a waker");
                 }
             }
+            cursor.move_next();
         }
     }
-    fn wake_up_readers_and_first_writer(rw: &mut State) {
-        loop {
-            let waiter_id = rw.waiters.pop_front();
-            if let Some(waiter_id) = waiter_id {
-                let (waiter_kind, waker) = rw.waiters_map.remove(&waiter_id).unwrap();
-                waker.wake();
 
-                if waiter_kind == WaiterKind::WRITER {
+    fn wake_up_readers_and_first_writer(rw: &mut State) {
+        let mut cursor = rw.waiters_queue.front_mut();
+        while !cursor.is_null() {
+            {
+                let node = cursor.get().unwrap();
+
+                let waker = node.waker.borrow_mut().take();
+                if let Some(waker) = waker {
+                    waker.wake();
+                } else {
+                    panic!("Future was linked in waiting list without an a waker");
+                }
+
+                if node.kind == WaiterKind::WRITER {
                     rw.queued_writers -= 1;
                     break;
                 }
-            } else {
-                break;
             }
+
+            cursor.move_next();
         }
     }
 
     fn wake_up_all_fibers(rw: &mut State) {
-        for (_, (_, waker)) in rw.waiters_map.drain() {
-            waker.wake();
+        let mut cursor = rw.waiters_queue.front_mut();
+        while !cursor.is_null() {
+            let node = cursor.remove().unwrap();
+            let waker = node.waker.borrow_mut().take();
+            if let Some(waker) = waker {
+                waker.wake();
+            } else {
+                panic!("Future was linked in waiting list without an a waker");
+            }
         }
-
-        rw.waiters.clear();
     }
 }
 
@@ -1169,7 +1194,7 @@ mod test {
 
     #[test]
     fn rwlock_overflow() {
-        let ex = LocalExecutor::make_default();
+        let ex = LocalExecutor::default();
 
         let lock = Rc::new(RwLock::new(()));
         let c_lock = lock.clone();
@@ -1191,7 +1216,12 @@ mod test {
                     Timer::new(Duration::from_micros(100)).await;
                 }
 
-                assert_eq!(c_lock.rw.borrow().waiters.len(), 1);
+                let mut waiters_count = 0;
+                for _ in &c_lock.rw.borrow().waiters_queue {
+                    waiters_count += 1;
+                }
+
+                assert_eq!(waiters_count, 1);
             })
             .detach();
 

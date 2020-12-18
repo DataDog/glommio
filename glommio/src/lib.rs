@@ -235,7 +235,7 @@
 //!
 //! use std::time::Duration;
 //!
-//! let local_ex = LocalExecutor::make_default();
+//! let local_ex = LocalExecutor::default();
 //! local_ex.run(async {
 //!     let timeout = async {
 //!         Timer::new(Duration::from_secs(10)).await;
@@ -249,6 +249,7 @@
 //! });
 //! ```
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+#![cfg_attr(doc, deny(broken_intra_doc_links))]
 #[macro_use]
 extern crate nix;
 extern crate alloc;
@@ -266,13 +267,37 @@ mod parking;
 mod sys;
 pub mod task;
 
+// unwraps a Result to Poll<T>: if error returns right away.
+//
+// usage is similar to future_lite::ready!
+macro_rules! poll_err {
+    ($e:expr $(,)?) => {
+        match $e {
+            Ok(t) => t,
+            Err(x) => return std::task::Poll::Ready(Err(x)),
+        }
+    };
+}
+
+// unwraps an Option to Poll<T>: if Some returns right away.
+//
+// usage is similar to future_lite::ready!
+macro_rules! poll_some {
+    ($e:expr $(,)?) => {
+        match $e {
+            Some(t) => return std::task::Poll::Ready(t),
+            None => {}
+        }
+    };
+}
+
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
     use crate::executor::{LocalExecutor, Task};
     use futures::future::join_all;
 
-    let local_ex = LocalExecutor::make_default();
+    let local_ex = LocalExecutor::default();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(

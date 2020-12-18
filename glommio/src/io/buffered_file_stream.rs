@@ -14,8 +14,10 @@ use std::convert::TryInto;
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, Waker};
+
+type Result<T> = crate::Result<T, ()>;
 
 pin_project! {
     #[derive(Debug)]
@@ -35,7 +37,7 @@ pin_project! {
         max_pos: u64,
         source: Option<Source>,
         buffer: Buffer,
-        reactor: Rc<Reactor>,
+        reactor: Weak<Reactor>,
     }
 }
 
@@ -48,7 +50,7 @@ pin_project! {
     pub struct Stdin {
         source: Option<Source>,
         buffer: Buffer,
-        reactor: Rc<Reactor>,
+        reactor: Weak<Reactor>,
     }
 }
 
@@ -61,7 +63,7 @@ pin_project! {
 /// use glommio::LocalExecutor;
 /// use futures_lite::AsyncBufReadExt;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 /// ex.run(async {
 ///     let mut sin = stdin();
 ///     loop {
@@ -75,7 +77,7 @@ pub fn stdin() -> Stdin {
     Stdin {
         source: None,
         buffer: Buffer::new(128),
-        reactor: Local::get_reactor(),
+        reactor: Rc::downgrade(&Local::get_reactor()),
     }
 }
 
@@ -87,7 +89,7 @@ enum FileStatus {
 }
 
 #[derive(Debug)]
-/// Provides linear write access to a [`BufferedFile`].     
+/// Provides linear write access to a [`BufferedFile`].
 ///
 /// The [`StreamWriter`] implements [`AsyncWrite`]
 ///
@@ -101,7 +103,7 @@ pub struct StreamWriter {
     source: Option<Source>,
     buffer: Buffer,
     file_status: FileStatus,
-    reactor: Rc<Reactor>,
+    reactor: Weak<Reactor>,
 }
 
 #[derive(Debug)]
@@ -193,7 +195,7 @@ impl Buffer {
 
 impl StreamReader {
     /// Asynchronously closes the underlying file.
-    pub async fn close(self) -> io::Result<()> {
+    pub async fn close(self) -> Result<()> {
         self.file.close().await
     }
 
@@ -204,7 +206,7 @@ impl StreamReader {
             max_pos: builder.end,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
-            reactor: Local::get_reactor(),
+            reactor: Rc::downgrade(&Local::get_reactor()),
         }
     }
 }
@@ -223,7 +225,7 @@ impl StreamReaderBuilder {
     /// use glommio::io::{BufferedFile, StreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = BufferedFile::open("myfile.txt").await.unwrap();
     ///     let _reader = StreamReaderBuilder::new(file).build();
@@ -294,7 +296,7 @@ impl StreamWriterBuilder {
     /// use glommio::io::{BufferedFile, StreamWriterBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = BufferedFile::create("myfile.txt").await.unwrap();
     ///     let _reader = StreamWriterBuilder::new(file).build();
@@ -345,7 +347,7 @@ impl StreamWriter {
             file_pos: 0,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
-            reactor: Local::get_reactor(),
+            reactor: Rc::downgrade(&Local::get_reactor()),
         }
     }
 
@@ -364,7 +366,7 @@ impl StreamWriter {
         assert!(self.source.is_none());
         let bytes = self.buffer.consumed_bytes();
         if !bytes.is_empty() {
-            let source = self.reactor.write_buffered(
+            let source = self.reactor.upgrade().unwrap().write_buffered(
                 self.file.as_ref().unwrap().as_raw_fd(),
                 bytes,
                 self.file_pos,
@@ -385,6 +387,8 @@ impl StreamWriter {
                 None => {
                     let source = self
                         .reactor
+                        .upgrade()
+                        .unwrap()
                         .fdatasync(self.file.as_ref().unwrap().as_raw_fd());
                     source.add_waiter(cx.waker().clone());
                     self.source = Some(source);
@@ -401,7 +405,11 @@ impl StreamWriter {
     fn poll_inner_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.source.take() {
             None => {
-                let source = self.reactor.close(self.file.as_ref().unwrap().as_raw_fd());
+                let source = self
+                    .reactor
+                    .upgrade()
+                    .unwrap()
+                    .close(self.file.as_ref().unwrap().as_raw_fd());
                 source.add_waiter(cx.waker().clone());
                 self.source = Some(source);
                 Poll::Pending
@@ -465,7 +473,11 @@ macro_rules! do_seek {
             }
             SeekFrom::End(pos) => match $self.source.take() {
                 None => {
-                    let source = $self.reactor.statx($fileobj.as_raw_fd(), $fileobj.path());
+                    let source = $self
+                        .reactor
+                        .upgrade()
+                        .unwrap()
+                        .statx($fileobj.as_raw_fd(), $fileobj.path());
                     source.add_waiter($cx.waker().clone());
                     $self.source = Some(source);
                     Poll::Pending
@@ -550,9 +562,11 @@ impl AsyncBufRead for StreamReader {
                 } else {
                     let file_pos = self.file_pos;
                     let fd = self.file.as_raw_fd();
-                    let source =
-                        self.reactor
-                            .read_buffered(fd, file_pos, self.buffer.max_buffer_size);
+                    let source = self.reactor.upgrade().unwrap().read_buffered(
+                        fd,
+                        file_pos,
+                        self.buffer.max_buffer_size,
+                    );
                     source.add_waiter(cx.waker().clone());
                     self.source = Some(source);
                     Poll::Pending
@@ -634,7 +648,7 @@ impl AsyncBufRead for Stdin {
                     let this = self.project();
                     Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                 } else {
-                    let source = self.reactor.read_buffered(
+                    let source = self.reactor.upgrade().unwrap().read_buffered(
                         libc::STDIN_FILENO,
                         0,
                         self.buffer.max_buffer_size,

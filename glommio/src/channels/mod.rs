@@ -22,7 +22,7 @@ mod spsc_queue;
 ///
 /// * The [`LocalReceiver`] never sees an error, as it is implemented as a stream
 ///   interface compatible with [`StreamExt`]. When the sender is no longer available the receiver's call to [`next`] will return [`None`].
-/// * The [`LocalSender`] will return a [`ChannelError`] encapsulating a [`BrokenPipe`] error if it tries to [`send`] into
+/// * The [`LocalSender`] will return a [`GlommioError::Closed(..)`](crate::GlommioError::Closed) if it tries to [`send`] into
 ///   a channel that no longer has a receiver.
 ///
 /// # Examples
@@ -32,7 +32,7 @@ mod spsc_queue;
 /// use glommio::channels::local_channel;
 /// use futures_lite::stream::StreamExt;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let task_queue =
 ///         Local::create_task_queue(
@@ -50,10 +50,9 @@ mod spsc_queue;
 /// [`TaskQueue`]: ../../struct.TaskQueueHandle.html
 /// [`LocalSender`]: struct.LocalSender.html
 /// [`LocalReceiver`]: struct.LocalReceiver.html
-/// [`ChannelError`]: ../struct.ChannelError.html
+/// [`GlommioError`]: ../struct.GlommioError.html
 /// [`send`]: struct.LocalSender.html#method.send
 /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
-/// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
 /// [`channel`]: https://doc.rust-lang.org/std/sync/mpsc/fn.channel.html
 /// [`next`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html#method.next
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
@@ -92,7 +91,7 @@ pub mod local_channel;
 ///
 /// * The [`ConnectedReceiver`] never sees an error, as it is implemented as a stream
 ///   interface compatible with [`StreamExt`]. When the sender is no longer available the receiver's call to [`next`] will return [`None`].
-/// * The [`ConnectedSender`] will return a [`ChannelError`] encapsulating a [`BrokenPipe`] error if it tries to [`send`] into
+/// * The [`ConnectedSender`] will return a [`GlommioError::Closed(..)`](crate::GlommioError::Closed) if it tries to [`send`] into
 ///   a channel that no longer has a receiver.
 ///
 /// # Examples
@@ -127,7 +126,7 @@ pub mod local_channel;
 /// ex1.join().unwrap();
 /// ex2.join().unwrap();
 /// ```
-/// [`ChannelError`]: ../struct.ChannelError.html
+/// [`GlommioError`]: ../struct.GlommioError.html
 /// [`ConnectedSender`]: struct.ConnectedSender.html
 /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
 /// [`SharedSender`]: struct.SharedSender.html
@@ -136,7 +135,6 @@ pub mod local_channel;
 /// [`Sync`]: https://doc.rust-lang.org/std/marker/trait.Sync.html
 /// [`send`]: struct.ConnectedSender.html#method.send
 /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
-/// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
 /// [`channel`]: https://doc.rust-lang.org/std/sync/mpsc/fn.channel.html
 /// [`next`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html#method.next
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html

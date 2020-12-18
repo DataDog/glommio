@@ -17,9 +17,10 @@ pub type Result<T, V> = std::result::Result<T, GlommioError<V>>;
 /// Resource Type used for errors that `WouldBlock` and includes extra
 /// diagnostic data for richer error messages.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ResourceType<T> {
     /// Semaphore resource that includes the requested and available shares
-    /// as debugging metadata.
+    /// as debugging metadata for the [`Semaphore`](crate::sync::Semaphore) type.
     Semaphore {
         /// Requested shares
         requested: u64,
@@ -27,15 +28,24 @@ pub enum ResourceType<T> {
         available: u64,
     },
 
-    /// Lock type
+    /// Lock variant for reporting errors from the [`RwLock`](crate::sync::RwLock) type.
     RwLock,
 
-    /// Channel
+    /// Channel variant for reporting errors from [`local_channel`](crate::channels::local_channel) and
+    /// [`shared_channel`](crate::channels::shared_channel) channel types.
     Channel(T),
+
+    /// File variant used for reporting errors for the Buffered ([`BufferedFile`](crate::io::BufferedFile))
+    /// and Direct ([`DmaFile`](crate::io::DmaFile)) file I/O variants.
+    File {
+        /// Specific message for the error
+        msg: String,
+    },
 }
 
 /// Error variant for executor queues.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum QueueErrorKind {
     /// Queue is still active
     StillActive,
@@ -43,14 +53,39 @@ pub enum QueueErrorKind {
     NotFound,
 }
 
-#[derive(Error)]
 /// Composite error type to encompass all error types glommio produces.
+///
+/// Single error type that will be produced by any public Glommio API
+/// functions. Contains a generic type that is only used for the [ `Channel` ](ResourceType::Channel)
+/// variants. In other cases it can just be replaced with the unit type `()`
+/// and ignored. The variants are broken up into a few common categories such as
+/// [`Closed`](GlommioError::Closed) and [`WouldBlock`](GlommioError::WouldBlock)
+/// as well as a generic [`IoError`](GlommioError::IoError) and an error dedicated to
+/// executor queue errors ([`QueueError`](GlommioError::QueueError)).
+///
+/// # Examples
+///
+/// ```
+/// use glommio::{GlommioError, ResourceType};
+///
+/// fn will_error() -> Result<(), GlommioError<()>> {
+///     Err(GlommioError::WouldBlock(ResourceType::File {
+///         msg: "Error reading a file".to_string(),
+///     }))?
+/// }
+/// assert!(will_error().is_err());
+///
+/// ```
+#[derive(Error)]
+#[non_exhaustive]
 pub enum GlommioError<T> {
-    /// IO error from standard library functions
+    /// IO error from standard library functions or libraries that produce
+    /// std::io::Error's.
     #[error("IO error occurred: {0}")]
     IoError(#[from] io::Error),
 
-    /// Executor queue error variant(s)
+    /// Executor queue error variant(s) for signaling certain error conditions
+    /// inside of the executor.
     #[error("Queue #{index} is {kind}")]
     QueueError {
         /// index of the queue
@@ -70,7 +105,7 @@ pub enum GlommioError<T> {
     /// nonblocking types that need to indicate if they are blocking or not.
     /// This type allows for signaling when a function would otherwise block
     /// for a specific `ResourceType`.
-    #[error("{0} would block")]
+    #[error("{0} operation would block")]
     WouldBlock(ResourceType<T>),
 }
 
@@ -102,18 +137,12 @@ impl fmt::Display for QueueErrorKind {
 impl<T> fmt::Display for ResourceType<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fmt_str = match self {
-            ResourceType::Semaphore {
-                requested,
-                available,
-            } => format!(
-                "Semaphore (requested {} but only {} available)",
-                requested, available
-            ),
+            ResourceType::Semaphore { .. } => "Semaphore".to_string(),
             ResourceType::RwLock => "RwLock".to_string(),
             ResourceType::Channel(_) => "Channel".to_string(),
+            ResourceType::File { .. } => "File".to_string(),
         };
-
-        f.write_str(&fmt_str)
+        write!(f, "{}", &fmt_str)
     }
 }
 
@@ -125,17 +154,19 @@ impl<T> fmt::Display for ResourceType<T> {
 impl<T> Debug for GlommioError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GlommioError::IoError(err) => f.write_fmt(format_args!("{:?}", err)),
+            GlommioError::IoError(err) => write!(f, "{:?}", err),
             GlommioError::Closed(resource) | GlommioError::WouldBlock(resource) => match resource {
                 ResourceType::Semaphore {
                     requested,
                     available,
-                } => f.write_fmt(format_args!(
+                } => write!(
+                    f,
                     "SemaphoreError {{ requested {}, available: {} }}",
                     requested, available
-                )),
-                ResourceType::RwLock => f.write_str("RwLockError {{ .. }}"),
-                ResourceType::Channel(_) => f.write_str("ChannelError {{ .. }}"),
+                ),
+                ResourceType::RwLock => write!(f, "RwLockError {{ .. }}"),
+                ResourceType::Channel(_) => write!(f, "ChannelError {{ .. }}"),
+                ResourceType::File { msg } => write!(f, "File {{ msg: {:?} }}", msg),
             },
             GlommioError::QueueError { index, kind } => f.write_fmt(format_args!(
                 "QueueError {{ index: {}, kind: {:?} }}",
@@ -145,14 +176,13 @@ impl<T> Debug for GlommioError<T> {
     }
 }
 
-/// TODO: finish
 impl<T> From<GlommioError<T>> for io::Error {
     fn from(err: GlommioError<T>) -> Self {
         match err {
             GlommioError::IoError(io_err) => io_err,
             GlommioError::WouldBlock(resource) => io::Error::new(
                 io::ErrorKind::WouldBlock,
-                format!("{} would block", resource),
+                format!("{} operation would block", resource),
             ),
             GlommioError::Closed(resource) => {
                 io::Error::new(io::ErrorKind::BrokenPipe, format!("{} is closed", resource))
@@ -233,7 +263,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Semaphore (requested 0 but only 0 available) is closed")]
+    #[should_panic(expected = "Semaphore is closed")]
     fn semaphore_closed_err_msg() {
         let err: Result<(), ()> = Err(GlommioError::Closed(ResourceType::Semaphore {
             requested: 0,
@@ -250,14 +280,14 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "RwLock would block")]
+    #[should_panic(expected = "RwLock operation would block")]
     fn rwlock_wouldblock_err_msg() {
         let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::RwLock));
         panic!(err.unwrap_err().to_string());
     }
 
     #[test]
-    #[should_panic(expected = "Semaphore (requested 0 but only 0 available) would block")]
+    #[should_panic(expected = "Semaphore operation would block")]
     fn semaphore_wouldblock_err_msg() {
         let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::Semaphore {
             requested: 0,
@@ -267,9 +297,18 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Channel would block")]
+    #[should_panic(expected = "Channel operation would block")]
     fn channel_wouldblock_err_msg() {
         let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::Channel(())));
+        panic!(err.unwrap_err().to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "File operation would block")]
+    fn file_wouldblock_err_msg() {
+        let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::File {
+            msg: "more specific file message".to_string(),
+        }));
         panic!(err.unwrap_err().to_string());
     }
 
@@ -344,5 +383,11 @@ mod test {
             s,
             "Bad file descriptor (os error 9), op: testing enhancer with fd 32"
         );
+    }
+
+    fn will_error() -> Result<(), GlommioError<()>> {
+        Err(GlommioError::WouldBlock(ResourceType::File {
+            msg: "".to_string(),
+        }))?
     }
 }

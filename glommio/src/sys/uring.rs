@@ -63,7 +63,9 @@ enum UringOpDescriptor {
     Timeout(*const uring_sys::__kernel_timespec),
     TimeoutRemove(u64),
     SockSend(*const u8, usize, i32),
+    SockSendMsg(*mut libc::msghdr, i32),
     SockRecv(usize, i32),
+    SockRecvMsg(usize, i32),
 }
 
 #[derive(Debug)]
@@ -353,6 +355,14 @@ where
                 );
             }
 
+            UringOpDescriptor::SockSendMsg(hdr, flags) => {
+                sqe.prep_sendmsg(
+                    op.fd,
+                    hdr,
+                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
+                );
+            }
+
             UringOpDescriptor::SockRecv(len, flags) => {
                 let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
                 sqe.prep_recv(
@@ -364,6 +374,32 @@ where
                 let src = peek_source(from_user_data(op.user_data));
                 match &mut *src.source_type.borrow_mut() {
                     SourceType::SockRecv(slot) => {
+                        *slot = Some(buf);
+                    }
+                    _ => unreachable!(),
+                };
+            }
+
+            UringOpDescriptor::SockRecvMsg(len, flags) => {
+                let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
+                let src = peek_source(from_user_data(op.user_data));
+                match &mut *src.source_type.borrow_mut() {
+                    SourceType::SockRecvMsg(slot, iov, hdr, msg_name) => {
+                        iov.iov_base = buf.as_mut_ptr() as *mut libc::c_void;
+                        iov.iov_len = len;
+
+                        let msg_namelen = std::mem::size_of::<nix::sys::socket::sockaddr_storage>()
+                            as libc::socklen_t;
+                        hdr.msg_name = msg_name.as_mut_ptr() as *mut libc::c_void;
+                        hdr.msg_namelen = msg_namelen;
+                        hdr.msg_iov = iov as *mut libc::iovec;
+                        hdr.msg_iovlen = 1;
+
+                        sqe.prep_recvmsg(
+                            op.fd,
+                            hdr as *mut libc::msghdr,
+                            MsgFlags::from_bits_unchecked(flags),
+                        );
                         *slot = Some(buf);
                     }
                     _ => unreachable!(),
@@ -1108,8 +1144,31 @@ impl Reactor {
         }
     }
 
+    pub(crate) fn sendmsg(&self, source: &Source, flags: MsgFlags) {
+        match &mut *source.source_type_mut() {
+            SourceType::SockSendMsg(_, iov, hdr, addr) => {
+                let (msg_name, msg_namelen) = addr.as_ffi_pair();
+                let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
+
+                hdr.msg_iov = iov as *mut libc::iovec;
+                hdr.msg_iovlen = 1;
+                hdr.msg_name = msg_name;
+                hdr.msg_namelen = msg_namelen;
+
+                let op = UringOpDescriptor::SockSendMsg(hdr, flags.bits());
+                self.queue_standard_request(source, op);
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn recv(&self, source: &Source, len: usize, flags: MsgFlags) {
         let op = UringOpDescriptor::SockRecv(len, flags.bits());
+        self.queue_standard_request(source, op);
+    }
+
+    pub(crate) fn recvmsg(&self, source: &Source, len: usize, flags: MsgFlags) {
+        let op = UringOpDescriptor::SockRecvMsg(len, flags.bits());
         self.queue_standard_request(source, op);
     }
 
@@ -1407,11 +1466,14 @@ mod tests {
     #[test]
     fn allocator() {
         let l = Layout::from_size_align(10 << 20, 4 << 10).unwrap();
-        let mut allocator = unsafe {
+        let (data, mut allocator) = unsafe {
             let data = alloc::alloc::alloc(l) as *mut u8;
             assert_eq!(data as usize & 4095, 0);
             let data = std::ptr::NonNull::new(data).unwrap();
-            BuddyAlloc::new(BuddyAllocParam::new(data.as_ptr(), l.size(), l.align()))
+            (
+                data,
+                BuddyAlloc::new(BuddyAllocParam::new(data.as_ptr(), l.size(), l.align())),
+            )
         };
         let x = allocator.malloc(4096);
         assert_eq!(x as usize & 4095, 0);
@@ -1419,6 +1481,7 @@ mod tests {
         assert_eq!(x as usize & 4095, 0);
         let x = allocator.malloc(1);
         assert_eq!(x as usize & 4095, 0);
+        unsafe { alloc::alloc::dealloc(data.as_ptr(), l) }
     }
 
     #[test]

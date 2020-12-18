@@ -68,7 +68,7 @@ impl Waiter {
             return;
         }
 
-        sem_state.waiters_list.push_front(self.node.clone());
+        sem_state.waiters_list.push_back(self.node.clone());
     }
 }
 
@@ -134,15 +134,17 @@ impl SemaphoreState {
     fn close(&mut self) {
         self.closed = true;
 
-        for node in &self.waiters_list {
-            if let Some(waker) = node.state.borrow_mut().waker.take() {
+        let mut cursor = self.waiters_list.front_mut();
+        while !cursor.is_null() {
+            let node = cursor.remove().unwrap();
+
+            let waker = node.state.borrow_mut().waker.take();
+            if let Some(waker) = waker {
                 waker.wake();
             } else {
-                panic!("Future is linked into the waiting list without a waker")
+                panic!("Future is linked into the waiting list without a waker");
             }
         }
-
-        self.waiters_list.fast_clear();
     }
 
     fn signal(&mut self, units: u64) {
@@ -173,8 +175,7 @@ fn process_wakes(sem: Rc<RefCell<SemaphoreState>>, units: u64) {
 
     let mut available_units = state.avail;
 
-    let mut cursor = state.waiters_list.cursor_mut();
-    cursor.move_next();
+    let mut cursor = state.waiters_list.front_mut();
 
     //only tasks which will be able to proceed will be awaken
     while available_units > 0 {
@@ -263,7 +264,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(1);
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     {
     ///         let permit = sem.acquire_permit(1).await.unwrap();
@@ -291,7 +292,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(1);
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     sem.acquire(1).await.unwrap();
     ///     sem.signal(1); // Has to be signaled explicitly. Be careful
@@ -336,7 +337,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(1);
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///     assert!(sem.try_acquire(1).unwrap());
@@ -383,7 +384,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(1);
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
     ///   let permit = sem.acquire_permit(1).await.unwrap();
@@ -416,7 +417,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(0);
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     // Note that we can signal to expand to more units than the original capacity had.
     ///     sem.signal(1);
@@ -439,7 +440,7 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(0);
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     // Note that we can signal to expand to more units than the original capacity had.
     ///     sem.close();
@@ -660,7 +661,7 @@ mod test {
 
     #[test]
     fn semaphore_overflow() {
-        let ex = LocalExecutor::make_default();
+        let ex = LocalExecutor::default();
         let semaphore = Rc::new(Semaphore::new(0));
         let semaphore_c = semaphore.clone();
 

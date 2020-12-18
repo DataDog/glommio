@@ -3,12 +3,12 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::dma_file::align_down;
 use crate::io::read_result::ReadResult;
 use crate::io::DmaFile;
 use crate::sys::DmaBuffer;
 use crate::task;
 use crate::Local;
+use crate::{io::dma_file::align_down, GlommioError, ResourceType};
 use ahash::AHashMap;
 use core::task::Waker;
 use futures_lite::future::poll_fn;
@@ -58,7 +58,7 @@ impl DmaStreamReaderBuilder {
     /// use glommio::{LocalExecutor, Local};
     /// use std::rc::Rc;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = Rc::new(DmaFile::open("myfile.txt").await.unwrap());
     ///     let _reader = DmaStreamReaderBuilder::from_rc(file.clone()).build();
@@ -97,7 +97,7 @@ impl DmaStreamReaderBuilder {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let _reader = DmaStreamReaderBuilder::new(file).build();
@@ -336,14 +336,14 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
     ///     reader.close().await.unwrap();
     /// });
     /// ```
-    pub async fn close(self) -> io::Result<()> {
+    pub async fn close(self) -> Result<()> {
         let handles = {
             let mut state = self.state.borrow_mut();
             state.cancel_all_in_flight()
@@ -357,7 +357,7 @@ impl DmaStreamReader {
 
         let mut state = self.state.borrow_mut();
         match state.error.take() {
-            Some(err) => Err(err),
+            Some(err) => Err(err.into()),
             None => Ok(()),
         }
     }
@@ -404,7 +404,7 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
@@ -442,7 +442,7 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
@@ -478,7 +478,7 @@ impl DmaStreamReader {
     /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::open("myfile.txt").await.unwrap();
     ///     let mut reader = DmaStreamReaderBuilder::new(file).build();
@@ -494,7 +494,7 @@ impl DmaStreamReader {
     /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
     /// [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html
     /// [`ReadResult`]: struct.ReadResult.html
-    pub async fn get_buffer_aligned(&mut self, len: u64) -> io::Result<ReadResult> {
+    pub async fn get_buffer_aligned(&mut self, len: u64) -> Result<ReadResult> {
         if len == 0 {
             return Ok(ReadResult::empty_buffer());
         }
@@ -507,7 +507,12 @@ impl DmaStreamReader {
         };
 
         if start_id != end_id {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})", len, self.current_pos, buffer_size)));
+            return Err(GlommioError::<()>::WouldBlock(ResourceType::File {
+                msg: format!(
+                "Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})",
+                len, self.current_pos, buffer_size
+            ),
+            }));
         }
 
         let x = poll_fn(|cx| self.get_buffer(cx, len, start_id)).await?;
@@ -611,7 +616,7 @@ impl DmaStreamWriterBuilder {
     /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
     /// use glommio::LocalExecutor;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///     let _reader = DmaStreamWriterBuilder::new(file).build();
@@ -868,7 +873,7 @@ impl DmaStreamWriter {
     /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///     let mut writer = DmaStreamWriterBuilder::new(file).build();
@@ -901,7 +906,7 @@ impl DmaStreamWriter {
     /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///     let mut writer = DmaStreamWriterBuilder::new(file).build();
@@ -938,7 +943,7 @@ impl DmaStreamWriter {
     /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
     ///        let mut writer = DmaStreamWriterBuilder::new(file)

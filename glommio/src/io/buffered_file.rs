@@ -6,9 +6,10 @@
 
 use crate::io::glommio_file::GlommioFile;
 use crate::io::read_result::ReadResult;
-use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+
+type Result<T> = crate::Result<T, ()>;
 
 /// An asynchronously accessed file backed by the OS page cache.
 ///
@@ -53,7 +54,7 @@ impl BufferedFile {
     /// use glommio::io::BufferedFile;
     /// use std::os::unix::io::AsRawFd;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let mut wfile = BufferedFile::create("myfile.txt").await.unwrap();
     ///     let mut rfile = BufferedFile::open("myfile.txt").await.unwrap();
@@ -72,7 +73,7 @@ impl BufferedFile {
     /// Similar to [`create`] in the standard library, but returns a `BufferedFile`
     ///
     /// [`create`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.create
-    pub async fn create<P: AsRef<Path>>(path: P) -> io::Result<BufferedFile> {
+    pub async fn create<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
         let flags = libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
         Ok(BufferedFile {
             file: enhanced_try!(
@@ -87,7 +88,7 @@ impl BufferedFile {
     /// Similar to [`open`] in the standard library, but returns a `BufferedFile`
     ///
     /// [`open`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.open
-    pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<BufferedFile> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
         let flags = libc::O_CLOEXEC | libc::O_RDONLY;
         Ok(BufferedFile {
             file: enhanced_try!(
@@ -113,7 +114,7 @@ impl BufferedFile {
     /// use glommio::LocalExecutor;
     /// use glommio::io::BufferedFile;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = BufferedFile::create("test.txt").await.unwrap();
     ///
@@ -122,9 +123,14 @@ impl BufferedFile {
     ///     file.close().await.unwrap();
     /// });
     /// ```
-    pub async fn write_at(&self, buf: Vec<u8>, pos: u64) -> io::Result<usize> {
-        let source = self.file.reactor.write_buffered(self.as_raw_fd(), buf, pos);
-        enhanced_try!(source.collect_rw().await, "Writing", self.file)
+    pub async fn write_at(&self, buf: Vec<u8>, pos: u64) -> Result<usize> {
+        let source =
+            self.file
+                .reactor
+                .upgrade()
+                .unwrap()
+                .write_buffered(self.as_raw_fd(), buf, pos);
+        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
     }
 
     /// Reads data at the specified position into a buffer allocated by this library.
@@ -135,8 +141,13 @@ impl BufferedFile {
     ///
     /// [`DmaFile`]: struct.DmaFile.html
     /// Reads from a specific position in the file and returns the buffer.
-    pub async fn read_at(&self, pos: u64, size: usize) -> io::Result<ReadResult> {
-        let mut source = self.file.reactor.read_buffered(self.as_raw_fd(), pos, size);
+    pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
+        let mut source =
+            self.file
+                .reactor
+                .upgrade()
+                .unwrap()
+                .read_buffered(self.as_raw_fd(), pos, size);
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         let mut buffer = source.extract_dma_buffer();
         buffer.trim_to_size(read_size);
@@ -145,27 +156,27 @@ impl BufferedFile {
 
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush all writes to the
     /// device, providing durability even if the system crashes or is rebooted.
-    pub async fn fdatasync(&self) -> io::Result<()> {
-        self.file.fdatasync().await
+    pub async fn fdatasync(&self) -> Result<()> {
+        self.file.fdatasync().await.map_err(Into::into)
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as the size argument.
-    pub async fn pre_allocate(&self, size: u64) -> io::Result<()> {
-        self.file.pre_allocate(size).await
+    pub async fn pre_allocate(&self, size: u64) -> Result<()> {
+        self.file.pre_allocate(size).await.map_err(Into::into)
     }
 
     /// Truncates a file to the specified size.
     ///
     /// **Warning:** synchronous operation, will block the reactor
-    pub async fn truncate(&self, size: u64) -> io::Result<()> {
-        self.file.truncate(size).await
+    pub async fn truncate(&self, size: u64) -> Result<()> {
+        self.file.truncate(size).await.map_err(Into::into)
     }
 
     /// rename this file.
     ///
     /// **Warning:** synchronous operation, will block the reactor
-    pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
-        self.file.rename(new_path).await
+    pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
+        self.file.rename(new_path).await.map_err(Into::into)
     }
 
     /// remove this file.
@@ -175,18 +186,18 @@ impl BufferedFile {
     /// as long as it is open.
     ///
     /// **Warning:** synchronous operation, will block the reactor
-    pub async fn remove(&self) -> io::Result<()> {
-        self.file.remove().await
+    pub async fn remove(&self) -> Result<()> {
+        self.file.remove().await.map_err(Into::into)
     }
 
     /// Returns the size of a file, in bytes.
-    pub async fn file_size(&self) -> io::Result<u64> {
-        self.file.file_size().await
+    pub async fn file_size(&self) -> Result<u64> {
+        self.file.file_size().await.map_err(Into::into)
     }
 
     /// Closes this file.
-    pub async fn close(self) -> io::Result<()> {
-        self.file.close().await
+    pub async fn close(self) -> Result<()> {
+        self.file.close().await.map_err(Into::into)
     }
 
     pub(crate) fn path(&self) -> &Path {

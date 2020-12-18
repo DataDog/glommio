@@ -31,7 +31,7 @@ pub struct LocalSender<T> {
 /// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
 ///
@@ -200,7 +200,7 @@ impl<T> LocalChannel<T> {
 /// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
 ///     let h = Local::local(async move {
@@ -223,7 +223,7 @@ pub fn new_unbounded<T>() -> (LocalSender<T>, LocalReceiver<T>) {
 /// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
 ///
-/// let ex = LocalExecutor::make_default();
+/// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, mut receiver) = local_channel::new_bounded(1);
 ///     assert_eq!(sender.is_full(), false);
@@ -241,8 +241,8 @@ pub fn new_bounded<T>(size: usize) -> (LocalSender<T>, LocalReceiver<T>) {
 impl<T> LocalSender<T> {
     /// Sends data into this channel.
     ///
-    /// It returns a [`ChannelError`] encapsulating a [`BrokenPipe`] if the receiver is destroyed.
-    /// It returns a [`ChannelError`] encapsulating a [`WouldBlock`] if this is a bounded channel that has no more capacity
+    /// It returns a [`GlommioError::Closed`] encapsulating a [`BrokenPipe`] if the receiver is destroyed.
+    /// It returns a [`GlommioError::WouldBlock`] encapsulating a [`WouldBlock`] if this is a bounded channel that has no more capacity
     ///
     /// # Examples
     /// ```
@@ -250,7 +250,7 @@ impl<T> LocalSender<T> {
     /// use glommio::channels::local_channel;
     /// use futures_lite::StreamExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, mut receiver) = local_channel::new_bounded(1);
     ///     sender.try_send(0);
@@ -285,7 +285,7 @@ impl<T> LocalSender<T> {
     /// use glommio::{LocalExecutor, Local};
     /// use glommio::channels::local_channel;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, receiver) = local_channel::new_bounded(1);
     ///     sender.send(0).await.unwrap();
@@ -306,7 +306,7 @@ impl<T> LocalSender<T> {
     /// use glommio::{LocalExecutor, Local};
     /// use glommio::channels::local_channel;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, receiver) = local_channel::new_bounded(1);
     ///     assert_eq!(sender.is_full(), false);
@@ -328,7 +328,7 @@ impl<T> LocalSender<T> {
     /// use glommio::channels::local_channel;
     /// use futures_lite::StreamExt;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, mut receiver) = local_channel::new_unbounded();
     ///     sender.try_send(0);
@@ -407,7 +407,7 @@ impl<T> LocalReceiver<T> {
     /// use glommio::{LocalExecutor, Local};
     /// use glommio::channels::local_channel;
     ///
-    /// let ex = LocalExecutor::make_default();
+    /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let (sender, receiver) = local_channel::new_bounded(1);
     ///     sender.send(0).await.unwrap();
