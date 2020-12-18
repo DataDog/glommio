@@ -729,7 +729,7 @@ impl<T> LocalReceiver<T> {
     /// Converts receiver into the ['Stream'] instance.
     /// Each ['Stream'] instance may handle only single receiver and can not be shared
     /// between ['Tasks'].
-    pub fn stream<'a>(&'a self) -> impl Stream<Item = T> + 'a {
+    pub fn stream(&self) -> impl Stream<Item = T> + '_ {
         ChannelStream::new(&self.channel)
     }
 
