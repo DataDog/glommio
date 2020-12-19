@@ -18,9 +18,9 @@ pub trait ByteSliceExt {
     /// # Examples
     ///
     /// ```no_run
+    /// use glommio::ByteSliceExt;
     /// use glommio::LocalExecutor;
     /// use glommio::io::DmaFile;
-    /// use glommio::io::ByteSliceExt;
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -50,9 +50,9 @@ pub trait ByteSliceMutExt {
     /// # Examples
     ///
     /// ```no_run
+    /// use glommio::ByteSliceMutExt;
     /// use glommio::LocalExecutor;
     /// use glommio::io::DmaFile;
-    /// use glommio::io::ByteSliceMutExt;
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {

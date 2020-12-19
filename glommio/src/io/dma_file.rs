@@ -330,8 +330,7 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::io::ByteSliceMutExt;
-    use crate::Local;
+    use crate::{ByteSliceMutExt, Local};
     use std::path::PathBuf;
 
     #[derive(Copy, Clone)]

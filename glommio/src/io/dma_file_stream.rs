@@ -6,10 +6,8 @@
 use crate::io::dma_file::align_down;
 use crate::io::read_result::ReadResult;
 use crate::io::DmaFile;
-use crate::io::{ByteSliceExt, ByteSliceMutExt};
 use crate::sys::DmaBuffer;
-use crate::task;
-use crate::Local;
+use crate::{task, ByteSliceExt, ByteSliceMutExt, Local};
 use ahash::AHashMap;
 use core::task::Waker;
 use futures_lite::future::poll_fn;

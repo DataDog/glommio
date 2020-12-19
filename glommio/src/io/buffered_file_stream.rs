@@ -160,7 +160,7 @@ impl Buffer {
     }
 
     fn replenish_buffer(&mut self, buf: DmaBuffer) {
-        use crate::io::ByteSliceExt;
+        use crate::ByteSliceExt;
         self.buffer_pos = 0;
         self.data.resize(buf.len(), 0u8);
         buf.read_at(0, &mut self.data);

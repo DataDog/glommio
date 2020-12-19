@@ -3,10 +3,9 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::ByteSliceMutExt;
 use crate::parking::Reactor;
 use crate::sys::{self, DmaBuffer, Source, SourceType};
-use crate::Local;
+use crate::{ByteSliceMutExt, Local};
 use futures_lite::future::poll_fn;
 use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use futures_lite::ready;

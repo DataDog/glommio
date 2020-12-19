@@ -105,7 +105,6 @@ macro_rules! enhanced_try {
 
 mod buffered_file;
 mod buffered_file_stream;
-mod byte_slice_ext;
 mod directory;
 mod dma_file;
 mod dma_file_stream;
@@ -139,7 +138,6 @@ pub use self::buffered_file::BufferedFile;
 pub use self::buffered_file_stream::{
     stdin, StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
 };
-pub use self::byte_slice_ext::{ByteSliceExt, ByteSliceMutExt};
 pub use self::directory::Directory;
 pub use self::dma_file::DmaFile;
 pub use self::dma_file_stream::{
