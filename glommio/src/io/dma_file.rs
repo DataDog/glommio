@@ -330,7 +330,7 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::Local;
+    use crate::{ByteSliceMutExt, Local};
     use std::path::PathBuf;
 
     #[derive(Copy, Clone)]
@@ -532,7 +532,7 @@ pub(crate) mod test {
         let read_buf = new_file.read_at(0, 500).await.expect("failed to read");
         std::assert_eq!(read_buf.len(), 500);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf.as_bytes()[i], 42);
+            std::assert_eq!(read_buf[i], 42);
         }
 
         let read_buf = new_file
@@ -541,7 +541,7 @@ pub(crate) mod test {
             .expect("failed to read");
         std::assert_eq!(read_buf.len(), 4096);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf.as_bytes()[i], 42);
+            std::assert_eq!(read_buf[i], 42);
         }
 
         new_file.close().await.expect("failed to close file");

@@ -5,7 +5,7 @@
 //
 use crate::parking::Reactor;
 use crate::sys::{self, DmaBuffer, Source, SourceType};
-use crate::Local;
+use crate::{ByteSliceMutExt, Local};
 use futures_lite::future::poll_fn;
 use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use futures_lite::ready;
