@@ -3,12 +3,12 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::{
     fmt::{self, Debug},
     io,
 };
+use std::{os::unix::io::RawFd, path::Path};
 use thiserror::Error;
 
 /// Result type alias that all Glommio public API functions can use.
@@ -37,10 +37,7 @@ pub enum ResourceType<T> {
 
     /// File variant used for reporting errors for the Buffered ([`BufferedFile`](crate::io::BufferedFile))
     /// and Direct ([`DmaFile`](crate::io::DmaFile)) file I/O variants.
-    File {
-        /// Specific message for the error
-        msg: String,
-    },
+    File,
 }
 
 /// Error variants for executor queues.
@@ -118,12 +115,23 @@ pub enum GlommioError<T> {
     #[error("IO error occurred: {0}")]
     IoError(#[from] io::Error),
 
+    /// Enhanced IO error that gives more information in the error message
+    /// than the basic [`IoError`](GlommioError::IoError). It includes the
+    /// operation, path and file descriptor. It also contains the error
+    /// from the source IO error from `std::io::*`.
     #[error("{source}, op: {op} path: {path:?} with fd: {fd:?}")]
     EnhancedIoError {
+        /// The source error from `std::io::Error`.
         #[source]
         source: io::Error,
+
+        /// The operation that was being attempted.
         op: &'static str,
+
+        /// The path of the file, if relavent.
         path: Option<PathBuf>,
+
+        /// The numeric file descriptor of the relavent resource.
         fd: Option<RawFd>,
     },
 
@@ -145,23 +153,121 @@ pub enum GlommioError<T> {
     #[error("{0} operation would block")]
     WouldBlock(ResourceType<T>),
 
+    /// Reactor error variants. This includes errors specific to the operation
+    /// of the io-uring instances or related.
     #[error("Reactor error: {0}")]
     ReactorError(ReactorErrorKind),
 }
 
+impl GlommioError<()> {
+    pub fn create_enhanced<P: AsRef<Path>>(
+        source: io::Error,
+        op: &'static str,
+        path: Option<P>,
+        fd: Option<RawFd>,
+    ) -> GlommioError<()> {
+        GlommioError::EnhancedIoError {
+            source,
+            op,
+            path: path.map(|path| path.as_ref().to_path_buf()),
+            fd,
+        }
+    }
+}
+
+// impl<T> From<io::Error> for GlommioError<T> {
+//     fn from(err: io::Error) -> Self {
+//         match err.kind() {
+//             io::ErrorKind::BrokenPipe => {}
+//             io::ErrorKind::WouldBlock => {}
+//             _ => {}
+//         }
+//     }
+// }
+
+// impl<T> fmt::Display for GlommioError<T> {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         match self {
+//             GlommioError::IoError(source) => {}
+//             GlommioError::EnhancedIoError {
+//                 source,
+//                 op,
+//                 path,
+//                 fd,
+//             } => {}
+//             GlommioError::ExecutorError(kind) => match kind {
+//                 ExecutorErrorKind::QueueError { index, kind } => match kind {
+//                     QueueErrorKind::StillActive => {}
+//                     QueueErrorKind::NotFound => {}
+//                 },
+//             },
+//             GlommioError::ReactorError(kind) => match kind {
+//                 ReactorErrorKind::IncorrectSourceType => {}
+//             },
+//             GlommioError::Closed(resource) => match resource {
+//                 ResourceType::Semaphore {
+//                     requested,
+//                     available,
+//                 } => {}
+//                 ResourceType::RwLock => {}
+//                 ResourceType::Channel(_) => {}
+//                 ResourceType::File { msg } => {}
+//             },
+//             GlommioError::WouldBlock(resource) => match resource {
+//                 ResourceType::Semaphore {
+//                     requested,
+//                     available,
+//                 } => {}
+//                 ResourceType::RwLock => {}
+//                 ResourceType::Channel(_) => {}
+//                 ResourceType::File { msg } => {}
+//             },
+//         }
+//     }
+// }
+
+// impl<T> std::error::Error for GlommioError<T> {
+//     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+//         match self {
+//             GlommioError::IoError(source) => Some(source),
+//             GlommioError::EnhancedIoError {
+//                 source,
+//                 op,
+//                 path,
+//                 fd,
+//             } => Some(source),
+//             _ => None,
+//         }
+//     }
+// }
+
+impl<T> From<(io::Error, ResourceType<T>)> for GlommioError<T> {
+    fn from(tuple: (io::Error, ResourceType<T>)) -> Self {
+        match tuple.0.kind() {
+            io::ErrorKind::BrokenPipe => GlommioError::Closed(tuple.1),
+            io::ErrorKind::WouldBlock => GlommioError::WouldBlock(tuple.1),
+            _ => tuple.0.into(),
+        }
+    }
+}
+
 impl<T> GlommioError<T> {
     pub(crate) fn queue_still_active(index: usize) -> GlommioError<T> {
-        GlommioError::ExecutorError(QueueError {
+        GlommioError::ExecutorError(ExecutorErrorKind::QueueError {
             index,
             kind: QueueErrorKind::StillActive,
         })
     }
 
     pub(crate) fn queue_not_found(index: usize) -> GlommioError<T> {
-        GlommioError::ExecutorError(QueueError {
+        GlommioError::ExecutorError(ExecutorErrorKind::QueueError {
             index,
             kind: QueueErrorKind::NotFound,
         })
+    }
+
+    pub(crate) fn from_io_error(err: io::Error, resource: ResourceType<T>) -> GlommioError<T> {
+        (err, resource).into()
     }
 }
 
@@ -206,12 +312,13 @@ impl<T> Debug for GlommioError<T> {
                 ),
                 ResourceType::RwLock => write!(f, "RwLockError {{ .. }}"),
                 ResourceType::Channel(_) => write!(f, "ChannelError {{ .. }}"),
-                ResourceType::File { msg } => write!(f, "File {{ msg: {:?} }}", msg),
+                ResourceType::File => write!(f, "File {{ .. }}"),
             },
-            GlommioError::QueueError { index, kind } => f.write_fmt(format_args!(
-                "QueueError {{ index: {}, kind: {:?} }}",
-                index, kind
-            )),
+            GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => f
+                .write_fmt(format_args!(
+                    "QueueError {{ index: {}, kind: {:?} }}",
+                    index, kind
+                )),
             GlommioError::EnhancedIoError {
                 source,
                 op,
@@ -245,19 +352,18 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::Closed(resource) => {
                 io::Error::new(io::ErrorKind::BrokenPipe, format!("{} is closed", resource))
             }
-            GlommioError::ExecutorError(ExecutorErrorKind::QueueError(QueueError {
-                index,
-                kind,
-            })) => match kind {
-                QueueErrorKind::StillActive => io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Queue #{} still active", index),
-                ),
-                QueueErrorKind::NotFound => io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Queue #{} not found", index),
-                ),
-            },
+            GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => {
+                match kind {
+                    QueueErrorKind::StillActive => io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Queue #{} still active", index),
+                    ),
+                    QueueErrorKind::NotFound => io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("Queue #{} not found", index),
+                    ),
+                }
+            }
             GlommioError::EnhancedIoError {
                 source,
                 op,
@@ -376,9 +482,7 @@ mod test {
     #[test]
     #[should_panic(expected = "File operation would block")]
     fn file_wouldblock_err_msg() {
-        let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::File {
-            msg: "more specific file message".to_string(),
-        }));
+        let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::File));
         panic!(err.unwrap_err().to_string());
     }
 

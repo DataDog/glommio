@@ -4,8 +4,8 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
-use crate::io::glommio_file::GlommioFile;
 use crate::io::read_result::ReadResult;
+use crate::{io::glommio_file::GlommioFile, GlommioError};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 
@@ -75,14 +75,10 @@ impl BufferedFile {
     /// [`create`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.create
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
         let flags = libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
-        Ok(BufferedFile {
-            file: enhanced_try!(
-                GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await,
-                "Creating",
-                Some(path.as_ref()),
-                None
-            )?,
-        })
+        GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644)
+            .await
+            .map_err(|source| GlommioError::create_enhanced(source, "Creating", Some(path), None))
+            .map(|file| BufferedFile { file })
     }
 
     /// Similar to [`open`] in the standard library, but returns a `BufferedFile`
@@ -90,14 +86,10 @@ impl BufferedFile {
     /// [`open`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.open
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
         let flags = libc::O_CLOEXEC | libc::O_RDONLY;
-        Ok(BufferedFile {
-            file: enhanced_try!(
-                GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await,
-                "Reading",
-                Some(path.as_ref()),
-                None
-            )?,
-        })
+        GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644)
+            .await
+            .map_err(|source| GlommioError::create_enhanced(source, "Reading", Some(path), None))
+            .map(|file| BufferedFile { file })
     }
 
     /// Write the data in the buffer `buf` to this `BufferedFile` at the specified position
@@ -130,7 +122,14 @@ impl BufferedFile {
                 .upgrade()
                 .unwrap()
                 .write_buffered(self.as_raw_fd(), buf, pos);
-        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+        source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Writing",
+                self.file.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })
     }
 
     /// Reads data at the specified position into a buffer allocated by this library.
@@ -148,7 +147,14 @@ impl BufferedFile {
                 .upgrade()
                 .unwrap()
                 .read_buffered(self.as_raw_fd(), pos, size);
-        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
+        let read_size = source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Reading",
+                self.file.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })?;
         let mut buffer = source.extract_dma_buffer();
         buffer.trim_to_size(read_size);
         Ok(ReadResult::from_whole_buffer(buffer))

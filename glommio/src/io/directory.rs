@@ -3,10 +3,10 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::dma_file::DmaFile;
 use crate::io::glommio_file::GlommioFile;
 use crate::sys;
 use crate::Local;
+use crate::{io::dma_file::DmaFile, GlommioError};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
@@ -31,11 +31,14 @@ impl Directory {
     /// The new object has a different file descriptor and has to be
     /// closed separately.
     pub fn try_clone(&self) -> Result<Directory> {
-        let fd = enhanced_try!(
-            sys::duplicate_file(self.file.as_raw_fd()),
-            "Cloning directory",
-            self.file
-        )?;
+        let fd = sys::duplicate_file(self.file.as_raw_fd()).map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Cloning directory",
+                self.file.path,
+                Some(self.file.as_raw_fd()),
+            )
+        })?;
         let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(self.file.path.clone());
         Ok(Directory { file })
     }
@@ -44,12 +47,14 @@ impl Directory {
     pub fn sync_open<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
         let flags = libc::O_CLOEXEC | libc::O_DIRECTORY;
-        let fd = enhanced_try!(
-            sys::sync_open(&path, flags, 0o755),
-            "Synchronously opening directory",
-            Some(&path),
-            None
-        )?;
+        let fd = sys::sync_open(&path, flags, 0o755).map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Synchronously opening directory",
+                Some(&path),
+                None,
+            )
+        })?;
         let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(Some(path));
         Ok(Directory { file })
     }
@@ -60,12 +65,9 @@ impl Directory {
         let flags = libc::O_DIRECTORY | libc::O_CLOEXEC;
         let reactor = Local::get_reactor();
         let source = reactor.open_at(-1, &path, flags, 0o755);
-        let fd = enhanced_try!(
-            source.collect_rw().await,
-            "Opening directory",
-            Some(&path),
-            None
-        )?;
+        let fd = source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(source, "Opening directory", Some(&path), None)
+        })?;
         let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(Some(path));
         Ok(Directory { file })
     }
@@ -74,13 +76,13 @@ impl Directory {
     ///
     /// NOTE: Path must not contain directories and just be a file name
     pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> Result<DmaFile> {
-        if contains_dir(path.as_ref()) {
+        let var_name = if contains_dir(path.as_ref()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Path cannot contain directories",
             )
             .into());
-        }
+        };
 
         let path = self.file.path_required("open file")?.join(path.as_ref());
         DmaFile::open(path).await
