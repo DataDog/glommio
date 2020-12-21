@@ -3,34 +3,38 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::parking::Reactor;
-use crate::sys::{self, DmaBuffer, Source, SourceType};
-use crate::{ByteSliceMutExt, Local};
+use super::datagram::GlommioDatagram;
 use iou::{InetAddr, SockAddr};
 use socket2::{Domain, Protocol, Socket, Type};
-use std::cell::Cell;
 use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
-use std::os::unix::io::AsRawFd;
-use std::rc::{Rc, Weak};
-
-const DEFAULT_BUFFER_SIZE: usize = 8192;
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 #[derive(Debug)]
 /// An Udp Socket.
 pub struct UdpSocket {
-    reactor: Weak<Reactor>,
-    socket: net::UdpSocket,
+    socket: GlommioDatagram<net::UdpSocket>,
+}
 
-    // you only live once, you've got no time to block! if this is set to true try a direct non-blocking syscall otherwise schedule for sending later over the ring
-    //
-    // If you are familiar with high throughput networking code you might have seen similar
-    // techniques with names such as "optimistic" "speculative" or things like that. But frankly "yolo" is such a
-    // better name. Calling this "yolo" is likely glommio's biggest contribution to humankind.
-    tx_yolo: Cell<bool>,
-    rx_yolo: Cell<bool>,
+impl From<socket2::Socket> for UdpSocket {
+    fn from(socket: socket2::Socket) -> UdpSocket {
+        Self {
+            socket: GlommioDatagram::<net::UdpSocket>::from(socket),
+        }
+    }
+}
 
-    rx_buf_size: usize,
+impl AsRawFd for UdpSocket {
+    fn as_raw_fd(&self) -> RawFd {
+        self.socket.as_raw_fd()
+    }
+}
+
+impl FromRawFd for UdpSocket {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        let socket = socket2::Socket::from_raw_fd(fd);
+        UdpSocket::from(socket)
+    }
 }
 
 impl UdpSocket {
@@ -70,16 +74,8 @@ impl UdpSocket {
         let addr = socket2::SockAddr::from(addr);
         sk.set_reuse_port(true)?;
         sk.bind(&addr)?;
-        let socket = sk.into_udp_socket();
-
-        //let socket = net::UdpSocket::bind(addr)?;
-        let reactor = Local::get_reactor();
         Ok(Self {
-            reactor: Rc::downgrade(&reactor),
-            socket,
-            tx_yolo: Cell::new(true),
-            rx_yolo: Cell::new(true),
-            rx_buf_size: DEFAULT_BUFFER_SIZE,
+            socket: GlommioDatagram::from(sk),
         })
     }
 
@@ -116,7 +112,7 @@ impl UdpSocket {
         for addr in iter {
             let inet = InetAddr::from_std(&addr);
             let addr = SockAddr::new_inet(inet);
-            let reactor = self.reactor.upgrade().unwrap();
+            let reactor = self.socket.reactor.upgrade().unwrap();
             let source = reactor.connect(self.socket.as_raw_fd(), addr);
             match source.collect_rw().await {
                 Ok(_) => return Ok(()),
@@ -128,29 +124,14 @@ impl UdpSocket {
         Err(err)
     }
 
-    async fn consume_receive_buffer(&self, source: &Source, buf: &mut [u8]) -> io::Result<usize> {
-        let sz = source.collect_rw().await?;
-        let src = match source.extract_source_type() {
-            SourceType::SockRecv(mut buf) => {
-                let mut buf = buf.take().unwrap();
-                buf.trim_to_size(sz);
-                buf
-            }
-            _ => unreachable!(),
-        };
-        buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
-        self.rx_yolo.set(true);
-        Ok(sz)
-    }
-
     /// Sets the buffer size used on the receive path
     pub fn set_buffer_size(&mut self, buffer_size: usize) {
-        self.rx_buf_size = buffer_size;
+        self.socket.rx_buf_size = buffer_size;
     }
 
     /// gets the buffer size used
     pub fn buffer_size(&mut self) -> usize {
-        self.rx_buf_size
+        self.socket.rx_buf_size
     }
 
     /// Receives single datagram on the socket from the remote address to which it is connected,
@@ -184,13 +165,7 @@ impl UdpSocket {
     /// [`connect`]: UdpSocket::connect
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         let _ = self.peer_addr()?;
-        let source = self.reactor.upgrade().unwrap().recv(
-            self.socket.as_raw_fd(),
-            buf.len(),
-            iou::MsgFlags::MSG_PEEK,
-        );
-
-        self.consume_receive_buffer(&source, buf).await
+        self.socket.peek(buf).await
     }
 
     ///Receives a single datagram message on the socket, without removing it from the queue. On
@@ -200,13 +175,7 @@ impl UdpSocket {
     /// message bytes. If a message is too long to fit in the supplied buffer, excess bytes may be
     /// discarded.
     pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        let (sz, addr) = match self.yolo_recvmsg(buf, iou::MsgFlags::MSG_PEEK) {
-            Some(res) => res?,
-            None => {
-                self.recv_from_blocking(buf, iou::MsgFlags::MSG_PEEK)
-                    .await?
-            }
-        };
+        let (sz, addr) = self.socket.peek_from(buf).await?;
 
         let addr = match addr {
             nix::sys::socket::SockAddr::Inet(addr) => addr,
@@ -217,12 +186,12 @@ impl UdpSocket {
 
     /// Returns the socket address of the remote peer this socket was connected to.
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.peer_addr()
+        self.socket.socket.peer_addr()
     }
 
     /// Returns the socket address of the local half of this UDP connection.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.local_addr()
+        self.socket.socket.local_addr()
     }
 
     /// Receives a single datagram message on the socket from the remote address to which it is
@@ -256,42 +225,7 @@ impl UdpSocket {
     /// [`connect`]: UdpSocket::connect
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         let _ = self.peer_addr()?;
-
-        match self.yolo_rx(buf) {
-            Some(x) => x,
-            None => {
-                let source = self
-                    .reactor
-                    .upgrade()
-                    .unwrap()
-                    .rushed_recv(self.socket.as_raw_fd(), buf.len())?;
-                self.consume_receive_buffer(&source, buf).await
-            }
-        }
-    }
-
-    async fn recv_from_blocking(
-        &self,
-        buf: &mut [u8],
-        flags: iou::MsgFlags,
-    ) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
-        let source = self.reactor.upgrade().unwrap().rushed_recvmsg(
-            self.socket.as_raw_fd(),
-            buf.len(),
-            flags,
-        )?;
-        let sz = source.collect_rw().await?;
-        match source.extract_source_type() {
-            SourceType::SockRecvMsg(mut src, _iov, hdr, addr) => {
-                let mut src = src.take().unwrap();
-                src.trim_to_size(sz);
-                buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
-                let addr = unsafe { sys::ssptr_to_sockaddr(addr, hdr.msg_namelen as _)? };
-                self.rx_yolo.set(true);
-                Ok((sz, addr))
-            }
-            _ => unreachable!(),
-        }
+        self.socket.recv(buf).await
     }
 
     /// Receives a single datagram message on the socket. On success, returns the number of bytes read and the origin.
@@ -317,33 +251,12 @@ impl UdpSocket {
     /// })
     /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        let (sz, addr) = match self.yolo_recvmsg(buf, iou::MsgFlags::empty()) {
-            Some(res) => res?,
-            None => self.recv_from_blocking(buf, iou::MsgFlags::empty()).await?,
-        };
-
+        let (sz, addr) = self.socket.recv_from(buf).await?;
         let addr = match addr {
             nix::sys::socket::SockAddr::Inet(addr) => addr,
             x => panic!("invalid socket addr for this family!: {:?}", x),
         };
         Ok((sz, addr.to_std()))
-    }
-
-    async fn send_to_blocking(
-        &self,
-        buf: &[u8],
-        sockaddr: nix::sys::socket::SockAddr,
-    ) -> io::Result<usize> {
-        let mut dma = self.allocate_buffer(buf.len());
-        assert_eq!(dma.write_at(0, buf), buf.len());
-        let source = self.reactor.upgrade().unwrap().rushed_sendmsg(
-            self.socket.as_raw_fd(),
-            dma,
-            sockaddr,
-        )?;
-        let ret = source.collect_rw().await?;
-        self.tx_yolo.set(true);
-        Ok(ret)
     }
 
     /// Sends data on the socket to the given address. On success, returns the number of bytes written.
@@ -377,12 +290,8 @@ impl UdpSocket {
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
 
         let inet = nix::sys::socket::InetAddr::from_std(&addr);
-        let mut sockaddr = nix::sys::socket::SockAddr::new_inet(inet);
-
-        match self.yolo_sendmsg(buf, &mut sockaddr) {
-            Some(res) => res,
-            None => self.send_to_blocking(buf, sockaddr).await,
-        }
+        let sockaddr = nix::sys::socket::SockAddr::new_inet(inet);
+        self.socket.send_to(buf, sockaddr).await
     }
 
     /// Sends data on the socket to the remote address to which it is connected.
@@ -406,81 +315,7 @@ impl UdpSocket {
     ///
     /// `[UdpSocket::connect`]: UdpSocket::connect
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        match self.yolo_tx(buf) {
-            Some(r) => r,
-            None => {
-                let mut dma = self.allocate_buffer(buf.len());
-                assert_eq!(dma.write_at(0, buf), buf.len());
-                let source = self
-                    .reactor
-                    .upgrade()
-                    .unwrap()
-                    .rushed_send(self.socket.as_raw_fd(), dma)?;
-                let ret = source.collect_rw().await?;
-                self.tx_yolo.set(true);
-                Ok(ret)
-            }
-        }
-    }
-
-    fn allocate_buffer(&self, size: usize) -> DmaBuffer {
-        self.reactor.upgrade().unwrap().alloc_dma_buffer(size)
-    }
-
-    fn yolo_rx(&self, buf: &mut [u8]) -> Option<io::Result<usize>> {
-        if self.rx_yolo.get() {
-            super::yolo_recv(self.socket.as_raw_fd(), buf)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.rx_yolo.set(false);
-            None
-        })
-    }
-
-    fn yolo_recvmsg(
-        &self,
-        buf: &mut [u8],
-        flags: iou::MsgFlags,
-    ) -> Option<io::Result<(usize, nix::sys::socket::SockAddr)>> {
-        if self.rx_yolo.get() {
-            super::yolo_recvmsg(self.socket.as_raw_fd(), buf, flags)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.rx_yolo.set(false);
-            None
-        })
-    }
-
-    fn yolo_tx(&self, buf: &[u8]) -> Option<io::Result<usize>> {
-        if self.tx_yolo.get() {
-            super::yolo_send(self.socket.as_raw_fd(), buf)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.tx_yolo.set(false);
-            None
-        })
-    }
-
-    fn yolo_sendmsg(
-        &self,
-        buf: &[u8],
-        addr: &mut nix::sys::socket::SockAddr,
-    ) -> Option<io::Result<usize>> {
-        if self.tx_yolo.get() {
-            super::yolo_sendmsg(self.socket.as_raw_fd(), buf, addr)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.tx_yolo.set(false);
-            None
-        })
+        self.socket.send(buf).await
     }
 }
 
@@ -488,6 +323,7 @@ impl UdpSocket {
 mod tests {
     use super::*;
     use crate::timer::Timer;
+    use crate::Local;
     use crate::LocalExecutorBuilder;
     use std::time::Duration;
 
@@ -707,12 +543,14 @@ mod tests {
                 let mut buf = [0u8; 1];
                 for _ in 0..10 {
                     let (sz, _) = receiver
+                        .socket
                         .recv_from_blocking(&mut buf, iou::MsgFlags::MSG_PEEK)
                         .await
                         .unwrap();
                     assert_eq!(sz, 1);
                 }
                 let (_, from) = receiver
+                    .socket
                     .recv_from_blocking(&mut buf, iou::MsgFlags::MSG_PEEK)
                     .await
                     .unwrap();
@@ -762,6 +600,7 @@ mod tests {
             let receive_handle = Task::local(async move {
                 let mut buf = [0u8; 1];
                 let (sz, from) = receiver
+                    .socket
                     .recv_from_blocking(&mut buf, iou::MsgFlags::empty())
                     .await
                     .unwrap();
@@ -809,7 +648,10 @@ mod tests {
             let inet = nix::sys::socket::InetAddr::from_std(&addr);
             let sockaddr = nix::sys::socket::SockAddr::new_inet(inet);
             let me = UdpSocket::bind("127.0.0.1:0").unwrap();
-            me.send_to_blocking(&[65u8; 1], sockaddr).await.unwrap();
+            me.socket
+                .send_to_blocking(&[65u8; 1], sockaddr)
+                .await
+                .unwrap();
 
             receiver.connect(me.local_addr().unwrap()).await.unwrap();
             let mut buf = [0u8; 1];

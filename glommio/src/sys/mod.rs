@@ -113,7 +113,16 @@ pub(crate) unsafe fn ssptr_to_sockaddr(
     ss: MaybeUninit<nix::sys::socket::sockaddr_storage>,
     len: usize,
 ) -> io::Result<nix::sys::socket::SockAddr> {
-    nix::sys::socket::sockaddr_storage_to_addr(&ss.assume_init(), len).map_err(|e| {
+    let storage = ss.assume_init();
+    // unnamed unix sockets have a len of 0. Technically we should make sure this has
+    // family = AF_UNIX, but if len == 0 the OS may not have written anything here. If this
+    // is not supposed to be unix, the upper layers will complain.
+    if len == 0 {
+        nix::sys::socket::SockAddr::new_unix("")
+    } else {
+        nix::sys::socket::sockaddr_storage_to_addr(&storage, len)
+    }
+    .map_err(|e| {
         let err_no = e.as_errno();
         match err_no {
             Some(err_no) => io::Error::from_raw_os_error(err_no as _),
@@ -239,7 +248,6 @@ pub(crate) enum SourceType {
         libc::msghdr,
         nix::sys::socket::SockAddr,
     ),
-    PollableFd,
     Open(CString),
     FdataSync,
     Fallocate,

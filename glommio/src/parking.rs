@@ -496,19 +496,6 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn insert_pollable_io(&self, raw: RawFd) -> io::Result<Source> {
-        let source = self.new_source(raw, SourceType::PollableFd);
-        self.sys.insert(raw)?;
-        Ok(source)
-    }
-
-    /*
-    /// Deregisters an I/O source from the reactor.
-    pub(crate) fn cancel_io(&self, source: &Source) {
-        self.sys.cancel_io(source)
-    }
-    */
-
     /// Registers a timer in the reactor.
     ///
     /// Returns the registered timer's ID.
@@ -628,34 +615,6 @@ impl Source {
             }
 
             self.add_waiter(cx.waker().clone());
-            Poll::Pending
-        })
-        .await
-    }
-
-    /// Waits until the I/O source is readable.
-    pub(crate) async fn readable(&self) -> io::Result<()> {
-        future::poll_fn(|cx| {
-            if self.take_result().is_some() {
-                return Poll::Ready(Ok(()));
-            }
-
-            self.add_waiter(cx.waker().clone());
-            Local::get_reactor().sys.interest(self, true, false);
-            Poll::Pending
-        })
-        .await
-    }
-
-    /// Waits until the I/O source is writable.
-    pub(crate) async fn writable(&self) -> io::Result<()> {
-        future::poll_fn(|cx| {
-            if self.take_result().is_some() {
-                return Poll::Ready(Ok(()));
-            }
-
-            self.add_waiter(cx.waker().clone());
-            Local::get_reactor().sys.interest(self, false, true);
             Poll::Pending
         })
         .await

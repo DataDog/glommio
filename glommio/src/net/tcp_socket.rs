@@ -3,9 +3,9 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use super::stream::GlommioStream;
 use crate::parking::Reactor;
-use crate::sys::{self, DmaBuffer, Source, SourceType};
-use crate::{ByteSliceMutExt, Local};
+use crate::Local;
 use futures_lite::future::poll_fn;
 use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use futures_lite::ready;
@@ -20,8 +20,6 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
-
-const DEFAULT_BUFFER_SIZE: usize = 8192;
 
 #[derive(Debug)]
 /// A TCP socket server, listening for connections.
@@ -265,22 +263,8 @@ impl AcceptedTcpStream {
     /// });
     /// ```
     pub fn bind_to_executor(self) -> TcpStream {
-        let reactor = Local::get_reactor();
-
-        let socket = unsafe { Socket::from_raw_fd(self.fd as _) };
-        let stream = socket.into_tcp_stream();
-        let source_tx = None;
-        let source_rx = None;
         TcpStream {
-            reactor: Rc::downgrade(&reactor),
-            stream,
-            source_tx,
-            source_rx,
-            tx_yolo: true,
-            rx_yolo: true,
-            rx_buf: None,
-            tx_buf: None,
-            rx_buf_size: DEFAULT_BUFFER_SIZE,
+            stream: unsafe { GlommioStream::from_raw_fd(self.fd) },
         }
     }
 }
@@ -293,46 +277,30 @@ pin_project! {
     /// [`AsyncRead`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncRead.html
     /// [`AsyncBufRead`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncBufRead.html
     /// [`AsyncWrite`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncWrite.html
+
     pub struct TcpStream {
-        reactor: Weak<Reactor>,
-        stream: net::TcpStream,
-        source_tx: Option<Source>,
-        source_rx: Option<Source>,
-
-        // you only live once, you've got no time to block! if this is set to true try a direct non-blocking syscall otherwise schedule for sending later over the ring
-        //
-        // If you are familiar with high throughput networking code you might have seen similar
-        // techniques with names such as "optimistic" "speculative" or things like that. But frankly "yolo" is such a
-        // better name. Calling this "yolo" is likely glommio's biggest contribution to humankind.
-        tx_yolo: bool,
-        rx_yolo: bool,
-
-        rx_buf: Option<DmaBuffer>,
-        tx_buf: Option<DmaBuffer>,
-
-        rx_buf_size: usize,
+        stream: GlommioStream<net::TcpStream>
     }
 }
 
-use std::convert::TryFrom;
-
-struct RecvBuffer {
-    buf: DmaBuffer,
+impl From<socket2::Socket> for TcpStream {
+    fn from(socket: socket2::Socket) -> TcpStream {
+        Self {
+            stream: GlommioStream::<net::TcpStream>::from(socket),
+        }
+    }
 }
 
-impl TryFrom<Source> for RecvBuffer {
-    type Error = io::Error;
+impl AsRawFd for TcpStream {
+    fn as_raw_fd(&self) -> RawFd {
+        self.stream.as_raw_fd()
+    }
+}
 
-    fn try_from(source: Source) -> io::Result<RecvBuffer> {
-        match source.extract_source_type() {
-            SourceType::SockRecv(mut buf) => {
-                let sz = source.take_result().unwrap()?;
-                let mut buf = buf.take().unwrap();
-                buf.trim_to_size(sz);
-                Ok(RecvBuffer { buf })
-            }
-            _ => unreachable!(),
-        }
+impl FromRawFd for TcpStream {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        let socket = socket2::Socket::from_raw_fd(fd);
+        TcpStream::from(socket)
     }
 }
 
@@ -367,65 +335,32 @@ impl TcpStream {
 
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
-        let stream = socket.into_tcp_stream();
 
-        let source_tx = None;
-        let source_rx = None;
-        Ok(Self {
-            reactor: Rc::downgrade(&reactor),
-            stream,
-            source_rx,
-            source_tx,
-            tx_yolo: true,
-            rx_yolo: true,
-            rx_buf: None,
-            tx_buf: None,
-            rx_buf_size: DEFAULT_BUFFER_SIZE,
+        Ok(TcpStream {
+            stream: GlommioStream::from(socket),
         })
-    }
-
-    fn consume_receive_buffer(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
-        if let Some(src) = self.rx_buf.as_mut() {
-            let sz = std::cmp::min(src.len(), buf.len());
-            buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
-            src.trim_front(sz);
-            if src.is_empty() {
-                self.rx_buf.take();
-            }
-            Some(Ok(sz))
-        } else {
-            None
-        }
-    }
-
-    // io_uring has support for shutdown now but it is not in any released kernel.
-    // Even with my "let's use latest" policy it would be crazy to mandate a kernel
-    // that doesn't even exist. So in preparation for that we'll sync-emulate this but
-    // already on an async wrapper
-    fn poll_shutdown(&self, _cx: &mut Context<'_>, how: Shutdown) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), how))
     }
 
     /// Shuts down the read, write, or both halves of this connection.
     pub async fn shutdown(&self, how: Shutdown) -> io::Result<()> {
-        poll_fn(|cx| self.poll_shutdown(cx, how)).await
+        poll_fn(|cx| self.stream.poll_shutdown(cx, how)).await
     }
 
     /// Sets the `TCP_NODELAY` option to this socket.
     ///
     /// Setting this to true disabled the Nagle algorithm.
     pub fn set_nodelay(&mut self, value: bool) -> io::Result<()> {
-        self.stream.set_nodelay(value)
+        self.stream.stream.set_nodelay(value)
     }
 
     /// Sets the buffer size used on the receive path
     pub fn set_buffer_size(&mut self, buffer_size: usize) {
-        self.rx_buf_size = buffer_size;
+        self.stream.rx_buf_size = buffer_size;
     }
 
     /// gets the buffer size used
     pub fn buffer_size(&mut self) -> usize {
-        self.rx_buf_size
+        self.stream.rx_buf_size
     }
 
     /// Receives data on the socket from the remote address to which it is connected, without removing that data from the queue.
@@ -433,22 +368,7 @@ impl TcpStream {
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        let source = self.reactor.upgrade().unwrap().recv(
-            self.stream.as_raw_fd(),
-            buf.len(),
-            iou::MsgFlags::MSG_PEEK,
-        );
-
-        let sz = source.collect_rw().await?;
-        match source.extract_source_type() {
-            SourceType::SockRecv(mut src) => {
-                let mut src = src.take().unwrap();
-                src.trim_to_size(sz);
-                buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
-            }
-            _ => unreachable!(),
-        }
-        Ok(sz)
+        self.stream.peek(buf).await
     }
 
     /// Returns the socket address of the remote peer of this TCP connection.
@@ -466,7 +386,7 @@ impl TcpStream {
     /// })
     /// ```
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.peer_addr()
+        self.stream.stream.peer_addr()
     }
 
     /// Returns the socket address of the local half of this TCP connection.
@@ -484,84 +404,7 @@ impl TcpStream {
     /// })
     /// ```
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.local_addr()
-    }
-
-    fn allocate_buffer(&self, size: usize) -> DmaBuffer {
-        self.reactor.upgrade().unwrap().alloc_dma_buffer(size)
-    }
-
-    fn yolo_rx(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
-        if self.rx_yolo {
-            super::yolo_recv(self.stream.as_raw_fd(), buf)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.rx_yolo = false;
-            None
-        })
-    }
-
-    fn yolo_tx(&mut self, buf: &[u8]) -> Option<io::Result<usize>> {
-        if self.tx_yolo {
-            super::yolo_send(self.stream.as_raw_fd(), buf)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.tx_yolo = false;
-            None
-        })
-    }
-
-    fn poll_replenish_buffer(
-        &mut self,
-        cx: &mut Context<'_>,
-        size: usize,
-    ) -> Poll<io::Result<usize>> {
-        let source = match self.source_rx.take() {
-            Some(source) => source,
-            None => poll_err!(self
-                .reactor
-                .upgrade()
-                .unwrap()
-                .rushed_recv(self.stream.as_raw_fd(), size)),
-        };
-
-        if !source.has_result() {
-            source.add_waiter(cx.waker().clone());
-            self.source_rx = Some(source);
-            Poll::Pending
-        } else {
-            let buf = poll_err!(RecvBuffer::try_from(source));
-            self.rx_yolo = true;
-            self.rx_buf = Some(buf.buf);
-            Poll::Ready(Ok(self.rx_buf.as_ref().unwrap().len()))
-        }
-    }
-
-    fn write_dma(&mut self, cx: &mut Context<'_>, buf: DmaBuffer) -> Poll<io::Result<usize>> {
-        let source = match self.source_tx.take() {
-            Some(source) => source,
-            None => poll_err!(self
-                .reactor
-                .upgrade()
-                .unwrap()
-                .rushed_send(self.stream.as_raw_fd(), buf)),
-        };
-
-        match source.take_result() {
-            None => {
-                source.add_waiter(cx.waker().clone());
-                self.source_tx = Some(source);
-                Poll::Pending
-            }
-            Some(res) => {
-                self.tx_yolo = true;
-                Poll::Ready(res)
-            }
-        }
+        self.stream.stream.local_addr()
     }
 }
 
@@ -570,21 +413,16 @@ impl AsyncBufRead for TcpStream {
         mut self: Pin<&'a mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
-        let buf_size = self.rx_buf_size;
-        if self.rx_buf.as_ref().is_none() {
-            poll_err!(ready!(self.poll_replenish_buffer(cx, buf_size)));
+        let buf_size = self.stream.rx_buf_size;
+        if self.stream.rx_buf.as_ref().is_none() {
+            poll_err!(ready!(self.stream.poll_replenish_buffer(cx, buf_size)));
         }
         let this = self.project();
-        Poll::Ready(Ok(this.rx_buf.as_ref().unwrap().as_bytes()))
+        Poll::Ready(Ok(this.stream.rx_buf.as_ref().unwrap().as_bytes()))
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        let buf_ref = self.rx_buf.as_mut().unwrap();
-        let amt = std::cmp::min(amt, buf_ref.len());
-        buf_ref.trim_front(amt);
-        if buf_ref.is_empty() {
-            self.rx_buf.take();
-        }
+        Pin::new(&mut self.stream).consume(amt)
     }
 }
 
@@ -594,11 +432,7 @@ impl AsyncRead for TcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        poll_some!(self.consume_receive_buffer(buf));
-        poll_some!(self.yolo_rx(buf));
-        poll_err!(ready!(self.poll_replenish_buffer(cx, buf.len())));
-        poll_some!(self.consume_receive_buffer(buf));
-        unreachable!();
+        Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
 
@@ -608,19 +442,15 @@ impl AsyncWrite for TcpStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_some!(self.yolo_tx(buf));
-        let mut dma = self.allocate_buffer(buf.len());
-        assert_eq!(dma.write_at(0, buf), buf.len());
-        self.write_dma(cx, dma)
+        Pin::new(&mut self.stream).poll_write(cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.source_tx.take();
-        Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), Shutdown::Write))
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_close(cx)
     }
 }
 
