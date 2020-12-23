@@ -76,7 +76,7 @@ impl Directory {
     ///
     /// NOTE: Path must not contain directories and just be a file name
     pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> Result<DmaFile> {
-        let var_name = if contains_dir(path.as_ref()) {
+        if contains_dir(path.as_ref()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Path cannot contain directories",
