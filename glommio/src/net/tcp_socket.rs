@@ -21,8 +21,6 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
-const DEFAULT_BUFFER_SIZE: usize = 8192;
-
 type Result<T> = crate::Result<T, ()>;
 
 #[derive(Debug)]
@@ -139,7 +137,7 @@ impl TcpListener {
     /// [`AcceptedTcpStream`]: struct.AcceptedTcpStream.html
     /// [`TcpStream`]: struct.TcpStream.html
     /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-    pub async fn shared_accept(&self) -> io::Result<AcceptedTcpStream> {
+    pub async fn shared_accept(&self) -> Result<AcceptedTcpStream> {
         let reactor = self.reactor.upgrade().unwrap();
         let source = reactor.accept(self.listener.as_raw_fd());
         let fd = source.collect_rw().await?;
@@ -346,15 +344,17 @@ impl TcpStream {
     }
 
     /// Shuts down the read, write, or both halves of this connection.
-    pub async fn shutdown(&self, how: Shutdown) -> io::Result<()> {
-        poll_fn(|cx| self.stream.poll_shutdown(cx, how)).await
+    pub async fn shutdown(&self, how: Shutdown) -> Result<()> {
+        poll_fn(|cx| self.stream.poll_shutdown(cx, how))
+            .await
+            .map_err(Into::into)
     }
 
     /// Sets the `TCP_NODELAY` option to this socket.
     ///
     /// Setting this to true disabled the Nagle algorithm.
-    pub fn set_nodelay(&mut self, value: bool) -> io::Result<()> {
-        self.stream.stream.set_nodelay(value)
+    pub fn set_nodelay(&mut self, value: bool) -> Result<()> {
+        self.stream.stream.set_nodelay(value).map_err(Into::into)
     }
 
     /// Sets the buffer size used on the receive path
@@ -371,8 +371,8 @@ impl TcpStream {
     ///
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
-    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stream.peek(buf).await
+    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
+        self.stream.peek(buf).await.map_err(Into::into)
     }
 
     /// Returns the socket address of the remote peer of this TCP connection.
@@ -389,8 +389,8 @@ impl TcpStream {
     ///     println!("My peer: {:?}", stream.peer_addr());
     /// })
     /// ```
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.stream.peer_addr()
+    pub fn peer_addr(&self) -> Result<SocketAddr> {
+        self.stream.stream.peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this TCP connection.
@@ -407,8 +407,8 @@ impl TcpStream {
     ///     println!("My peer: {:?}", stream.local_addr());
     /// })
     /// ```
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.stream.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.stream.stream.local_addr().map_err(Into::into)
     }
 }
 
