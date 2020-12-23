@@ -363,7 +363,7 @@ impl<T: 'static> DeadlineQueue<T> {
         };
 
         let tq = Local::create_task_queue(Shares::Dynamic(queue.clone()), lat, name);
-        let (sender, mut receiver): (LocalSender<QueueItem<T>>, LocalReceiver<QueueItem<T>>) =
+        let (sender, receiver): (LocalSender<QueueItem<T>>, LocalReceiver<QueueItem<T>>) =
             local_channel::new_bounded(1);
 
         let (response_sender, responder): (LocalSender<T>, LocalReceiver<T>) =
@@ -374,7 +374,8 @@ impl<T: 'static> DeadlineQueue<T> {
         let handle = Local::local_into(
             enclose! { (queue_weak) async move {
                 let response = Rc::new(response_sender);
-                while let Some(request) = receiver.next().await {
+                let mut stream = receiver.stream();
+                while let Some(request) = stream.next().await {
                     let res = request.action().await;
                     // now that we have executed the action, pop it from
                     // the queue. We must do it regardless of whether or not

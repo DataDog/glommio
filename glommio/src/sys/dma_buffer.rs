@@ -149,81 +149,18 @@ impl DmaBuffer {
     pub fn as_ptr(&self) -> *const u8 {
         unsafe { self.storage.as_ptr().add(self.trim) }
     }
+}
 
-    /// Reads data from this buffer into a user-provided byte slice, starting at a particular
-    /// offset
-    ///
-    /// ## Returns
-    ///
-    /// The amount of bytes read.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use glommio::LocalExecutor;
-    /// use glommio::io::DmaFile;
-    ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async {
-    ///     let file = DmaFile::create("test.txt").await.unwrap();
-    ///     let buf = file.alloc_dma_buffer(4096);
-    ///     let mut vec = vec![0; 64];
-    ///     let n = buf.read_at(0, &mut vec);
-    ///     assert_eq!(n, 64); // read 64 bytes, the size of the buffer
-    ///
-    ///     let n = buf.read_at(4090, &mut vec);
-    ///     assert_eq!(n, 6);  // read 6 bytes, as there are only 6 bytes left from this offset
-    ///     file.close().await.unwrap();
-    /// });
-    /// ```
-    pub fn read_at(&self, offset: usize, dst: &mut [u8]) -> usize {
-        if offset > self.size {
-            return 0;
-        }
-        let len = std::cmp::min(dst.len(), self.size - offset);
-        let me = &self.as_bytes()[offset..offset + len];
-        dst[0..len].copy_from_slice(me);
-        len
+impl AsRef<[u8]> for DmaBuffer {
+    #[inline(always)]
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
     }
+}
 
-    /// Writes data to this buffer from a user-provided byte slice, starting at a particular
-    /// offset
-    ///
-    /// ## Returns
-    ///
-    /// The amount of bytes written.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use glommio::LocalExecutor;
-    /// use glommio::io::DmaFile;
-    ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async {
-    ///     let file = DmaFile::create("test.txt").await.unwrap();
-    ///     let mut buf = file.alloc_dma_buffer(4096);
-    ///     let vec = vec![1; 64];
-    ///     let n = buf.write_at(0, &vec);
-    ///     assert_eq!(n, 64); // wrote 64 bytes.
-    ///
-    ///     let n = buf.write_at(4090, &vec);
-    ///     assert_eq!(n, 6);  // wrote 6 bytes, as there are only 6 bytes left from this offset
-    ///     file.close().await.unwrap();
-    /// });
-    /// ```
-    pub fn write_at(&mut self, offset: usize, src: &[u8]) -> usize {
-        if offset > self.size {
-            return 0;
-        }
-        let len = std::cmp::min(src.len(), self.size - offset);
-        let me = &mut self.as_bytes_mut()[offset..offset + len];
-        me.copy_from_slice(&src[0..len]);
-        len
-    }
-
-    /// Writes the specified value into all bytes of this buffer
-    pub fn memset(&mut self, value: u8) {
-        unsafe { std::ptr::write_bytes(self.as_mut_ptr(), value, self.size) }
+impl AsMut<[u8]> for DmaBuffer {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.as_bytes_mut()
     }
 }

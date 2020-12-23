@@ -6,9 +6,10 @@
 use crate::io::read_result::ReadResult;
 use crate::io::DmaFile;
 use crate::sys::DmaBuffer;
-use crate::task;
-use crate::Local;
-use crate::{io::dma_file::align_down, GlommioError, ResourceType};
+use crate::{
+    io::dma_file::align_down, task, ByteSliceExt, ByteSliceMutExt, GlommioError, Local,
+    ResourceType,
+};
 use ahash::AHashMap;
 use core::task::Waker;
 use futures_lite::future::poll_fn;
@@ -485,7 +486,7 @@ impl DmaStreamReader {
     ///     assert_eq!(reader.current_pos(), 0);
     ///     let result = reader.get_buffer_aligned(512).await.unwrap();
     ///     assert_eq!(result.len(), 512);
-    ///     println!("First 512 bytes: {:?}", result.as_bytes());
+    ///     println!("First 512 bytes: {:?}", &*result);
     ///     reader.close().await.unwrap();
     /// });
     /// ```
@@ -507,12 +508,10 @@ impl DmaStreamReader {
         };
 
         if start_id != end_id {
-            return Err(GlommioError::<()>::WouldBlock(ResourceType::File {
-                msg: format!(
+            return Err(GlommioError::<()>::WouldBlock(ResourceType::File(format!(
                 "Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})",
                 len, self.current_pos, buffer_size
-            ),
-            }));
+            ))));
         }
 
         let x = poll_fn(|cx| self.get_buffer(cx, len, start_id)).await?;
@@ -540,7 +539,9 @@ impl DmaStreamReader {
             Some(buffer) => {
                 let offset = state.offset_of(self.current_pos);
                 let len = std::cmp::min(len as usize, buffer.len() - offset);
-                Poll::Ready(buffer.slice(offset, len))
+                Poll::Ready(ReadResult::slice(buffer, offset, len).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "buffer offset out of range").into()
+                }))
             }
         }
     }
@@ -961,7 +962,7 @@ impl DmaStreamWriter {
     ///     writer.close().await.unwrap();
     /// });
     /// ```
-    pub async fn sync(&self) -> io::Result<u64> {
+    pub async fn sync(&self) -> Result<u64> {
         let (mut pending, file_pos_at_sync_time) = {
             let mut state = self.state.borrow_mut();
             (state.current_pending(), state.file_pos)
@@ -1359,13 +1360,13 @@ mod test {
 
         let buffer = reader.get_buffer_aligned(24).await.unwrap();
         assert_eq!(buffer.len(), 24);
-        check_contents!(buffer.as_bytes(), 0);
+        check_contents!(*buffer, 0);
 
         reader.skip(980);
 
         let buffer = reader.get_buffer_aligned(8).await.unwrap();
         assert_eq!(buffer.len(), 8);
-        check_contents!(buffer.as_bytes(), 1004);
+        check_contents!(*buffer, 1004);
 
         match reader.get_buffer_aligned(20).await {
             Err(_) => {},
@@ -1375,7 +1376,7 @@ mod test {
         reader.skip((128 << 10) - 1012);
         let eof_short_buffer = reader.get_buffer_aligned(4).await.unwrap();
         assert_eq!(eof_short_buffer.len(), 2);
-        check_contents!(eof_short_buffer.as_bytes(), 131072);
+        check_contents!(*eof_short_buffer, 131072);
 
         reader.close().await.unwrap();
     });
@@ -1387,7 +1388,6 @@ mod test {
 
         let buffer = reader.get_buffer_aligned(0).await.unwrap();
         assert_eq!(buffer.len(), 0);
-        assert_eq!(buffer.as_bytes().len(), 0);
         reader.close().await.unwrap();
     });
 
@@ -1398,7 +1398,7 @@ mod test {
 
         let buffer = reader.get_buffer_aligned(131072).await.unwrap();
         assert_eq!(buffer.len(), 131072);
-        check_contents!(buffer.as_bytes(), 0);
+        check_contents!(*buffer, 0);
         reader.close().await.unwrap();
     });
 
@@ -1409,7 +1409,7 @@ mod test {
 
         let buffer = reader.get_buffer_aligned(24).await.unwrap();
         assert_eq!(buffer.len(), 24);
-        check_contents!(buffer.as_bytes(), 0);
+        check_contents!(*buffer, 0);
 
         let mut buf = [0u8; 2000];
         reader.read_exact(&mut buf).await.unwrap();

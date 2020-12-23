@@ -281,18 +281,18 @@ mod test {
 
         let rb = reader.read_at(0, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        check_contents!(rb.as_bytes(), 0);
+        check_contents!(*rb, 0);
 
         // Can read again from the same position
         let rb = reader.read_at(0, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        check_contents!(rb.as_bytes(), 0);
+        check_contents!(*rb, 0);
 
         // Can read again from a random, unaligned position, and will hit
         // EOF.
         let rb = reader.read_at(3, 6).await.unwrap();
         assert_eq!(rb.len(), 3);
-        check_contents!(rb.as_bytes()[0..3], 3);
+        check_contents!(rb[0..3], 3);
 
         writer.close().await.unwrap();
         reader.close().await.unwrap();
@@ -312,13 +312,13 @@ mod test {
 
         let rb = reader.read_at(0, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        for i in rb.as_bytes() {
+        for i in rb.iter() {
             assert_eq!(*i, 0);
         }
 
         let rb = reader.read_at(10, 6).await.unwrap();
         assert_eq!(rb.len(), 6);
-        check_contents!(rb.as_bytes(), 0);
+        check_contents!(*rb, 0);
 
         writer.close().await.unwrap();
         reader.close().await.unwrap();

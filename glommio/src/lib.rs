@@ -366,6 +366,7 @@ macro_rules! make_shared_var_mut {
     }
 }
 
+mod byte_slice_ext;
 pub mod channels;
 pub mod controllers;
 mod error;
@@ -379,6 +380,7 @@ mod shares;
 pub mod sync;
 pub mod timer;
 
+pub use crate::byte_slice_ext::{ByteSliceExt, ByteSliceMutExt};
 pub use crate::error::{GlommioError, QueueErrorKind, ResourceType, Result};
 pub use crate::executor::{
     ExecutorStats, LocalExecutor, LocalExecutorBuilder, Task, TaskQueueHandle, TaskQueueStats,
@@ -393,8 +395,8 @@ pub use scopeguard::defer;
 pub mod prelude {
     #[doc(no_inline)]
     pub use crate::{
-        error::GlommioError, Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares,
-        TaskQueueHandle,
+        error::GlommioError, ByteSliceExt, ByteSliceMutExt, Latency, Local, LocalExecutor,
+        LocalExecutorBuilder, Shares, TaskQueueHandle,
     };
 }
 

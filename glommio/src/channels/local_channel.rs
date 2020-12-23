@@ -5,12 +5,17 @@
 //
 use crate::channels::ChannelCapacity;
 use crate::{GlommioError, ResourceType};
-use futures_lite::{future, stream::Stream};
+use futures_lite::{stream::Stream, Future};
 use std::task::{Context, Poll, Waker};
 use std::{cell::RefCell, pin::Pin, rc::Rc};
 
-use intrusive_collections::intrusive_adapter;
+use intrusive_collections::linked_list::LinkOps;
+use intrusive_collections::{container_of, offset_of, Adapter, PointerOps};
 use intrusive_collections::{LinkedList, LinkedListLink};
+
+use std::collections::VecDeque;
+use std::marker::PhantomPinned;
+use std::ptr::NonNull;
 
 #[derive(Debug)]
 /// Send endpoint to the `local_channel`
@@ -36,7 +41,7 @@ pub struct LocalSender<T> {
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
 ///
 ///     let h = Local::local(async move {
-///         let sum = receiver.fold(0, |acc, x| acc + x).await;
+///         let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
 ///         assert_eq!(sum, 45);
 ///     }).detach();
 ///
@@ -51,28 +56,242 @@ pub struct LocalSender<T> {
 /// [`StreamExt`]: https://docs.rs/futures/0.3.6/futures/stream/trait.StreamExt.html
 pub struct LocalReceiver<T> {
     channel: LocalChannel<T>,
+    node: WaiterNode,
+}
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+enum WaiterKind {
+    SENDER,
+    RECEIVER,
+}
+
+#[derive(Debug)]
+struct Waiter<'a, T, F> {
+    node: WaiterNode,
+    channel: &'a LocalChannel<T>,
+
+    poll_fn: F,
+}
+
+#[derive(Debug)]
+enum PollResult<T> {
+    Pending(WaiterKind),
+    Ready(T),
+}
+
+impl<'a, T, F, R> Waiter<'a, T, F>
+where
+    F: FnMut() -> PollResult<R>,
+{
+    fn new(poll_fn: F, channel: &'a LocalChannel<T>) -> Self {
+        Waiter {
+            poll_fn,
+            channel,
+
+            node: WaiterNode {
+                waker: RefCell::new(None),
+                link: LinkedListLink::new(),
+                kind: RefCell::new(None),
+
+                _p: PhantomPinned,
+            },
+        }
+    }
+}
+
+impl<'a, T, F, R> Future for Waiter<'a, T, F>
+where
+    F: FnMut() -> PollResult<R>,
+{
+    type Output = R;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let future_mut = unsafe { self.get_unchecked_mut() };
+        let pinned_node = unsafe { Pin::new_unchecked(&mut future_mut.node) };
+
+        let result = (future_mut.poll_fn)();
+        match result {
+            PollResult::Pending(kind) => {
+                *pinned_node.kind.borrow_mut() = Some(kind);
+                *pinned_node.waker.borrow_mut() = Some(cx.waker().clone());
+
+                register_into_waiting_queue(
+                    pinned_node,
+                    &mut future_mut.channel.state.borrow_mut(),
+                );
+                Poll::Pending
+            }
+            PollResult::Ready(result) => {
+                remove_from_the_waiting_queue(
+                    pinned_node,
+                    &mut future_mut.channel.state.borrow_mut(),
+                );
+                Poll::Ready(result)
+            }
+        }
+    }
+}
+
+fn register_into_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut State<T>) {
+    if node.link.is_linked() {
+        return;
+    }
+
+    let kind = node.kind.borrow().expect("Unknown part of the channel");
+    match kind {
+        WaiterKind::SENDER => {
+            state
+                .send_waiters
+                .as_mut()
+                .expect("There should be active sender instance for the channel")
+                //it is safe to use unchecked call here because we convert from reference
+                .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
+        }
+        WaiterKind::RECEIVER => {
+            state
+                .recv_waiters
+                .as_mut()
+                .expect("There should be active receiver instance for the channel")
+                //it is safe to use unchecked call here because we convert from reference
+                .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
+        }
+    }
+}
+
+fn remove_from_the_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut State<T>) {
+    if !node.link.is_linked() {
+        return;
+    }
+
+    let kind = node.kind.borrow().expect("Unknown part of the channel");
+    let mut cursor = match kind {
+        WaiterKind::SENDER => unsafe {
+            state
+                .send_waiters
+                .as_mut()
+                .expect("There should be active sender instance for the channel")
+                .cursor_mut_from_ptr(node.get_unchecked_mut())
+        },
+        WaiterKind::RECEIVER => unsafe {
+            state
+                .recv_waiters
+                .as_mut()
+                .expect("There should be active receiver instance for the channel")
+                .cursor_mut_from_ptr(node.get_unchecked_mut())
+        },
+    };
+
+    cursor
+        .remove()
+        .expect("Future has to be queue into the waiting queue");
+}
+
+impl<'a, T, F> Drop for Waiter<'a, T, F> {
+    fn drop(&mut self) {
+        if self.node.link.is_linked() {
+            //if future is linked into the waiting queue then it is already pinned
+            let pinned_node = unsafe { Pin::new_unchecked(&mut self.node) };
+            let kind = pinned_node
+                .kind
+                .borrow()
+                .expect("If Future is queued type of the queue has to be specified");
+
+            let mut state = self.channel.state.borrow_mut();
+            let waiters = match kind {
+                WaiterKind::SENDER => state
+                    .send_waiters
+                    .as_mut()
+                    .expect("Waiting queue of senders can not be empty"),
+                WaiterKind::RECEIVER => state
+                    .recv_waiters
+                    .as_mut()
+                    .expect("Waiting queue of receivers can not be empty"),
+            };
+
+            let mut cursor =
+                unsafe { waiters.cursor_mut_from_ptr(pinned_node.get_unchecked_mut()) };
+            cursor
+                .remove()
+                .expect("Future has to be linked into the waiting queue");
+        }
+    }
 }
 
 #[derive(Debug)]
 struct WaiterNode {
-    waker: Waker,
+    waker: RefCell<Option<Waker>>,
     link: LinkedListLink,
+    kind: RefCell<Option<WaiterKind>>,
+
+    _p: PhantomPinned,
 }
 
-#[derive(Debug)]
-struct ChannelNode<T> {
-    value: T,
-    link: LinkedListLink,
+struct WaiterPointerOps;
+
+unsafe impl PointerOps for WaiterPointerOps {
+    type Value = WaiterNode;
+    type Pointer = NonNull<WaiterNode>;
+
+    unsafe fn from_raw(&self, value: *const Self::Value) -> Self::Pointer {
+        NonNull::new(value as *mut Self::Value).expect("Pointer to the value can not be null")
+    }
+
+    fn into_raw(&self, ptr: Self::Pointer) -> *const Self::Value {
+        ptr.as_ptr() as *const Self::Value
+    }
 }
 
-intrusive_adapter!(WaiterAdapter = Rc<WaiterNode> : WaiterNode {link : LinkedListLink});
-intrusive_adapter!(ChannelAdapter<T> = Rc<ChannelNode<T>> : ChannelNode<T> {link : LinkedListLink});
+struct WaiterAdapter {
+    pointers_ops: WaiterPointerOps,
+    link_ops: LinkOps,
+}
+
+impl WaiterAdapter {
+    pub const NEW: Self = WaiterAdapter {
+        pointers_ops: WaiterPointerOps,
+        link_ops: LinkOps,
+    };
+}
+
+unsafe impl Adapter for WaiterAdapter {
+    type LinkOps = LinkOps;
+    type PointerOps = WaiterPointerOps;
+
+    unsafe fn get_value(
+        &self,
+        link: <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr,
+    ) -> *const <Self::PointerOps as PointerOps>::Value {
+        container_of!(link.as_ptr(), WaiterNode, link)
+    }
+
+    unsafe fn get_link(
+        &self,
+        value: *const <Self::PointerOps as PointerOps>::Value,
+    ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
+        if value.is_null() {
+            panic!("Value pointer can not be null");
+        }
+        let ptr = (value as *const u8).add(offset_of!(WaiterNode, link));
+        core::ptr::NonNull::new_unchecked(ptr as *mut _)
+    }
+
+    fn link_ops(&self) -> &Self::LinkOps {
+        &self.link_ops
+    }
+
+    fn link_ops_mut(&mut self) -> &mut Self::LinkOps {
+        &mut self.link_ops
+    }
+
+    fn pointer_ops(&self) -> &Self::PointerOps {
+        &self.pointers_ops
+    }
+}
 
 #[derive(Debug)]
 struct State<T> {
     capacity: ChannelCapacity,
-    channel: LinkedList<ChannelAdapter<T>>,
-    channel_len: usize,
+    channel: VecDeque<T>,
     recv_waiters: Option<LinkedList<WaiterAdapter>>,
     send_waiters: Option<LinkedList<WaiterAdapter>>,
 }
@@ -84,17 +303,15 @@ impl<T> State<T> {
         } else if self.is_full() {
             Err(GlommioError::WouldBlock(ResourceType::Channel(item)))
         } else {
-            self.channel.push_back(Rc::new(ChannelNode {
-                value: item,
-                link: LinkedListLink::new(),
-            }));
-            self.channel_len += 1;
+            self.channel.push_back(item);
 
             Ok(self.recv_waiters.as_mut().and_then(|x| {
                 x.pop_front().map(|n| {
-                    Rc::try_unwrap(n)
-                        .expect("Wake is shared between several containers")
+                    unsafe { n.as_ref() }
                         .waker
+                        .borrow_mut()
+                        .take()
+                        .expect("Future was added to the waiting queue without a waker")
                 })
             }))
         }
@@ -103,54 +320,34 @@ impl<T> State<T> {
     fn is_full(&self) -> bool {
         match self.capacity {
             ChannelCapacity::Unbounded => false,
-            ChannelCapacity::Bounded(x) => self.channel_len >= x,
+            ChannelCapacity::Bounded(x) => self.channel.len() >= x,
         }
     }
 
-    fn wait_for_room(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+    fn wait_for_room(&mut self) -> PollResult<()> {
         if !self.is_full() {
-            Poll::Ready(())
+            PollResult::Ready(())
         } else {
-            self.send_waiters
-                .as_mut()
-                .unwrap()
-                .push_back(Rc::new(WaiterNode {
-                    waker: cx.waker().clone(),
-                    link: LinkedListLink::new(),
-                }));
-            Poll::Pending
+            PollResult::Pending(WaiterKind::SENDER)
         }
     }
 
-    fn recv_one(&mut self, cx: &mut Context<'_>) -> Poll<Option<(T, Option<Waker>)>> {
+    fn recv_one(&mut self) -> PollResult<Option<(T, Option<Waker>)>> {
         match self.channel.pop_front() {
-            Some(item) => {
-                self.channel_len -= 1;
-
-                Poll::Ready(Some((
-                    Rc::try_unwrap(item).ok().unwrap().value,
-                    self.send_waiters.as_mut().and_then(|x| {
-                        x.pop_front().map(|node| {
-                            Rc::try_unwrap(node)
-                                .expect("Waker is stored in several containers")
-                                .waker
-                        })
-                    }),
-                )))
-            }
-            None => match self.send_waiters.is_some() {
-                true => {
-                    self.recv_waiters
-                        .as_mut()
-                        .unwrap()
-                        .push_back(Rc::new(WaiterNode {
-                            waker: cx.waker().clone(),
-                            link: LinkedListLink::new(),
-                        }));
-                    Poll::Pending
+            Some(item) => PollResult::Ready(Some((
+                item,
+                self.send_waiters.as_mut().and_then(|x| {
+                    x.pop_front()
+                        .and_then(|node| unsafe { node.as_ref() }.waker.borrow_mut().take())
+                }),
+            ))),
+            None => {
+                if self.send_waiters.is_some() {
+                    PollResult::Pending(WaiterKind::RECEIVER)
+                } else {
+                    PollResult::Ready(None)
                 }
-                false => Poll::Ready(None),
-            },
+            }
         }
     }
 }
@@ -168,16 +365,43 @@ impl<T> Clone for LocalChannel<T> {
     }
 }
 
+impl<T> Drop for LocalChannel<T> {
+    fn drop(&mut self) {
+        assert!(
+            self.state.borrow().recv_waiters.is_none()
+                || self
+                    .state
+                    .borrow()
+                    .recv_waiters
+                    .as_ref()
+                    .unwrap()
+                    .is_empty()
+        );
+        assert!(
+            self.state.borrow().send_waiters.is_none()
+                || self
+                    .state
+                    .borrow()
+                    .send_waiters
+                    .as_ref()
+                    .unwrap()
+                    .is_empty()
+        );
+    }
+}
+
 impl<T> LocalChannel<T> {
     #[allow(clippy::new_ret_no_self)]
     fn new(capacity: ChannelCapacity) -> (LocalSender<T>, LocalReceiver<T>) {
-        let channel = LinkedList::new(ChannelAdapter::new());
+        let channel = match capacity {
+            ChannelCapacity::Unbounded => VecDeque::new(),
+            ChannelCapacity::Bounded(x) => VecDeque::with_capacity(x),
+        };
 
         let channel = LocalChannel {
             state: Rc::new(RefCell::new(State {
                 capacity,
                 channel,
-                channel_len: 0,
                 send_waiters: Some(LinkedList::new(WaiterAdapter::NEW)),
                 recv_waiters: Some(LinkedList::new(WaiterAdapter::NEW)),
             })),
@@ -187,7 +411,16 @@ impl<T> LocalChannel<T> {
             LocalSender {
                 channel: channel.clone(),
             },
-            LocalReceiver { channel },
+            LocalReceiver {
+                channel,
+                node: WaiterNode {
+                    waker: RefCell::new(None),
+                    link: LinkedListLink::new(),
+                    kind: RefCell::new(None),
+
+                    _p: PhantomPinned,
+                },
+            },
         )
     }
 }
@@ -202,9 +435,9 @@ impl<T> LocalChannel<T> {
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
-///     let (sender, mut receiver) = local_channel::new_unbounded();
+///     let (sender, receiver) = local_channel::new_unbounded();
 ///     let h = Local::local(async move {
-///         assert_eq!(receiver.next().await.unwrap(), 0);
+///         assert_eq!(receiver.stream().next().await.unwrap(), 0);
 ///     }).detach();
 ///     sender.try_send(0);
 ///     drop(sender);
@@ -225,11 +458,11 @@ pub fn new_unbounded<T>() -> (LocalSender<T>, LocalReceiver<T>) {
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
-///     let (sender, mut receiver) = local_channel::new_bounded(1);
+///     let (sender, receiver) = local_channel::new_bounded(1);
 ///     assert_eq!(sender.is_full(), false);
 ///     sender.try_send(0);
 ///     assert_eq!(sender.is_full(), true);
-///     receiver.next().await.unwrap();
+///     receiver.stream().next().await.unwrap();
 ///     assert_eq!(sender.is_full(), false);
 /// });
 /// ```
@@ -252,10 +485,10 @@ impl<T> LocalSender<T> {
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///     let (sender, mut receiver) = local_channel::new_bounded(1);
+    ///     let (sender, receiver) = local_channel::new_bounded(1);
     ///     sender.try_send(0);
     ///     sender.try_send(0).unwrap_err(); // no more capacity
-    ///     receiver.next().await.unwrap(); // now we have capacity again
+    ///     receiver.stream().next().await.unwrap(); // now we have capacity again
     ///     drop(receiver); // but because the receiver is destroyed send will err
     ///     sender.try_send(0).unwrap_err();
     /// });
@@ -295,7 +528,7 @@ impl<T> LocalSender<T> {
     ///
     /// [`try_send`]: struct.LocalSender.html#method.try_send
     pub async fn send(&self, item: T) -> Result<(), GlommioError<T>> {
-        future::poll_fn(|cx| self.wait_for_room(cx)).await;
+        Waiter::new(|| self.wait_for_room(), &self.channel).await;
         self.try_send(item)
     }
 
@@ -334,20 +567,20 @@ impl<T> LocalSender<T> {
     ///     sender.try_send(0);
     ///     sender.try_send(0);
     ///     assert_eq!(sender.len(), 2);
-    ///     receiver.next().await.unwrap();
+    ///     receiver.stream().next().await.unwrap();
     ///     assert_eq!(sender.len(), 1);
     ///     drop(receiver);
     /// });
     /// ```
     #[inline]
     pub fn len(&self) -> usize {
-        self.channel.state.borrow().channel_len
+        self.channel.state.borrow().channel.len()
     }
 
-    fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
+    fn wait_for_room(&self) -> PollResult<()> {
         // NOTE: it is important that the borrow is dropped
         // if Poll::Pending is returned
-        self.channel.state.borrow_mut().wait_for_room(cx)
+        self.channel.state.borrow_mut().wait_for_room()
     }
 }
 
@@ -355,11 +588,20 @@ fn wake_up_all(ws: &mut Option<LinkedList<WaiterAdapter>>) {
     if let Some(ref mut waiters) = ws {
         // we assume here that wakes don't try to acquire a borrow on
         // the channel.state
-        for w in core::mem::take(waiters) {
-            Rc::try_unwrap(w)
-                .expect("Waker is stored in several containers")
-                .waker
-                .wake();
+        let mut cursor = waiters.front_mut();
+        while !cursor.is_null() {
+            {
+                let node = unsafe {
+                    Pin::new_unchecked(cursor.get().expect("Waiter queue can not be empty"))
+                };
+                node.waker
+                    .borrow_mut()
+                    .take()
+                    .expect("Future can not be queued without waker")
+                    .wake();
+            }
+
+            cursor.remove().expect("Waiter queue can not be empty");
         }
     }
 }
@@ -382,12 +624,72 @@ impl<T> Drop for LocalReceiver<T> {
     }
 }
 
-impl<T> Stream for LocalReceiver<T> {
+struct ChannelStream<'a, T> {
+    channel: &'a LocalChannel<T>,
+    //if do not use Box stream becomes !Unpin which will force users to pin it
+    //while using StreamExt which is not user friendly. Creation of stream is relatively
+    //rare operation and happens once during the routine so we can afford to perform
+    //memory allocation here
+    node: Pin<Box<WaiterNode>>,
+}
+
+impl<'a, T> ChannelStream<'a, T> {
+    fn new(channel: &'a LocalChannel<T>) -> Self {
+        ChannelStream {
+            channel,
+            node: Box::pin(WaiterNode {
+                waker: RefCell::new(None),
+                link: LinkedListLink::new(),
+                kind: RefCell::new(None),
+
+                _p: PhantomPinned,
+            }),
+        }
+    }
+}
+
+impl<'a, T> Stream for ChannelStream<'a, T> {
     type Item = T;
 
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.recv_one(cx)
+        let result = self.channel.state.borrow_mut().recv_one();
+
+        let this = unsafe { self.get_unchecked_mut() };
+
+        match result {
+            PollResult::Pending(kind) => {
+                *this.node.waker.borrow_mut() = Some(cx.waker().clone());
+                *this.node.kind.borrow_mut() = Some(kind);
+
+                register_into_waiting_queue(
+                    this.node.as_mut(),
+                    &mut this.channel.state.borrow_mut(),
+                );
+
+                Poll::Pending
+            }
+            PollResult::Ready(result) => {
+                remove_from_the_waiting_queue(
+                    this.node.as_mut(),
+                    &mut this.channel.state.borrow_mut(),
+                );
+
+                Poll::Ready(result.map(|(ret, mw)| {
+                    if let Some(waker) = mw {
+                        waker.wake();
+                    }
+
+                    ret
+                }))
+            }
+        }
+    }
+}
+
+impl<'a, T> Drop for ChannelStream<'a, T> {
+    fn drop(&mut self) {
+        remove_from_the_waiting_queue(self.node.as_mut(), &mut self.channel.state.borrow_mut());
     }
 }
 
@@ -422,18 +724,28 @@ impl<T> LocalReceiver<T> {
     /// [`next`]: https://docs.rs/futures-lite/1.11.2/futures_lite/stream/trait.StreamExt.html#method.next
     /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
     pub async fn recv(&self) -> Option<T> {
-        future::poll_fn(|cx| self.recv_one(cx)).await
+        Waiter::new(|| self.recv_one(), &self.channel).await
     }
 
-    fn recv_one(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        self.channel.state.borrow_mut().recv_one(cx).map(|opt| {
-            opt.map(|(ret, mw)| {
+    /// Converts receiver into the ['Stream'] instance.
+    /// Each ['Stream'] instance may handle only single receiver and can not be shared
+    /// between ['Tasks'].
+    pub fn stream(&self) -> impl Stream<Item = T> + '_ {
+        ChannelStream::new(&self.channel)
+    }
+
+    fn recv_one(&self) -> PollResult<Option<T>> {
+        let result = self.channel.state.borrow_mut().recv_one();
+        match result {
+            PollResult::Pending(kind) => PollResult::Pending(kind),
+            PollResult::Ready(opt) => PollResult::Ready(opt.map(|(ret, mw)| {
                 if let Some(w) = mw {
                     w.wake();
                 }
+
                 ret
-            })
-        })
+            })),
+        }
     }
 }
 
@@ -449,7 +761,7 @@ mod test {
             let (sender, receiver) = new_unbounded();
 
             let handle = Local::local(async move {
-                let sum = receiver.fold(0, |acc, x| acc + x).await;
+                let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
             .detach();
@@ -473,6 +785,7 @@ mod test {
             let handle = Local::local(async move {
                 let mut sum = 0;
                 receiver
+                    .stream()
                     .for_each_concurrent(1000, |x| {
                         sum += x;
                         future::ready(())
@@ -502,7 +815,7 @@ mod test {
             drop(sender);
 
             let handle = Local::local(async move {
-                let sum = receiver.fold(0, |acc, x| acc + x).await;
+                let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
             .detach();
@@ -517,7 +830,7 @@ mod test {
             let (sender, receiver) = new_unbounded();
 
             let handle = Local::local(async move {
-                let sum = receiver.take(3).fold(0, |acc, x| acc + x).await;
+                let sum = receiver.stream().take(3).fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 3);
             })
             .detach();
@@ -562,7 +875,7 @@ mod test {
             let (sender, receiver) = new_bounded(1);
 
             let handle = Local::local(async move {
-                let sum = receiver.fold(0, |acc, x| acc + x).await;
+                let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
             .detach();
@@ -578,7 +891,7 @@ mod test {
     #[test]
     fn producer_bounded_previously_blocked_still_errors_out() {
         test_executor!(async move {
-            let (sender, mut receiver) = new_bounded(1);
+            let (sender, receiver) = new_bounded(1);
 
             let s = Local::local(async move {
                 sender.try_send(0).unwrap();
@@ -587,7 +900,7 @@ mod test {
             .detach();
 
             let r = Local::local(async move {
-                receiver.next().await.unwrap();
+                receiver.stream().next().await.unwrap();
                 drop(receiver);
             })
             .detach();

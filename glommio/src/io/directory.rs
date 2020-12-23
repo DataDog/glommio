@@ -35,7 +35,7 @@ impl Directory {
             GlommioError::create_enhanced(
                 source,
                 "Cloning directory",
-                self.file.path,
+                self.file.path.as_ref(),
                 Some(self.file.as_raw_fd()),
             )
         })?;

@@ -37,7 +37,7 @@ pub enum ResourceType<T> {
 
     /// File variant used for reporting errors for the Buffered ([`BufferedFile`](crate::io::BufferedFile))
     /// and Direct ([`DmaFile`](crate::io::DmaFile)) file I/O variants.
-    File,
+    File(String),
 }
 
 /// Error variants for executor queues.
@@ -50,6 +50,7 @@ pub enum QueueErrorKind {
     NotFound,
 }
 
+/// Errors coming from the reactor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReactorErrorKind {
     IncorrectSourceType,
@@ -63,6 +64,7 @@ impl fmt::Display for ReactorErrorKind {
     }
 }
 
+/// Error types that can be created by the executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutorErrorKind {
     QueueError {
@@ -100,9 +102,7 @@ impl fmt::Display for ExecutorErrorKind {
 /// use glommio::{GlommioError, ResourceType};
 ///
 /// fn will_error() -> Result<(), GlommioError<()>> {
-///     Err(GlommioError::WouldBlock(ResourceType::File {
-///         msg: "Error reading a file".to_string(),
-///     }))?
+///     Err(GlommioError::WouldBlock(ResourceType::File("Error reading a file".to_string())))?
 /// }
 /// assert!(will_error().is_err());
 ///
@@ -175,72 +175,6 @@ impl GlommioError<()> {
     }
 }
 
-// impl<T> From<io::Error> for GlommioError<T> {
-//     fn from(err: io::Error) -> Self {
-//         match err.kind() {
-//             io::ErrorKind::BrokenPipe => {}
-//             io::ErrorKind::WouldBlock => {}
-//             _ => {}
-//         }
-//     }
-// }
-
-// impl<T> fmt::Display for GlommioError<T> {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             GlommioError::IoError(source) => {}
-//             GlommioError::EnhancedIoError {
-//                 source,
-//                 op,
-//                 path,
-//                 fd,
-//             } => {}
-//             GlommioError::ExecutorError(kind) => match kind {
-//                 ExecutorErrorKind::QueueError { index, kind } => match kind {
-//                     QueueErrorKind::StillActive => {}
-//                     QueueErrorKind::NotFound => {}
-//                 },
-//             },
-//             GlommioError::ReactorError(kind) => match kind {
-//                 ReactorErrorKind::IncorrectSourceType => {}
-//             },
-//             GlommioError::Closed(resource) => match resource {
-//                 ResourceType::Semaphore {
-//                     requested,
-//                     available,
-//                 } => {}
-//                 ResourceType::RwLock => {}
-//                 ResourceType::Channel(_) => {}
-//                 ResourceType::File { msg } => {}
-//             },
-//             GlommioError::WouldBlock(resource) => match resource {
-//                 ResourceType::Semaphore {
-//                     requested,
-//                     available,
-//                 } => {}
-//                 ResourceType::RwLock => {}
-//                 ResourceType::Channel(_) => {}
-//                 ResourceType::File { msg } => {}
-//             },
-//         }
-//     }
-// }
-
-// impl<T> std::error::Error for GlommioError<T> {
-//     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-//         match self {
-//             GlommioError::IoError(source) => Some(source),
-//             GlommioError::EnhancedIoError {
-//                 source,
-//                 op,
-//                 path,
-//                 fd,
-//             } => Some(source),
-//             _ => None,
-//         }
-//     }
-// }
-
 impl<T> From<(io::Error, ResourceType<T>)> for GlommioError<T> {
     fn from(tuple: (io::Error, ResourceType<T>)) -> Self {
         match tuple.0.kind() {
@@ -264,10 +198,6 @@ impl<T> GlommioError<T> {
             index,
             kind: QueueErrorKind::NotFound,
         })
-    }
-
-    pub(crate) fn from_io_error(err: io::Error, resource: ResourceType<T>) -> GlommioError<T> {
-        (err, resource).into()
     }
 }
 
@@ -312,7 +242,7 @@ impl<T> Debug for GlommioError<T> {
                 ),
                 ResourceType::RwLock => write!(f, "RwLockError {{ .. }}"),
                 ResourceType::Channel(_) => write!(f, "ChannelError {{ .. }}"),
-                ResourceType::File => write!(f, "File {{ .. }}"),
+                ResourceType::File(msg) => write!(f, "File (\"{}\")", msg),
             },
             GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => f
                 .write_fmt(format_args!(
@@ -343,6 +273,7 @@ impl<T> Debug for GlommioError<T> {
 
 impl<T> From<GlommioError<T>> for io::Error {
     fn from(err: GlommioError<T>) -> Self {
+        let display_err = err.to_string();
         match err {
             GlommioError::IoError(io_err) => io_err,
             GlommioError::WouldBlock(resource) => io::Error::new(
@@ -364,53 +295,50 @@ impl<T> From<GlommioError<T>> for io::Error {
                     ),
                 }
             }
-            GlommioError::EnhancedIoError {
-                source,
-                op,
-                path,
-                fd,
-            } => io::Error::new(source.kind(), source),
-            GlommioError::ReactorError(kind) => {
+            GlommioError::EnhancedIoError { source, .. } => {
+                io::Error::new(source.kind(), display_err)
+            }
+            GlommioError::ReactorError(_) => {
                 io::Error::new(io::ErrorKind::InvalidData, "Incorrect source type!")
             }
         }
     }
 }
 
-/// Augments an `io::Error` with more information about what was happening
-/// and to which file when the error ocurred.
-pub(crate) struct ErrorEnhancer {
-    pub(crate) inner: io::Error,
-    pub(crate) op: &'static str,
-    pub(crate) path: Option<PathBuf>,
-    pub(crate) fd: Option<RawFd>,
-}
+// /// Augments an `io::Error` with more information about what was happening
+// /// and to which file when the error ocurred.
+// pub(crate) struct ErrorEnhancer {
+//     pub(crate) inner: io::Error,
+//     pub(crate) op: &'static str,
+//     pub(crate) path: Option<PathBuf>,
+//     pub(crate) fd: Option<RawFd>,
+// }
 
-impl fmt::Debug for ErrorEnhancer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
+// impl fmt::Debug for ErrorEnhancer {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "{}", self)
+//     }
+// }
 
-impl fmt::Display for ErrorEnhancer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, op: {}", self.inner, self.op)?;
-        if let Some(path) = &self.path {
-            write!(f, " path {}", path.display())?;
-        }
+// impl fmt::Display for ErrorEnhancer {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "{}, op: {}", self.inner, self.op)?;
+//         if let Some(path) = &self.path {
+//             write!(f, " path {}", path.display())?;
+//         }
 
-        if let Some(fd) = self.fd {
-            write!(f, " with fd {}", fd)?;
-        }
-        Ok(())
-    }
-}
+//         if let Some(fd) = self.fd {
+//             write!(f, " with fd {}", fd)?;
+//         }
+//         Ok(())
+//     }
+// }
 
-impl From<ErrorEnhancer> for io::Error {
-    fn from(err: ErrorEnhancer) -> io::Error {
-        io::Error::new(err.inner.kind(), format!("{}", err))
-    }
-}
+// impl From<ErrorEnhancer> for io::Error {
+//     fn from(err: ErrorEnhancer) -> io::Error {
+//         io::Error::new(err.inner.kind(), format!("{}", err))
+//     }
+// }
 
 #[cfg(test)]
 mod test {
@@ -482,7 +410,9 @@ mod test {
     #[test]
     #[should_panic(expected = "File operation would block")]
     fn file_wouldblock_err_msg() {
-        let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::File));
+        let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::File(
+            "specific error message here".to_string(),
+        )));
         panic!(err.unwrap_err().to_string());
     }
 
@@ -524,8 +454,8 @@ mod test {
     #[test]
     fn enhance_error() {
         let inner = io::Error::from_raw_os_error(9);
-        let enhanced = ErrorEnhancer {
-            inner,
+        let enhanced = GlommioError::EnhancedIoError::<()> {
+            source: inner,
             op: "testing enhancer",
             path: None,
             fd: Some(32),
@@ -533,18 +463,18 @@ mod test {
         let s = format!("{}", enhanced);
         assert_eq!(
             s,
-            "Bad file descriptor (os error 9), op: testing enhancer with fd 32"
+            "Bad file descriptor (os error 9), op: testing enhancer path: None with fd: Some(32)"
         );
     }
 
     fn convert_error() -> io::Result<()> {
         let inner = io::Error::from_raw_os_error(9);
-        let enhanced = ErrorEnhancer {
+        let enhanced = GlommioError::<()>::create_enhanced::<PathBuf>(
             inner,
-            op: "testing enhancer",
-            path: None,
-            fd: Some(32),
-        };
+            "testing enhancer",
+            None,
+            Some(32),
+        );
         Err(enhanced)?;
         Ok(())
     }
@@ -555,7 +485,7 @@ mod test {
         let s = format!("{}", io_error.into_inner().unwrap());
         assert_eq!(
             s,
-            "Bad file descriptor (os error 9), op: testing enhancer with fd 32"
+            "Bad file descriptor (os error 9), op: testing enhancer path: None with fd: Some(32)"
         );
     }
 }

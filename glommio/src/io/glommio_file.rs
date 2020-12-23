@@ -3,10 +3,8 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::parking::Reactor;
-use crate::sys;
-use crate::Local;
-use crate::{error::ErrorEnhancer, GlommioError};
+
+use crate::{parking::Reactor, sys, GlommioError, Local};
 use log::debug;
 use std::convert::TryInto;
 use std::io;
@@ -119,7 +117,10 @@ impl GlommioFile {
         // Destruct `self` into components skipping Drop.
         let (fd, path) = self.discard();
         let source = reactor.close(fd);
-        enhanced_try!(source.collect_rw().await, "Closing", path, Some(fd))?;
+        source
+            .collect_rw()
+            .await
+            .map_err(|source| GlommioError::create_enhanced(source, "Closing", path, Some(fd)))?;
         Ok(())
     }
 
@@ -149,7 +150,14 @@ impl GlommioFile {
             .upgrade()
             .unwrap()
             .fallocate(self.as_raw_fd(), 0, size, flags);
-        enhanced_try!(source.collect_rw().await, "Pre-allocate space", self)?;
+        source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Pre-allocate space",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })?;
         Ok(())
     }
 
@@ -158,34 +166,55 @@ impl GlommioFile {
     }
 
     pub(crate) async fn truncate(&self, size: u64) -> Result<()> {
-        enhanced_try!(
-            sys::truncate_file(self.as_raw_fd(), size),
-            "Truncating",
-            self
-        )
-        .map_err(Into::into)
+        sys::truncate_file(self.as_raw_fd(), size).map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Truncating",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })
     }
 
     pub(crate) async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
         let old_path = self.path_required("rename")?;
-        enhanced_try!(
-            crate::io::rename(old_path, &new_path).await,
-            "Renaming",
-            self
-        )?;
+        crate::io::rename(old_path, &new_path)
+            .await
+            .map_err(|source| {
+                GlommioError::create_enhanced(
+                    source,
+                    "Renaming",
+                    self.path.as_ref(),
+                    Some(self.as_raw_fd()),
+                )
+            })?;
         self.path = Some(new_path.as_ref().to_owned());
         Ok(())
     }
 
     pub(crate) async fn fdatasync(&self) -> Result<()> {
         let source = self.reactor.upgrade().unwrap().fdatasync(self.as_raw_fd());
-        enhanced_try!(source.collect_rw().await, "Syncing", self)?;
+        source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Syncing",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })?;
         Ok(())
     }
 
     pub(crate) async fn remove(&self) -> Result<()> {
         let path = self.path_required("remove")?;
-        enhanced_try!(sys::remove_file(path), "Removing", self).map_err(Into::into)
+        sys::remove_file(path).map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Removing",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall
@@ -197,7 +226,14 @@ impl GlommioFile {
             .upgrade()
             .unwrap()
             .statx(self.as_raw_fd(), path);
-        enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
+        source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "getting file metadata",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })?;
         let stype = source.extract_source_type();
         stype.try_into()
     }

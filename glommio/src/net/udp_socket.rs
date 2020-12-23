@@ -5,7 +5,7 @@
 //
 use crate::parking::Reactor;
 use crate::sys::{self, DmaBuffer, Source, SourceType};
-use crate::Local;
+use crate::{ByteSliceMutExt, Local};
 use iou::{InetAddr, SockAddr};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::cell::Cell;
