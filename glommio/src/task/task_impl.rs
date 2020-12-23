@@ -26,9 +26,8 @@ use crate::task::JoinHandle;
 /// [`JoinHandle`]: struct.JoinHandle.html
 pub(crate) fn spawn_local<F, R, S>(future: F, schedule: S) -> (Task, JoinHandle<R>)
 where
-    F: Future<Output = R> + 'static,
-    R: 'static,
-    S: Fn(Task) + 'static,
+    F: Future<Output = R>,
+    S: Fn(Task),
 {
     // Allocate large futures on the heap.
     let raw_task = if mem::size_of::<F>() >= 2048 {
