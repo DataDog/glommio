@@ -17,7 +17,6 @@ pub type Result<T, V> = std::result::Result<T, GlommioError<V>>;
 /// Resource Type used for errors that `WouldBlock` and includes extra
 /// diagnostic data for richer error messages.
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum ResourceType<T> {
     /// Semaphore resource that includes the requested and available shares
     /// as debugging metadata for the [`Semaphore`](crate::sync::Semaphore) type.
@@ -42,7 +41,6 @@ pub enum ResourceType<T> {
 
 /// Error variants for executor queues.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-#[non_exhaustive]
 pub enum QueueErrorKind {
     /// Queue is still active
     StillActive,
@@ -108,7 +106,6 @@ impl fmt::Display for ExecutorErrorKind {
 ///
 /// ```
 #[derive(Error)]
-#[non_exhaustive]
 pub enum GlommioError<T> {
     /// IO error from standard library functions or libraries that produce
     /// std::io::Error's.
