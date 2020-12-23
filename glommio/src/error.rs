@@ -93,8 +93,8 @@ impl fmt::Display for ExecutorErrorKind {
 /// variants. In other cases it can just be replaced with the unit type `()`
 /// and ignored. The variants are broken up into a few common categories such as
 /// [`Closed`](GlommioError::Closed) and [`WouldBlock`](GlommioError::WouldBlock)
-/// as well as a generic [`IoError`](GlommioError::IoError) and an error dedicated to
-/// executor queue errors ([`QueueError`](GlommioError::QueueError)).
+/// as well as a generic [`IoError`](GlommioError::IoError) and errors dedicated to
+/// the executor and reactor.
 ///
 /// # Examples
 ///
@@ -160,7 +160,7 @@ pub enum GlommioError<T> {
 }
 
 impl GlommioError<()> {
-    pub fn create_enhanced<P: AsRef<Path>>(
+    pub(crate) fn create_enhanced<P: AsRef<Path>>(
         source: io::Error,
         op: &'static str,
         path: Option<P>,
@@ -304,41 +304,6 @@ impl<T> From<GlommioError<T>> for io::Error {
         }
     }
 }
-
-// /// Augments an `io::Error` with more information about what was happening
-// /// and to which file when the error ocurred.
-// pub(crate) struct ErrorEnhancer {
-//     pub(crate) inner: io::Error,
-//     pub(crate) op: &'static str,
-//     pub(crate) path: Option<PathBuf>,
-//     pub(crate) fd: Option<RawFd>,
-// }
-
-// impl fmt::Debug for ErrorEnhancer {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "{}", self)
-//     }
-// }
-
-// impl fmt::Display for ErrorEnhancer {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "{}, op: {}", self.inner, self.op)?;
-//         if let Some(path) = &self.path {
-//             write!(f, " path {}", path.display())?;
-//         }
-
-//         if let Some(fd) = self.fd {
-//             write!(f, " with fd {}", fd)?;
-//         }
-//         Ok(())
-//     }
-// }
-
-// impl From<ErrorEnhancer> for io::Error {
-//     fn from(err: ErrorEnhancer) -> io::Error {
-//         io::Error::new(err.inner.kind(), format!("{}", err))
-//     }
-// }
 
 #[cfg(test)]
 mod test {
