@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::io::dma_open_options::DmaOpenOptions;
 use crate::io::glommio_file::GlommioFile;
 use crate::io::read_result::ReadResult;
 use crate::sys::sysfs;
@@ -94,7 +95,7 @@ impl DmaFile {
         dir: RawFd,
         path: &Path,
         flags: libc::c_int,
-        mode: libc::c_int,
+        mode: libc::mode_t,
     ) -> io::Result<DmaFile> {
         let mut pollable = PollableStatus::Pollable;
         let res = GlommioFile::open_at(dir, path, flags, mode).await;
@@ -136,6 +137,31 @@ impl DmaFile {
         })
     }
 
+    pub(super) async fn open_with_options<'a>(
+        dir: RawFd,
+        path: &'a Path,
+        opdesc: &'static str,
+        opts: &'a DmaOpenOptions,
+    ) -> io::Result<DmaFile> {
+        // try to open the file with O_DIRECT if the underlying media supports it
+        let flags = libc::O_CLOEXEC
+            | libc::O_DIRECT
+            | opts.get_access_mode()?
+            | opts.get_creation_mode()?
+            | (opts.custom_flags as libc::c_int & !libc::O_ACCMODE);
+
+        let res = DmaFile::open_at(dir, path, flags, opts.mode).await;
+        let mut f = enhanced_try!(res, opdesc, Some(path), None)?;
+        // FIXME: Don't assume 512 or 4096, we can read this info from sysfs
+        // currently, we just use the minimal {values which make sense}
+        // NOTE(zserik): if we later add a opts.append "option", then
+        // the following condition should be replaced with a method call which
+        // evaluates to `opts.write || opts.append`
+        // (because we don't want to make both members `pub(super)`)
+        f.o_direct_alignment = if opts.write { 4096 } else { 512 };
+        Ok(f)
+    }
+
     /// Allocates a buffer that is suitable for using to write to this file.
     pub fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         self.file.reactor.upgrade().unwrap().alloc_dma_buffer(size)
@@ -143,25 +169,17 @@ impl DmaFile {
 
     /// Similar to `create()` in the standard library, but returns a DMA file
     pub async fn create<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
-        // try to open the file with O_DIRECT if the underlying media supports it
-        let flags =
-            libc::O_DIRECT | libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
-        let res = DmaFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await;
-
-        let mut f = enhanced_try!(res, "Creating", Some(path.as_ref()), None)?;
-        f.o_direct_alignment = 4096;
-        Ok(f)
+        DmaOpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path.as_ref())
+            .await
     }
 
     /// Similar to `open()` in the standard library, but returns a DMA file
     pub async fn open<P: AsRef<Path>>(path: P) -> io::Result<DmaFile> {
-        // try to open the file with O_DIRECT if the underlying media supports it
-        let flags = libc::O_DIRECT | libc::O_CLOEXEC | libc::O_RDONLY;
-        let res = DmaFile::open_at(-1_i32, path.as_ref(), flags, 0o644).await;
-
-        let mut f = enhanced_try!(res, "Opening", Some(path.as_ref()), None)?;
-        f.o_direct_alignment = 512;
-        Ok(f)
+        DmaOpenOptions::new().read(true).open(path.as_ref()).await
     }
 
     /// Write the buffer in `buf` to a specific position in the file.
