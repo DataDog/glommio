@@ -206,7 +206,7 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
     }
 }
 
-static SCIPIO_URING_OPS: &[IoRingOp] = &[
+static GLOMMIO_URING_OPS: &[IoRingOp] = &[
     IoRingOp::IORING_OP_NOP,
     IoRingOp::IORING_OP_READV,
     IoRingOp::IORING_OP_WRITEV,
@@ -232,7 +232,7 @@ static SCIPIO_URING_OPS: &[IoRingOp] = &[
 ];
 
 lazy_static! {
-    static ref IO_URING_RECENT_ENOUGH: bool = check_supported_operations(SCIPIO_URING_OPS);
+    static ref IO_URING_RECENT_ENOUGH: bool = check_supported_operations(GLOMMIO_URING_OPS);
 }
 
 fn fill_sqe<F>(sqe: &mut iou::SubmissionQueueEvent<'_>, op: &UringDescriptor, buffer_allocation: F)
