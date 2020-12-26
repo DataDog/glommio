@@ -41,3 +41,7 @@ path = "deadline_writer.rs"
 [[example]]
 name = "storage"
 path = "storage.rs"
+
+[[example]]
+name = "pipeline"
+path = "pipeline.rs"
