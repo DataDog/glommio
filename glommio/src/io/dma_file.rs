@@ -154,10 +154,6 @@ impl DmaFile {
         let mut f = enhanced_try!(res, opdesc, Some(path), None)?;
         // FIXME: Don't assume 512 or 4096, we can read this info from sysfs
         // currently, we just use the minimal {values which make sense}
-        // NOTE(zserik): if we later add a opts.append "option", then
-        // the following condition should be replaced with a method call which
-        // evaluates to `opts.write || opts.append`
-        // (because we don't want to make both members `pub(super)`)
         f.o_direct_alignment = if opts.write { 4096 } else { 512 };
         Ok(f)
     }

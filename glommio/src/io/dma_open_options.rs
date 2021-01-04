@@ -43,7 +43,7 @@ impl DmaOpenOptions {
             create_new: false,
             // system-specific
             custom_flags: 0,
-            // previously, we defaulted to 0o644, but 0o666 is usedd by libstd
+            // previously, we defaulted to 0o644, but 0o666 is used by libstd
             mode: 0o666,
         }
     }
@@ -115,17 +115,6 @@ impl DmaOpenOptions {
     }
 
     pub(super) fn get_access_mode(&self) -> io::Result<libc::c_int> {
-        /*
-        Ok(match (self.read, self.write, self.append) {
-            (true, false, false) => libc::O_RDONLY,
-            (false, true, false) => libc::O_WRONLY,
-            (true, true, false) => libc::O_RDWR,
-            (false, _, true) => libc::O_WRONLY | libc::O_APPEND,
-            (true, _, true) => libc::O_RDWR | libc::O_APPEND,
-            (false, false, false) => return Err(io::Error::from_raw_os_error(libc::EINVAL)),
-        })
-        */
-
         Ok(match (self.read, self.write) {
             (true, false) => libc::O_RDONLY,
             (false, true) => libc::O_WRONLY,
@@ -135,33 +124,17 @@ impl DmaOpenOptions {
     }
 
     pub(super) fn get_creation_mode(&self) -> io::Result<libc::c_int> {
-        /*
-        match (self.write, self.append) {
-            (true, false) => {}
-            (false, false) => {
-                if self.truncate || self.create || self.create_new {
-                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
-                }
-            }
-            (_, true) => {
-                if self.truncate && !self.create_new {
-                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
-                }
-            }
-        }
-        */
-
         if !self.write && (self.truncate || self.create || self.create_new) {
-            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+            Err(io::Error::from_raw_os_error(libc::EINVAL))
+        } else {
+            Ok(match (self.create, self.truncate, self.create_new) {
+                (false, false, false) => 0,
+                (true, false, false) => libc::O_CREAT,
+                (false, true, false) => libc::O_TRUNC,
+                (true, true, false) => libc::O_CREAT | libc::O_TRUNC,
+                (_, _, true) => libc::O_CREAT | libc::O_EXCL,
+            })
         }
-
-        Ok(match (self.create, self.truncate, self.create_new) {
-            (false, false, false) => 0,
-            (true, false, false) => libc::O_CREAT,
-            (false, true, false) => libc::O_TRUNC,
-            (true, true, false) => libc::O_CREAT | libc::O_TRUNC,
-            (_, _, true) => libc::O_CREAT | libc::O_EXCL,
-        })
     }
 
     /// Similiar to `OpenOptions::open()` in the standard library, but returns a DMA file
