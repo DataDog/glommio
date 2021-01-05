@@ -18,7 +18,7 @@
 //! This library provides abstractions for timers, file I/O and networking plus support for
 //! multiple-queues and an internal scheduler, all without using helper threads.
 //!
-//! A more detailed exposition of Glommio's architecture is ]available in this blog
+//! A more detailed exposition of Glommio's architecture is [available in this blog
 //! post](https://www.datadoghq.com/blog/engineering/introducing-glommio/)
 //!
 //! ### Rust `async`
