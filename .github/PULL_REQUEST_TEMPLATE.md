@@ -20,4 +20,3 @@ Anything else we should know when reviewing?
 [] I have added unit tests to the code I am submitting
 [] My unit tests cover both failure and success scenarios
 [] If applicable, I have discussed my architecture
-[] The new code I am adding is formatted using `rustfmt`
