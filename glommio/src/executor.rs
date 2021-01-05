@@ -1803,4 +1803,10 @@ mod test {
             Local::local(async {}).detach().await;
         });
     }
+
+    #[test]
+    #[should_panic(expected = "Message!")]
+    fn panic_is_not_list() {
+        LocalExecutor::default().run(async { panic!("Message!") });
+    }
 }
