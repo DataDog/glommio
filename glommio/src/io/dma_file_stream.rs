@@ -3,11 +3,13 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::dma_file::align_down;
 use crate::io::read_result::ReadResult;
 use crate::io::DmaFile;
 use crate::sys::DmaBuffer;
-use crate::{task, ByteSliceExt, ByteSliceMutExt, Local};
+use crate::{
+    io::dma_file::align_down, task, ByteSliceExt, ByteSliceMutExt, GlommioError, Local,
+    ResourceType,
+};
 use ahash::AHashMap;
 use core::task::Waker;
 use futures_lite::future::poll_fn;
@@ -20,6 +22,8 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::vec::Vec;
+
+type Result<T> = crate::Result<T, ()>;
 
 macro_rules! current_error {
     ( $state:expr ) => {
@@ -208,7 +212,7 @@ impl DmaStreamReaderState {
                     state.buffermap.insert(buffer_id, buf);
                 }
                 Err(x) => {
-                    state.error = Some(x);
+                    state.error = Some(x.into());
                 }
             }
             state.pending.remove(&buffer_id);
@@ -340,7 +344,7 @@ impl DmaStreamReader {
     ///     reader.close().await.unwrap();
     /// });
     /// ```
-    pub async fn close(self) -> io::Result<()> {
+    pub async fn close(self) -> Result<()> {
         let handles = {
             let mut state = self.state.borrow_mut();
             state.cancel_all_in_flight()
@@ -354,7 +358,7 @@ impl DmaStreamReader {
 
         let mut state = self.state.borrow_mut();
         match state.error.take() {
-            Some(err) => Err(err),
+            Some(err) => Err(err.into()),
             None => Ok(()),
         }
     }
@@ -491,7 +495,7 @@ impl DmaStreamReader {
     /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
     /// [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html
     /// [`ReadResult`]: struct.ReadResult.html
-    pub async fn get_buffer_aligned(&mut self, len: u64) -> io::Result<ReadResult> {
+    pub async fn get_buffer_aligned(&mut self, len: u64) -> Result<ReadResult> {
         if len == 0 {
             return Ok(ReadResult::empty_buffer());
         }
@@ -504,7 +508,10 @@ impl DmaStreamReader {
         };
 
         if start_id != end_id {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})", len, self.current_pos, buffer_size)));
+            return Err(GlommioError::<()>::WouldBlock(ResourceType::File(format!(
+                "Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})",
+                len, self.current_pos, buffer_size
+            ))));
         }
 
         let x = poll_fn(|cx| self.get_buffer(cx, len, start_id)).await?;
@@ -517,7 +524,7 @@ impl DmaStreamReader {
         cx: &mut Context<'_>,
         len: u64,
         buffer_id: u64,
-    ) -> Poll<io::Result<ReadResult>> {
+    ) -> Poll<Result<ReadResult>> {
         let mut state = self.state.borrow_mut();
         if let Some(err) = current_error!(state) {
             return Poll::Ready(err);
@@ -533,7 +540,7 @@ impl DmaStreamReader {
                 let offset = state.offset_of(self.current_pos);
                 let len = std::cmp::min(len as usize, buffer.len() - offset);
                 Poll::Ready(ReadResult::slice(buffer, offset, len).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "buffer offset out of range")
+                    io::Error::new(io::ErrorKind::InvalidInput, "buffer offset out of range").into()
                 }))
             }
         }
@@ -955,7 +962,7 @@ impl DmaStreamWriter {
     ///     writer.close().await.unwrap();
     /// });
     /// ```
-    pub async fn sync(&self) -> io::Result<u64> {
+    pub async fn sync(&self) -> Result<u64> {
         let (mut pending, file_pos_at_sync_time) = {
             let mut state = self.state.borrow_mut();
             (state.current_pending(), state.file_pos)
@@ -1413,7 +1420,7 @@ mod test {
     });
 
     #[track_caller]
-    fn expect_specific_error<T>(op: Result<T, io::Error>, expected_err: &'static str) {
+    fn expect_specific_error<T>(op: std::result::Result<T, io::Error>, expected_err: &'static str) {
         match op {
             Ok(_) => panic!("should have failed"),
             Err(err) => {

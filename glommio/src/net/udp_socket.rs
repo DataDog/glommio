@@ -10,6 +10,8 @@ use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
+type Result<T> = crate::Result<T, ()>;
+
 #[derive(Debug)]
 /// An Udp Socket.
 pub struct UdpSocket {
@@ -58,7 +60,7 @@ impl UdpSocket {
     ///     println!("Listening on {}", listener.local_addr().unwrap());
     /// });
     /// ```
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> Result<UdpSocket> {
         let addr = addr
             .to_socket_addrs()
             .unwrap()
@@ -106,7 +108,7 @@ impl UdpSocket {
     ///
     /// [`send`]: UdpSocket::send
     /// [`recv`]: UdpSocket::recv
-    pub async fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
+    pub async fn connect<A: ToSocketAddrs>(&self, addr: A) -> Result<()> {
         let iter = addr.to_socket_addrs()?;
         let mut err = io::Error::new(io::ErrorKind::Other, "No Valid addresses");
         for addr in iter {
@@ -121,7 +123,7 @@ impl UdpSocket {
                 }
             };
         }
-        Err(err)
+        Err(err.into())
     }
 
     /// Sets the buffer size used on the receive path
@@ -163,9 +165,9 @@ impl UdpSocket {
     /// ```
     ///
     /// [`connect`]: UdpSocket::connect
-    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = self.peer_addr()?;
-        self.socket.peek(buf).await
+        self.socket.peek(buf).await.map_err(Into::into)
     }
 
     ///Receives a single datagram message on the socket, without removing it from the queue. On
@@ -174,7 +176,7 @@ impl UdpSocket {
     /// The function must be called with valid byte array buf of sufficient size to hold the
     /// message bytes. If a message is too long to fit in the supplied buffer, excess bytes may be
     /// discarded.
-    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+    pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         let (sz, addr) = self.socket.peek_from(buf).await?;
 
         let addr = match addr {
@@ -185,13 +187,13 @@ impl UdpSocket {
     }
 
     /// Returns the socket address of the remote peer this socket was connected to.
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.socket.peer_addr()
+    pub fn peer_addr(&self) -> Result<SocketAddr> {
+        self.socket.socket.peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this UDP connection.
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.socket.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.socket.socket.local_addr().map_err(Into::into)
     }
 
     /// Receives a single datagram message on the socket from the remote address to which it is
@@ -223,9 +225,9 @@ impl UdpSocket {
     /// ```
     ///
     /// [`connect`]: UdpSocket::connect
-    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn recv(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = self.peer_addr()?;
-        self.socket.recv(buf).await
+        self.socket.recv(buf).await.map_err(Into::into)
     }
 
     /// Receives a single datagram message on the socket. On success, returns the number of bytes read and the origin.
@@ -250,7 +252,7 @@ impl UdpSocket {
     ///     assert_eq!(addr, sender.local_addr().unwrap());
     /// })
     /// ```
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+    pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         let (sz, addr) = self.socket.recv_from(buf).await?;
         let addr = match addr {
             nix::sys::socket::SockAddr::Inet(addr) => addr,
@@ -282,7 +284,7 @@ impl UdpSocket {
     /// ```
     ///
     /// [`ToSocketAddrs`]: https://doc.rust-lang.org/stable/std/net/trait.ToSocketAddrs.html
-    pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
+    pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> Result<usize> {
         let addr = addr
             .to_socket_addrs()
             .unwrap()
@@ -291,7 +293,7 @@ impl UdpSocket {
 
         let inet = nix::sys::socket::InetAddr::from_std(&addr);
         let sockaddr = nix::sys::socket::SockAddr::new_inet(inet);
-        self.socket.send_to(buf, sockaddr).await
+        self.socket.send_to(buf, sockaddr).await.map_err(Into::into)
     }
 
     /// Sends data on the socket to the remote address to which it is connected.
@@ -314,8 +316,8 @@ impl UdpSocket {
     /// ```
     ///
     /// `[UdpSocket::connect`]: UdpSocket::connect
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.socket.send(buf).await
+    pub async fn send(&self, buf: &[u8]) -> Result<usize> {
+        self.socket.send(buf).await.map_err(Into::into)
     }
 }
 

@@ -242,7 +242,7 @@
 //! local_ex.run(async {
 //!     let timeout = async {
 //!         Timer::new(Duration::from_secs(10)).await;
-//!         Err(io::ErrorKind::TimedOut.into())
+//!         Err(io::Error::new(io::ErrorKind::TimedOut, "").into())
 //!     };
 //!     let stream = TcpStream::connect("::80").or(timeout).await?;
 //!
@@ -382,9 +382,9 @@ pub mod sync;
 pub mod timer;
 
 pub use crate::byte_slice_ext::{ByteSliceExt, ByteSliceMutExt};
+pub use crate::error::{GlommioError, QueueErrorKind, ResourceType, Result};
 pub use crate::executor::{
-    ExecutorStats, LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
-    TaskQueueStats,
+    ExecutorStats, LocalExecutor, LocalExecutorBuilder, Task, TaskQueueHandle, TaskQueueStats,
 };
 pub use crate::shares::{Shares, SharesManager};
 pub use enclose::enclose;
@@ -394,8 +394,8 @@ pub use scopeguard::defer;
 pub mod prelude {
     #[doc(no_inline)]
     pub use crate::{
-        ByteSliceExt, ByteSliceMutExt, Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares,
-        TaskQueueHandle,
+        error::GlommioError, ByteSliceExt, ByteSliceMutExt, Latency, Local, LocalExecutor,
+        LocalExecutorBuilder, Shares, TaskQueueHandle,
     };
 }
 

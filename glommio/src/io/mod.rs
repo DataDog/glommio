@@ -81,9 +81,9 @@ macro_rules! enhanced_try {
     ($expr:expr, $op:expr, $path:expr, $fd:expr) => {{
         match $expr {
             Ok(val) => Ok(val),
-            Err(inner) => {
-                let enhanced: std::io::Error = crate::error::ErrorEnhancer {
-                    inner,
+            Err(source) => {
+                let enhanced: std::io::Error = crate::error::GlommioError::<()>::EnhancedIoError {
+                    source,
                     op: $op,
                     path: $path.and_then(|x| Some(x.to_path_buf())),
                     fd: $fd,

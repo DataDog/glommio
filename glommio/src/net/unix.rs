@@ -25,6 +25,8 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
+type Result<T> = crate::Result<T, ()>;
+
 #[derive(Debug)]
 /// A Unix socket server, listening for connections.
 ///
@@ -79,7 +81,7 @@ impl UnixListener {
     ///     let _listener = UnixListener::bind("/tmp/named").unwrap();
     /// });
     /// ```
-    pub fn bind<A: AsRef<Path>>(addr: A) -> io::Result<UnixListener> {
+    pub fn bind<A: AsRef<Path>>(addr: A) -> Result<UnixListener> {
         let sk = Socket::new(Domain::unix(), Type::stream(), None)?;
         let addr = socket2::SockAddr::unix(addr.as_ref())?;
 
@@ -121,7 +123,7 @@ impl UnixListener {
     /// [`AcceptedUnixStream`]: struct.AcceptedUnixStream.html
     /// [`UnixStream`]: struct.UnixStream.html
     /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-    pub async fn shared_accept(&self) -> io::Result<AcceptedUnixStream> {
+    pub async fn shared_accept(&self) -> Result<AcceptedUnixStream> {
         let reactor = self.reactor.upgrade().unwrap();
         let source = reactor.accept(self.listener.as_raw_fd());
         let fd = source.collect_rw().await?;
@@ -152,7 +154,7 @@ impl UnixListener {
     ///
     /// [`shared_accept`]: UnixListener::accept
     /// [`bind_to_executor`]: AcceptedUnixStream::bind_to_executor
-    pub async fn accept(&self) -> io::Result<UnixStream> {
+    pub async fn accept(&self) -> Result<UnixStream> {
         let a = self.shared_accept().await?;
         Ok(a.bind_to_executor())
     }
@@ -175,9 +177,9 @@ impl UnixListener {
     ///     }
     /// });
     /// ```
-    pub fn incoming(&self) -> impl Stream<Item = io::Result<UnixStream>> + Unpin + '_ {
+    pub fn incoming(&self) -> impl Stream<Item = Result<UnixStream>> + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
-            let res = listener.accept().await;
+            let res = listener.accept().await.map_err(Into::into);
             Some((res, listener))
         }))
     }
@@ -195,8 +197,8 @@ impl UnixListener {
     ///     println!("Listening on {:?}", listener.local_addr().unwrap());
     /// });
     /// ```
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.listener.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.listener.local_addr().map_err(Into::into)
     }
 }
 
@@ -284,7 +286,7 @@ impl UnixStream {
     ///     let sz = p2.read(&mut buf).await.unwrap();
     /// })
     /// ```
-    pub fn pair() -> io::Result<(UnixStream, UnixStream)> {
+    pub fn pair() -> Result<(UnixStream, UnixStream)> {
         let (stream1, stream2) = net::UnixStream::pair()?;
         let stream1 = GlommioStream::from(socket2::Socket::from(stream1));
         let stream2 = GlommioStream::from(socket2::Socket::from(stream2));
@@ -306,7 +308,7 @@ impl UnixStream {
     ///     UnixStream::connect("/tmp/named").await.unwrap();
     /// })
     /// ```
-    pub async fn connect<A: AsRef<Path>>(addr: A) -> io::Result<UnixStream> {
+    pub async fn connect<A: AsRef<Path>>(addr: A) -> Result<UnixStream> {
         let reactor = Local::get_reactor();
 
         let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
@@ -321,8 +323,10 @@ impl UnixStream {
     }
 
     /// Shuts down the read, write, or both halves of this connection.
-    pub async fn shutdown(&self, how: Shutdown) -> io::Result<()> {
-        poll_fn(|cx| self.stream.poll_shutdown(cx, how)).await
+    pub async fn shutdown(&self, how: Shutdown) -> Result<()> {
+        poll_fn(|cx| self.stream.poll_shutdown(cx, how))
+            .await
+            .map_err(Into::into)
     }
 
     /// Sets the buffer size used on the receive path
@@ -339,8 +343,8 @@ impl UnixStream {
     ///
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
-    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stream.peek(buf).await
+    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
+        self.stream.peek(buf).await.map_err(Into::into)
     }
 
     /// Returns the socket address of the remote peer of this Unix connection.
@@ -357,8 +361,8 @@ impl UnixStream {
     ///     println!("My peer: {:?}", stream.peer_addr());
     /// })
     /// ```
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.stream.peer_addr()
+    pub fn peer_addr(&self) -> Result<SocketAddr> {
+        self.stream.stream.peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this Unix connection.
@@ -375,8 +379,8 @@ impl UnixStream {
     ///     println!("My peer: {:?}", stream.local_addr());
     /// })
     /// ```
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.stream.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.stream.stream.local_addr().map_err(Into::into)
     }
 }
 
@@ -449,7 +453,7 @@ impl UnixDatagram {
     ///     let sz = p2.recv(&mut buf).await.unwrap();
     /// })
     /// ```
-    pub fn pair() -> io::Result<(UnixDatagram, UnixDatagram)> {
+    pub fn pair() -> Result<(UnixDatagram, UnixDatagram)> {
         let (socket1, socket2) = net::UnixDatagram::pair()?;
         let socket1 = GlommioDatagram::from(socket2::Socket::from(socket1));
         let socket2 = GlommioDatagram::from(socket2::Socket::from(socket2));
@@ -472,7 +476,7 @@ impl UnixDatagram {
     ///     println!("Listening on {:?}", listener.local_addr().unwrap());
     /// });
     /// ```
-    pub fn bind<A: AsRef<Path>>(addr: A) -> io::Result<UnixDatagram> {
+    pub fn bind<A: AsRef<Path>>(addr: A) -> Result<UnixDatagram> {
         let sk = Socket::new(Domain::unix(), Type::dgram(), None)?;
         let addr = socket2::SockAddr::unix(addr.as_ref())?;
         sk.bind(&addr)?;
@@ -482,7 +486,7 @@ impl UnixDatagram {
     }
 
     /// Creates a Unix Datagram socket which is not bound to any address.
-    pub fn unbound() -> io::Result<UnixDatagram> {
+    pub fn unbound() -> Result<UnixDatagram> {
         let sk = Socket::new(Domain::unix(), Type::dgram(), None)?;
         Ok(Self {
             socket: GlommioDatagram::from(sk),
@@ -515,13 +519,13 @@ impl UnixDatagram {
     ///
     /// [`send`]: UnixDatagram::send
     /// [`recv`]: UnixDatagram::recv
-    pub async fn connect<A: AsRef<Path>>(&self, addr: A) -> io::Result<()> {
+    pub async fn connect<A: AsRef<Path>>(&self, addr: A) -> Result<()> {
         let addr = iou::SockAddr::new_unix(addr.as_ref())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         let reactor = self.socket.reactor.upgrade().unwrap();
         let source = reactor.connect(self.socket.as_raw_fd(), addr);
-        source.collect_rw().await.map(|_| {})
+        source.collect_rw().await.map(|_| {}).map_err(Into::into)
     }
 
     /// Sets the buffer size used on the receive path
@@ -563,9 +567,9 @@ impl UnixDatagram {
     /// ```
     ///
     /// [`connect`]: UnixDatagram::connect
-    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = self.peer_addr()?;
-        self.socket.peek(buf).await
+        self.socket.peek(buf).await.map_err(Into::into)
     }
 
     ///Receives a single datagram message on the socket, without removing it from the queue. On
@@ -574,7 +578,7 @@ impl UnixDatagram {
     /// The function must be called with valid byte array buf of sufficient size to hold the
     /// message bytes. If a message is too long to fit in the supplied buffer, excess bytes may be
     /// discarded.
-    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixAddr)> {
+    pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, UnixAddr)> {
         let (sz, addr) = self.socket.peek_from(buf).await?;
 
         let addr = match addr {
@@ -585,13 +589,13 @@ impl UnixDatagram {
     }
 
     /// Returns the socket address of the remote peer this socket was connected to.
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.socket.peer_addr()
+    pub fn peer_addr(&self) -> Result<SocketAddr> {
+        self.socket.socket.peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this Unix Datagram connection.
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.socket.socket.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.socket.socket.local_addr().map_err(Into::into)
     }
 
     /// Receives a single datagram message on the socket from the remote address to which it is
@@ -623,8 +627,8 @@ impl UnixDatagram {
     /// ```
     ///
     /// [`connect`]: UnixDatagram::connect
-    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.socket.recv(buf).await
+    pub async fn recv(&self, buf: &mut [u8]) -> Result<usize> {
+        self.socket.recv(buf).await.map_err(Into::into)
     }
 
     /// Receives a single datagram message on the socket. On success, returns the number of bytes read and the origin.
@@ -648,7 +652,7 @@ impl UnixDatagram {
     ///     assert_eq!(sz, 1);
     /// })
     /// ```
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixAddr)> {
+    pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, UnixAddr)> {
         let (sz, addr) = self.socket.recv_from(buf).await?;
         let addr = match addr {
             nix::sys::socket::SockAddr::Unix(addr) => addr,
@@ -671,10 +675,10 @@ impl UnixDatagram {
     ///     sender.send_to(&[1; 1], "/tmp/dgram").await.unwrap();
     /// })
     /// ```
-    pub async fn send_to<A: AsRef<Path>>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
+    pub async fn send_to<A: AsRef<Path>>(&self, buf: &[u8], addr: A) -> Result<usize> {
         let addr = nix::sys::socket::SockAddr::new_unix(addr.as_ref())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        self.socket.send_to(buf, addr).await
+        self.socket.send_to(buf, addr).await.map_err(Into::into)
     }
 
     /// Sends data on the socket to the remote address to which it is connected.
@@ -697,8 +701,8 @@ impl UnixDatagram {
     /// ```
     ///
     /// `[UnixDatagram::connect`]: UnixDatagram::connect
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.socket.send(buf).await
+    pub async fn send(&self, buf: &[u8]) -> Result<usize> {
+        self.socket.send(buf).await.map_err(Into::into)
     }
 }
 

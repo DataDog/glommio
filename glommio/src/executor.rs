@@ -33,7 +33,6 @@
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::BinaryHeap;
-use std::fmt;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -49,55 +48,18 @@ use scoped_tls::scoped_thread_local;
 use crate::multitask;
 use crate::parking;
 use crate::task::{self, waker_fn::waker_fn};
+use crate::GlommioError;
 use crate::{IoRequirements, Latency};
 use crate::{Reactor, Shares};
 use ahash::AHashMap;
 
 static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug, Clone)]
-/// Error thrown when a Task Queue is not found.
-pub struct QueueNotFoundError {
-    index: usize,
-}
-
-impl QueueNotFoundError {
-    fn new(h: TaskQueueHandle) -> Self {
-        QueueNotFoundError { index: h.index }
-    }
-}
-
-impl std::error::Error for QueueNotFoundError {}
-
-impl fmt::Display for QueueNotFoundError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid queue index: {}", self.index)
-    }
-}
-
-#[derive(Debug, Clone)]
-/// Error thrown when a Task Queue is still active and one attempts to remove it
-pub struct QueueStillActiveError {
-    index: usize,
-}
-
-impl std::error::Error for QueueStillActiveError {}
-
-impl QueueStillActiveError {
-    fn new(h: TaskQueueHandle) -> Self {
-        QueueStillActiveError { index: h.index }
-    }
-}
-
-impl fmt::Display for QueueStillActiveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "queue with index {} is still active, but tried to remove",
-            self.index
-        )
-    }
-}
+/// Result type alias that removes the need to specify a type parameter
+/// that's only valid in the channel variants of the error. Otherwise it
+/// might be confused with the error (`E`) that a result usually has in
+/// the second type parameter.
+type Result<T> = crate::Result<T, ()>;
 
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
@@ -216,11 +178,11 @@ macro_rules! to_io_error {
     }};
 }
 
-fn bind_to_cpu(cpu: usize) -> io::Result<()> {
+fn bind_to_cpu(cpu: usize) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
     to_io_error!(&cpuset.set(cpu as usize))?;
     let pid = nix::unistd::Pid::from_raw(0);
-    to_io_error!(nix::sched::sched_setaffinity(pid, &cpuset))
+    to_io_error!(nix::sched::sched_setaffinity(pid, &cpuset)).map_err(Into::into)
 }
 
 // Dealing with references would imply getting an Rc, RefCells, and all of that
@@ -368,7 +330,7 @@ impl ExecutorQueues {
 ///
 /// Methods can be chained on it in order to configure it.
 ///
-/// The [`spawn`] method will take ownership of the builder and create an `io::Result` to the
+/// The [`spawn`] method will take ownership of the builder and create an `Result` to the
 /// [`LocalExecutor`] handle with the given configuration.
 ///
 /// The [`LocalExecutor::default`] free function uses a Builder with default configuration and
@@ -450,8 +412,8 @@ impl LocalExecutorBuilder {
         self
     }
 
-    /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and returns an
-    /// [`io::Result`] to the executor.
+    /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and returns a
+    /// [`Result`](crate::Result) to the executor.
     /// # Examples
     ///
     /// ```
@@ -459,7 +421,7 @@ impl LocalExecutorBuilder {
     ///
     /// let local_ex = LocalExecutorBuilder::new().make().unwrap();
     /// ```
-    pub fn make(self) -> io::Result<LocalExecutor> {
+    pub fn make(self) -> Result<LocalExecutor> {
         let mut le =
             LocalExecutor::new(EXECUTOR_ID.fetch_add(1, Ordering::Relaxed), self.io_memory);
         if let Some(cpu) = self.binding {
@@ -509,7 +471,7 @@ impl LocalExecutorBuilder {
     ///
     /// [`LocalExecutor::run`]:struct.LocalExecutor.html#method.run
     #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
-    pub fn spawn<G, F, T>(self, fut_gen: G) -> io::Result<JoinHandle<()>>
+    pub fn spawn<G, F, T>(self, fut_gen: G) -> Result<JoinHandle<()>>
     where
         G: FnOnce() -> F + std::marker::Send + 'static,
         F: Future<Output = T> + 'static,
@@ -517,17 +479,20 @@ impl LocalExecutorBuilder {
         let id = EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
         let name = format!("{}-{}", self.name, id);
 
-        Builder::new().name(name).spawn(move || {
-            let mut le = LocalExecutor::new(id, self.io_memory);
-            if let Some(cpu) = self.binding {
-                le.bind_to_cpu(cpu).unwrap();
-                le.queues.borrow_mut().spin_before_park = self.spin_before_park;
-            }
-            le.init().unwrap();
-            le.run(async move {
-                fut_gen().await;
+        Builder::new()
+            .name(name)
+            .spawn(move || {
+                let mut le = LocalExecutor::new(id, self.io_memory);
+                if let Some(cpu) = self.binding {
+                    le.bind_to_cpu(cpu).unwrap();
+                    le.queues.borrow_mut().spin_before_park = self.spin_before_park;
+                }
+                le.init().unwrap();
+                le.run(async move {
+                    fut_gen().await;
+                })
             })
-        })
+            .map_err(Into::into)
     }
 }
 
@@ -579,11 +544,11 @@ impl LocalExecutor {
         self.reactor.clone()
     }
 
-    fn bind_to_cpu(&self, cpu: usize) -> io::Result<()> {
+    fn bind_to_cpu(&self, cpu: usize) -> Result<()> {
         bind_to_cpu(cpu)
     }
 
-    fn init(&mut self) -> io::Result<()> {
+    fn init(&mut self) -> Result<()> {
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
             0,
@@ -639,23 +604,20 @@ impl LocalExecutor {
     /// Removes a task queue.
     ///
     /// The task queue cannot be removed if there are still pending tasks.
-    pub fn remove_task_queue(
-        &self,
-        handle: TaskQueueHandle,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn remove_task_queue(&self, handle: TaskQueueHandle) -> Result<()> {
         let mut queues = self.queues.borrow_mut();
 
         let queue_entry = queues.available_executors.entry(handle.index);
         if let Entry::Occupied(entry) = queue_entry {
             let tq = entry.get();
             if tq.borrow().is_active() {
-                return Err(Box::new(QueueStillActiveError::new(handle)));
+                return Err(GlommioError::queue_still_active(handle.index));
             }
 
             entry.remove();
             return Ok(());
         }
-        Err(Box::new(QueueNotFoundError::new(handle)))
+        Err(GlommioError::queue_not_found(handle.index))
     }
 
     fn get_queue(&self, handle: &TaskQueueHandle) -> Option<Rc<RefCell<TaskQueue>>> {
@@ -699,17 +661,13 @@ impl LocalExecutor {
         Task(ex.spawn(tq, future))
     }
 
-    fn spawn_into<T, F>(
-        &self,
-        future: F,
-        handle: TaskQueueHandle,
-    ) -> Result<Task<T>, QueueNotFoundError>
+    fn spawn_into<T, F>(&self, future: F, handle: TaskQueueHandle) -> Result<Task<T>>
     where
         F: Future<Output = T>,
     {
         let tq = self
             .get_queue(&handle)
-            .ok_or_else(|| QueueNotFoundError::new(handle))?;
+            .ok_or_else(|| GlommioError::queue_not_found(handle.index))?;
         let ex = tq.borrow().ex.clone();
         Ok(Task(ex.spawn(tq, future)))
     }
@@ -1055,7 +1013,7 @@ impl<T> Task<T> {
     pub fn local_into(
         future: impl Future<Output = T> + 'static,
         handle: TaskQueueHandle,
-    ) -> Result<Task<T>, QueueNotFoundError>
+    ) -> Result<Task<T>>
     where
         T: 'static,
     {
@@ -1185,10 +1143,10 @@ impl<T> Task<T> {
     /// [`ExecutorStats`]: struct.ExecutorStats.html
     /// [`QueueNotFoundError`]: struct.QueueNotFoundError.html
     /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
-    pub fn task_queue_stats(handle: TaskQueueHandle) -> Result<TaskQueueStats, QueueNotFoundError> {
+    pub fn task_queue_stats(handle: TaskQueueHandle) -> Result<TaskQueueStats> {
         LOCAL_EX.with(|local_ex| match local_ex.get_queue(&handle) {
             Some(x) => Ok(x.borrow().stats),
-            None => Err(QueueNotFoundError::new(handle)),
+            None => Err(GlommioError::queue_not_found(handle.index)),
         })
     }
 
