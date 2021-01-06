@@ -85,8 +85,8 @@ impl<F, R, S> Clone for RawTask<F, R, S> {
 
 impl<F, R, S> RawTask<F, R, S>
 where
-    F: Future<Output = R> + 'static,
-    S: Fn(Task) + 'static,
+    F: Future<Output = R>,
+    S: Fn(Task),
 {
     const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
         Self::clone_waker,
@@ -375,13 +375,13 @@ where
 
         struct Guard<'a, F, R, S>(&'a RawTask<F, R, S>)
         where
-            F: Future<Output = R> + 'static,
-            S: Fn(Task) + 'static;
+            F: Future<Output = R>,
+            S: Fn(Task);
 
         impl<'a, F, R, S> Drop for Guard<'a, F, R, S>
         where
-            F: Future<Output = R> + 'static,
-            S: Fn(Task) + 'static,
+            F: Future<Output = R>,
+            S: Fn(Task),
         {
             fn drop(&mut self) {
                 let raw = self.0;
@@ -573,13 +573,13 @@ where
         /// A guard that closes the task if polling its future panics.
         struct Guard<F, R, S>(RawTask<F, R, S>)
         where
-            F: Future<Output = R> + 'static,
-            S: Fn(Task) + 'static;
+            F: Future<Output = R>,
+            S: Fn(Task);
 
         impl<F, R, S> Drop for Guard<F, R, S>
         where
-            F: Future<Output = R> + 'static,
-            S: Fn(Task) + 'static,
+            F: Future<Output = R>,
+            S: Fn(Task),
         {
             fn drop(&mut self) {
                 let raw = self.0;

@@ -347,7 +347,7 @@ pub(crate) mod test {
             Err(_) => {
                 eprintln!(
                     "Glommio currently only supports NVMe-backed volumes formatted with XFS \
-                    or EXT4. To run poll io-related tests, please set SCIPIO_TEST_POLLIO_ROOTDIR to a \
+                    or EXT4. To run poll io-related tests, please set GLOMMIO_TEST_POLLIO_ROOTDIR to a \
                     NVMe-backed directory path in your environment.\nPoll io tests will not run."
                 );
             }

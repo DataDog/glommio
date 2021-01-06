@@ -125,10 +125,10 @@ impl LocalExecutor {
     }
 
     /// Spawns a thread-local future onto this executor.
-    pub(crate) fn spawn<T: 'static>(
+    pub(crate) fn spawn<T>(
         &self,
         tq: Rc<RefCell<TaskQueue>>,
-        future: impl Future<Output = T> + 'static,
+        future: impl Future<Output = T>,
     ) -> Task<T> {
         let tq = Rc::downgrade(&tq);
 

@@ -489,10 +489,7 @@ impl LocalExecutorBuilder {
                 }
                 le.init().unwrap();
                 le.run(async move {
-                    let task = Task::local(async move {
-                        fut_gen().await;
-                    });
-                    task.await;
+                    fut_gen().await;
                 })
             })
             .map_err(Into::into)
@@ -651,7 +648,7 @@ impl LocalExecutor {
         me.yielded = true;
     }
 
-    fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
+    fn spawn<T>(&self, future: impl Future<Output = T>) -> Task<T> {
         let tq = self
             .queues
             .borrow()
@@ -666,8 +663,7 @@ impl LocalExecutor {
 
     fn spawn_into<T, F>(&self, future: F, handle: TaskQueueHandle) -> Result<Task<T>>
     where
-        T: 'static,
-        F: Future<Output = T> + 'static,
+        F: Future<Output = T>,
     {
         let tq = self
             .get_queue(&handle)
@@ -788,17 +784,20 @@ impl LocalExecutor {
     /// assert_eq!(res, 6);
     /// ```
     pub fn run<T>(&self, future: impl Future<Output = T>) -> T {
-        pin!(future);
-
         let waker = waker_fn(|| {});
         let cx = &mut Context::from_waker(&waker);
 
         let spin_before_park = self.spin_before_park().unwrap_or_default();
 
         LOCAL_EX.set(self, || {
+            let future = self.spawn(async move { future.await }).detach();
+            pin!(future);
+
             loop {
                 if let Poll::Ready(t) = future.as_mut().poll(cx) {
-                    break t;
+                    // can't be canceled, and join handle is None only upon
+                    // cancellation or panic. So in case of panic this just propagates
+                    break t.unwrap();
                 }
 
                 // We want to do I/O before we call run_task_queues,
@@ -814,7 +813,7 @@ impl LocalExecutor {
                         // is exhausted. But if we sleep (park) we'll never know so we
                         // test again here. We can't test *just* here because the main
                         // future is probably the one setting up the task queues and etc.
-                        break t;
+                        break t.unwrap();
                     } else {
                         let spin_start = Instant::now();
                         while !self.reactor.spin_poll_io().unwrap() {
@@ -1750,5 +1749,22 @@ mod test {
             assert!(ratios[0] < 0.25);
             assert!(ratios[1] > 0.50);
         });
+    }
+
+    #[test]
+    fn multiple_spawn() {
+        // Issue 241
+        LocalExecutor::default().run(async {
+            Local::local(async {}).detach().await;
+            // In issue 241, the presence of the second detached waiter caused
+            // the program to hang.
+            Local::local(async {}).detach().await;
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Message!")]
+    fn panic_is_not_list() {
+        LocalExecutor::default().run(async { panic!("Message!") });
     }
 }

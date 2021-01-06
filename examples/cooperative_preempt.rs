@@ -5,11 +5,11 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 fn main() {
-    // Scipio is a cooperative thread per core system so once you start processing a future
+    // Glommio is a cooperative thread per core system so once you start processing a future
     // it will run it to completion. This is not great for latency, and may be outright wrong
     // if you have tasks that may spin forever before returning, like a long-lived server.
     //
-    // Applications using Scipio are then expected to be well-behaved and explicitly yield
+    // Applications using Glommio are then expected to be well-behaved and explicitly yield
     // control if they are going to do something that may take too long (that is usually a
     // loop!)
     //

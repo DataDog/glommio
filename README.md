@@ -1,14 +1,5 @@
 # glommio 
 
-**ATTENTION** If you are confused between this and Scipio, this
-project was previously called Scipio but had to be very unfortunately
-renamed due to a trademark dispute. This disclaimer will self-destruct
-as soon as people have enough time to switch over. We would also like to
-make sure to clarify that this doesn't change our opinion on Scipio
-Africanus being such a great and underrated general that deserved a lot
-better from Rome than what we got.
-
-
 [![CircleCI](https://circleci.com/gh/DataDog/glommio.svg?style=svg)](https://circleci.com/gh/DataDog/glommio)
 
 ## Join our Zulip community!
@@ -35,7 +26,8 @@ Using Glommio is not hard if you are familiar with rust async. All you have to d
 ```
 
 For more details check out our [docs
-page](https://docs.rs/glommio/0.2.0-alpha/glommio/)
+page](https://docs.rs/glommio/0.2.0-alpha/glommio/) and an [introductory
+article](https://www.datadoghq.com/blog/engineering/introducing-glommio/)
 
 ## Status
 
