@@ -215,6 +215,50 @@ impl TcpListener {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.listener.local_addr()?)
     }
+
+    /// Gets the value of the `IP_TTL` option for this socket.
+    ///
+    /// This option configures the time-to-live field that is used in every packet sent from this
+    /// socket.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::net::TcpListener;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
+    ///
+    ///     listener.set_ttl(100).expect("could not set TTL");
+    ///     assert_eq!(listener.ttl().unwrap(), 100);
+    /// });
+    /// ```
+    pub fn ttl(&self) -> Result<u32> {
+        Ok(self.listener.ttl()?)
+    }
+
+    /// Sets the value of the `IP_TTL` option for this socket.
+    ///
+    /// This option configures the time-to-live field that is used in every packet sent from this
+    /// socket.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::net::TcpListener;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
+    ///
+    ///     listener.set_ttl(100).expect("could not set TTL");
+    ///     assert_eq!(listener.ttl().unwrap(), 100);
+    /// });
+    /// ```
+    pub fn set_ttl(&self, ttl: u32) -> Result<()> {
+        Ok(self.listener.set_ttl(ttl)?)
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -471,6 +515,15 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn tcp_listener_ttl() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_ttl(100).unwrap();
+            assert_eq!(listener.ttl().unwrap(), 100);
+        });
+    }
 
     #[test]
     fn connect_local_server() {
