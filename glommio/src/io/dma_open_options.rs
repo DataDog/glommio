@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::dma_file::DmaFile;
+use crate::io::dma_file::{DmaFile, Result};
 use std::io;
 use std::path::Path;
 
@@ -114,18 +114,18 @@ impl DmaOpenOptions {
         self
     }
 
-    pub(super) fn get_access_mode(&self) -> io::Result<libc::c_int> {
+    pub(super) fn get_access_mode(&self) -> Result<libc::c_int> {
         Ok(match (self.read, self.write) {
             (true, false) => libc::O_RDONLY,
             (false, true) => libc::O_WRONLY,
             (true, true) => libc::O_RDWR,
-            (false, false) => return Err(io::Error::from_raw_os_error(libc::EINVAL)),
+            (false, false) => return Err(io::Error::from_raw_os_error(libc::EINVAL).into()),
         })
     }
 
-    pub(super) fn get_creation_mode(&self) -> io::Result<libc::c_int> {
+    pub(super) fn get_creation_mode(&self) -> Result<libc::c_int> {
         if !self.write && (self.truncate || self.create || self.create_new) {
-            Err(io::Error::from_raw_os_error(libc::EINVAL))
+            Err(io::Error::from_raw_os_error(libc::EINVAL).into())
         } else {
             Ok(match (self.create, self.truncate, self.create_new) {
                 (false, false, false) => 0,
@@ -138,7 +138,7 @@ impl DmaOpenOptions {
     }
 
     /// Similiar to `OpenOptions::open()` in the standard library, but returns a DMA file
-    pub async fn open<P: AsRef<Path>>(&self, path: P) -> io::Result<DmaFile> {
+    pub async fn open<P: AsRef<Path>>(&self, path: P) -> Result<DmaFile> {
         DmaFile::open_with_options(
             -1_i32,
             path.as_ref(),

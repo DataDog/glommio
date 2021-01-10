@@ -14,7 +14,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
 
-type Result<T> = crate::Result<T, ()>;
+pub(super) type Result<T> = crate::Result<T, ()>;
 
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
@@ -144,7 +144,7 @@ impl DmaFile {
         path: &'a Path,
         opdesc: &'static str,
         opts: &'a DmaOpenOptions,
-    ) -> io::Result<DmaFile> {
+    ) -> Result<DmaFile> {
         // try to open the file with O_DIRECT if the underlying media supports it
         let flags = libc::O_CLOEXEC
             | libc::O_DIRECT
