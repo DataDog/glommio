@@ -3,16 +3,16 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::error::ErrorEnhancer;
-use crate::parking::Reactor;
-use crate::sys;
-use crate::Local;
+
+use crate::{parking::Reactor, sys, GlommioError, Local};
 use log::debug;
 use std::convert::TryInto;
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+
+type Result<T> = crate::Result<T, ()>;
 
 /// A wrapper over `std::fs::File` which carries a path (for better error
 /// messages) and prints a warning if closed synchronously.
@@ -112,12 +112,15 @@ impl GlommioFile {
         (fd, path)
     }
 
-    pub(crate) async fn close(self) -> io::Result<()> {
+    pub(crate) async fn close(self) -> Result<()> {
         let reactor = self.reactor.upgrade().unwrap();
         // Destruct `self` into components skipping Drop.
         let (fd, path) = self.discard();
         let source = reactor.close(fd);
-        enhanced_try!(source.collect_rw().await, "Closing", path, Some(fd))?;
+        source
+            .collect_rw()
+            .await
+            .map_err(|source| GlommioError::create_enhanced(source, "Closing", path, Some(fd)))?;
         Ok(())
     }
 
@@ -126,29 +129,35 @@ impl GlommioFile {
         self
     }
 
-    pub(crate) fn path_required(&self, op: &'static str) -> io::Result<&Path> {
-        self.path.as_deref().ok_or_else(|| {
-            ErrorEnhancer {
-                inner: std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "operation requires a valid path",
-                ),
+    pub(crate) fn path_required(&self, op: &'static str) -> Result<&Path> {
+        self.path
+            .as_deref()
+            .ok_or_else(|| GlommioError::EnhancedIoError {
                 op,
                 path: None,
                 fd: Some(self.as_raw_fd()),
-            }
-            .into()
-        })
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "operation requires a valid path",
+                ),
+            })
     }
 
-    pub(crate) async fn pre_allocate(&self, size: u64) -> io::Result<()> {
+    pub(crate) async fn pre_allocate(&self, size: u64) -> Result<()> {
         let flags = libc::FALLOC_FL_ZERO_RANGE;
         let source = self
             .reactor
             .upgrade()
             .unwrap()
             .fallocate(self.as_raw_fd(), 0, size, flags);
-        enhanced_try!(source.collect_rw().await, "Pre-allocate space", self)?;
+        source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Pre-allocate space",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })?;
         Ok(())
     }
 
@@ -156,38 +165,60 @@ impl GlommioFile {
         sys::fs_hint_extentsize(self.as_raw_fd(), size)
     }
 
-    pub(crate) async fn truncate(&self, size: u64) -> io::Result<()> {
-        enhanced_try!(
-            sys::truncate_file(self.as_raw_fd(), size),
-            "Truncating",
-            self
-        )
+    pub(crate) async fn truncate(&self, size: u64) -> Result<()> {
+        sys::truncate_file(self.as_raw_fd(), size).map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Truncating",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })
     }
 
-    pub(crate) async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
+    pub(crate) async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
         let old_path = self.path_required("rename")?;
-        enhanced_try!(
-            crate::io::rename(old_path, &new_path).await,
-            "Renaming",
-            self
-        )?;
+        crate::io::rename(old_path, &new_path)
+            .await
+            .map_err(|source| {
+                GlommioError::create_enhanced(
+                    source,
+                    "Renaming",
+                    self.path.as_ref(),
+                    Some(self.as_raw_fd()),
+                )
+            })?;
         self.path = Some(new_path.as_ref().to_owned());
         Ok(())
     }
 
-    pub(crate) async fn fdatasync(&self) -> io::Result<()> {
+    pub(crate) async fn fdatasync(&self) -> Result<()> {
         let source = self.reactor.upgrade().unwrap().fdatasync(self.as_raw_fd());
-        enhanced_try!(source.collect_rw().await, "Syncing", self)?;
+        source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Syncing",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })?;
         Ok(())
     }
 
-    pub(crate) async fn remove(&self) -> io::Result<()> {
+    pub(crate) async fn remove(&self) -> Result<()> {
         let path = self.path_required("remove")?;
-        enhanced_try!(sys::remove_file(path), "Removing", self)
+        sys::remove_file(path).map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "Removing",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall
-    pub(crate) async fn statx(&self) -> io::Result<libc::statx> {
+    pub(crate) async fn statx(&self) -> Result<libc::statx> {
         let path = self.path_required("stat")?;
 
         let source = self
@@ -195,12 +226,19 @@ impl GlommioFile {
             .upgrade()
             .unwrap()
             .statx(self.as_raw_fd(), path);
-        enhanced_try!(source.collect_rw().await, "getting file metadata", self)?;
+        source.collect_rw().await.map_err(|source| {
+            GlommioError::create_enhanced(
+                source,
+                "getting file metadata",
+                self.path.as_ref(),
+                Some(self.as_raw_fd()),
+            )
+        })?;
         let stype = source.extract_source_type();
         stype.try_into()
     }
 
-    pub(crate) async fn file_size(&self) -> io::Result<u64> {
+    pub(crate) async fn file_size(&self) -> Result<u64> {
         let st = self.statx().await?;
         Ok(st.stx_size)
     }

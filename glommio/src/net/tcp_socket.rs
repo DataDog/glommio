@@ -21,6 +21,8 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
+type Result<T> = crate::Result<T, ()>;
+
 #[derive(Debug)]
 /// A TCP socket server, listening for connections.
 ///
@@ -82,7 +84,7 @@ impl TcpListener {
     ///     println!("Listening on {}", listener.local_addr().unwrap());
     /// });
     /// ```
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> Result<TcpListener> {
         let addr = addr
             .to_socket_addrs()
             .unwrap()
@@ -135,7 +137,7 @@ impl TcpListener {
     /// [`AcceptedTcpStream`]: struct.AcceptedTcpStream.html
     /// [`TcpStream`]: struct.TcpStream.html
     /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-    pub async fn shared_accept(&self) -> io::Result<AcceptedTcpStream> {
+    pub async fn shared_accept(&self) -> Result<AcceptedTcpStream> {
         let reactor = self.reactor.upgrade().unwrap();
         let source = reactor.accept(self.listener.as_raw_fd());
         let fd = source.collect_rw().await?;
@@ -167,7 +169,7 @@ impl TcpListener {
     ///
     /// [`shared_accept`]: TcpListener::accept
     /// [`bind_to_executor`]: AcceptedTcpStream::bind_to_executor
-    pub async fn accept(&self) -> io::Result<TcpStream> {
+    pub async fn accept(&self) -> Result<TcpStream> {
         let a = self.shared_accept().await?;
         Ok(a.bind_to_executor())
     }
@@ -190,7 +192,7 @@ impl TcpListener {
     ///     }
     /// });
     /// ```
-    pub fn incoming(&self) -> impl Stream<Item = io::Result<TcpStream>> + Unpin + '_ {
+    pub fn incoming(&self) -> impl Stream<Item = Result<TcpStream>> + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
             let res = listener.accept().await;
             Some((res, listener))
@@ -210,8 +212,8 @@ impl TcpListener {
     ///     println!("Listening on {}", listener.local_addr().unwrap());
     /// });
     /// ```
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.listener.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        Ok(self.listener.local_addr()?)
     }
 }
 
@@ -318,7 +320,7 @@ impl TcpStream {
     ///     TcpStream::connect("127.0.0.1:10000").await.unwrap();
     /// })
     /// ```
-    pub async fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
+    pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<TcpStream> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
 
         let reactor = Local::get_reactor();
@@ -342,15 +344,17 @@ impl TcpStream {
     }
 
     /// Shuts down the read, write, or both halves of this connection.
-    pub async fn shutdown(&self, how: Shutdown) -> io::Result<()> {
-        poll_fn(|cx| self.stream.poll_shutdown(cx, how)).await
+    pub async fn shutdown(&self, how: Shutdown) -> Result<()> {
+        poll_fn(|cx| self.stream.poll_shutdown(cx, how))
+            .await
+            .map_err(Into::into)
     }
 
     /// Sets the `TCP_NODELAY` option to this socket.
     ///
     /// Setting this to true disabled the Nagle algorithm.
-    pub fn set_nodelay(&mut self, value: bool) -> io::Result<()> {
-        self.stream.stream.set_nodelay(value)
+    pub fn set_nodelay(&mut self, value: bool) -> Result<()> {
+        self.stream.stream.set_nodelay(value).map_err(Into::into)
     }
 
     /// Sets the buffer size used on the receive path
@@ -367,8 +371,8 @@ impl TcpStream {
     ///
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
-    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stream.peek(buf).await
+    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
+        self.stream.peek(buf).await.map_err(Into::into)
     }
 
     /// Returns the socket address of the remote peer of this TCP connection.
@@ -385,8 +389,8 @@ impl TcpStream {
     ///     println!("My peer: {:?}", stream.peer_addr());
     /// })
     /// ```
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.stream.peer_addr()
+    pub fn peer_addr(&self) -> Result<SocketAddr> {
+        self.stream.stream.peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this TCP connection.
@@ -403,8 +407,8 @@ impl TcpStream {
     ///     println!("My peer: {:?}", stream.local_addr());
     /// })
     /// ```
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.stream.stream.local_addr()
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.stream.stream.local_addr().map_err(Into::into)
     }
 }
 
@@ -475,7 +479,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle: Task<io::Result<SocketAddr>> =
+            let listener_handle: Task<Result<SocketAddr>> =
                 Task::local(enclose! { (coord) async move {
                     coord.set(1);
                     let stream = listener.accept().await?;
@@ -578,13 +582,12 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle: Task<io::Result<()>> =
-                Task::local(enclose! { (coord) async move {
-                    coord.set(1);
-                    listener.incoming().take(4).try_for_each(|addr| {
-                        addr.map(|_| ())
-                    }).await
-                }});
+            let listener_handle: Task<Result<()>> = Task::local(enclose! { (coord) async move {
+                coord.set(1);
+                listener.incoming().take(4).try_for_each(|addr| {
+                    addr.map(|_| ())
+                }).await
+            }});
 
             while coord.get() != 1 {
                 Local::later().await;
@@ -648,7 +651,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle = Task::<io::Result<u8>>::local(enclose! { (coord) async move {
+            let listener_handle = Task::<Result<u8>>::local(enclose! { (coord) async move {
                 coord.set(1);
                 let mut stream = listener.accept().await?;
                 let mut byte = [0u8; 1];
@@ -676,7 +679,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = Vec::new();
                 stream.read_until(10, &mut buf).await?;
@@ -699,7 +702,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = String::new();
                 stream.read_line(&mut buf).await?;
@@ -721,7 +724,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let stream = listener.accept().await?;
                 Ok(stream.lines().count().await)
             })
@@ -742,7 +745,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<()>>::local(async move {
+            let listener_handle = Task::<Result<()>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 // likely both messages were coalesced together
@@ -774,7 +777,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<()>>::local(async move {
+            let listener_handle = Task::<Result<()>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf.len(), 4);
@@ -799,7 +802,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<()>>::local(async move {
+            let listener_handle = Task::<Result<()>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf, b"msg1");
@@ -826,7 +829,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<io::Result<usize>>::local(async move {
+            let listener_handle = Task::<Result<usize>>::local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = [0u8; 64];
                 for _ in 0..10 {

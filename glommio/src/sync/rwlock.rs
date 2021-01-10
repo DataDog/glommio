@@ -33,11 +33,7 @@
 //!
 use core::fmt::Debug;
 use std::cell::{Ref, RefCell, RefMut};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::future::Future;
-use std::io;
-use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
@@ -46,85 +42,15 @@ use intrusive_collections::linked_list::LinkOps;
 use intrusive_collections::{container_of, offset_of, Adapter, PointerOps};
 use intrusive_collections::{LinkedList, LinkedListLink};
 
+use crate::{GlommioError, ResourceType};
 use std::marker::PhantomPinned;
 use std::ptr::NonNull;
 
 /// A type alias for the result of a lock method which can be suspended.
-pub type LockResult<T> = Result<T, LockClosedError>;
+pub type LockResult<T> = Result<T, GlommioError<()>>;
 
 /// A type alias for the result of a non-suspending locking method.
-pub type TryLockResult<T> = Result<T, TryLockError>;
-
-///Error which indicates that RwLock is closed and can not be use
-///to request lock access
-pub struct LockClosedError;
-
-impl Error for LockClosedError {}
-
-impl Display for LockClosedError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.write_str("lock already closed")
-    }
-}
-
-impl Debug for LockClosedError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.write_str("Closed")
-    }
-}
-
-/// Error which indicates reason of the error returned by [`try_read`] and ['try_write'] methods
-/// on ['RwLock']
-///
-/// [`try_read`]: struct.RwLock.html#method.try_read
-/// [`try_write`]: struct.RwLock.html#method.try_write
-pub enum TryLockError {
-    ///Lock is closed and can not be used to request access to the lock
-    Closed(LockClosedError),
-    ///Requested access can not be granted till already hold access will be released
-    WouldSuspend,
-}
-
-impl Display for TryLockError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        match self {
-            TryLockError::Closed(error) => Display::fmt(error, f),
-            TryLockError::WouldSuspend => f.write_str("call would suspend execution"),
-        }
-    }
-}
-
-impl Debug for TryLockError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        match self {
-            TryLockError::Closed(error) => Debug::fmt(error, f),
-            TryLockError::WouldSuspend => f.write_str("WouldSuspend"),
-        }
-    }
-}
-
-impl Error for TryLockError {}
-
-impl From<LockClosedError> for TryLockError {
-    fn from(error: LockClosedError) -> Self {
-        TryLockError::Closed(error)
-    }
-}
-
-impl From<LockClosedError> for io::Error {
-    fn from(er: LockClosedError) -> Self {
-        io::Error::new(ErrorKind::BrokenPipe, er)
-    }
-}
-
-impl From<TryLockError> for io::Error {
-    fn from(er: TryLockError) -> Self {
-        match &er {
-            TryLockError::Closed(_) => io::Error::new(ErrorKind::BrokenPipe, er),
-            TryLockError::WouldSuspend => io::Error::new(ErrorKind::WouldBlock, er),
-        }
-    }
-}
+pub type TryLockResult<T> = Result<T, GlommioError<()>>;
 
 #[derive(Debug)]
 struct Waiter<'a, T> {
@@ -404,7 +330,7 @@ impl State {
 
     fn try_read(&mut self) -> LockResult<bool> {
         if self.closed {
-            return Err(LockClosedError);
+            return Err(GlommioError::Closed(ResourceType::RwLock));
         }
 
         debug_assert!(!(self.readers > 0 && self.writers > 0));
@@ -419,7 +345,7 @@ impl State {
 
     fn try_write(&mut self) -> LockResult<bool> {
         if self.closed {
-            return Err(LockClosedError);
+            return Err(GlommioError::Closed(ResourceType::RwLock));
         }
 
         debug_assert!(!(self.readers > 0 && self.writers > 0));
@@ -571,7 +497,7 @@ impl<T> RwLock<T> {
     pub fn get_mut(&mut self) -> LockResult<&mut T> {
         let state = self.state.borrow();
         if state.closed {
-            return Err(LockClosedError);
+            return Err(GlommioError::Closed(ResourceType::RwLock));
         }
 
         Ok(unsafe { &mut *(self.value.borrow_mut().as_mut().unwrap() as *mut _) })
@@ -725,7 +651,7 @@ impl<T> RwLock<T> {
             });
         }
 
-        Err(TryLockError::WouldSuspend)
+        Err(GlommioError::WouldBlock(ResourceType::RwLock))
     }
 
     /// Attempts to lock this RwLock with exclusive write access.
@@ -767,7 +693,7 @@ impl<T> RwLock<T> {
             });
         }
 
-        Err(TryLockError::WouldSuspend)
+        Err(GlommioError::WouldBlock(ResourceType::RwLock))
     }
 
     ///Indicates whether current RwLock is closed. Once lock is closed all subsequent calls
@@ -872,7 +798,7 @@ impl<T> RwLock<T> {
     pub fn into_inner(self) -> LockResult<T> {
         let state = self.state.borrow();
         if state.closed {
-            return Err(LockClosedError {});
+            return Err(GlommioError::Closed(ResourceType::RwLock));
         }
 
         drop(state);
@@ -987,9 +913,8 @@ impl<T> Drop for RwLock<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::sync::rwlock::LockClosedError;
+    use super::*;
     use crate::sync::rwlock::RwLock;
-    use crate::sync::rwlock::TryLockError;
     use crate::timer::Timer;
     use crate::LocalExecutor;
     use crate::Task;
@@ -1283,7 +1208,7 @@ mod test {
 
             let write_result = lock.try_write();
             match write_result {
-                Err(TryLockError::WouldSuspend) => (),
+                Err(GlommioError::WouldBlock(ResourceType::RwLock)) => (),
                 Ok(_) => assert!(
                     false,
                     "try_write should not succeed while read_guard is in scope"
@@ -1303,7 +1228,7 @@ mod test {
 
             let write_result = lock.try_read();
             match write_result {
-                Err(TryLockError::WouldSuspend) => (),
+                Err(GlommioError::WouldBlock(ResourceType::RwLock)) => (),
                 Ok(_) => assert!(
                     false,
                     "try_read should not succeed while read_guard is in scope"
@@ -1351,7 +1276,7 @@ mod test {
         assert!(lock.is_closed());
         let into_inner_result = lock.into_inner();
         match into_inner_result {
-            Err(LockClosedError) => (),
+            Err(_) => (),
             Ok(_) => panic!("into_inner of closed lock is Ok"),
         }
     }
@@ -1371,7 +1296,7 @@ mod test {
         assert!(lock.is_closed());
         let get_mut_result = lock.get_mut();
         match get_mut_result {
-            Err(LockClosedError) => (),
+            Err(_) => (),
             Ok(_) => panic!("get_mut of closed lock is Ok"),
         }
     }

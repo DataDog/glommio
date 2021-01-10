@@ -5,13 +5,15 @@
 //
 use crate::parking::Reactor;
 use crate::task::JoinHandle;
-use crate::{Local, QueueNotFoundError, Task, TaskQueueHandle};
+use crate::{Local, Task, TaskQueueHandle};
 use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
+
+type Result<T> = crate::Result<T, ()>;
 
 #[derive(Debug)]
 struct Inner {
@@ -267,7 +269,7 @@ impl<T: 'static> TimerActionOnce<T> {
         when: Duration,
         action: impl Future<Output = T> + 'static,
         tq: TaskQueueHandle,
-    ) -> Result<TimerActionOnce<T>, QueueNotFoundError> {
+    ) -> Result<TimerActionOnce<T>> {
         let reactor = Local::get_reactor();
         let timer_id = reactor.register_timer();
         let timer = Timer::from_id(timer_id, when);
@@ -350,7 +352,7 @@ impl<T: 'static> TimerActionOnce<T> {
         when: Instant,
         action: impl Future<Output = T> + 'static,
         tq: TaskQueueHandle,
-    ) -> Result<TimerActionOnce<T>, QueueNotFoundError> {
+    ) -> Result<TimerActionOnce<T>> {
         let now = Instant::now();
         let dur = {
             if when > now {
@@ -537,10 +539,7 @@ impl TimerActionRepeat {
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerActionRepeat`]: struct.TimerActionRepeat.html
     /// [`TaskQueueHandle`]: ../struct.TaskQueueHandle.html
-    pub fn repeat_into<G, F>(
-        action_gen: G,
-        tq: TaskQueueHandle,
-    ) -> Result<TimerActionRepeat, QueueNotFoundError>
+    pub fn repeat_into<G, F>(action_gen: G, tq: TaskQueueHandle) -> Result<TimerActionRepeat>
     where
         G: Fn() -> F + 'static,
         F: Future<Output = Option<Duration>> + 'static,

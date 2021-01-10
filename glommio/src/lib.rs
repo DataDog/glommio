@@ -6,11 +6,6 @@
 //
 //! # Glommio - asynchronous thread per core applications in Rust.
 //!
-//! ## Attention
-//!
-//! This crate was previously named Scipio but was renamed after a trademark dispute. We are
-//! removing this message soon but it is now here to avoid confusion.
-//!
 //! ## What is Glommio
 //!
 //! Glommio is a library providing a safe Rust interface for asynchronous, thread-local I/O, based
@@ -22,6 +17,9 @@
 //!
 //! This library provides abstractions for timers, file I/O and networking plus support for
 //! multiple-queues and an internal scheduler, all without using helper threads.
+//!
+//! A more detailed exposition of Glommio's architecture is [available in this blog
+//! post](https://www.datadoghq.com/blog/engineering/introducing-glommio/)
 //!
 //! ### Rust `async`
 //!
@@ -91,6 +89,15 @@
 //! time. Notice that this scheduling method doesn't prevent either `tq1` no `tq2` from using 100%
 //! of CPU time at times in which they are the only task queue running: the shares are only
 //! considered when multiple queues need to run.
+//!
+//! ## Direct I/O
+//!
+//! Glommio makes Direct I/O a first-class citizen, although Buffered I/O is present as well for
+//! situations where it may make sense.
+//!
+//! This rides the trend of devices getting faster over the years and tries to bridge the software
+//! gap between fast devices, and fast storage applications. You can read more about it [in this
+//! article](https://itnext.io/modern-storage-is-plenty-fast-it-is-the-apis-that-are-bad-6a68319fbc1a)
 //!
 //! ## Controlled processes
 //!
@@ -216,10 +223,6 @@
 //!
 //! * As mentioned, an I/O Scheduler.
 //!
-//! * The networking code uses `poll + rw`. This is essentially so we could get started sooner by
-//!   reusing code from [async-io](https://github.com/stjepang/async-io) but we really should be
-//!   using uring's native interface for that
-//!
 //! * Visibility: the crate exposes no metrics on its internals, and that should change ASAP.
 //!
 //!
@@ -239,7 +242,7 @@
 //! local_ex.run(async {
 //!     let timeout = async {
 //!         Timer::new(Duration::from_secs(10)).await;
-//!         Err(io::ErrorKind::TimedOut.into())
+//!         Err(io::Error::new(io::ErrorKind::TimedOut, "").into())
 //!     };
 //!     let stream = TcpStream::connect("::80").or(timeout).await?;
 //!
@@ -379,9 +382,9 @@ pub mod sync;
 pub mod timer;
 
 pub use crate::byte_slice_ext::{ByteSliceExt, ByteSliceMutExt};
+pub use crate::error::{GlommioError, QueueErrorKind, ResourceType, Result};
 pub use crate::executor::{
-    ExecutorStats, LocalExecutor, LocalExecutorBuilder, QueueNotFoundError, Task, TaskQueueHandle,
-    TaskQueueStats,
+    ExecutorStats, LocalExecutor, LocalExecutorBuilder, Task, TaskQueueHandle, TaskQueueStats,
 };
 pub use crate::shares::{Shares, SharesManager};
 pub use enclose::enclose;
@@ -391,8 +394,8 @@ pub use scopeguard::defer;
 pub mod prelude {
     #[doc(no_inline)]
     pub use crate::{
-        ByteSliceExt, ByteSliceMutExt, Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares,
-        TaskQueueHandle,
+        error::GlommioError, ByteSliceExt, ByteSliceMutExt, Latency, Local, LocalExecutor,
+        LocalExecutorBuilder, Shares, TaskQueueHandle,
     };
 }
 

@@ -17,6 +17,8 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, Waker};
 
+type Result<T> = crate::Result<T, ()>;
+
 pin_project! {
     #[derive(Debug)]
     /// Provides linear read access to a [`BufferedFile`].
@@ -87,7 +89,7 @@ enum FileStatus {
 }
 
 #[derive(Debug)]
-/// Provides linear write access to a [`BufferedFile`].     
+/// Provides linear write access to a [`BufferedFile`].
 ///
 /// The [`StreamWriter`] implements [`AsyncWrite`]
 ///
@@ -194,7 +196,7 @@ impl Buffer {
 
 impl StreamReader {
     /// Asynchronously closes the underlying file.
-    pub async fn close(self) -> io::Result<()> {
+    pub async fn close(self) -> Result<()> {
         self.file.close().await
     }
 
