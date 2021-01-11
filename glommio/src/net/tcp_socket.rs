@@ -394,7 +394,6 @@ impl TcpStream {
             .map_err(Into::into)
     }
 
-
     /// Sets the value of the `TCP_NODELAY` option on this socket.
     ///
     /// If set, this option disables the Nagle algorithm. This means that
