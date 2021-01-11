@@ -397,7 +397,7 @@ impl TcpStream {
     /// Sets the `TCP_NODELAY` option to this socket.
     ///
     /// Setting this to true disabled the Nagle algorithm.
-    pub fn set_nodelay(&mut self, value: bool) -> Result<()> {
+    pub fn set_nodelay(&self, value: bool) -> Result<()> {
         self.stream.stream.set_nodelay(value).map_err(Into::into)
     }
 
