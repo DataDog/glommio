@@ -394,9 +394,27 @@ impl TcpStream {
             .map_err(Into::into)
     }
 
-    /// Sets the `TCP_NODELAY` option to this socket.
+
+    /// Sets the value of the `TCP_NODELAY` option on this socket.
     ///
-    /// Setting this to true disabled the Nagle algorithm.
+    /// If set, this option disables the Nagle algorithm. This means that
+    /// segments are always sent as soon as possible, even if there is only a
+    /// small amount of data. When not set, data is buffered until there is a
+    /// sufficient amount to send out, thereby avoiding the frequent sending of
+    /// small packets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use glommio::net::TcpStream;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    ///     stream.set_nodelay(true).expect("set_nodelay call failed");
+    /// });
+    /// ```
     pub fn set_nodelay(&self, value: bool) -> Result<()> {
         self.stream.stream.set_nodelay(value).map_err(Into::into)
     }
