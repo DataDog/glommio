@@ -419,6 +419,27 @@ impl TcpStream {
         self.stream.stream.set_nodelay(value).map_err(Into::into)
     }
 
+    /// Gets the `TCP_NODELAY` option on this socket.
+    ///
+    /// For more information about this option, see [`TcpStream::set_nodelay`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use glommio::net::TcpStream;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    ///     stream.set_nodelay(true).expect("set_nodelay call failed");
+    ///     assert_eq!(stream.nodelay().unwrap(), true);
+    /// });
+    /// ```
+    pub fn nodelay(&self) -> Result<bool> {
+        self.stream.stream.nodelay().map_err(Into::into)
+    }
+
     /// Sets the buffer size used on the receive path
     pub fn set_buffer_size(&mut self, buffer_size: usize) {
         self.stream.rx_buf_size = buffer_size;
@@ -593,6 +614,17 @@ mod tests {
             let stream = TcpStream::connect(addr).await.unwrap();
             stream.set_ttl(100).unwrap();
             assert_eq!(stream.ttl().unwrap(), 100);
+        });
+    }
+
+    #[test]
+    fn tcp_stream_nodelay() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let stream = TcpStream::connect(addr).await.unwrap();
+            stream.set_nodelay(true).expect("set_nodelay call failed");
+            assert_eq!(stream.nodelay().unwrap(), true);
         });
     }
 
