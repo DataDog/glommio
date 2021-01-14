@@ -129,7 +129,7 @@ impl LocalExecutor {
     pub(crate) fn spawn<T>(
         &self,
         tq: Rc<RefCell<TaskQueue>>,
-        future: impl Future<Output=T>,
+        future: impl Future<Output = T>,
     ) -> Task<T> {
         let tq = Rc::downgrade(&tq);
 

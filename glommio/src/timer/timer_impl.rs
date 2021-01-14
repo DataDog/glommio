@@ -693,9 +693,9 @@ impl TimerActionRepeat {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::LocalExecutorBuilder;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use crate::LocalExecutorBuilder;
 
     #[test]
     fn basic_timer_works() {
@@ -1003,13 +1003,15 @@ mod test {
         // 2. Ensure correct clean up of resources in case of presence of unfinished tasks. Previous
         // versions of timer and executor caused abort of the program at some cases.
 
-        let handle = LocalExecutorBuilder::new().spawn(|| async move {
-            let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
-                println!("hello");
-            });
+        let handle = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
+                    println!("hello");
+                });
 
-            action.rearm_in(Duration::from_millis(100));
-        }).unwrap();
+                action.rearm_in(Duration::from_millis(100));
+            })
+            .unwrap();
 
         handle.join().unwrap();
     }
