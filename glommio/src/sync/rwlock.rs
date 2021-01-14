@@ -1319,7 +1319,9 @@ mod test {
                 c_semaphore.acquire(1).await.unwrap();
 
                 let _g = c_lock.read().await.unwrap();
-                wait_on_cond!(c_cond, 1);
+                *c_cond.borrow_mut() = 1;
+
+                wait_on_cond!(c_cond, 2);
 
                 for _ in 0..100 {
                     Timer::new(Duration::from_micros(100)).await;
@@ -1335,7 +1337,8 @@ mod test {
             .detach();
 
             semaphore.signal(1);
-            *cond.borrow_mut() = 1;
+            wait_on_cond!(cond, 1);
+            *cond.borrow_mut() = 2;
             let _ = lock.write().await.unwrap();
         })
     }
