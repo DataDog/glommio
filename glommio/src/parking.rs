@@ -487,7 +487,7 @@ impl Reactor {
         dir: RawFd,
         path: &Path,
         flags: libc::c_int,
-        mode: libc::c_int,
+        mode: libc::mode_t,
     ) -> Source {
         let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
 

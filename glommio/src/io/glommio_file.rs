@@ -69,7 +69,7 @@ impl GlommioFile {
         dir: RawFd,
         path: &Path,
         flags: libc::c_int,
-        mode: libc::c_int,
+        mode: libc::mode_t,
     ) -> io::Result<GlommioFile> {
         let reactor = Local::get_reactor();
         let path = if dir == -1 && path.is_relative() {

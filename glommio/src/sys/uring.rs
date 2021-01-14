@@ -1195,7 +1195,7 @@ impl Reactor {
         self.queue_standard_request(source, op);
     }
 
-    pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::c_int) {
+    pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::mode_t) {
         let pathptr = match &*source.source_type() {
             SourceType::Open(cstring) => cstring.as_c_str().as_ptr(),
             _ => panic!("Wrong source type!"),
