@@ -138,10 +138,12 @@ impl Timers {
         self.timer_id
     }
 
-    fn remove(&mut self, id: u64) {
+    fn remove(&mut self, id: u64) -> Option<Waker> {
         if let Some(when) = self.timers_by_id.remove(&id) {
-            self.timers.remove(&(when, id));
+            return self.timers.remove(&(when, id));
         }
+
+        None
     }
 
     fn insert(&mut self, id: u64, when: Instant, waker: Waker) {
@@ -507,15 +509,15 @@ impl Reactor {
     /// Registers a timer in the reactor.
     ///
     /// Returns the inserted timer's ID.
-    pub(crate) fn insert_timer(&self, id: u64, when: Instant, waker: &Waker) {
+    pub(crate) fn insert_timer(&self, id: u64, when: Instant, waker: Waker) {
         let mut timers = self.timers.borrow_mut();
-        timers.insert(id, when, waker.clone());
+        timers.insert(id, when, waker);
     }
 
     /// Deregisters a timer from the reactor.
-    pub(crate) fn remove_timer(&self, id: u64) {
+    pub(crate) fn remove_timer(&self, id: u64) -> Option<Waker> {
         let mut timers = self.timers.borrow_mut();
-        timers.remove(id);
+        timers.remove(id)
     }
 
     /// Processes ready timers and extends the list of wakers to wake.
