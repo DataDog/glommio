@@ -258,6 +258,8 @@ pub(crate) enum SourceType {
     Connect(SockAddr),
     Accept(SockAddrStorage),
     Invalid,
+    #[cfg(feature = "bench")]
+    Noop,
 }
 
 impl TryFrom<SourceType> for libc::statx {

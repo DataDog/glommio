@@ -503,6 +503,13 @@ impl Reactor {
         source
     }
 
+    #[cfg(feature = "bench")]
+    pub(crate) fn nop(&self) -> Source {
+        let source = self.new_source(-1, SourceType::Noop);
+        self.sys.nop(&source);
+        source
+    }
+
     /// Registers a timer in the reactor.
     ///
     /// Returns the registered timer's ID.

@@ -41,6 +41,9 @@ futures = "0.3.5"
 fastrand = "1.4.0"
 tokio = { version = "0.3.5", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time"] }
 
+[features]
+bench = []
+
 [[bench]]
 name = "executor"
 harness = false
@@ -73,3 +76,6 @@ harness = false
 name = "udp"
 harness = false
 
+[[bench]]
+name = "nop"
+harness = false
