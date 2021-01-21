@@ -12,13 +12,13 @@ use crate::{
 use crate::{enclose, Local};
 use futures_lite::future;
 use futures_lite::stream::Stream;
+use std::fmt;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
 type Result<T, V> = crate::Result<T, V>;
 
-#[derive(Debug)]
 /// The `SharedReceiver` is the receiving end of the Shared Channel.
 /// It implements [`Send`] so it can be passed to any thread. However
 /// it doesn't implement any method: before it is used it must be changed
@@ -35,7 +35,6 @@ pub struct SharedReceiver<T: Send + Sized + Copy> {
     state: Option<Rc<ReceiverState<T>>>,
 }
 
-#[derive(Debug)]
 /// The `SharedSender` is the sending end of the Shared Channel.
 /// It implements [`Send`] so it can be passed to any thread. However
 /// it doesn't implement any method: before it is used it must be changed
@@ -52,10 +51,27 @@ pub struct SharedSender<T: Send + Sized + Copy> {
     state: Option<Rc<SenderState<T>>>,
 }
 
+impl<T: Send + Sized + Copy> fmt::Debug for SharedSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.state {
+            Some(s) => write!(f, "Unbound SharedSender {:?}", s.buffer),
+            None => write!(f, "Bound SharedSender"),
+        }
+    }
+}
+
+impl<T: Send + Sized + Copy> fmt::Debug for SharedReceiver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.state {
+            Some(s) => write!(f, "Unbound SharedReceiver: {:?}", s.buffer),
+            None => write!(f, "Bound SharedReceiver"),
+        }
+    }
+}
+
 unsafe impl<T: Send + Sized + Copy> Send for SharedReceiver<T> {}
 unsafe impl<T: Send + Sized + Copy> Send for SharedSender<T> {}
 
-#[derive(Debug)]
 /// The `ConnectedReceiver` is the receiving end of the Shared Channel.
 pub struct ConnectedReceiver<T: Send + Sized + Copy> {
     id: u64,
@@ -63,7 +79,6 @@ pub struct ConnectedReceiver<T: Send + Sized + Copy> {
     reactor: Weak<Reactor>,
 }
 
-#[derive(Debug)]
 /// The `ConnectedReceiver` is the sending end of the Shared Channel.
 pub struct ConnectedSender<T: Send + Sized + Copy> {
     id: u64,
@@ -71,12 +86,22 @@ pub struct ConnectedSender<T: Send + Sized + Copy> {
     reactor: Weak<Reactor>,
 }
 
-#[derive(Debug)]
+impl<T: Send + Sized + Copy> fmt::Debug for ConnectedReceiver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Connected Receiver {}: {:?}", self.id, self.state.buffer)
+    }
+}
+
+impl<T: Send + Sized + Copy> fmt::Debug for ConnectedSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Connected Sender {} : {:?}", self.id, self.state.buffer)
+    }
+}
+
 struct SenderState<T: Send + Sized + Copy> {
     buffer: Producer<T>,
 }
 
-#[derive(Debug)]
 struct ReceiverState<T: Send + Sized + Copy> {
     buffer: Consumer<T>,
 }

@@ -52,6 +52,7 @@ impl<T: Copy> fmt::Debug for Buffer<T> {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);
         let shead = self.shadow_head.get();
+        let stail = self.shadow_tail.get();
         let consumer_disconnected = self.consumer_disconnected.load(Ordering::Relaxed) != 0;
         let producer_disconnected = self.producer_disconnected.load(Ordering::Relaxed) != 0;
 
@@ -59,8 +60,9 @@ impl<T: Copy> fmt::Debug for Buffer<T> {
             .field("capacity:", &self.capacity)
             .field("allocated_size:", &self.allocated_size)
             .field("consumer_head:", &head)
-            .field("producer_tail:", &tail)
             .field("shadow_head:", &shead)
+            .field("producer_tail:", &tail)
+            .field("shadow_tail:", &stail)
             .field("consumer_disconnected:", &consumer_disconnected)
             .field("producer_disconnected:", &producer_disconnected)
             .finish()
@@ -70,15 +72,25 @@ impl<T: Copy> fmt::Debug for Buffer<T> {
 unsafe impl<T: Sync + Copy> Sync for Buffer<T> {}
 
 /// A handle to the queue which allows consuming values from the buffer
-#[derive(Debug)]
 pub(crate) struct Consumer<T: Copy> {
-    buffer: Arc<Buffer<T>>,
+    pub(crate) buffer: Arc<Buffer<T>>,
 }
 
 /// A handle to the queue which allows adding values onto the buffer
-#[derive(Debug)]
 pub(crate) struct Producer<T: Copy> {
-    buffer: Arc<Buffer<T>>,
+    pub(crate) buffer: Arc<Buffer<T>>,
+}
+
+impl<T: Copy> fmt::Debug for Consumer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Consumer {:?}", self.buffer)
+    }
+}
+
+impl<T: Copy> fmt::Debug for Producer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Producer {:?}", self.buffer)
+    }
 }
 
 unsafe impl<T: Send + Copy> Send for Consumer<T> {}
