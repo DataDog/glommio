@@ -296,6 +296,11 @@ impl Reactor {
         id
     }
 
+    pub(crate) fn unregister_shared_channel(&self, id: u64) {
+        let mut channels = self.shared_channels.borrow_mut();
+        channels.check_map.remove(&id);
+    }
+
     pub(crate) fn add_shared_channel_waker(&self, id: u64, waker: Waker) {
         let mut channels = self.shared_channels.borrow_mut();
         let map = channels.wakers_map.entry(id).or_insert_with(VecDeque::new);
