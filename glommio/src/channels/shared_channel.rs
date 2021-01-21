@@ -334,6 +334,9 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
                 r.notify(fd);
             }
         }
+        if let Some(r) = self.reactor.upgrade() {
+            r.unregister_shared_channel(self.id)
+        }
     }
 }
 
@@ -344,6 +347,9 @@ impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
             if let Some(r) = self.reactor.upgrade() {
                 r.notify(fd);
             }
+        }
+        if let Some(r) = self.reactor.upgrade() {
+            r.unregister_shared_channel(self.id)
         }
     }
 }
