@@ -43,7 +43,9 @@ use std::time::{Duration, Instant};
 use futures_lite::*;
 
 use crate::sys;
-use crate::sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
+use crate::sys::{
+    DirectIO, DmaBuffer, IOBuffer, PollableStatus, SleepNotifier, Source, SourceType,
+};
 use crate::Local;
 use crate::{IoRequirements, Latency};
 
@@ -248,8 +250,9 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    pub(crate) fn new(io_memory: usize) -> Reactor {
-        let sys = sys::Reactor::new(io_memory).expect("cannot initialize I/O event notification");
+    pub(crate) fn new(notifier: Arc<SleepNotifier>, io_memory: usize) -> Reactor {
+        let sys = sys::Reactor::new(notifier, io_memory)
+            .expect("cannot initialize I/O event notification");
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
             sys,

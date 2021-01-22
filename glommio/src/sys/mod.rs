@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use ahash::AHashMap;
 use iou::{SockAddr, SockAddrStorage};
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
@@ -10,9 +11,11 @@ use std::ffi::CString;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::{FromRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::task::Waker;
 use std::time::Duration;
 use std::{fmt, io};
@@ -199,6 +202,81 @@ mod uring;
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::uring::*;
 use crate::{error::ReactorErrorKind, GlommioError, IoRequirements};
+
+#[derive(Debug, Default)]
+pub(crate) struct ReactorGlobalState {
+    idgen: usize,
+    // reactor_id -> notifier
+    sleep_notifiers: AHashMap<usize, Arc<SleepNotifier>>,
+}
+
+impl ReactorGlobalState {
+    fn new_local_state(&mut self) -> io::Result<Arc<SleepNotifier>> {
+        // note how this starts from 1. 0 means "no notifier present"
+        self.idgen += 1;
+        let id = self.idgen;
+        let notifier = SleepNotifier::new(id)?;
+        let res = self.sleep_notifiers.insert(id, notifier.clone());
+        assert_eq!(res.is_none(), true);
+        Ok(notifier)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SleepNotifier {
+    id: usize,
+    eventfd: std::fs::File,
+    memory: Arc<AtomicUsize>,
+}
+
+lazy_static! {
+    static ref REACTOR_GLOBAL_STATE: RwLock<ReactorGlobalState> =
+        RwLock::new(ReactorGlobalState::default());
+}
+
+pub(super) fn new_sleep_notifier() -> io::Result<Arc<SleepNotifier>> {
+    let mut state = REACTOR_GLOBAL_STATE.write().unwrap();
+    state.new_local_state()
+}
+
+impl SleepNotifier {
+    pub(crate) fn new(id: usize) -> io::Result<Arc<Self>> {
+        let eventfd = unsafe { std::fs::File::from_raw_fd(create_eventfd()?) };
+        Ok(Arc::new(Self {
+            eventfd,
+            id,
+            memory: Arc::new(AtomicUsize::new(0)),
+        }))
+    }
+
+    pub(crate) fn eventfd_fd(&self) -> RawFd {
+        self.eventfd.as_raw_fd()
+    }
+
+    pub(crate) fn eventfd_memory(&self) -> Arc<AtomicUsize> {
+        self.memory.clone()
+    }
+
+    pub(crate) fn id(&self) -> usize {
+        self.id
+    }
+
+    pub(super) fn prepare_to_sleep(&self) {
+        self.memory
+            .store(self.eventfd.as_raw_fd() as _, Ordering::Release);
+    }
+
+    pub(super) fn wake_up(&self) {
+        self.memory.store(0, Ordering::Release);
+    }
+}
+
+impl Drop for SleepNotifier {
+    fn drop(&mut self) {
+        let mut state = REACTOR_GLOBAL_STATE.write().unwrap();
+        state.sleep_notifiers.remove(&self.id).unwrap();
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum IOBuffer {

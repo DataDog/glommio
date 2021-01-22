@@ -27,8 +27,7 @@ use crate::sys::{
 use crate::{IoRequirements, Latency};
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use iou::{MsgFlags, SockAddr, SockAddrStorage, SockFlag};
-use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use uring_sys::IoRingOp;
@@ -940,14 +939,10 @@ pub(crate) struct Reactor {
     poll_ring: RefCell<PollRing>,
 
     link_rings_src: RefCell<Source>,
-
     timeout_src: Cell<Option<Source>>,
 
     // This keeps the eventfd alive. Drop will close it when we're done
-    _eventfd: std::fs::File,
-    // This tells the other reactors whether we are sleeping or not, and if we
-    // are what is our eventfd
-    eventfd_memory: Arc<AtomicUsize>,
+    notifier: Arc<sys::SleepNotifier>,
     // This is the source used to handle the notifications into the ring
     eventfd_src: Source,
 }
@@ -993,7 +988,10 @@ fn align_up(v: usize, align: usize) -> usize {
 }
 
 impl Reactor {
-    pub(crate) fn new(mut io_memory: usize) -> io::Result<Reactor> {
+    pub(crate) fn new(
+        notifier: Arc<sys::SleepNotifier>,
+        mut io_memory: usize,
+    ) -> io::Result<Reactor> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
@@ -1035,7 +1033,6 @@ impl Reactor {
         }
 
         let latency_ring = SleepableRing::new(128, "latency", allocator.clone())?;
-
         let link_fd = latency_ring.ring_fd();
         let link_rings_src = Source::new(
             IoRequirements::default(),
@@ -1043,10 +1040,9 @@ impl Reactor {
             SourceType::LinkRings(LinkStatus::Freestanding),
         );
 
-        let eventfd = unsafe { std::fs::File::from_raw_fd(sys::create_eventfd()?) };
         let eventfd_src = Source::new(
             IoRequirements::default(),
-            eventfd.as_raw_fd(),
+            notifier.eventfd_fd(),
             SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
         );
         assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
@@ -1057,14 +1053,13 @@ impl Reactor {
             poll_ring: RefCell::new(poll_ring),
             link_rings_src: RefCell::new(link_rings_src),
             timeout_src: Cell::new(None),
-            _eventfd: eventfd,
-            eventfd_memory: Arc::new(AtomicUsize::new(0)),
+            notifier,
             eventfd_src,
         })
     }
 
     pub(crate) fn eventfd(&self) -> Arc<AtomicUsize> {
-        self.eventfd_memory.clone()
+        self.notifier.eventfd_memory()
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
@@ -1324,12 +1319,11 @@ impl Reactor {
             // We have to sweep the remote channels function once more because since
             // last time until now it could be that something happened in a remote executor
             // that opened up room. If if did we bail on sleep and go process it.
-            self.eventfd_memory
-                .store(self.eventfd_src.raw() as _, Ordering::Release);
+            self.notifier.prepare_to_sleep();
             if process_remote_channels(wakers) == 0 {
                 self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)?;
                 // woke up, so no need to notify us anymore.
-                self.eventfd_memory.store(0, Ordering::Release);
+                self.notifier.wake_up();
                 consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
             }
         }
