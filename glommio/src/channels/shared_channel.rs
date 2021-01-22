@@ -126,7 +126,7 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
     /// to send data into this channel
     ///
     /// [`ConnectedSender`]: struct.ConnectedSender.html
-    pub fn connect(mut self) -> ConnectedSender<T> {
+    pub async fn connect(mut self) -> ConnectedSender<T> {
         let state = self.state.take().unwrap();
         let reactor = Local::get_reactor();
         state.buffer.connect(reactor.eventfd());
@@ -155,17 +155,21 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// use glommio::channels::shared_channel;
     /// use futures_lite::StreamExt;
     ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async move {
-    ///     let (sender, receiver) = shared_channel::new_bounded(1);
-    ///     let sender = sender.connect();
-    ///     let mut receiver = receiver.connect();
-    ///     sender.try_send(0);
-    ///     sender.try_send(0).unwrap_err(); // no more capacity
+    /// let (sender, receiver) = shared_channel::new_bounded(1);
+    /// let producer = LocalExecutorBuilder::new()
+    ///    .name("producer")
+    ///    .spawn(move || async move {
+    ///         let sender = sender.connect().await;
+    ///         sender.try_send(0);
+    ///  }).unwrap();
+    ///  let receiver = LocalExecutorBuilder::new()
+    ///    .name("receiver")
+    ///    .spawn(move || async move {
+    ///     let mut receiver = receiver.connect().await;
     ///     receiver.next().await.unwrap(); // now we have capacity again
-    ///     drop(receiver); // but because the receiver is destroyed send will err
-    ///     sender.try_send(0).unwrap_err();
-    /// });
+    ///  }).unwrap();
+    ///  producer.join().unwrap();
+    ///  receiver.join().unwrap();
     /// ```
     ///
     /// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
@@ -209,13 +213,21 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// use glommio::prelude::*;
     /// use glommio::channels::shared_channel;
     ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async move {
-    ///     let (sender, receiver) = shared_channel::new_bounded(1);
-    ///     let sender = sender.connect();
-    ///     let receiver = receiver.connect();
-    ///     sender.send(0).await.unwrap();
-    /// });
+    /// let (sender, receiver) = shared_channel::new_bounded(1);
+    /// let producer = LocalExecutorBuilder::new()
+    ///    .name("producer")
+    ///    .spawn(move || async move {
+    ///         let sender = sender.connect().await;
+    ///         sender.send(0).await;
+    ///  }).unwrap();
+    ///  let receiver = LocalExecutorBuilder::new()
+    ///    .name("receiver")
+    ///    .spawn(move || async move {
+    ///     let mut receiver = receiver.connect().await;
+    ///     receiver.recv().await.unwrap();
+    ///  }).unwrap();
+    ///  producer.join().unwrap();
+    ///  receiver.join().unwrap();
     /// ```
     pub async fn send(&self, item: T) -> Result<(), T> {
         let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
@@ -246,7 +258,7 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
     /// to send data into this channel
     ///
     /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
-    pub fn connect(mut self) -> ConnectedReceiver<T> {
+    pub async fn connect(mut self) -> ConnectedReceiver<T> {
         let reactor = Local::get_reactor();
         let state = self.state.take().unwrap();
         state.buffer.connect(reactor.eventfd());
@@ -279,15 +291,22 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     /// use glommio::prelude::*;
     /// use glommio::channels::shared_channel;
     ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async move {
-    ///     let (sender, receiver) = shared_channel::new_bounded(1);
-    ///     let sender = sender.connect();
-    ///     let receiver = receiver.connect();
-    ///     sender.send(0).await.unwrap();
+    /// let (sender, receiver) = shared_channel::new_bounded(1);
+    /// let producer = LocalExecutorBuilder::new()
+    ///    .name("producer")
+    ///    .spawn(move || async move {
+    ///         let sender = sender.connect().await;
+    ///         sender.try_send(0u32);
+    ///  }).unwrap();
+    ///  let receiver = LocalExecutorBuilder::new()
+    ///    .name("receiver")
+    ///    .spawn(move || async move {
+    ///     let mut receiver = receiver.connect().await;
     ///     let x = receiver.recv().await.unwrap();
     ///     assert_eq!(x, 0);
-    /// });
+    ///  }).unwrap();
+    ///  producer.join().unwrap();
+    ///  receiver.join().unwrap();
     /// ```
     ///
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
@@ -395,7 +414,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 Timer::new(Duration::from_millis(10)).await;
                 sender.try_send(100).unwrap();
             })
@@ -403,7 +422,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let x = receiver.recv().await;
                 assert_eq!(x.unwrap(), 100);
             })
@@ -421,7 +440,7 @@ mod test {
             .pin_to_cpu(0)
             .spin_before_park(Duration::from_millis(1000000))
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 for _ in 0..10 {
                     sender.send(1).await.unwrap();
                     Timer::new(Duration::from_millis(1)).await;
@@ -433,7 +452,7 @@ mod test {
             .pin_to_cpu(1)
             .spin_before_park(Duration::from_millis(1000000))
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let sum = receiver.fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -450,14 +469,14 @@ mod test {
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 Timer::new(Duration::from_millis(100)).await;
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 sender.send(1).await.unwrap();
             })
             .unwrap();
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let recv = receiver.recv().await.unwrap();
                 assert_eq!(recv, 1);
                 let sum = receiver.fold(0, |acc, x| acc + x).await;
@@ -475,7 +494,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 // This will go right away because the channel fits 1 element
                 sender.try_send(1).unwrap();
                 // This will sleep. The consumer should unblock us
@@ -486,7 +505,7 @@ mod test {
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 Timer::new(Duration::from_millis(100)).await;
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let sum = receiver.fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 2);
             })
@@ -508,7 +527,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver: ConnectedReceiver<usize> = receiver.connect();
+                let receiver: ConnectedReceiver<usize> = receiver.connect().await;
                 assert_eq!(receiver.recv().await.is_none(), true);
             })
             .unwrap();
@@ -530,7 +549,7 @@ mod test {
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 Timer::new(Duration::from_millis(100)).await;
-                let sender: ConnectedSender<usize> = sender.connect();
+                let sender: ConnectedSender<usize> = sender.connect().await;
                 match sender.send(0).await {
                     Ok(_) => panic!("Should not have sent"),
                     Err(GlommioError::Closed(ResourceType::Channel(_))) => {
@@ -556,7 +575,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 Timer::new(Duration::from_millis(10)).await;
                 if sender.send(|| 32).await.is_err() {
                     panic!("send failed");
@@ -566,7 +585,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let x = receiver.recv().await.unwrap();
                 assert_eq!(32, x());
             })
@@ -585,7 +604,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 sender.send(0).await.unwrap();
                 let x = sender.try_send(1);
                 assert_eq!(x.is_err(), true);
@@ -595,7 +614,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
 
                 while status.load(Ordering::Relaxed) == 0 {}
                 let x = receiver.recv().await.unwrap();

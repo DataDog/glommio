@@ -12,8 +12,8 @@ fn main() {
     let server_ex = LocalExecutorBuilder::new()
         .pin_to_cpu(0)
         .spawn(move || async move {
-            let addr_sender = server_sender.connect();
-            let addr_receiver = client_receiver.connect();
+            let addr_sender = server_sender.connect().await;
+            let addr_receiver = client_receiver.connect().await;
 
             let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
             addr_sender
@@ -46,8 +46,8 @@ fn main() {
     let client_ex = LocalExecutorBuilder::new()
         .pin_to_cpu(1)
         .spawn(move || async move {
-            let addr_receiver = server_receiver.connect();
-            let addr_sender = client_sender.connect();
+            let addr_receiver = server_receiver.connect().await;
+            let addr_sender = client_sender.connect().await;
 
             let addr = addr_receiver.recv().await.unwrap();
             let client = UdpSocket::bind("127.0.0.1:0").unwrap();

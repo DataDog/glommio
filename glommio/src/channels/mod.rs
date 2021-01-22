@@ -108,7 +108,7 @@ pub mod local_channel;
 ///     .spawn(move || async move {
 ///         // Before using we have to connect. Connecting this endpoint
 ///         // binds it this executor as the connected endpoint is not Send.
-///         let sender = sender.connect();
+///         let sender = sender.connect().await;
 ///         // Channel has room for 1 element so this will always succeed
 ///         sender.try_send(100).unwrap();
 ///     })
@@ -117,7 +117,7 @@ pub mod local_channel;
 /// let ex2 = LocalExecutorBuilder::new()
 ///     .spawn(move || async move {
 ///         // much like the sender, the receiver also needs to be connected
-///         let receiver = receiver.connect();
+///         let receiver = receiver.connect().await;
 ///         let x = receiver.recv().await.unwrap();
 ///         assert_eq!(x, 100);
 ///     })
