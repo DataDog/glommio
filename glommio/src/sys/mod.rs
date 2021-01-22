@@ -201,9 +201,10 @@ mod uring;
 
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::uring::*;
-use crate::{error::ReactorErrorKind, GlommioError, IoRequirements};
+use crate::error::{ExecutorErrorKind, GlommioError, ReactorErrorKind};
+use crate::IoRequirements;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ReactorGlobalState {
     idgen: usize,
     // reactor_id -> notifier
@@ -215,10 +216,29 @@ impl ReactorGlobalState {
         // note how this starts from 1. 0 means "no notifier present"
         self.idgen += 1;
         let id = self.idgen;
+        if id == 0 || id == usize::MAX {
+            return Err(GlommioError::<()>::ExecutorError(ExecutorErrorKind::InvalidId(id)).into());
+        }
+
         let notifier = SleepNotifier::new(id)?;
         let res = self.sleep_notifiers.insert(id, notifier.clone());
         assert_eq!(res.is_none(), true);
         Ok(notifier)
+    }
+}
+
+/// By default, we create a placeholder notifier for id = usize::MAX (the disconnected case).
+/// It will never require a notification because we will never call sleep or wake up on it
+impl Default for ReactorGlobalState {
+    fn default() -> Self {
+        let mut sleep_notifiers = AHashMap::new();
+        // we could set the eventfd to -1 in the dummy object, but for simplicity we'll
+        // just create. We can't recover from a failure here, tough.
+        sleep_notifiers.insert(usize::MAX, SleepNotifier::new(usize::MAX).unwrap());
+        Self {
+            idgen: 0,
+            sleep_notifiers,
+        }
     }
 }
 
@@ -239,6 +259,11 @@ pub(super) fn new_sleep_notifier() -> io::Result<Arc<SleepNotifier>> {
     state.new_local_state()
 }
 
+pub(crate) fn get_sleep_notifier_for(id: usize) -> Option<Arc<SleepNotifier>> {
+    let state = REACTOR_GLOBAL_STATE.read().unwrap();
+    state.sleep_notifiers.get(&id).cloned()
+}
+
 impl SleepNotifier {
     pub(crate) fn new(id: usize) -> io::Result<Arc<Self>> {
         let eventfd = unsafe { std::fs::File::from_raw_fd(create_eventfd()?) };
@@ -253,15 +278,21 @@ impl SleepNotifier {
         self.eventfd.as_raw_fd()
     }
 
-    pub(crate) fn eventfd_memory(&self) -> Arc<AtomicUsize> {
-        self.memory.clone()
-    }
-
     pub(crate) fn id(&self) -> usize {
         self.id
     }
 
+    pub(crate) fn must_notify(&self) -> Option<RawFd> {
+        match self.memory.load(Ordering::Acquire) {
+            0 => None,
+            x => Some(x as _),
+        }
+    }
+
     pub(super) fn prepare_to_sleep(&self) {
+        // This will allow this eventfd to be notified. This should not happen
+        // for the placeholder (disconnected) case.
+        assert_ne!(self.id, usize::MAX);
         self.memory
             .store(self.eventfd.as_raw_fd() as _, Ordering::Release);
     }

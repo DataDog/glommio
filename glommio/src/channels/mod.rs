@@ -78,6 +78,12 @@ pub mod local_channel;
 /// respond back, other executors that are not really connected to anybody, cliques of
 /// executors, you name it.
 ///
+/// However, note that connecting a channel will involve a blocking operation as we need to
+/// synchronize and exchange information between peers. That can block the executor, although in
+/// practice that will only happen if it races with the creation of a new executor. Because of
+/// that, The best performance pattern when using shared channels is to create both the
+/// executors and channels early, connect the channels as soon as they start, and keep them alive.
+///
 /// Data that goes into the channels need to be [`Send`], as well as the channels themselves
 /// (otherwise you would not be able to really pass them along to the actual executors). But to
 /// prevent accidental use from multiple producers, the channel endpoints have to be `connected` before

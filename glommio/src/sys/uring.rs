@@ -27,7 +27,6 @@ use crate::sys::{
 use crate::{IoRequirements, Latency};
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use iou::{MsgFlags, SockAddr, SockAddrStorage, SockFlag};
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use uring_sys::IoRingOp;
@@ -1058,8 +1057,8 @@ impl Reactor {
         })
     }
 
-    pub(crate) fn eventfd(&self) -> Arc<AtomicUsize> {
-        self.notifier.eventfd_memory()
+    pub(crate) fn id(&self) -> usize {
+        self.notifier.id()
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
@@ -1392,7 +1391,8 @@ mod tests {
 
     #[test]
     fn timeout_smoke_test() {
-        let reactor = Reactor::new(0).unwrap();
+        let notifier = sys::new_sleep_notifier().unwrap();
+        let reactor = Reactor::new(notifier, 0).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(

@@ -1,6 +1,5 @@
 use std::cell::Cell;
 use std::fmt;
-use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -33,18 +32,20 @@ pub(crate) struct Buffer<T: Copy> {
     /// Index position of the current head
     head: AtomicUsize,
     shadow_tail: Cell<usize>,
-    producer_disconnected: AtomicUsize,
-    producer_eventfd: Cell<Option<Arc<AtomicUsize>>>,
-    _padding2: [usize; cacheline_pad(4)],
+    /// Id == 0 : never connected
+    /// Id == usize::MAX: disconnected
+    producer_id: AtomicUsize,
+    _padding2: [usize; cacheline_pad(3)],
 
     /// Producer cacheline:
 
     /// Index position of current tail
     tail: AtomicUsize,
     shadow_head: Cell<usize>,
-    consumer_disconnected: AtomicUsize,
-    consumer_eventfd: Cell<Option<Arc<AtomicUsize>>>,
-    _padding3: [usize; cacheline_pad(4)],
+    /// Id == 0 : never connected
+    /// Id == usize::MAX: disconnected
+    consumer_id: AtomicUsize,
+    _padding3: [usize; cacheline_pad(3)],
 }
 
 impl<T: Copy> fmt::Debug for Buffer<T> {
@@ -53,8 +54,14 @@ impl<T: Copy> fmt::Debug for Buffer<T> {
         let tail = self.tail.load(Ordering::Relaxed);
         let shead = self.shadow_head.get();
         let stail = self.shadow_tail.get();
-        let consumer_disconnected = self.consumer_disconnected.load(Ordering::Relaxed) != 0;
-        let producer_disconnected = self.producer_disconnected.load(Ordering::Relaxed) != 0;
+        let id_to_str = |id| match id {
+            0 => "not connected".into(),
+            usize::MAX => "disconnected".into(),
+            x => format!("{}", x),
+        };
+
+        let consumer_id = id_to_str(self.consumer_id.load(Ordering::Relaxed));
+        let producer_id = id_to_str(self.producer_id.load(Ordering::Relaxed));
 
         f.debug_struct("SPSC Buffer")
             .field("capacity:", &self.capacity)
@@ -63,8 +70,8 @@ impl<T: Copy> fmt::Debug for Buffer<T> {
             .field("shadow_head:", &shead)
             .field("producer_tail:", &tail)
             .field("shadow_tail:", &stail)
-            .field("consumer_disconnected:", &consumer_disconnected)
-            .field("producer_disconnected:", &producer_disconnected)
+            .field("consumer_id:", &consumer_id)
+            .field("producer_id:", &producer_id)
             .finish()
     }
 }
@@ -72,11 +79,13 @@ impl<T: Copy> fmt::Debug for Buffer<T> {
 unsafe impl<T: Sync + Copy> Sync for Buffer<T> {}
 
 /// A handle to the queue which allows consuming values from the buffer
+#[derive(Clone)]
 pub(crate) struct Consumer<T: Copy> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
 /// A handle to the queue which allows adding values onto the buffer
+#[derive(Clone)]
 pub(crate) struct Producer<T: Copy> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
@@ -125,7 +134,7 @@ impl<T: Copy> Buffer<T> {
     /// `v` was the value attempting to be pushed onto the buffer.  If the value was successfully
     /// pushed onto the buffer, `None` will be returned signifying success.
     fn try_push(&self, v: T) -> Option<T> {
-        if self.consumer_disconnected.load(Ordering::Acquire) > 0 {
+        if self.consumer_disconnected() {
             return Some(v);
         }
         let current_tail = self.tail.load(Ordering::Relaxed);
@@ -146,22 +155,22 @@ impl<T: Copy> Buffer<T> {
 
     /// Disconnects the consumer, and returns whether or not it was already disconnected
     pub(crate) fn disconnect_consumer(&self) -> bool {
-        self.consumer_disconnected.swap(1, Ordering::Release) != 0
+        self.consumer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
     /// Disconnects the consumer, and returns whether or not it was already disconnected
     pub(crate) fn disconnect_producer(&self) -> bool {
-        self.producer_disconnected.swap(1, Ordering::Release) != 0
+        self.producer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
     /// Disconnects the consumer, and returns whether or not it was already disconnected
     pub(crate) fn producer_disconnected(&self) -> bool {
-        self.producer_disconnected.load(Ordering::Acquire) != 0
+        self.producer_id.load(Ordering::Acquire) == usize::MAX
     }
 
     /// Disconnects the consumer, and returns whether or not it was already disconnected
     pub(crate) fn consumer_disconnected(&self) -> bool {
-        self.consumer_disconnected.load(Ordering::Acquire) != 0
+        self.consumer_id.load(Ordering::Acquire) == usize::MAX
     }
 
     /// Returns the current size of the queue
@@ -199,18 +208,16 @@ pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
         capacity,
         allocated_size: capacity.next_power_of_two(),
         _padding1: [0; cacheline_pad(3)],
-        _padding2: [0; cacheline_pad(4)],
-        _padding3: [0; cacheline_pad(4)],
+        _padding2: [0; cacheline_pad(3)],
+        _padding3: [0; cacheline_pad(3)],
 
         head: AtomicUsize::new(0),
         shadow_tail: Cell::new(0),
-        producer_disconnected: AtomicUsize::new(0),
-        producer_eventfd: Cell::new(None),
+        producer_id: AtomicUsize::new(0),
 
         tail: AtomicUsize::new(0),
         shadow_head: Cell::new(0),
-        consumer_disconnected: AtomicUsize::new(0),
-        consumer_eventfd: Cell::new(None),
+        consumer_id: AtomicUsize::new(0),
     });
 
     (
@@ -234,24 +241,8 @@ pub(crate) trait BufferHalf {
     type Item: Copy;
 
     fn buffer(&self) -> &Buffer<Self::Item>;
-    fn eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>>;
-    fn opposite_eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>>;
-
-    fn must_notify(&self) -> Option<RawFd> {
-        let eventfd = self.opposite_eventfd();
-        let mem = eventfd.take();
-        let ret = mem.as_ref().map(|x| x.load(Ordering::Acquire) as _);
-        eventfd.set(mem);
-        match ret {
-            None | Some(0) => None,
-            Some(x) => Some(x),
-        }
-    }
-
-    fn connect(&self, eventfd: Arc<AtomicUsize>) {
-        let old = self.eventfd().replace(Some(eventfd));
-        assert_eq!(old.is_none(), true);
-    }
+    fn connect(&self, id: usize);
+    fn peer_id(&self) -> usize;
 
     /// Returns the total capacity of this queue
     ///
@@ -275,11 +266,15 @@ impl<T: Copy> BufferHalf for Producer<T> {
     fn buffer(&self) -> &Buffer<T> {
         &*self.buffer
     }
-    fn eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
-        &(*self.buffer).producer_eventfd
+
+    fn connect(&self, id: usize) {
+        assert_ne!(id, 0);
+        assert_ne!(id, usize::MAX);
+        (*self.buffer).producer_id.store(id, Ordering::Relaxed);
     }
-    fn opposite_eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
-        &(*self.buffer).consumer_eventfd
+
+    fn peer_id(&self) -> usize {
+        (*self.buffer).consumer_id.load(Ordering::Relaxed)
     }
 }
 
@@ -298,7 +293,6 @@ impl<T: Copy> Producer<T> {
     ///
     /// Returns the buffer status before the disconnect
     pub(crate) fn disconnect(&self) -> bool {
-        (*self.buffer).producer_eventfd.set(None);
         (*self.buffer).disconnect_producer()
     }
 
@@ -320,11 +314,15 @@ impl<T: Copy> BufferHalf for Consumer<T> {
     fn buffer(&self) -> &Buffer<T> {
         &(*self.buffer)
     }
-    fn eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
-        &(*self.buffer).consumer_eventfd
+
+    fn connect(&self, id: usize) {
+        assert_ne!(id, usize::MAX);
+        assert_ne!(id, 0);
+        (*self.buffer).consumer_id.store(id, Ordering::Relaxed);
     }
-    fn opposite_eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>> {
-        &(*self.buffer).producer_eventfd
+
+    fn peer_id(&self) -> usize {
+        (*self.buffer).producer_id.load(Ordering::Relaxed)
     }
 }
 
@@ -334,7 +332,6 @@ impl<T: Copy> Consumer<T> {
     ///
     /// Returns the buffer status before the disconnect
     pub(crate) fn disconnect(&self) -> bool {
-        (*self.buffer).consumer_eventfd.set(None);
         (*self.buffer).disconnect_consumer()
     }
 
