@@ -72,6 +72,8 @@ pub enum ExecutorErrorKind {
         /// the kind of error encountered
         kind: QueueErrorKind,
     },
+    /// The executor Id is invalid
+    InvalidId(usize),
 }
 
 impl fmt::Display for ExecutorErrorKind {
@@ -79,6 +81,9 @@ impl fmt::Display for ExecutorErrorKind {
         match self {
             ExecutorErrorKind::QueueError { index, kind } => {
                 write!(f, "Queue #{} is {}", index, kind)
+            }
+            ExecutorErrorKind::InvalidId(x) => {
+                write!(f, "indexing executor with id {}, which is invalid", x)
             }
         }
     }
@@ -241,11 +246,15 @@ impl<T> Debug for GlommioError<T> {
                 ResourceType::Channel(_) => write!(f, "ChannelError {{ .. }}"),
                 ResourceType::File(msg) => write!(f, "File (\"{}\")", msg),
             },
-            GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => f
-                .write_fmt(format_args!(
+            GlommioError::ExecutorError(kind) => match kind {
+                ExecutorErrorKind::QueueError { index, kind } => f.write_fmt(format_args!(
                     "QueueError {{ index: {}, kind: {:?} }}",
                     index, kind
                 )),
+                ExecutorErrorKind::InvalidId(x) => {
+                    f.write_fmt(format_args!("Invalid Executor ID {{ id: {} }}", x))
+                }
+            },
             GlommioError::EnhancedIoError {
                 source,
                 op,
@@ -292,6 +301,10 @@ impl<T> From<GlommioError<T>> for io::Error {
                     ),
                 }
             }
+            GlommioError::ExecutorError(ExecutorErrorKind::InvalidId(id)) => io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid executor id {}", id),
+            ),
             GlommioError::EnhancedIoError { source, .. } => {
                 io::Error::new(source.kind(), display_err)
             }

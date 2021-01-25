@@ -5,6 +5,7 @@
 //
 //
 use crate::parking::Reactor;
+use crate::sys::{self, SleepNotifier};
 use crate::{
     channels::spsc_queue::{make, BufferHalf, Consumer, Producer},
     GlommioError, ResourceType,
@@ -12,13 +13,15 @@ use crate::{
 use crate::{enclose, Local};
 use futures_lite::future;
 use futures_lite::stream::Stream;
+use std::fmt;
+use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 type Result<T, V> = crate::Result<T, V>;
 
-#[derive(Debug)]
 /// The `SharedReceiver` is the receiving end of the Shared Channel.
 /// It implements [`Send`] so it can be passed to any thread. However
 /// it doesn't implement any method: before it is used it must be changed
@@ -35,7 +38,6 @@ pub struct SharedReceiver<T: Send + Sized + Copy> {
     state: Option<Rc<ReceiverState<T>>>,
 }
 
-#[derive(Debug)]
 /// The `SharedSender` is the sending end of the Shared Channel.
 /// It implements [`Send`] so it can be passed to any thread. However
 /// it doesn't implement any method: before it is used it must be changed
@@ -52,33 +54,89 @@ pub struct SharedSender<T: Send + Sized + Copy> {
     state: Option<Rc<SenderState<T>>>,
 }
 
+impl<T: Send + Sized + Copy> fmt::Debug for SharedSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.state {
+            Some(s) => write!(f, "Unbound SharedSender {:?}", s.buffer),
+            None => write!(f, "Bound SharedSender"),
+        }
+    }
+}
+
+impl<T: Send + Sized + Copy> fmt::Debug for SharedReceiver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.state {
+            Some(s) => write!(f, "Unbound SharedReceiver: {:?}", s.buffer),
+            None => write!(f, "Bound SharedReceiver"),
+        }
+    }
+}
+
 unsafe impl<T: Send + Sized + Copy> Send for SharedReceiver<T> {}
 unsafe impl<T: Send + Sized + Copy> Send for SharedSender<T> {}
 
-#[derive(Debug)]
 /// The `ConnectedReceiver` is the receiving end of the Shared Channel.
 pub struct ConnectedReceiver<T: Send + Sized + Copy> {
     id: u64,
     state: Rc<ReceiverState<T>>,
     reactor: Weak<Reactor>,
+    notifier: Arc<SleepNotifier>,
 }
 
-#[derive(Debug)]
 /// The `ConnectedReceiver` is the sending end of the Shared Channel.
 pub struct ConnectedSender<T: Send + Sized + Copy> {
     id: u64,
     state: Rc<SenderState<T>>,
     reactor: Weak<Reactor>,
+    notifier: Arc<SleepNotifier>,
 }
 
-#[derive(Debug)]
+impl<T: Send + Sized + Copy> fmt::Debug for ConnectedReceiver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Connected Receiver {}: {:?}", self.id, self.state.buffer)
+    }
+}
+
+impl<T: Send + Sized + Copy> fmt::Debug for ConnectedSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Connected Sender {} : {:?}", self.id, self.state.buffer)
+    }
+}
+
 struct SenderState<T: Send + Sized + Copy> {
     buffer: Producer<T>,
 }
 
-#[derive(Debug)]
 struct ReceiverState<T: Send + Sized + Copy> {
     buffer: Consumer<T>,
+}
+
+struct Connector<T: BufferHalf + Clone> {
+    buffer: T,
+    reactor: Weak<Reactor>,
+}
+
+impl<T: BufferHalf + Clone> Connector<T> {
+    fn new(buffer: T, reactor: Weak<Reactor>) -> Self {
+        Self { buffer, reactor }
+    }
+}
+
+impl<T: BufferHalf + Clone> Future for Connector<T> {
+    type Output = Arc<SleepNotifier>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let reactor = self.reactor.upgrade().unwrap();
+
+        match self.buffer.peer_id() {
+            0 => {
+                reactor.add_shared_channel_connection_waker(cx.waker().clone());
+                Poll::Pending
+            }
+            // usize::MAX (the disconnected) always has a placeholder notifier that never
+            // returns its fd. So if the other side disconnected it will unblock us here
+            id => Poll::Ready(sys::get_sleep_notifier_for(id).unwrap()),
+        }
+    }
 }
 
 /// Creates a a new `shared_channel` returning its sender and receiver endpoints.
@@ -101,10 +159,10 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
     /// to send data into this channel
     ///
     /// [`ConnectedSender`]: struct.ConnectedSender.html
-    pub fn connect(mut self) -> ConnectedSender<T> {
+    pub async fn connect(mut self) -> ConnectedSender<T> {
         let state = self.state.take().unwrap();
         let reactor = Local::get_reactor();
-        state.buffer.connect(reactor.eventfd());
+        state.buffer.connect(reactor.id());
         let id = reactor.register_shared_channel(Box::new(enclose! {(state) move || {
             if state.buffer.consumer_disconnected() {
                 state.buffer.capacity()
@@ -114,7 +172,14 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
         }}));
 
         let reactor = Rc::downgrade(&reactor);
-        ConnectedSender { state, id, reactor }
+        let peer = Connector::new(state.buffer.clone(), reactor.clone());
+        let notifier = peer.await;
+        ConnectedSender {
+            state,
+            id,
+            reactor,
+            notifier,
+        }
     }
 }
 
@@ -130,17 +195,21 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// use glommio::channels::shared_channel;
     /// use futures_lite::StreamExt;
     ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async move {
-    ///     let (sender, receiver) = shared_channel::new_bounded(1);
-    ///     let sender = sender.connect();
-    ///     let mut receiver = receiver.connect();
-    ///     sender.try_send(0);
-    ///     sender.try_send(0).unwrap_err(); // no more capacity
+    /// let (sender, receiver) = shared_channel::new_bounded(1);
+    /// let producer = LocalExecutorBuilder::new()
+    ///    .name("producer")
+    ///    .spawn(move || async move {
+    ///         let sender = sender.connect().await;
+    ///         sender.try_send(0);
+    ///  }).unwrap();
+    ///  let receiver = LocalExecutorBuilder::new()
+    ///    .name("receiver")
+    ///    .spawn(move || async move {
+    ///     let mut receiver = receiver.connect().await;
     ///     receiver.next().await.unwrap(); // now we have capacity again
-    ///     drop(receiver); // but because the receiver is destroyed send will err
-    ///     sender.try_send(0).unwrap_err();
-    /// });
+    ///  }).unwrap();
+    ///  producer.join().unwrap();
+    ///  receiver.join().unwrap();
     /// ```
     ///
     /// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
@@ -161,7 +230,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
         }
         match self.state.buffer.try_push(item) {
             None => {
-                if let Some(fd) = self.state.buffer.must_notify() {
+                if let Some(fd) = self.notifier.must_notify() {
                     self.reactor.upgrade().unwrap().notify(fd);
                 }
                 Ok(())
@@ -184,13 +253,21 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     /// use glommio::prelude::*;
     /// use glommio::channels::shared_channel;
     ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async move {
-    ///     let (sender, receiver) = shared_channel::new_bounded(1);
-    ///     let sender = sender.connect();
-    ///     let receiver = receiver.connect();
-    ///     sender.send(0).await.unwrap();
-    /// });
+    /// let (sender, receiver) = shared_channel::new_bounded(1);
+    /// let producer = LocalExecutorBuilder::new()
+    ///    .name("producer")
+    ///    .spawn(move || async move {
+    ///         let sender = sender.connect().await;
+    ///         sender.send(0).await;
+    ///  }).unwrap();
+    ///  let receiver = LocalExecutorBuilder::new()
+    ///    .name("receiver")
+    ///    .spawn(move || async move {
+    ///     let mut receiver = receiver.connect().await;
+    ///     receiver.recv().await.unwrap();
+    ///  }).unwrap();
+    ///  producer.join().unwrap();
+    ///  receiver.join().unwrap();
     /// ```
     pub async fn send(&self, item: T) -> Result<(), T> {
         let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
@@ -221,10 +298,10 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
     /// to send data into this channel
     ///
     /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
-    pub fn connect(mut self) -> ConnectedReceiver<T> {
+    pub async fn connect(mut self) -> ConnectedReceiver<T> {
         let reactor = Local::get_reactor();
         let state = self.state.take().unwrap();
-        state.buffer.connect(reactor.eventfd());
+        state.buffer.connect(reactor.id());
         let id = reactor.register_shared_channel(Box::new(enclose! { (state) move || {
             if state.buffer.producer_disconnected() {
                 state.buffer.capacity()
@@ -234,7 +311,14 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
         }}));
 
         let reactor = Rc::downgrade(&reactor);
-        ConnectedReceiver { state, id, reactor }
+        let peer = Connector::new(state.buffer.clone(), reactor.clone());
+        let notifier = peer.await;
+        ConnectedReceiver {
+            state,
+            id,
+            reactor,
+            notifier,
+        }
     }
 }
 
@@ -254,15 +338,22 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     /// use glommio::prelude::*;
     /// use glommio::channels::shared_channel;
     ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async move {
-    ///     let (sender, receiver) = shared_channel::new_bounded(1);
-    ///     let sender = sender.connect();
-    ///     let receiver = receiver.connect();
-    ///     sender.send(0).await.unwrap();
+    /// let (sender, receiver) = shared_channel::new_bounded(1);
+    /// let producer = LocalExecutorBuilder::new()
+    ///    .name("producer")
+    ///    .spawn(move || async move {
+    ///         let sender = sender.connect().await;
+    ///         sender.try_send(0u32);
+    ///  }).unwrap();
+    ///  let receiver = LocalExecutorBuilder::new()
+    ///    .name("receiver")
+    ///    .spawn(move || async move {
+    ///     let mut receiver = receiver.connect().await;
     ///     let x = receiver.recv().await.unwrap();
     ///     assert_eq!(x, 0);
-    /// });
+    ///  }).unwrap();
+    ///  producer.join().unwrap();
+    ///  receiver.join().unwrap();
     /// ```
     ///
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
@@ -285,7 +376,7 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
                 Poll::Pending
             }
             res => {
-                if let Some(fd) = self.state.buffer.must_notify() {
+                if let Some(fd) = self.notifier.must_notify() {
                     self.reactor.upgrade().unwrap().notify(fd);
                 }
                 Poll::Ready(res)
@@ -307,8 +398,11 @@ impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
             state.buffer.disconnect();
-            if let Some(fd) = state.buffer.must_notify() {
-                Local::get_reactor().notify(fd);
+            let id = state.buffer.peer_id();
+            if let Some(notifier) = sys::get_sleep_notifier_for(id) {
+                if let Some(fd) = notifier.must_notify() {
+                    Local::get_reactor().notify(fd);
+                }
             }
         }
     }
@@ -319,8 +413,11 @@ impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
             state.buffer.disconnect();
-            if let Some(fd) = state.buffer.must_notify() {
-                Local::get_reactor().notify(fd);
+            let id = state.buffer.peer_id();
+            if let Some(notifier) = sys::get_sleep_notifier_for(id) {
+                if let Some(fd) = notifier.must_notify() {
+                    Local::get_reactor().notify(fd);
+                }
             }
         }
     }
@@ -329,7 +426,7 @@ impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
 impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
-        if let Some(fd) = self.state.buffer.must_notify() {
+        if let Some(fd) = self.notifier.must_notify() {
             if let Some(r) = self.reactor.upgrade() {
                 r.notify(fd);
             }
@@ -343,7 +440,7 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
 impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
-        if let Some(fd) = self.state.buffer.must_notify() {
+        if let Some(fd) = self.notifier.must_notify() {
             if let Some(r) = self.reactor.upgrade() {
                 r.notify(fd);
             }
@@ -370,7 +467,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 Timer::new(Duration::from_millis(10)).await;
                 sender.try_send(100).unwrap();
             })
@@ -378,7 +475,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let x = receiver.recv().await;
                 assert_eq!(x.unwrap(), 100);
             })
@@ -396,7 +493,7 @@ mod test {
             .pin_to_cpu(0)
             .spin_before_park(Duration::from_millis(1000000))
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 for _ in 0..10 {
                     sender.send(1).await.unwrap();
                     Timer::new(Duration::from_millis(1)).await;
@@ -408,7 +505,7 @@ mod test {
             .pin_to_cpu(1)
             .spin_before_park(Duration::from_millis(1000000))
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let sum = receiver.fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -425,14 +522,14 @@ mod test {
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 Timer::new(Duration::from_millis(100)).await;
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 sender.send(1).await.unwrap();
             })
             .unwrap();
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let recv = receiver.recv().await.unwrap();
                 assert_eq!(recv, 1);
                 let sum = receiver.fold(0, |acc, x| acc + x).await;
@@ -450,7 +547,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 // This will go right away because the channel fits 1 element
                 sender.try_send(1).unwrap();
                 // This will sleep. The consumer should unblock us
@@ -461,7 +558,7 @@ mod test {
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 Timer::new(Duration::from_millis(100)).await;
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let sum = receiver.fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 2);
             })
@@ -483,7 +580,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver: ConnectedReceiver<usize> = receiver.connect();
+                let receiver: ConnectedReceiver<usize> = receiver.connect().await;
                 assert_eq!(receiver.recv().await.is_none(), true);
             })
             .unwrap();
@@ -505,7 +602,7 @@ mod test {
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 Timer::new(Duration::from_millis(100)).await;
-                let sender: ConnectedSender<usize> = sender.connect();
+                let sender: ConnectedSender<usize> = sender.connect().await;
                 match sender.send(0).await {
                     Ok(_) => panic!("Should not have sent"),
                     Err(GlommioError::Closed(ResourceType::Channel(_))) => {
@@ -531,7 +628,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 Timer::new(Duration::from_millis(10)).await;
                 if sender.send(|| 32).await.is_err() {
                     panic!("send failed");
@@ -541,7 +638,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let x = receiver.recv().await.unwrap();
                 assert_eq!(32, x());
             })
@@ -560,7 +657,7 @@ mod test {
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
+                let sender = sender.connect().await;
                 sender.send(0).await.unwrap();
                 let x = sender.try_send(1);
                 assert_eq!(x.is_err(), true);
@@ -570,7 +667,7 @@ mod test {
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
 
                 while status.load(Ordering::Relaxed) == 0 {}
                 let x = receiver.recv().await.unwrap();

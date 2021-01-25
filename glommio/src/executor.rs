@@ -37,7 +37,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
@@ -47,13 +47,12 @@ use scoped_tls::scoped_thread_local;
 
 use crate::multitask;
 use crate::parking;
+use crate::sys;
 use crate::task::{self, waker_fn::waker_fn};
 use crate::GlommioError;
 use crate::{IoRequirements, Latency};
 use crate::{Reactor, Shares};
 use ahash::AHashMap;
-
-static EXECUTOR_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Result type alias that removes the need to specify a type parameter
 /// that's only valid in the channel variants of the error. Otherwise it
@@ -422,8 +421,8 @@ impl LocalExecutorBuilder {
     /// let local_ex = LocalExecutorBuilder::new().make().unwrap();
     /// ```
     pub fn make(self) -> Result<LocalExecutor> {
-        let mut le =
-            LocalExecutor::new(EXECUTOR_ID.fetch_add(1, Ordering::Relaxed), self.io_memory);
+        let notifier = sys::new_sleep_notifier()?;
+        let mut le = LocalExecutor::new(notifier, self.io_memory);
         if let Some(cpu) = self.binding {
             le.bind_to_cpu(cpu)?;
             le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -476,13 +475,13 @@ impl LocalExecutorBuilder {
         G: FnOnce() -> F + std::marker::Send + 'static,
         F: Future<Output = T> + 'static,
     {
-        let id = EXECUTOR_ID.fetch_add(1, Ordering::Relaxed);
-        let name = format!("{}-{}", self.name, id);
+        let notifier = sys::new_sleep_notifier()?;
+        let name = format!("{}-{}", self.name, notifier.id());
 
         Builder::new()
             .name(name)
             .spawn(move || {
-                let mut le = LocalExecutor::new(id, self.io_memory);
+                let mut le = LocalExecutor::new(notifier, self.io_memory);
                 if let Some(cpu) = self.binding {
                     le.bind_to_cpu(cpu).unwrap();
                     le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -557,13 +556,13 @@ impl LocalExecutor {
         Ok(())
     }
 
-    fn new(id: usize, io_memory: usize) -> LocalExecutor {
+    fn new(notifier: Arc<sys::SleepNotifier>, io_memory: usize) -> LocalExecutor {
         let p = parking::Parker::new();
         LocalExecutor {
             queues: ExecutorQueues::new(),
             parker: p,
-            id,
-            reactor: Rc::new(parking::Reactor::new(io_memory)),
+            id: notifier.id(),
+            reactor: Rc::new(parking::Reactor::new(notifier, io_memory)),
         }
     }
 

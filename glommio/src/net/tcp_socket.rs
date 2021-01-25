@@ -292,7 +292,7 @@ impl AcceptedTcpStream {
     /// ex.run(async move {
     ///
     ///    let (sender, receiver) = shared_channel::new_bounded(1);
-    ///    let sender = sender.connect();
+    ///    let sender = sender.connect().await;
     ///
     ///    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     ///
@@ -300,7 +300,7 @@ impl AcceptedTcpStream {
     ///    sender.try_send(accepted).unwrap();
     ///
     ///   let ex1 = LocalExecutorBuilder::new().spawn(move || async move {
-    ///       let receiver = receiver.connect();
+    ///       let receiver = receiver.connect().await;
     ///       let accepted = receiver.recv().await.unwrap();
     ///       let _ = accepted.bind_to_executor();
     ///   }).unwrap();
@@ -659,7 +659,7 @@ mod tests {
 
             let ex1 = LocalExecutorBuilder::new()
                 .spawn(move || async move {
-                    let receiver = first_receiver.connect();
+                    let receiver = first_receiver.connect().await;
                     let _ = TcpListener::bind(addr).unwrap();
                     receiver.recv().await.unwrap();
                 })
@@ -667,7 +667,7 @@ mod tests {
 
             let ex2 = LocalExecutorBuilder::new()
                 .spawn(move || async move {
-                    let receiver = second_receiver.connect();
+                    let receiver = second_receiver.connect().await;
                     let _ = TcpListener::bind(addr).unwrap();
                     receiver.recv().await.unwrap();
                 })
@@ -675,9 +675,9 @@ mod tests {
 
             Timer::new(Duration::from_millis(100)).await;
 
-            let sender = first_sender.connect();
+            let sender = first_sender.connect().await;
             sender.try_send(0).unwrap();
-            let sender = second_sender.connect();
+            let sender = second_sender.connect().await;
             sender.try_send(0).unwrap();
 
             ex1.join().unwrap();
@@ -694,8 +694,8 @@ mod tests {
         let status = connected.clone();
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
-                let addr_sender = addr_sender.connect();
+                let sender = sender.connect().await;
+                let addr_sender = addr_sender.connect().await;
                 let listener = TcpListener::bind("127.0.0.1:0").unwrap();
                 let addr = listener.local_addr().unwrap();
                 addr_sender.try_send(addr).unwrap();
@@ -709,7 +709,7 @@ mod tests {
         let status = connected.clone();
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let accepted = receiver.recv().await.unwrap();
                 let _ = accepted.bind_to_executor();
                 status.store(2, Ordering::Relaxed);
@@ -718,7 +718,7 @@ mod tests {
 
         let ex3 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = addr_receiver.connect();
+                let receiver = addr_receiver.connect().await;
                 let addr = receiver.recv().await.unwrap();
                 TcpStream::connect(addr).await.unwrap()
             })

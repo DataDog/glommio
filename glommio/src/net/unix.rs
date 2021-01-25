@@ -233,7 +233,7 @@ impl AcceptedUnixStream {
     /// ex.run(async move {
     ///
     ///    let (sender, receiver) = shared_channel::new_bounded(1);
-    ///    let sender = sender.connect();
+    ///    let sender = sender.connect().await;
     ///
     ///    let listener = UnixListener::bind("/tmp/named").unwrap();
     ///
@@ -241,7 +241,7 @@ impl AcceptedUnixStream {
     ///    sender.try_send(accepted).unwrap();
     ///
     ///   let ex1 = LocalExecutorBuilder::new().spawn(move || async move {
-    ///       let receiver = receiver.connect();
+    ///       let receiver = receiver.connect().await;
     ///       let accepted = receiver.recv().await.unwrap();
     ///       let _ = accepted.bind_to_executor();
     ///   }).unwrap();
