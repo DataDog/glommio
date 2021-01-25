@@ -1319,6 +1319,9 @@ impl Reactor {
             // last time until now it could be that something happened in a remote executor
             // that opened up room. If if did we bail on sleep and go process it.
             self.notifier.prepare_to_sleep();
+            // See https://www.scylladb.com/2018/02/15/memory-barriers-seastar-linux/ for
+            // details. This translates to sys_membarrier() / MEMBARRIER_CMD_PRIVATE_EXPEDITED
+            membarrier::heavy();
             if process_remote_channels(wakers) == 0 {
                 self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)?;
                 // woke up, so no need to notify us anymore.

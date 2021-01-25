@@ -284,7 +284,7 @@ impl SleepNotifier {
         // for the placeholder (disconnected) case.
         assert_ne!(self.id, usize::MAX);
         self.memory
-            .store(self.eventfd.as_raw_fd() as _, Ordering::Release);
+            .store(self.eventfd.as_raw_fd() as _, Ordering::SeqCst);
     }
 
     pub(super) fn wake_up(&self) {
