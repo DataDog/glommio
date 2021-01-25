@@ -116,9 +116,7 @@ impl<T: Copy> Buffer<T> {
         }
 
         let v = self.buffer_storage[current_head % self.ccache.capacity].get();
-        self.ccache
-            .head
-            .store(current_head.wrapping_add(1), Ordering::Release);
+        self.ccache.head.store(current_head + 1, Ordering::Release);
         Some(v)
     }
 
@@ -143,9 +141,7 @@ impl<T: Copy> Buffer<T> {
         }
 
         self.buffer_storage[current_tail % self.pcache.capacity].set(v);
-        self.pcache
-            .tail
-            .store(current_tail.wrapping_add(1), Ordering::Release);
+        self.pcache.tail.store(current_tail + 1, Ordering::Release);
         None
     }
 
@@ -196,7 +192,7 @@ impl<T: Copy> Drop for Buffer<T> {
     }
 }
 
-pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+fn inner_make<T: Copy>(capacity: usize, initial_value: usize) -> (Producer<T>, Consumer<T>) {
     let buffer_storage = allocate_buffer(capacity);
 
     let arc = Arc::new(Buffer {
@@ -204,15 +200,15 @@ pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
         ccache: ConsumerCacheline {
             capacity,
 
-            head: AtomicUsize::new(0),
-            shadow_tail: Cell::new(0),
+            head: AtomicUsize::new(initial_value),
+            shadow_tail: Cell::new(initial_value),
             producer_id: AtomicUsize::new(0),
         },
         pcache: ProducerCacheline {
             capacity,
 
-            tail: AtomicUsize::new(0),
-            shadow_head: Cell::new(0),
+            tail: AtomicUsize::new(initial_value),
+            shadow_head: Cell::new(initial_value),
             consumer_id: AtomicUsize::new(0),
         },
     });
@@ -223,6 +219,10 @@ pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
         },
         Consumer { buffer: arc },
     )
+}
+
+pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+    inner_make(capacity, 0)
 }
 
 fn allocate_buffer<T: Copy>(capacity: usize) -> Arc<Vec<Cell<T>>> {
@@ -424,6 +424,20 @@ mod tests {
                     break;
                 }
             }
+        }
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_wrap() {
+        let (p, c) = super::inner_make(10, usize::MAX - 1);
+
+        for i in 0..10 {
+            assert_eq!(p.try_push(i).is_none(), true);
+        }
+
+        for i in 0..10 {
+            assert_eq!(c.try_pop(), Some(i));
         }
     }
 }
