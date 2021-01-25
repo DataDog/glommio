@@ -201,10 +201,10 @@ impl SharedChannels {
     }
 
     fn process_shared_channels(&mut self, wakers: &mut Vec<Waker>) -> usize {
+        let mut added = self.connection_wakers.len();
         wakers.append(&mut self.connection_wakers);
 
         let current_wakers = mem::take(&mut self.wakers_map);
-        let mut added = 0;
         for (id, mut pending) in current_wakers.into_iter() {
             let room = self.check_map.get(&id).unwrap()();
             let room = std::cmp::min(room, pending.len());
