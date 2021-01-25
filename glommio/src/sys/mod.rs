@@ -204,11 +204,11 @@ pub(crate) use self::uring::*;
 use crate::error::{ExecutorErrorKind, GlommioError, ReactorErrorKind};
 use crate::IoRequirements;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
     idgen: usize,
     // reactor_id -> notifier
-    sleep_notifiers: AHashMap<usize, Arc<SleepNotifier>>,
+    sleep_notifiers: AHashMap<usize, std::sync::Weak<SleepNotifier>>,
 }
 
 impl ReactorGlobalState {
@@ -221,24 +221,9 @@ impl ReactorGlobalState {
         }
 
         let notifier = SleepNotifier::new(id)?;
-        let res = self.sleep_notifiers.insert(id, notifier.clone());
+        let res = self.sleep_notifiers.insert(id, Arc::downgrade(&notifier));
         assert_eq!(res.is_none(), true);
         Ok(notifier)
-    }
-}
-
-/// By default, we create a placeholder notifier for id = usize::MAX (the disconnected case).
-/// It will never require a notification because we will never call sleep or wake up on it
-impl Default for ReactorGlobalState {
-    fn default() -> Self {
-        let mut sleep_notifiers = AHashMap::new();
-        // we could set the eventfd to -1 in the dummy object, but for simplicity we'll
-        // just create. We can't recover from a failure here, tough.
-        sleep_notifiers.insert(usize::MAX, SleepNotifier::new(usize::MAX).unwrap());
-        Self {
-            idgen: 0,
-            sleep_notifiers,
-        }
     }
 }
 
@@ -252,6 +237,7 @@ pub(crate) struct SleepNotifier {
 lazy_static! {
     static ref REACTOR_GLOBAL_STATE: RwLock<ReactorGlobalState> =
         RwLock::new(ReactorGlobalState::default());
+    static ref REACTOR_DISCONNECTED: Arc<SleepNotifier> = SleepNotifier::new(usize::MAX).unwrap();
 }
 
 pub(super) fn new_sleep_notifier() -> io::Result<Arc<SleepNotifier>> {
@@ -260,8 +246,12 @@ pub(super) fn new_sleep_notifier() -> io::Result<Arc<SleepNotifier>> {
 }
 
 pub(crate) fn get_sleep_notifier_for(id: usize) -> Option<Arc<SleepNotifier>> {
-    let state = REACTOR_GLOBAL_STATE.read().unwrap();
-    state.sleep_notifiers.get(&id).cloned()
+    if id == usize::MAX {
+        Some(REACTOR_DISCONNECTED.clone())
+    } else {
+        let state = REACTOR_GLOBAL_STATE.read().unwrap();
+        state.sleep_notifiers.get(&id).and_then(|x| x.upgrade())
+    }
 }
 
 impl SleepNotifier {
@@ -305,6 +295,10 @@ impl SleepNotifier {
 impl Drop for SleepNotifier {
     fn drop(&mut self) {
         let mut state = REACTOR_GLOBAL_STATE.write().unwrap();
+        // The other side may still be holding a reference in which case the notifier will
+        // be freed later. However we can't receive notifications anymore so memory must be
+        // zeroed here.
+        self.wake_up();
         state.sleep_notifiers.remove(&self.id).unwrap();
     }
 }
