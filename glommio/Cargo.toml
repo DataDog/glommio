@@ -17,6 +17,7 @@ readme = "../README.md"
 log = "0.4"
 concurrent-queue = "1.1.2"
 futures-lite = "1.11.1"
+futures = "0.3.12"
 libc = "0.2.73"
 socket2 = { version = "0.3.18", features = ["unix", "reuseport"] }
 iou = { git = "https://github.com/glommer/iou", tag = "glommio-2020-11-30" }

@@ -146,6 +146,44 @@ pub mod local_channel;
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
 pub mod shared_channel;
 
+/// A channel mesh consists of a group of participating executors (peers) and the channels between
+/// each pair of them.
+///
+/// Within a mesh, peers are identified by unique peer ids, which are used to specify the
+/// source/destination which messages are sent to/received from. Peer ids are assigned when the last
+/// peer joins by the indexes to the list of all peers, which is sorted by their executor ids. So
+/// multiple meshes can be built over the same set of peers, and the peer ids are guaranteed to be
+/// identical across meshes for each peer.
+///
+/// # Examples
+///
+/// ```
+/// use glommio::LocalExecutorBuilder;
+/// use glommio::channels::channel_mesh::MeshBuilder;
+///
+/// let mesh_builder = MeshBuilder::new(nr_peers, channel_size);
+///
+/// let executors = (0..nr_executors).map(|_| {
+///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+///         let (sender, receiver) = mesh_builder.join().await;
+///         Local::local(async move {
+///             for peer in 0..sender.nr_peers() {
+///                 sender.send_to(peer, (sender.id(), peer)).await.unwrap();
+///             }
+///         }).detach();
+///
+///         for peer in 0..receiver.nr_peers() {
+///             assert_eq!((peer, receiver.id()), receiver.recv_from(peer).await.unwrap());
+///         }
+///     }))
+/// });
+///
+/// for ex in executors.collect::<Vec<_>>() {
+///     ex.unwrap().join().unwrap();
+/// }
+/// ```
+pub mod channel_mesh;
+
 use std::fmt::Debug;
 
 #[derive(Debug)]
