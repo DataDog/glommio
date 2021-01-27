@@ -58,6 +58,8 @@ enum UringOpDescriptor {
     SockSendMsg(*mut libc::msghdr, i32),
     SockRecv(usize, i32),
     SockRecvMsg(usize, i32),
+    #[cfg(feature = "bench")]
+    Nop,
 }
 
 #[derive(Debug)]
@@ -397,6 +399,8 @@ where
                     _ => unreachable!(),
                 };
             }
+            #[cfg(feature = "bench")]
+            UringOpDescriptor::Nop => sqe.prep_nop(),
         }
     }
 
@@ -1196,6 +1200,11 @@ impl Reactor {
         };
         let op = UringOpDescriptor::Open(pathptr as _, flags, mode as _);
         self.queue_standard_request(source, op);
+    }
+
+    #[cfg(feature = "bench")]
+    pub(crate) fn nop(&self, source: &Source) {
+        self.queue_standard_request(source, UringOpDescriptor::Nop)
     }
 
     // We want to go to sleep but we can only go to sleep in one of the rings,
