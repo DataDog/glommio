@@ -80,3 +80,4 @@ harness = false
 [[bench]]
 name = "nop"
 harness = false
+required-features = ["bench"]
