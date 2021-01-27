@@ -15,6 +15,7 @@ use intrusive_collections::{container_of, offset_of, Adapter, PointerOps};
 use intrusive_collections::{LinkedList, LinkedListLink};
 use std::marker::PhantomPinned;
 use std::ptr::NonNull;
+use std::rc::Rc;
 
 type Result<T> = crate::error::Result<T, ()>;
 
@@ -257,15 +258,43 @@ pub struct Permit<'a> {
     sem: &'a Semaphore,
 }
 
+/// The static permit is A RAII-friendly way to acquire semaphore resources in long-lived
+/// operations that require a static lifetime.
+///
+/// Resources are held while the Permit is alive, and released when the
+/// permit is dropped.
+#[derive(Debug)]
+pub struct StaticPermit {
+    units: u64,
+    sem: Rc<Semaphore>,
+}
+
 impl<'a> Permit<'a> {
     fn new(units: u64, sem: &'a Semaphore) -> Permit<'a> {
         Permit { units, sem }
     }
 }
 
+impl StaticPermit {
+    fn new(units: u64, sem: Rc<Semaphore>) -> StaticPermit {
+        StaticPermit { units, sem }
+    }
+
+    /// Closes the underlying semaphore that originated this permit.
+    pub fn close(&self) {
+        self.sem.close()
+    }
+}
+
 impl<'a> Drop for Permit<'a> {
     fn drop(&mut self) {
         process_wakes(self.sem, self.units);
+    }
+}
+
+impl Drop for StaticPermit {
+    fn drop(&mut self) {
+        process_wakes(&self.sem, self.units);
     }
 }
 
@@ -350,6 +379,11 @@ impl Semaphore {
     ///
     /// Returns Err() if the semaphore is closed during the wait.
     ///
+    /// Similar to [`acquire_static_permit`], except that it requires the permit never
+    /// to be passed to contexts that require a static lifetime. As this is cheaper than
+    /// [`acquire_static_permit`], it is useful in situations where the permit tracks an
+    /// a asynchronous operation whose lifetime is simple and well-defined.
+    ///
     /// # Examples
     ///
     /// ```
@@ -368,9 +402,52 @@ impl Semaphore {
     ///     let _guard = sem.acquire_permit(1).await.unwrap();
     /// });
     /// ```
+    ///
+    /// [`acquire_static_permit`]: Semaphore::acquire_static_permit
     pub async fn acquire_permit(&self, units: u64) -> Result<Permit<'_>> {
         self.acquire(units).await?;
         Ok(Permit::new(units, self))
+    }
+
+    /// Suspends until a permit can be acquired with the specified amount of units.
+    ///
+    /// Returns Err() if the semaphore is closed during the wait.
+    ///
+    /// Similar to [`acquire_permit`], except that it requires the semaphore to be
+    /// contained in an [`Rc`]. This is useful in situations where the permit tracks
+    /// a long-lived asynchronous operation whose lifetime is complex.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{Local, LocalExecutor};
+    /// use glommio::timer::sleep;
+    /// use glommio::sync::Semaphore;
+    /// use std::time::Duration;
+    /// use std::rc::Rc;
+    ///
+    /// let sem = Rc::new(Semaphore::new(1));
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     {
+    ///         let permit = sem.acquire_static_permit(1).await.unwrap();
+    ///         Local::local(async move {
+    ///             let _guard = permit;
+    ///             sleep(Duration::from_secs(1)).await;
+    ///         }).detach();
+    ///         // once it is dropped it can be acquired again
+    ///         // going out of scope will drop
+    ///     }
+    ///     let _guard = sem.acquire_permit(1).await.unwrap();
+    /// });
+    /// ```
+    ///
+    /// [`acquire_permit`]: Semaphore::acquire_permit
+    /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
+    pub async fn acquire_static_permit(self: &Rc<Self>, units: u64) -> Result<StaticPermit> {
+        self.acquire(units).await?;
+        Ok(StaticPermit::new(units, self.clone()))
     }
 
     /// Acquires the specified amount of units from this semaphore.
@@ -558,7 +635,7 @@ impl Drop for Semaphore {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::timer::Timer;
+    use crate::timer::{sleep, Timer};
     use crate::{enclose, Local, LocalExecutor};
 
     use futures_lite::future::or;
@@ -590,9 +667,14 @@ mod test {
                 let _g = sem.acquire_permit(1).await.unwrap();
             }});
 
+            // For this last one, use the static version. Move around and sleep a bit first
             let t3 = Local::local(enclose! { (sem, exec) async move {
                 exec.set(exec.get() + 1);
-                let _g = sem.acquire_permit(1).await.unwrap();
+                let g = sem.acquire_static_permit(1).await.unwrap();
+                Local::local(async move {
+                    let _g = g;
+                    sleep(Duration::from_secs(1)).await;
+                }).detach();
             }});
 
             // Wait for all permits to try and acquire, then unleash the gates.
@@ -604,6 +686,8 @@ mod test {
             t3.await;
             t2.await;
             t1.await;
+            sleep(Duration::from_secs(2)).await;
+            assert_eq!(sem.available(), 1);
         });
     }
 
