@@ -332,6 +332,12 @@ impl DmaFile {
         self.file.close().await
     }
 
+    /// Returns an `Option` containing the path associated with this open
+    /// directory, or `None` if there isn't one.
+    pub fn path(&self) -> Option<&Path> {
+        self.file.path()
+    }
+
     pub(crate) async fn close_rc(self: Rc<DmaFile>) -> Result<()> {
         match Rc::try_unwrap(self) {
             Err(file) => Err(io::Error::new(
@@ -489,6 +495,15 @@ pub(crate) mod test {
             .await
             .expect_err("fallocate should fail with len == 0");
 
+        new_file.close().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_path, path, _k, {
+        let new_file = DmaFile::create(path.join("testfile"))
+            .await
+            .expect("failed to create file");
+
+        assert_eq!(new_file.path().unwrap(), path.join("testfile"));
         new_file.close().await.expect("failed to close file");
     });
 
