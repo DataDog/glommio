@@ -269,6 +269,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     ///  producer.join().unwrap();
     ///  receiver.join().unwrap();
     /// ```
+    #[track_caller]
     pub async fn send(&self, item: T) -> Result<(), T> {
         let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
         waiter.await;
