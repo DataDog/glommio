@@ -206,8 +206,10 @@ impl BufferedFile {
         self.file.close().await.map_err(Into::into)
     }
 
-    pub(crate) fn path(&self) -> &Path {
-        self.file.path.as_ref().unwrap().as_path()
+    /// Returns an `Option` containing the path associated with this open
+    /// directory, or `None` if there isn't one.
+    pub fn path(&self) -> Option<&Path> {
+        self.file.path()
     }
 
     pub(crate) fn discard(self) -> (RawFd, Option<PathBuf>) {

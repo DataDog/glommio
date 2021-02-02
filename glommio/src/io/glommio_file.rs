@@ -143,6 +143,10 @@ impl GlommioFile {
             })
     }
 
+    pub(crate) fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     pub(crate) async fn pre_allocate(&self, size: u64) -> Result<()> {
         let flags = libc::FALLOC_FL_ZERO_RANGE;
         let source = self
