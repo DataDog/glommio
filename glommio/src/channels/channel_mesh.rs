@@ -5,6 +5,7 @@
 //
 use std::cell::Cell;
 use std::fmt::{self, Debug, Formatter};
+use std::result::Result as StdResult;
 use std::sync::{Arc, RwLock};
 
 use futures::future;
@@ -140,11 +141,11 @@ impl<T: Send + Copy> Receivers<T> {
 
 struct Notifier {
     executor_id: usize,
-    sender: Option<SharedSender<usize>>,
+    sender: Option<SharedSender<bool>>,
 }
 
 impl Notifier {
-    fn new(sender: Option<SharedSender<usize>>) -> Self {
+    fn new(sender: Option<SharedSender<bool>>) -> Self {
         Self {
             executor_id: Local::id(),
             sender,
@@ -207,7 +208,7 @@ impl<T: 'static + Send + Copy> MeshBuilder<T> {
         }
     }
 
-    async fn join(self) -> (Senders<T>, Receivers<T>) {
+    fn register(&self) -> StdResult<SharedReceiver<bool>, Vec<SharedSender<bool>>> {
         let mut notifiers = self.notifiers.write().unwrap();
 
         if notifiers.len() == self.nr_peers {
@@ -218,20 +219,41 @@ impl<T: 'static + Send + Copy> MeshBuilder<T> {
             .binary_search_by(|n| n.executor_id.cmp(&Local::id()))
             .expect_err("Should not join a mesh more than once.");
 
-        let peer_id = if notifiers.len() == self.nr_peers - 1 {
+        if notifiers.len() == self.nr_peers - 1 {
             notifiers.insert(index, Notifier::new(None));
-            for (peer_id, notifier) in notifiers.iter_mut().enumerate() {
-                if let Some(sender) = notifier.sender.take() {
-                    sender.connect().await.send(peer_id).await.unwrap();
-                }
-            }
-            drop(notifiers);
-            index
+
+            let peers: Vec<_> = notifiers
+                .iter_mut()
+                .map(|notifier| notifier.sender.take())
+                .flatten()
+                .collect();
+
+            Err(peers)
         } else {
             let (sender, receiver) = shared_channel::new_bounded(1);
             notifiers.insert(index, Notifier::new(Some(sender)));
-            drop(notifiers);
-            receiver.connect().await.recv().await.unwrap()
+            Ok(receiver)
+        }
+    }
+
+    async fn join(self) -> (Senders<T>, Receivers<T>) {
+        match Self::register(&self) {
+            Ok(receiver) => {
+                receiver.connect().await.recv().await.unwrap();
+            }
+            Err(peers) => {
+                for peer in peers {
+                    peer.connect().await.send(true).await.unwrap();
+                }
+            }
+        }
+
+        let peer_id = {
+            let notifiers = self.notifiers.read().unwrap();
+
+            notifiers
+                .binary_search_by(|n| n.executor_id.cmp(&Local::id()))
+                .unwrap()
         };
 
         let providers = self.providers.as_ref();
