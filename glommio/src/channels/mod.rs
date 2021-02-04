@@ -158,7 +158,8 @@ pub mod shared_channel;
 /// # Examples
 ///
 /// ```
-/// use glommio::LocalExecutorBuilder;
+/// use glommio::enclose;
+/// use glommio::prelude::*;
 /// use glommio::channels::channel_mesh::MeshBuilder;
 ///
 /// let mesh_builder = MeshBuilder::new(nr_peers, channel_size);

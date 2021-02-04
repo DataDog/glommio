@@ -294,6 +294,31 @@ mod tests {
     }
 
     #[test]
+    fn test_peer_id_invariance() {
+        let nr_peers = 10;
+        let channel_size = 100;
+        let builder1 = MeshBuilder::<i32>::new(nr_peers, channel_size);
+        let builder2 = MeshBuilder::<usize>::new(nr_peers, channel_size);
+
+        let executors = (0..nr_peers).map(|_| {
+            LocalExecutorBuilder::new().spawn(enclose!((builder1, builder2) move || async move {
+                let (sender1, receiver1) = builder1.join().await;
+                assert_eq!(sender1.id(), receiver1.id());
+
+                let (sender2, receiver2) = builder2.join().await;
+                assert_eq!(sender2.id(), receiver2.id());
+
+                assert_eq!(sender1.id(), sender2.id());
+                assert_eq!(receiver1.id(), receiver2.id());
+            }))
+        });
+
+        for ex in executors.collect::<Vec<_>>() {
+            ex.unwrap().join().unwrap();
+        }
+    }
+
+    #[test]
     #[should_panic]
     fn test_join_more_than_once() {
         let mesh_builder = MeshBuilder::<u32>::new(2, 1);
