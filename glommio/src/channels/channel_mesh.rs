@@ -5,105 +5,22 @@
 //
 use std::cell::Cell;
 use std::fmt::{self, Debug, Formatter};
-use std::result::Result as StdResult;
+use std::io::{Error, ErrorKind};
+use std::iter::repeat_with;
 use std::sync::{Arc, RwLock};
 
-use futures::future;
-
-use crate::channels::local_channel::{self, *};
 use crate::channels::shared_channel::{self, *};
-use crate::{Local, Result};
-
-#[derive(Debug)]
-pub enum Sender<T: Send + Copy> {
-    Local(LocalSender<T>),
-    Connected(ConnectedSender<T>),
-}
-
-impl<T: Send + Copy> Sender<T> {
-    pub async fn send(&self, item: T) -> Result<(), T> {
-        match self {
-            Self::Local(sender) => sender.send(item).await,
-            Self::Connected(sender) => sender.send(item).await,
-        }
-    }
-
-    pub fn try_send(&self, item: T) -> Result<(), T> {
-        match self {
-            Self::Local(sender) => sender.try_send(item),
-            Self::Connected(sender) => sender.try_send(item),
-        }
-    }
-}
-
-enum SenderProvider<T: Send + Copy> {
-    Local(LocalSender<T>),
-    Shared(SharedSender<T>),
-    Taken,
-}
-
-impl<T: Send + Copy> Default for SenderProvider<T> {
-    fn default() -> Self {
-        Self::Taken
-    }
-}
-
-impl<T: Send + Copy + 'static> SenderProvider<T> {
-    async fn get(self) -> Sender<T> {
-        match self {
-            Self::Local(sender) => Sender::Local(sender),
-            Self::Shared(sender) => Sender::Connected(sender.connect().await),
-            Self::Taken => unreachable!(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum Receiver<T: Send + Copy> {
-    Local(LocalReceiver<T>),
-    Connected(ConnectedReceiver<T>),
-}
-
-impl<T: Send + Copy> Receiver<T> {
-    pub async fn recv(&self) -> Option<T> {
-        match self {
-            Self::Local(receiver) => receiver.recv().await,
-            Self::Connected(receiver) => receiver.recv().await,
-        }
-    }
-}
-
-enum ReceiverProvider<T: Send + Copy> {
-    Local(LocalReceiver<T>),
-    Shared(SharedReceiver<T>),
-    Taken,
-}
-
-impl<T: Send + Copy> Default for ReceiverProvider<T> {
-    fn default() -> Self {
-        Self::Taken
-    }
-}
-
-impl<T: Send + Copy + 'static> ReceiverProvider<T> {
-    async fn get(self) -> Receiver<T> {
-        match self {
-            Self::Local(receiver) => Receiver::Local(receiver),
-            Self::Shared(receiver) => Receiver::Connected(receiver.connect().await),
-            Self::Taken => unreachable!(),
-        }
-    }
-}
+use crate::{GlommioError, Local, Result, Task};
 
 #[derive(Debug)]
 struct Senders<T: Send + Copy> {
-    id: usize,
-    senders: Vec<Sender<T>>,
+    peer_id: usize,
+    senders: Vec<Option<ConnectedSender<T>>>,
 }
 
 impl<T: Send + Copy> Senders<T> {
     pub fn id(&self) -> usize {
-        self.id
+        self.peer_id
     }
 
     pub fn nr_peers(&self) -> usize {
@@ -111,31 +28,49 @@ impl<T: Send + Copy> Senders<T> {
     }
 
     pub async fn send_to(&self, peer_id: usize, msg: T) -> Result<(), T> {
-        self.senders[peer_id].send(msg).await
+        if peer_id == self.peer_id {
+            return Err(GlommioError::IoError(Error::new(
+                ErrorKind::InvalidInput,
+                "Local message should not be sent via channel mesh",
+            )));
+        }
+        self.senders[peer_id].as_ref().unwrap().send(msg).await
     }
 
     pub fn try_send_to(&self, peer_id: usize, msg: T) -> Result<(), T> {
-        self.senders[peer_id].try_send(msg)
+        if peer_id == self.peer_id {
+            return Err(GlommioError::IoError(Error::new(
+                ErrorKind::InvalidInput,
+                "Local message should not be sent via channel mesh",
+            )));
+        }
+        self.senders[peer_id].as_ref().unwrap().try_send(msg)
     }
 }
 
 #[derive(Debug)]
 struct Receivers<T: Send + Copy> {
-    id: usize,
-    receivers: Vec<Receiver<T>>,
+    peer_id: usize,
+    receivers: Vec<Option<ConnectedReceiver<T>>>,
 }
 
 impl<T: Send + Copy> Receivers<T> {
     pub fn id(&self) -> usize {
-        self.id
+        self.peer_id
     }
 
     pub fn nr_peers(&self) -> usize {
         self.receivers.len()
     }
 
-    pub async fn recv_from(&self, peer_id: usize) -> Option<T> {
-        self.receivers[peer_id].recv().await
+    pub async fn recv_from(&self, peer_id: usize) -> Result<Option<T>, ()> {
+        if peer_id == self.peer_id {
+            return Err(GlommioError::IoError(Error::new(
+                ErrorKind::InvalidInput,
+                "Local message should not be received from channel mesh",
+            )));
+        }
+        Ok(self.receivers[peer_id].as_ref().unwrap().recv().await)
     }
 }
 
@@ -153,15 +88,18 @@ impl Notifier {
     }
 }
 
-type ChannelProvider<T> = (Cell<SenderProvider<T>>, Cell<ReceiverProvider<T>>);
+type SharedChannel<T> = (
+    Cell<Option<SharedSender<T>>>,
+    Cell<Option<SharedReceiver<T>>>,
+);
 
-type ChannelProviders<T> = Vec<Vec<ChannelProvider<T>>>;
+type SharedChannels<T> = Vec<Vec<SharedChannel<T>>>;
 
 #[derive(Clone)]
 pub struct MeshBuilder<T: Send + Copy> {
     nr_peers: usize,
     notifiers: Arc<RwLock<Vec<Notifier>>>,
-    providers: Arc<Vec<Vec<ChannelProvider<T>>>>,
+    channels: Arc<SharedChannels<T>>,
 }
 
 unsafe impl<T: Send + Copy> Send for MeshBuilder<T> {}
@@ -180,39 +118,33 @@ impl<T: 'static + Send + Copy> MeshBuilder<T> {
         MeshBuilder {
             nr_peers,
             notifiers: Arc::new(RwLock::new(Vec::new())),
-            providers: Arc::new(Self::build_providers(nr_peers, channel_size)),
+            channels: Arc::new(Self::build_channels(nr_peers, channel_size)),
         }
     }
 
-    fn build_providers(nr_peers: usize, channel_size: usize) -> ChannelProviders<T> {
-        (0..nr_peers)
-            .map(|i| {
-                (0..nr_peers)
-                    .map(|j| Self::build_provider(i, j, channel_size))
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn build_provider(from: usize, to: usize, channel_size: usize) -> ChannelProvider<T> {
-        if from == to {
-            let (sender, receiver) = local_channel::new_bounded(channel_size.max(1));
-            let sender_provider = SenderProvider::Local(sender);
-            let receiver_provider = ReceiverProvider::Local(receiver);
-            (Cell::new(sender_provider), Cell::new(receiver_provider))
-        } else {
-            let (sender, receiver) = shared_channel::new_bounded(channel_size);
-            let sender_provider = SenderProvider::Shared(sender);
-            let receiver_provider = ReceiverProvider::Shared(receiver);
-            (Cell::new(sender_provider), Cell::new(receiver_provider))
+    fn build_channels(nr_peers: usize, channel_size: usize) -> SharedChannels<T> {
+        let mut channels: Vec<_> = repeat_with(Vec::new).take(nr_peers).collect();
+        for (i, vec) in channels.iter_mut().enumerate() {
+            vec.resize_with(i, || Self::build_channel(channel_size));
+            vec.resize_with(i + 1, || (Cell::new(None), Cell::new(None)));
+            vec.resize_with(nr_peers, || Self::build_channel(channel_size));
         }
+        channels
     }
 
-    fn register(&self) -> StdResult<SharedReceiver<bool>, Vec<SharedSender<bool>>> {
+    fn build_channel(channel_size: usize) -> SharedChannel<T> {
+        let (sender, receiver) = shared_channel::new_bounded(channel_size);
+        (Cell::new(Some(sender)), Cell::new(Some(receiver)))
+    }
+
+    fn register(&self) -> Result<RegisterResult<bool>, ()> {
         let mut notifiers = self.notifiers.write().unwrap();
 
         if notifiers.len() == self.nr_peers {
-            panic!("The channel mesh is full.");
+            return Err(GlommioError::IoError(Error::new(
+                ErrorKind::Other,
+                "The channel mesh is full.",
+            )));
         }
 
         let index = notifiers
@@ -228,20 +160,20 @@ impl<T: 'static + Send + Copy> MeshBuilder<T> {
                 .flatten()
                 .collect();
 
-            Err(peers)
+            Ok(RegisterResult::NotificationSenders(peers))
         } else {
             let (sender, receiver) = shared_channel::new_bounded(1);
             notifiers.insert(index, Notifier::new(Some(sender)));
-            Ok(receiver)
+            Ok(RegisterResult::NotificationReceiver(receiver))
         }
     }
 
-    async fn join(self) -> (Senders<T>, Receivers<T>) {
-        match Self::register(&self) {
-            Ok(receiver) => {
+    async fn join(self) -> Result<(Senders<T>, Receivers<T>), ()> {
+        match Self::register(&self)? {
+            RegisterResult::NotificationReceiver(receiver) => {
                 receiver.connect().await.recv().await.unwrap();
             }
-            Err(peers) => {
+            RegisterResult::NotificationSenders(peers) => {
                 for peer in peers {
                     peer.connect().await.send(true).await.unwrap();
                 }
@@ -256,31 +188,41 @@ impl<T: 'static + Send + Copy> MeshBuilder<T> {
                 .unwrap()
         };
 
-        let providers = self.providers.as_ref();
-
-        let mut senders = Senders {
-            id: peer_id,
-            senders: Vec::with_capacity(self.nr_peers),
-        };
-        let mut receivers = Receivers {
-            id: peer_id,
-            receivers: Vec::with_capacity(self.nr_peers),
-        };
+        let mut senders = Vec::with_capacity(self.nr_peers);
+        let mut receivers = Vec::with_capacity(self.nr_peers);
 
         for i in 0..self.nr_peers {
-            let sender = providers[peer_id][i].0.take();
-            let receiver = providers[i][peer_id].1.take();
-            let (sender, receiver) = future::join(sender.get(), receiver.get()).await;
-            senders.senders.push(sender);
-            receivers.receivers.push(receiver);
+            if peer_id == i {
+                senders.push(None);
+                receivers.push(None);
+            } else {
+                let sender = self.channels[peer_id][i].0.take().unwrap();
+                let sender = Task::<_>::local(sender.connect()).detach();
+
+                let receiver = self.channels[i][peer_id].1.take().unwrap();
+                let receiver = Task::<_>::local(receiver.connect()).detach();
+
+                senders.push(Some(sender.await.unwrap()));
+                receivers.push(Some(receiver.await.unwrap()));
+            }
         }
 
-        (senders, receivers)
+        Ok((
+            Senders { peer_id, senders },
+            Receivers { peer_id, receivers },
+        ))
     }
+}
+
+enum RegisterResult<T: Send + Copy> {
+    NotificationReceiver(SharedReceiver<T>),
+    NotificationSenders(Vec<SharedSender<T>>),
 }
 
 #[cfg(test)]
 mod tests {
+    use futures::future;
+
     use crate::enclose;
     use crate::prelude::*;
 
@@ -302,10 +244,10 @@ mod tests {
 
         let executors = (0..nr_peers).map(|_| {
             LocalExecutorBuilder::new().spawn(enclose!((builder1, builder2) move || async move {
-                let (sender1, receiver1) = builder1.join().await;
+                let (sender1, receiver1) = builder1.join().await.unwrap();
                 assert_eq!(sender1.id(), receiver1.id());
 
-                let (sender2, receiver2) = builder2.join().await;
+                let (sender2, receiver2) = builder2.join().await.unwrap();
                 assert_eq!(sender2.id(), receiver2.id());
 
                 assert_eq!(sender1.id(), sender2.id());
@@ -339,15 +281,19 @@ mod tests {
 
         let executors = (0..nr_executors).map(|_| {
             LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
-                let (sender, receiver) = mesh_builder.join().await;
+                let (sender, receiver) = mesh_builder.join().await.unwrap();
                 Local::local(async move {
                     for peer in 0..sender.nr_peers() {
-                        sender.send_to(peer, (sender.id(), peer)).await.unwrap();
+                        if peer != sender.id() {
+                            sender.send_to(peer, (sender.id(), peer)).await.unwrap();
+                        }
                     }
                 }).detach();
 
                 for peer in 0..receiver.nr_peers() {
-                    assert_eq!((peer, receiver.id()), receiver.recv_from(peer).await.unwrap());
+                    if peer != receiver.id() {
+                        assert_eq!((peer, receiver.id()), receiver.recv_from(peer).await.unwrap().unwrap());
+                    }
                 }
             }))
         });
