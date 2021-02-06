@@ -450,7 +450,7 @@ mod tests {
     fn test_partial_mesh() {
         let nr_producers = 2;
         let nr_consumers = 3;
-        let mesh_builder = MeshBuilder::new(5, 100, Partial);
+        let mesh_builder = MeshBuilder::partial(5, 100);
 
         let producers = (0..nr_producers).map(|i| {
             LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
