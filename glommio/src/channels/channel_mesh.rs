@@ -12,8 +12,9 @@ use std::sync::{Arc, RwLock};
 use crate::channels::shared_channel::{self, *};
 use crate::{GlommioError, Local, Result, Task};
 
+/// Sender side
 #[derive(Debug)]
-struct Senders<T: Send + Copy> {
+pub struct Senders<T: Send + Copy> {
     peer_id: usize,
     producer_id: Option<usize>,
     senders: Vec<Option<ConnectedSender<T>>>,
@@ -36,21 +37,39 @@ impl<T: Send + Copy> Senders<T> {
     }
 
     /// Send a message to the idx-th consumer
+    ///
+    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`] if the idx is out of
+    /// the range of available senders, or the sender is a placeholder in the case of full mesh.
+    ///
+    /// See [`ConnectedSender.send`] for how the underlying sender works.
+    ///
+    /// [`GlommioError::IoError`]: ../../error/enum.GlommioError.html#variant.IoError
+    /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidInput
+    /// [`ConnectedSender.send`]: ../shared_channel/struct.ConnectedSender.html#method.send
     pub async fn send_to(&self, idx: usize, msg: T) -> Result<(), T> {
-        match self.senders[idx].as_ref() {
-            Some(consumer) => consumer.send(msg).await,
-            None => Err(GlommioError::IoError(Error::new(
+        match self.senders.get(idx) {
+            Some(Some(consumer)) => consumer.send(msg).await,
+            _ => Err(GlommioError::IoError(Error::new(
                 ErrorKind::InvalidInput,
                 "Local message should not be sent via channel mesh",
             ))),
         }
     }
 
-    /// Try sending a message to the idx-th consumer
+    /// Send a message to the idx-th consumer
+    ///
+    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`] if the idx is out of
+    /// the range of available senders, or the sender is a placeholder in the case of full mesh.
+    ///
+    /// See [`ConnectedSender.try_send`] for how the underlying sender works.
+    ///
+    /// [`GlommioError::IoError`]: ../../error/enum.GlommioError.html#variant.IoError
+    /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidInput
+    /// [`ConnectedSender.try_send`]: ../shared_channel/struct.ConnectedSender.html#method.try_send
     pub fn try_send_to(&self, idx: usize, msg: T) -> Result<(), T> {
-        match self.senders[idx].as_ref() {
-            Some(consumer) => consumer.try_send(msg),
-            None => Err(GlommioError::IoError(Error::new(
+        match self.senders.get(idx) {
+            Some(Some(consumer)) => consumer.try_send(msg),
+            _ => Err(GlommioError::IoError(Error::new(
                 ErrorKind::InvalidInput,
                 "Local message should not be sent via channel mesh",
             ))),
@@ -59,7 +78,7 @@ impl<T: Send + Copy> Senders<T> {
 }
 
 #[derive(Debug)]
-struct Receivers<T: Send + Copy> {
+pub struct Receivers<T: Send + Copy> {
     peer_id: usize,
     consumer_id: Option<usize>,
     receivers: Vec<Option<ConnectedReceiver<T>>>,
@@ -82,14 +101,31 @@ impl<T: Send + Copy> Receivers<T> {
     }
 
     /// Receive a message from the idx-th producer
+    ///
+    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`] if the idx is out of
+    /// the range of available receivers, or the receiver is a placeholder in the case of full mesh.
+    ///
+    /// See [`ConnectedReceiver.recv`] for how the underlying sender works.
+    ///
+    /// [`GlommioError::IoError`]: ../../error/enum.GlommioError.html#variant.IoError
+    /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidInput
+    /// [`ConnectedReceiver.recv`]: ../shared_channel/struct.ConnectedReceiver.html#method.recv
     pub async fn recv_from(&self, idx: usize) -> Result<Option<T>, ()> {
-        match self.receivers[idx].as_ref() {
-            Some(producer) => Ok(producer.recv().await),
-            None => Err(GlommioError::IoError(Error::new(
+        match self.receivers.get(idx) {
+            Some(Some(producer)) => Ok(producer.recv().await),
+            _ => Err(GlommioError::IoError(Error::new(
                 ErrorKind::InvalidInput,
                 "Local message should not be received from channel mesh",
             ))),
         }
+    }
+
+    pub fn streams(&mut self) -> Vec<(usize, ConnectedReceiver<T>)> {
+        self.receivers
+            .iter_mut()
+            .enumerate()
+            .flat_map(|(idx, recv)| recv.take().map(|recv| (idx, recv)))
+            .collect()
     }
 }
 
@@ -116,10 +152,14 @@ type SharedChannel<T> = (
 
 type SharedChannels<T> = Vec<Vec<SharedChannel<T>>>;
 
+/// The role an executor plays in the mesh
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Role {
+    /// The executor produces message
     Producer,
+    /// The executor consumes message
     Consumer,
+    /// The executor produces and consumes message
     Both,
 }
 
@@ -133,13 +173,19 @@ impl Role {
     }
 }
 
-pub trait MeshAdapter {
+/// An adapter for MeshBuilder
+pub trait MeshAdapter: Clone {
+    /// Determine whether a channel should be created between a pair of peers
+    /// considering their roles.
     fn connect(&self, from: &Role, to: &Role) -> bool;
+
+    /// Determine whether we are building a full mesh, when placeholders should
+    /// be inserted into the list senders/receivers
     fn is_full(&self) -> bool;
 }
 
-#[derive(Clone)]
-struct Full;
+#[derive(Clone, Debug)]
+pub struct Full;
 
 impl MeshAdapter for Full {
     fn connect(&self, _: &Role, _: &Role) -> bool {
@@ -151,8 +197,10 @@ impl MeshAdapter for Full {
     }
 }
 
-#[derive(Clone)]
-struct Partial;
+pub type FullMesh<T> = MeshBuilder<T, Full>;
+
+#[derive(Clone, Debug)]
+pub struct Partial;
 
 impl MeshAdapter for Partial {
     fn connect(&self, from: &Role, to: &Role) -> bool {
@@ -164,7 +212,9 @@ impl MeshAdapter for Partial {
     }
 }
 
-#[derive(Clone)]
+pub type PartialMesh<T> = MeshBuilder<T, Full>;
+
+/// A builder for channel mesh
 pub struct MeshBuilder<T: Send + Copy, A: MeshAdapter> {
     nr_peers: usize,
     channel_size: usize,
@@ -174,6 +224,18 @@ pub struct MeshBuilder<T: Send + Copy, A: MeshAdapter> {
 }
 
 unsafe impl<T: Send + Copy, A: MeshAdapter> Send for MeshBuilder<T, A> {}
+
+impl<T: Send + Copy, A: MeshAdapter> Clone for MeshBuilder<T, A> {
+    fn clone(&self) -> Self {
+        Self {
+            nr_peers: self.nr_peers,
+            channel_size: self.channel_size,
+            peers: self.peers.clone(),
+            channels: self.channels.clone(),
+            adapter: self.adapter.clone(),
+        }
+    }
+}
 
 impl<T: Send + Copy, A: MeshAdapter> Debug for MeshBuilder<T, A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -217,6 +279,10 @@ impl<T: 'static + Send + Copy, A: MeshAdapter> MeshBuilder<T, A> {
             channels: Arc::new(Self::placeholder(nr_peers)),
             adapter,
         }
+    }
+
+    pub fn nr_peers(&self) -> usize {
+        self.nr_peers
     }
 
     fn placeholder(nr_peers: usize) -> SharedChannels<T> {
@@ -400,6 +466,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[allow(unused_must_use)]
     fn test_join_more_than_once() {
         let mesh_builder = MeshBuilder::<u32, _>::full(2, 1);
 
@@ -410,6 +477,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[allow(unused_must_use)]
     fn test_join_more_than_capacity() {
         do_test_channel_mesh(1, 1, 2);
     }
