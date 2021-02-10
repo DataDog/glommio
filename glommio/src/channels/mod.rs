@@ -248,7 +248,11 @@ pub mod channel_mesh;
 /// Examples
 ///
 /// ```
-/// use glommio::channels::sharding::Handler;
+/// use futures_lite::stream::repeat_with;
+/// use futures_lite::StreamExt;
+
+/// use glommio::channels::channel_mesh::MeshBuilder;
+/// use glommio::channels::sharding::{Handler, Sharded};
 /// use glommio::{enclose, LocalExecutorBuilder};
 ///
 /// type Msg = i32;

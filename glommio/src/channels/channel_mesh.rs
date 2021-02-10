@@ -75,6 +75,15 @@ impl<T: Send + Copy> Senders<T> {
             ))),
         }
     }
+
+    /// Close the senders
+    pub fn close(&self) {
+        for sender in self.senders.iter() {
+            if let Some(sender) = sender {
+                sender.close();
+            }
+        }
+    }
 }
 
 /// Receiver side

@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::fmt::{self, Debug, Formatter};
 use std::rc::Rc;
 
@@ -46,7 +45,7 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Sharded<T, H> {
             nr_shards,
             shard_id: senders.peer_id(),
             shard_fn,
-            senders: RefCell::new(Some(senders)),
+            senders,
             handler: handler.clone(),
         });
 
@@ -107,7 +106,7 @@ struct Shard<T: Send + Copy, H> {
     nr_shards: usize,
     shard_id: usize,
     shard_fn: ShardFn<T>,
-    senders: RefCell<Option<Senders<T>>>,
+    senders: Senders<T>,
     handler: H,
 }
 
@@ -118,15 +117,13 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Shard<T, H> {
             if dst_shard == self.shard_id {
                 self.handler.handle(msg, self.shard_id, self.shard_id);
             } else {
-                let senders = self.senders.borrow();
-                let forward = senders.as_ref().unwrap().send_to(dst_shard, msg).await;
-                forward.unwrap();
+                self.senders.send_to(dst_shard, msg).await.unwrap();
             }
         }
     }
 
     fn close(&self) {
-        self.senders.borrow_mut().take();
+        self.senders.close();
     }
 }
 
