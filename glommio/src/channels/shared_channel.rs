@@ -455,8 +455,9 @@ impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::timer::Timer;
+    use crate::timer::{sleep, Timer};
     use crate::LocalExecutorBuilder;
+    use futures_lite::FutureExt;
     use futures_lite::StreamExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -587,6 +588,32 @@ mod test {
             .unwrap();
 
         ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[test]
+    fn destroy_with_pending_wakers() {
+        let (sender, receiver) = new_bounded::<u8>(1);
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect();
+                let sender = sender.connect();
+                let (receiver, sender) = futures::future::join(receiver, sender).await;
+
+                future::poll_fn(move |cx| {
+                    let mut f1 = receiver.recv().boxed_local();
+                    assert_eq!(f1.poll(cx), Poll::Pending);
+                    assert_eq!(sender.try_send(1).is_ok(), true);
+                    let r = receiver.recv_one(cx);
+                    assert_eq!(r, Poll::Ready(Some(1)));
+                    r
+                })
+                .await;
+                sleep(Duration::from_secs(1)).await;
+            })
+            .unwrap();
+
         ex2.join().unwrap();
     }
 
