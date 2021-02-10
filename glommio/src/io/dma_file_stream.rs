@@ -1064,11 +1064,7 @@ impl AsyncWrite for DmaStreamWriter {
                     }
                 }
                 Some(mut buffer) => {
-                    let size = buf.len();
-                    let space = state.buffer_size - state.buffer_pos;
-                    let writesz = std::cmp::min(space, size - written);
-                    let end = written + writesz;
-                    buffer.write_at(state.buffer_pos, &buf[written..end]);
+                    let writesz = buffer.write_at(state.buffer_pos, &buf[written..]);
                     written += writesz;
                     state.buffer_pos += writesz;
                     if state.buffer_pos == state.buffer_size {
