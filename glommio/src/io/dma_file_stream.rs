@@ -166,6 +166,8 @@ struct DmaStreamReaderState {
     buffer_read_ahead_current_pos: u64,
     max_pos: u64,
     buffer_size: u64,
+    buffer_size_mask: u64,
+    buffer_size_shift: u64,
     read_ahead: usize,
     wakermap: AHashMap<u64, Waker>,
     pending: AHashMap<u64, task::JoinHandle<()>>,
@@ -233,7 +235,7 @@ impl DmaStreamReaderState {
     }
 
     fn buffer_id(&self, pos: u64) -> u64 {
-        pos / self.buffer_size
+        (pos & self.buffer_size_mask) >> self.buffer_size_shift
     }
 
     fn copy_data(&mut self, pos: u64, result: &mut [u8]) -> usize {
@@ -369,6 +371,8 @@ impl DmaStreamReader {
             read_ahead: builder.read_ahead,
             max_pos: builder.end,
             buffer_size: builder.buffer_size as u64,
+            buffer_size_mask: !(builder.buffer_size as u64 - 1),
+            buffer_size_shift: (builder.buffer_size as f64).log2() as u64,
             wakermap: AHashMap::with_capacity(builder.read_ahead),
             buffermap: AHashMap::with_capacity(builder.read_ahead),
             pending: AHashMap::with_capacity(builder.read_ahead),
