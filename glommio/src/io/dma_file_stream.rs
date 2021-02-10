@@ -455,18 +455,20 @@ impl DmaStreamReader {
         let buffer_id = state.buffer_id(self.current_pos);
         self.current_pos = std::cmp::min(self.current_pos + bytes, self.end);
         let new_buffer_id = state.buffer_id(self.current_pos);
-        let candidate_read_ahead_pos = align_down(self.current_pos, self.buffer_size);
-        state.buffer_read_ahead_current_pos = std::cmp::max(
-            state.buffer_read_ahead_current_pos,
-            candidate_read_ahead_pos,
-        );
+        if buffer_id != new_buffer_id {
+            let candidate_read_ahead_pos = align_down(self.current_pos, self.buffer_size);
+            state.buffer_read_ahead_current_pos = std::cmp::max(
+                state.buffer_read_ahead_current_pos,
+                candidate_read_ahead_pos,
+            );
 
-        // remember the end range is exclusive so if we didn't cross a buffer
-        // we don't discard anything
-        for id in buffer_id..new_buffer_id {
-            state.discard_buffer(id);
+            // remember the end range is exclusive so if we didn't cross a buffer
+            // we don't discard anything
+            for id in buffer_id..new_buffer_id {
+                state.discard_buffer(id);
+            }
+            state.replenish_read_ahead(self.state.clone(), self.file.clone());
         }
-        state.replenish_read_ahead(self.state.clone(), self.file.clone());
     }
 
     /// Acquires the current position of this [`DmaStreamReader`].
