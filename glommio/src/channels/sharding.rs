@@ -9,11 +9,12 @@ use crate::task::JoinHandle;
 use crate::{GlommioError, Local, ResourceType, Result};
 
 /// Trait for handling sharded messages
-///
-/// * `msg` - The message to handle.
-/// * `src_shard` - Id of the shard where the msg is from.
-/// * `cur_shard` - Id of the local shard.
 pub trait Handler<T>: Clone {
+    /// Handle a message either received from an external stream of forwarded
+    /// from another peer.
+    /// * `msg` - The message to handle.
+    /// * `src_shard` - Id of the shard where the msg is from.
+    /// * `cur_shard` - Id of the local shard.
     fn handle(&self, msg: T, src_shard: usize, cur_shard: usize);
 }
 
@@ -119,7 +120,7 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Shard<T, H> {
             } else {
                 let senders = self.senders.borrow();
                 let forward = senders.as_ref().unwrap().send_to(dst_shard, msg).await;
-                forward.expect(&format!("Failed to forward request to shard {}", dst_shard))
+                forward.unwrap();
             }
         }
     }

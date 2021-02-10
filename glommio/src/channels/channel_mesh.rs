@@ -77,6 +77,7 @@ impl<T: Send + Copy> Senders<T> {
     }
 }
 
+/// Receiver side
 #[derive(Debug)]
 pub struct Receivers<T: Send + Copy> {
     peer_id: usize,
@@ -120,6 +121,10 @@ impl<T: Send + Copy> Receivers<T> {
         }
     }
 
+    /// Returns a vec of [`ConnectedReceiver`]s with the id of their upstream
+    /// producers.
+    ///
+    /// [`ConnectedReceiver`]: ../shared_channel/struct.ConnectedReceiver.html
     pub fn streams(&mut self) -> Vec<(usize, ConnectedReceiver<T>)> {
         self.receivers
             .iter_mut()
@@ -184,6 +189,7 @@ pub trait MeshAdapter: Clone {
     fn is_full(&self) -> bool;
 }
 
+/// Adapter for full mesh
 #[derive(Clone, Debug)]
 pub struct Full;
 
@@ -197,8 +203,10 @@ impl MeshAdapter for Full {
     }
 }
 
+/// Alias for full mesh builder
 pub type FullMesh<T> = MeshBuilder<T, Full>;
 
+/// Adapter for partial mesh
 #[derive(Clone, Debug)]
 pub struct Partial;
 
@@ -212,6 +220,7 @@ impl MeshAdapter for Partial {
     }
 }
 
+/// Alias for partial mesh builder
 pub type PartialMesh<T> = MeshBuilder<T, Full>;
 
 /// A builder for channel mesh
@@ -281,6 +290,7 @@ impl<T: 'static + Send + Copy, A: MeshAdapter> MeshBuilder<T, A> {
         }
     }
 
+    /// Returns number of all peers in the mesh
     pub fn nr_peers(&self) -> usize {
         self.nr_peers
     }
