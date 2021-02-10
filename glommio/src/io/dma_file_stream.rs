@@ -573,10 +573,15 @@ impl DmaStreamReader {
             }
             Some(buffer) => {
                 let offset = state.offset_of(self.current_pos);
-                let len = std::cmp::min(len as usize, buffer.len() - offset);
-                Poll::Ready(ReadResult::slice(&buffer, offset, len).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "buffer offset out of range").into()
-                }))
+                if buffer.len() <= offset {
+                    Poll::Ready(Ok(ReadResult::empty_buffer()))
+                } else {
+                    let len = std::cmp::min(len as usize, buffer.len() - offset);
+                    Poll::Ready(ReadResult::slice(&buffer, offset, len).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "buffer offset out of range")
+                            .into()
+                    }))
+                }
             }
         }
     }
@@ -1454,6 +1459,17 @@ mod test {
         let buffer = reader.get_buffer_aligned(131072).await.unwrap();
         assert_eq!(buffer.len(), 131072);
         check_contents!(*buffer, 0);
+        reader.close().await.unwrap();
+    });
+
+    file_stream_read_test!(read_get_buffer_aligned_past_the_end, path, _k, file, _file_size: 131072, {
+        let mut reader = DmaStreamReaderBuilder::new(file)
+            .with_buffer_size(131072)
+            .build();
+
+        reader.skip(131073);
+        let buffer = reader.get_buffer_aligned(32).await.unwrap();
+        assert_eq!(buffer.len(), 0);
         reader.close().await.unwrap();
     });
 
