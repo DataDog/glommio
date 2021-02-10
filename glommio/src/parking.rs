@@ -305,6 +305,8 @@ impl Reactor {
 
     pub(crate) fn unregister_shared_channel(&self, id: u64) {
         let mut channels = self.shared_channels.borrow_mut();
+        channels.wakers_map.clear();
+        channels.connection_wakers.clear();
         channels.check_map.remove(&id);
     }
 
