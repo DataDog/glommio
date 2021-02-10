@@ -166,11 +166,14 @@ struct DmaStreamReaderState {
     buffer_read_ahead_current_pos: u64,
     max_pos: u64,
     buffer_size: u64,
+    buffer_size_mask: u64,
+    buffer_size_shift: u64,
     read_ahead: usize,
     wakermap: AHashMap<u64, Waker>,
     pending: AHashMap<u64, task::JoinHandle<()>>,
     error: Option<io::Error>,
     buffermap: AHashMap<u64, ReadResult>,
+    cached_buffer: Option<(u64, ReadResult)>,
 }
 
 impl DmaStreamReaderState {
@@ -233,7 +236,7 @@ impl DmaStreamReaderState {
     }
 
     fn buffer_id(&self, pos: u64) -> u64 {
-        pos / self.buffer_size
+        (pos & self.buffer_size_mask) >> self.buffer_size_shift
     }
 
     fn copy_data(&mut self, pos: u64, result: &mut [u8]) -> usize {
@@ -274,6 +277,33 @@ impl DmaStreamReaderState {
             handles.push(v);
         }
         handles
+    }
+
+    fn update_cached_buffer(&mut self, buffer_id: &u64) -> Option<&ReadResult> {
+        if let Some(buffer) = self.buffermap.get(buffer_id) {
+            self.cached_buffer = Some((*buffer_id, buffer.clone()));
+            Some(buffer)
+        } else {
+            None
+        }
+    }
+
+    fn get_cached_buffer(&mut self, buffer_id: &u64) -> Option<&ReadResult> {
+        match &self.cached_buffer {
+            None => return self.update_cached_buffer(buffer_id),
+            Some((id, _)) => {
+                if id != buffer_id {
+                    self.update_cached_buffer(buffer_id);
+                }
+            }
+        }
+
+        if let Some((id, buffer)) = &self.cached_buffer {
+            if id == buffer_id {
+                return Some(buffer);
+            }
+        }
+        None
     }
 }
 
@@ -369,10 +399,13 @@ impl DmaStreamReader {
             read_ahead: builder.read_ahead,
             max_pos: builder.end,
             buffer_size: builder.buffer_size as u64,
+            buffer_size_mask: !(builder.buffer_size as u64 - 1),
+            buffer_size_shift: (builder.buffer_size as f64).log2() as u64,
             wakermap: AHashMap::with_capacity(builder.read_ahead),
             buffermap: AHashMap::with_capacity(builder.read_ahead),
             pending: AHashMap::with_capacity(builder.read_ahead),
             error: None,
+            cached_buffer: None,
         };
 
         let state = Rc::new(RefCell::new(state));
@@ -422,18 +455,20 @@ impl DmaStreamReader {
         let buffer_id = state.buffer_id(self.current_pos);
         self.current_pos = std::cmp::min(self.current_pos + bytes, self.end);
         let new_buffer_id = state.buffer_id(self.current_pos);
-        let candidate_read_ahead_pos = align_down(self.current_pos, self.buffer_size);
-        state.buffer_read_ahead_current_pos = std::cmp::max(
-            state.buffer_read_ahead_current_pos,
-            candidate_read_ahead_pos,
-        );
+        if buffer_id != new_buffer_id {
+            let candidate_read_ahead_pos = align_down(self.current_pos, self.buffer_size);
+            state.buffer_read_ahead_current_pos = std::cmp::max(
+                state.buffer_read_ahead_current_pos,
+                candidate_read_ahead_pos,
+            );
 
-        // remember the end range is exclusive so if we didn't cross a buffer
-        // we don't discard anything
-        for id in buffer_id..new_buffer_id {
-            state.discard_buffer(id);
+            // remember the end range is exclusive so if we didn't cross a buffer
+            // we don't discard anything
+            for id in buffer_id..new_buffer_id {
+                state.discard_buffer(id);
+            }
+            state.replenish_read_ahead(self.state.clone(), self.file.clone());
         }
-        state.replenish_read_ahead(self.state.clone(), self.file.clone());
     }
 
     /// Acquires the current position of this [`DmaStreamReader`].
@@ -530,7 +565,7 @@ impl DmaStreamReader {
             return Poll::Ready(err);
         }
 
-        match state.buffermap.get(&buffer_id) {
+        match state.get_cached_buffer(&buffer_id).cloned() {
             None => {
                 state.fill_buffer(self.state.clone(), self.file.clone());
                 state.add_waker(buffer_id, cx.waker().clone());
@@ -538,10 +573,15 @@ impl DmaStreamReader {
             }
             Some(buffer) => {
                 let offset = state.offset_of(self.current_pos);
-                let len = std::cmp::min(len as usize, buffer.len() - offset);
-                Poll::Ready(ReadResult::slice(buffer, offset, len).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "buffer offset out of range").into()
-                }))
+                if buffer.len() <= offset {
+                    Poll::Ready(Ok(ReadResult::empty_buffer()))
+                } else {
+                    let len = std::cmp::min(len as usize, buffer.len() - offset);
+                    Poll::Ready(ReadResult::slice(&buffer, offset, len).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "buffer offset out of range")
+                            .into()
+                    }))
+                }
             }
         }
     }
@@ -559,36 +599,60 @@ impl AsyncRead for DmaStreamReader {
         }
 
         let mut pos = self.current_pos;
+        if pos > state.max_pos {
+            return Poll::Ready(Ok(0));
+        }
 
         let start = state.buffer_id(pos);
-        let end = state.buffer_id(pos + buf.len() as u64) + 1;
-        for id in start..end {
-            match state.buffermap.get(&id) {
+        let end = state.buffer_id(pos + buf.len() as u64);
+
+        // special-casing the single buffer scenario helps small reads, as it allows
+        // us to do a single buffer lookup instead of N * 2;
+        if start == end {
+            match state.get_cached_buffer(&start).cloned() {
                 Some(buffer) => {
-                    if (buffer.len() as u64) < self.buffer_size {
-                        break;
-                    }
+                    let max_len = std::cmp::min(buf.len(), (state.max_pos - pos) as usize);
+                    let offset = state.offset_of(pos);
+                    let bytes_copied = buffer.read_at(offset, &mut buf[..max_len]);
+                    drop(state);
+                    self.skip(bytes_copied as u64);
+                    Poll::Ready(Ok(bytes_copied))
                 }
                 None => {
                     state.fill_buffer(self.state.clone(), self.file.clone());
-                    state.add_waker(id, cx.waker().clone());
-                    return Poll::Pending;
+                    state.add_waker(start, cx.waker().clone());
+                    Poll::Pending
                 }
             }
-        }
-
-        let mut current_offset = 0;
-        while current_offset < buf.len() {
-            let bytes_copied = state.copy_data(pos, &mut buf[current_offset..]);
-            current_offset += bytes_copied;
-            pos += bytes_copied as u64;
-            if bytes_copied == 0 {
-                break;
+        } else {
+            for id in start..=end {
+                match state.get_cached_buffer(&id) {
+                    Some(buffer) => {
+                        if (buffer.len() as u64) < self.buffer_size {
+                            break;
+                        }
+                    }
+                    None => {
+                        state.fill_buffer(self.state.clone(), self.file.clone());
+                        state.add_waker(id, cx.waker().clone());
+                        return Poll::Pending;
+                    }
+                }
             }
+
+            let mut current_offset = 0;
+            while current_offset < buf.len() {
+                let bytes_copied = state.copy_data(pos, &mut buf[current_offset..]);
+                current_offset += bytes_copied;
+                pos += bytes_copied as u64;
+                if bytes_copied == 0 {
+                    break;
+                }
+            }
+            drop(state);
+            self.skip(current_offset as u64);
+            Poll::Ready(Ok(current_offset))
         }
-        drop(state);
-        self.skip(current_offset as u64);
-        Poll::Ready(Ok(current_offset))
     }
 }
 
@@ -1005,11 +1069,7 @@ impl AsyncWrite for DmaStreamWriter {
                     }
                 }
                 Some(mut buffer) => {
-                    let size = buf.len();
-                    let space = state.buffer_size - state.buffer_pos;
-                    let writesz = std::cmp::min(space, size - written);
-                    let end = written + writesz;
-                    buffer.write_at(state.buffer_pos, &buf[written..end]);
+                    let writesz = buffer.write_at(state.buffer_pos, &buf[written..]);
                     written += writesz;
                     state.buffer_pos += writesz;
                     if state.buffer_pos == state.buffer_size {
@@ -1399,6 +1459,17 @@ mod test {
         let buffer = reader.get_buffer_aligned(131072).await.unwrap();
         assert_eq!(buffer.len(), 131072);
         check_contents!(*buffer, 0);
+        reader.close().await.unwrap();
+    });
+
+    file_stream_read_test!(read_get_buffer_aligned_past_the_end, path, _k, file, _file_size: 131072, {
+        let mut reader = DmaStreamReaderBuilder::new(file)
+            .with_buffer_size(131072)
+            .build();
+
+        reader.skip(131073);
+        let buffer = reader.get_buffer_aligned(32).await.unwrap();
+        assert_eq!(buffer.len(), 0);
         reader.close().await.unwrap();
     });
 
