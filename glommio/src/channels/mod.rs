@@ -171,22 +171,23 @@ pub mod shared_channel;
 /// use glommio::channels::channel_mesh::MeshBuilder;
 ///
 /// let nr_peers = 5;
+/// let channel_size = 100;
 /// let mesh_builder = MeshBuilder::full(nr_peers, channel_size);
 ///
 /// let executors = (0..nr_peers).map(|_| {
 ///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
-///         let (sender, receiver) = mesh_builder.join().await;
+///         let (sender, receiver) = mesh_builder.join().await.unwrap();
 ///         Local::local(async move {
-///             for peer in 0..sender.nr_peers() {
+///             for peer in 0..sender.nr_consumers() {
 ///                 if peer != sender.peer_id() {
-///                     sender.send_to(peer, (sender.id(), peer)).await.unwrap();
+///                     sender.send_to(peer, (sender.peer_id(), peer)).await.unwrap();
 ///                 }
 ///             }
 ///         }).detach();
 ///
-///         for peer in 0..receiver.nr_peers() {
+///         for peer in 0..receiver.nr_producers() {
 ///             if peer != receiver.peer_id() {
-///                 assert_eq!((peer, receiver.id()), receiver.recv_from(peer).await.unwrap());
+///                 assert_eq!((peer, receiver.peer_id()), receiver.recv_from(peer).await.unwrap().unwrap());
 ///             }
 ///         }
 ///     }))
@@ -201,10 +202,11 @@ pub mod shared_channel;
 /// ```
 /// use glommio::enclose;
 /// use glommio::prelude::*;
-/// use glommio::channels::channel_mesh::MeshBuilder;
+/// use glommio::channels::channel_mesh::{MeshBuilder, Role};
 ///
 /// let nr_producers = 2;
 /// let nr_consumers = 3;
+/// let channel_size = 100;
 /// let mesh_builder = MeshBuilder::partial(nr_producers + nr_consumers, channel_size);
 ///
 /// let producers = (0..nr_producers).map(|i| {
