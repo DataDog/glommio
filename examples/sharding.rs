@@ -9,7 +9,7 @@ use glommio::prelude::*;
 fn main() {
     type Msg = i32;
 
-    let nr_shards = 10;
+    let nr_shards = 2;
 
     fn get_shard_for(msg: &Msg, nr_shards: usize) -> usize {
         *msg as usize % nr_shards
@@ -22,6 +22,7 @@ fn main() {
 
     impl Handler<i32> for RequestHandler {
         fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) {
+            println!("shard {} received {}", cur_shard, msg);
             assert_eq!(get_shard_for(&msg, self.nr_shards), cur_shard);
         }
     }
@@ -32,7 +33,8 @@ fn main() {
         LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
             let handler = RequestHandler { nr_shards };
             let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
-            let messages = repeat_with(|| fastrand::i32(0..100)).take(1000);
+            let me = sharded.shard_id();
+            let messages = repeat_with(|| fastrand::i32(0..100)).take(10).inspect(move |x| println!("shard {} generated {}", me, x));
             sharded.handle(messages).unwrap();
             sharded.close().await;
         }))

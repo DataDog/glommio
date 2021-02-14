@@ -69,6 +69,11 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Sharded<T, H> {
         })
     }
 
+    /// Returns the shard_id associated with ourselves
+    pub fn shard_id(&self) -> usize {
+        self.shard.shard_id
+    }
+
     /// Consume messages from a stream. It will return a [`GlommioError::Closed`] if this
     /// [`Sharded`] is closed. Otherwise, the function will return immediately after spawning a
     /// background task draining messages from the stream.

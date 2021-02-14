@@ -243,21 +243,21 @@ pub mod shared_channel;
 /// ```
 pub mod channel_mesh;
 
-///
+/// Sharding utilities built on top of full mesh.
 ///
 /// Examples
 ///
 /// ```
 /// use futures_lite::stream::repeat_with;
 /// use futures_lite::StreamExt;
-
+/// use glommio::enclose;
+/// use glommio::prelude::*;
 /// use glommio::channels::channel_mesh::MeshBuilder;
 /// use glommio::channels::sharding::{Handler, Sharded};
-/// use glommio::{enclose, LocalExecutorBuilder};
 ///
 /// type Msg = i32;
 ///
-/// let nr_shards = 10;
+/// let nr_shards = 2;
 ///
 /// fn get_shard_for(msg: &Msg, nr_shards: usize) -> usize {
 ///     *msg as usize % nr_shards
@@ -270,6 +270,7 @@ pub mod channel_mesh;
 ///
 /// impl Handler<i32> for RequestHandler {
 ///     fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) {
+///         println!("shard {} received {}", cur_shard, msg);
 ///         assert_eq!(get_shard_for(&msg, self.nr_shards), cur_shard);
 ///     }
 /// }
@@ -280,7 +281,7 @@ pub mod channel_mesh;
 ///     LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
 ///         let handler = RequestHandler { nr_shards };
 ///         let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
-///         let messages = repeat_with(|| fastrand::i32(0..100)).take(1000);
+///         let messages = repeat_with(|| fastrand::i32(0..10)).take(1000).inspect(move |x| println!("shard {} generated {}", me, x));
 ///         sharded.handle(messages).unwrap();
 ///         sharded.close().await;
 ///     }))
