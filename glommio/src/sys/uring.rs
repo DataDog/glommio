@@ -1207,6 +1207,17 @@ impl Reactor {
         self.queue_standard_request(source, UringOpDescriptor::Nop)
     }
 
+    // io_uring can return EBUSY when the CQE queue is full and we try to push more
+    // requests. This is fine: we just need to make sure that we don't sleep and that we
+    // dont' failed rushed polls. So we just ignore this error
+    fn busy_ok(x: std::io::Error) -> io::Result<usize> {
+        match x.raw_os_error() {
+            Some(libc::EBUSY) => Ok(0),
+            Some(_) => Err(x),
+            None => Err(x),
+        }
+    }
+
     // We want to go to sleep but we can only go to sleep in one of the rings,
     // as we only have one thread. There are more than one sleepable rings, so
     // what we do is we take advantage of the fact that the ring's ring_fd is pollable
@@ -1220,13 +1231,14 @@ impl Reactor {
         eventfd_src: &Source,
     ) -> io::Result<()> {
         let mut link_rings = self.link_rings_src.borrow_mut();
-        ring.sleep(&mut link_rings, eventfd_src)?;
+        ring.sleep(&mut link_rings, eventfd_src)
+            .or_else(Self::busy_ok)?;
         Ok(())
     }
 
     fn simple_poll(ring: &RefCell<dyn UringCommon>, wakers: &mut Vec<Waker>) -> io::Result<()> {
         let mut ring = ring.borrow_mut();
-        ring.consume_submission_queue()?;
+        ring.consume_submission_queue().or_else(Self::busy_ok)?;
         ring.consume_completion_queue(wakers);
         Ok(())
     }
