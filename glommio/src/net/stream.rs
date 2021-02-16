@@ -7,6 +7,7 @@ use crate::parking::Reactor;
 use crate::sys::{self, DmaBuffer, Source, SourceType};
 use crate::{ByteSliceMutExt, Local};
 use futures_lite::ready;
+use nix::sys::socket::MsgFlags;
 use std::convert::TryFrom;
 use std::io;
 use std::net::Shutdown;
@@ -97,7 +98,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         let source = self.reactor.upgrade().unwrap().recv(
             self.stream.as_raw_fd(),
             buf.len(),
-            iou::MsgFlags::MSG_PEEK,
+            MsgFlags::MSG_PEEK,
         );
 
         let sz = source.collect_rw().await?;

@@ -4,15 +4,16 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use alloc::alloc::Layout;
-use iou::PollFlags;
 use log::warn;
+use nix::fcntl::{FallocateFlags, OFlag};
+use nix::poll::PollFlags;
 use rlimit::Resource;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::fmt;
 use std::io;
-use std::io::{Error, ErrorKind, IoSlice};
+use std::io::{Error, ErrorKind};
 use std::os::unix::io::RawFd;
 use std::ptr;
 use std::rc::Rc;
@@ -26,7 +27,9 @@ use crate::sys::{
 };
 use crate::{IoRequirements, Latency};
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
-use iou::{MsgFlags, SockAddr, SockAddrStorage, SockFlag};
+use iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, TimeoutFlags};
+use nix::sys::socket::{MsgFlags, SockAddr, SockFlag};
+use nix::sys::stat::Mode as OpenMode;
 use std::sync::Arc;
 
 use uring_sys::IoRingOp;
@@ -42,14 +45,14 @@ enum UringOpDescriptor {
     PollRemove(*const u8),
     Cancel(u64),
     Write(*const u8, usize, u64),
-    WriteFixed(*const u8, usize, u64, usize),
+    WriteFixed(*const u8, usize, u64, u32),
     ReadFixed(u64, usize),
     Read(u64, usize),
     Open(*const u8, libc::c_int, u32),
     Close,
     FDataSync,
-    Connect(*const iou::SockAddr),
-    Accept(*mut iou::SockAddrStorage),
+    Connect(*const SockAddr),
+    Accept(*mut SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
     Timeout(*const uring_sys::__kernel_timespec),
@@ -74,7 +77,7 @@ pub(crate) struct UringBufferAllocator {
     size: usize,
     allocator: RefCell<BuddyAlloc>,
     layout: Layout,
-    uring_buffer_id: Cell<Option<usize>>,
+    uring_buffer_id: Cell<Option<u32>>,
 }
 
 impl fmt::Debug for UringBufferAllocator {
@@ -108,7 +111,7 @@ impl UringBufferAllocator {
         }
     }
 
-    fn activate_registered_buffers(&self, idx: usize) {
+    fn activate_registered_buffers(&self, idx: u32) {
         self.uring_buffer_id.set(Some(idx))
     }
 
@@ -148,7 +151,7 @@ impl Drop for UringBufferAllocator {
 pub(crate) struct UringBuffer {
     allocator: Rc<UringBufferAllocator>,
     data: ptr::NonNull<u8>,
-    uring_buffer_id: Option<usize>,
+    uring_buffer_id: Option<u32>,
 }
 
 impl fmt::Debug for UringBuffer {
@@ -169,7 +172,7 @@ impl UringBuffer {
         self.data.as_ptr()
     }
 
-    pub(crate) fn uring_buffer_id(&self) -> Option<usize> {
+    pub(crate) fn uring_buffer_id(&self) -> Option<u32> {
         self.uring_buffer_id
     }
 }
@@ -235,7 +238,7 @@ lazy_static! {
     static ref IO_URING_RECENT_ENOUGH: bool = check_supported_operations(GLOMMIO_URING_OPS);
 }
 
-fn fill_sqe<F>(sqe: &mut iou::SubmissionQueueEvent<'_>, op: &UringDescriptor, buffer_allocation: F)
+fn fill_sqe<F>(sqe: &mut iou::SQE<'_>, op: &UringDescriptor, buffer_allocation: F)
 where
     F: FnOnce(usize) -> Option<DmaBuffer>,
 {
@@ -251,7 +254,7 @@ where
             }
             UringOpDescriptor::Cancel(to_remove) => {
                 user_data = 0;
-                sqe.prep_cancel(to_remove);
+                sqe.prep_cancel(to_remove, 0);
             }
             UringOpDescriptor::Write(ptr, len, pos) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
@@ -275,12 +278,12 @@ where
                 sqe.prep_openat(
                     op.fd,
                     path,
-                    flags as _,
-                    iou::OpenMode::from_bits_truncate(mode),
+                    OFlag::from_bits_truncate(flags),
+                    OpenMode::from_bits_truncate(mode),
                 );
             }
             UringOpDescriptor::FDataSync => {
-                sqe.prep_fsync(op.fd, iou::FsyncFlags::FSYNC_DATASYNC);
+                sqe.prep_fsync(op.fd, FsyncFlags::FSYNC_DATASYNC);
             }
             UringOpDescriptor::Connect(addr) => {
                 sqe.prep_connect(op.fd, &*addr);
@@ -291,19 +294,18 @@ where
             }
 
             UringOpDescriptor::Fallocate(offset, size, flags) => {
-                let flags = iou::FallocateFlags::from_bits_truncate(flags);
+                let flags = FallocateFlags::from_bits_truncate(flags);
                 sqe.prep_fallocate(op.fd, offset, size, flags);
             }
             UringOpDescriptor::Statx(path, statx_buf) => {
-                let flags =
-                    iou::StatxFlags::AT_STATX_SYNC_AS_STAT | iou::StatxFlags::AT_NO_AUTOMOUNT;
-                let mode = iou::StatxMode::from_bits_truncate(0x7ff);
+                let flags = StatxFlags::AT_STATX_SYNC_AS_STAT | StatxFlags::AT_NO_AUTOMOUNT;
+                let mode = StatxMode::from_bits_truncate(0x7ff);
 
                 let path = CStr::from_ptr(path as _);
                 sqe.prep_statx(-1, path, flags, mode, &mut *statx_buf);
             }
             UringOpDescriptor::Timeout(timespec) => {
-                sqe.prep_timeout(&*timespec);
+                sqe.prep_timeout(&*timespec, 0, TimeoutFlags::empty());
             }
             UringOpDescriptor::TimeoutRemove(timer) => {
                 sqe.prep_timeout_remove(timer as _);
@@ -402,13 +404,12 @@ where
             #[cfg(feature = "bench")]
             UringOpDescriptor::Nop => sqe.prep_nop(),
         }
+        sqe.set_user_data(user_data);
     }
-
-    sqe.set_user_data(user_data);
 }
 
 fn process_one_event<F>(
-    cqe: Option<iou::CompletionQueueEvent>,
+    cqe: Option<iou::CQE>,
     try_process: F,
     wakers: &mut Vec<Waker>,
 ) -> Option<()>
@@ -429,7 +430,7 @@ where
 
         if !was_cancelled && try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
-            w.result = Some(result);
+            w.result = Some(result.map(|x| x as usize));
             if let Some(waiter) = w.waiter.take() {
                 wakers.push(waiter);
             }
@@ -610,7 +611,11 @@ struct PollRing {
 
 impl PollRing {
     fn new(size: usize, allocator: Rc<UringBufferAllocator>) -> io::Result<Self> {
-        let ring = iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?;
+        let ring = iou::IoUring::new_with_flags(
+            size as _,
+            iou::SetupFlags::IOPOLL,
+            iou::SetupFeatures::empty(),
+        )?;
         Ok(PollRing {
             submitted: 0,
             completed: 0,
@@ -652,9 +657,11 @@ impl UringCommon for PollRing {
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
         if self.submitted != self.completed {
-            return self.ring.submit_sqes();
+            let res = self.ring.submit_sqes()?;
+            Ok(res as usize)
+        } else {
+            Ok(0)
         }
-        Ok(0)
     }
 
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
@@ -670,7 +677,7 @@ impl UringCommon for PollRing {
         }
 
         //let buffers = self.buffers.clone();
-        if let Some(mut sqe) = self.ring.next_sqe() {
+        if let Some(mut sqe) = self.ring.prepare_sqe() {
             self.submitted += 1;
             let op = queue.pop_front().unwrap();
             let allocator = self.allocator.clone();
@@ -729,7 +736,10 @@ impl Source {
 
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
         let mut w = self.inner.wakers.borrow_mut();
-        w.result.take()
+        match w.result.take() {
+            None => None,
+            Some(x) => Some(x.map(|x| x as usize)),
+        }
     }
 
     pub(crate) fn has_result(&self) -> bool {
@@ -771,7 +781,6 @@ impl SleepableRing {
     ) -> io::Result<Self> {
         assert_eq!(*IO_URING_RECENT_ENOUGH, true);
         Ok(SleepableRing {
-            //     ring: iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?,
             ring: iou::IoUring::new(size as _)?,
             submission_queue: UringQueueState::with_capacity(size * 4),
             waiting_submission: 0,
@@ -813,7 +822,7 @@ impl SleepableRing {
     }
 
     fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
-        if let Some(mut sqe) = self.ring.next_sqe() {
+        if let Some(mut sqe) = self.ring.prepare_sqe() {
             self.waiting_submission += 1;
             // Now must wait on the eventfd in case someone wants to wake us up.
             // If we can't then we can't sleep and will just bail immediately
@@ -838,7 +847,7 @@ impl SleepableRing {
         };
 
         if is_freestanding {
-            if let Some(mut sqe) = self.ring.next_sqe() {
+            if let Some(mut sqe) = self.ring.prepare_sqe() {
                 self.waiting_submission += 1;
                 link.update_source_type(SourceType::LinkRings(LinkStatus::Linked));
 
@@ -852,7 +861,7 @@ impl SleepableRing {
                 // Can't link rings because we ran out of CQEs. Just can't sleep.
                 // Submit what we have, once we're out of here we'll consume them
                 // and at some point will be able to sleep again.
-                return self.ring.submit_sqes();
+                return self.ring.submit_sqes().map(|x| x as usize);
             }
         }
 
@@ -861,7 +870,7 @@ impl SleepableRing {
             None => {
                 // We already have the eventfd registered and nobody woke us up so far.
                 // Just proceed to sleep
-                self.ring.submit_sqes_and_wait(1)
+                self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
             }
             Some(res) => {
                 if self.install_eventfd(eventfd_src) {
@@ -869,9 +878,9 @@ impl SleepableRing {
                     res.unwrap();
                     // Now must wait on the eventfd in case someone wants to wake us up.
                     // If we can't then we can't sleep and will just bail immediately
-                    self.ring.submit_sqes_and_wait(1)
+                    self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
                 } else {
-                    self.ring.submit_sqes()
+                    self.ring.submit_sqes().map(|x| x as usize)
                 }
             }
         }
@@ -896,7 +905,7 @@ impl UringCommon for SleepableRing {
     }
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
-        let x = self.ring.submit_sqes()?;
+        let x = self.ring.submit_sqes()? as usize;
         self.waiting_submission -= x;
         Ok(x)
     }
@@ -924,7 +933,7 @@ impl UringCommon for SleepableRing {
             return Some(false);
         }
 
-        if let Some(mut sqe) = self.ring.next_sqe() {
+        if let Some(mut sqe) = self.ring.prepare_sqe() {
             self.waiting_submission += 1;
             let op = queue.pop_front().unwrap();
             let allocator = self.allocator.clone();
@@ -1011,17 +1020,17 @@ impl Reactor {
         io_memory = std::cmp::max(align_up(io_memory, 4096), 65536);
 
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
-        let registry = vec![IoSlice::new(allocator.as_bytes())];
+        let registry = vec![allocator.as_bytes()];
 
         let mut main_ring = SleepableRing::new(128, "main", allocator.clone())?;
         let poll_ring = PollRing::new(128, allocator.clone())?;
 
-        match main_ring.registrar().register_buffers(&registry) {
+        match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
                 "Error: registering buffers in the main ring. Skipping{:#?}",
                 x
             ),
-            Ok(_) => match poll_ring.registrar().register_buffers(&registry) {
+            Ok(_) => match poll_ring.registrar().register_buffers_by_ref(&registry) {
                 Err(x) => {
                     warn!(
                         "Error: registering buffers in the poll ring. Skipping{:#?}",
@@ -1344,7 +1353,8 @@ impl Reactor {
             // details. This translates to sys_membarrier() / MEMBARRIER_CMD_PRIVATE_EXPEDITED
             membarrier::heavy();
             if process_remote_channels(wakers) == 0 {
-                self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)?;
+                self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)
+                    .expect("some error");
                 // woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
                 consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
@@ -1363,7 +1373,7 @@ impl Reactor {
 
     pub(crate) fn preempt_pointers(&self) -> (*const u32, *const u32) {
         let mut lat_ring = self.latency_ring.borrow_mut();
-        let cq = &lat_ring.ring.raw_mut().cq;
+        let cq = unsafe { &lat_ring.ring.raw_mut().cq };
         (cq.khead, cq.ktail)
     }
 

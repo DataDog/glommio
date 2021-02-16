@@ -4,7 +4,8 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use ahash::AHashMap;
-use iou::{SockAddr, SockAddrStorage};
+use iou::sqe::SockAddrStorage;
+use nix::sys::socket::SockAddr;
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
 use std::ffi::CString;

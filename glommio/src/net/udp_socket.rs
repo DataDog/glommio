@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::datagram::GlommioDatagram;
-use iou::{InetAddr, SockAddr};
+use nix::sys::socket::{InetAddr, SockAddr};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{self, SocketAddr, ToSocketAddrs};
@@ -329,6 +329,7 @@ mod tests {
     use crate::timer::Timer;
     use crate::Local;
     use crate::LocalExecutorBuilder;
+    use nix::sys::socket::MsgFlags;
     use std::time::Duration;
 
     macro_rules! connected_pair {
@@ -548,14 +549,14 @@ mod tests {
                 for _ in 0..10 {
                     let (sz, _) = receiver
                         .socket
-                        .recv_from_blocking(&mut buf, iou::MsgFlags::MSG_PEEK)
+                        .recv_from_blocking(&mut buf, MsgFlags::MSG_PEEK)
                         .await
                         .unwrap();
                     assert_eq!(sz, 1);
                 }
                 let (_, from) = receiver
                     .socket
-                    .recv_from_blocking(&mut buf, iou::MsgFlags::MSG_PEEK)
+                    .recv_from_blocking(&mut buf, MsgFlags::MSG_PEEK)
                     .await
                     .unwrap();
                 let addr = match from {
@@ -605,7 +606,7 @@ mod tests {
                 let mut buf = [0u8; 1];
                 let (sz, from) = receiver
                     .socket
-                    .recv_from_blocking(&mut buf, iou::MsgFlags::empty())
+                    .recv_from_blocking(&mut buf, MsgFlags::empty())
                     .await
                     .unwrap();
                 assert_eq!(sz, 1);

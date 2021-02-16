@@ -23,7 +23,8 @@
 //!
 
 use ahash::AHashMap;
-use iou::{SockAddr, SockAddrStorage};
+use iou::sqe::SockAddrStorage;
+use nix::sys::socket::{MsgFlags, SockAddr};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
@@ -363,7 +364,7 @@ impl Reactor {
 
     pub(crate) fn rushed_send(&self, fd: RawFd, buf: DmaBuffer) -> io::Result<Source> {
         let source = self.new_source(fd, SourceType::SockSend(buf));
-        self.sys.send(&source, iou::MsgFlags::empty());
+        self.sys.send(&source, MsgFlags::empty());
         self.rush_dispatch(&source)?;
         Ok(source)
     }
@@ -390,7 +391,7 @@ impl Reactor {
         };
 
         let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr));
-        self.sys.sendmsg(&source, iou::MsgFlags::empty());
+        self.sys.sendmsg(&source, MsgFlags::empty());
         self.rush_dispatch(&source)?;
         Ok(source)
     }
@@ -399,7 +400,7 @@ impl Reactor {
         &self,
         fd: RawFd,
         size: usize,
-        flags: iou::MsgFlags,
+        flags: MsgFlags,
     ) -> io::Result<Source> {
         let hdr = libc::msghdr {
             msg_name: std::ptr::null_mut(),
@@ -430,12 +431,12 @@ impl Reactor {
 
     pub(crate) fn rushed_recv(&self, fd: RawFd, size: usize) -> io::Result<Source> {
         let source = self.new_source(fd, SourceType::SockRecv(None));
-        self.sys.recv(&source, size, iou::MsgFlags::empty());
+        self.sys.recv(&source, size, MsgFlags::empty());
         self.rush_dispatch(&source)?;
         Ok(source)
     }
 
-    pub(crate) fn recv(&self, fd: RawFd, size: usize, flags: iou::MsgFlags) -> Source {
+    pub(crate) fn recv(&self, fd: RawFd, size: usize, flags: MsgFlags) -> Source {
         let source = self.new_source(fd, SourceType::SockRecv(None));
         self.sys.recv(&source, size, flags);
         source
