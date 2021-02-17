@@ -34,7 +34,7 @@ type Result<T, V> = crate::Result<T, V>;
 ///
 /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-pub struct SharedReceiver<T: Send + Sized + Copy> {
+pub struct SharedReceiver<T: Send + Sized> {
     state: Option<Rc<ReceiverState<T>>>,
 }
 
@@ -50,11 +50,11 @@ pub struct SharedReceiver<T: Send + Sized + Copy> {
 ///
 /// [`ConnectedSender`]: struct.ConnectedSender.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-pub struct SharedSender<T: Send + Sized + Copy> {
+pub struct SharedSender<T: Send + Sized> {
     state: Option<Rc<SenderState<T>>>,
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for SharedSender<T> {
+impl<T: Send + Sized> fmt::Debug for SharedSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.state {
             Some(s) => write!(f, "Unbound SharedSender {:?}", s.buffer),
@@ -63,7 +63,7 @@ impl<T: Send + Sized + Copy> fmt::Debug for SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for SharedReceiver<T> {
+impl<T: Send + Sized> fmt::Debug for SharedReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.state {
             Some(s) => write!(f, "Unbound SharedReceiver: {:?}", s.buffer),
@@ -72,11 +72,11 @@ impl<T: Send + Sized + Copy> fmt::Debug for SharedReceiver<T> {
     }
 }
 
-unsafe impl<T: Send + Sized + Copy> Send for SharedReceiver<T> {}
-unsafe impl<T: Send + Sized + Copy> Send for SharedSender<T> {}
+unsafe impl<T: Send + Sized> Send for SharedReceiver<T> {}
+unsafe impl<T: Send + Sized> Send for SharedSender<T> {}
 
 /// The `ConnectedReceiver` is the receiving end of the Shared Channel.
-pub struct ConnectedReceiver<T: Send + Sized + Copy> {
+pub struct ConnectedReceiver<T: Send + Sized> {
     id: u64,
     state: Rc<ReceiverState<T>>,
     reactor: Weak<Reactor>,
@@ -84,30 +84,30 @@ pub struct ConnectedReceiver<T: Send + Sized + Copy> {
 }
 
 /// The `ConnectedReceiver` is the sending end of the Shared Channel.
-pub struct ConnectedSender<T: Send + Sized + Copy> {
+pub struct ConnectedSender<T: Send + Sized> {
     id: u64,
     state: Rc<SenderState<T>>,
     reactor: Weak<Reactor>,
     notifier: Arc<SleepNotifier>,
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for ConnectedReceiver<T> {
+impl<T: Send + Sized> fmt::Debug for ConnectedReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected Receiver {}: {:?}", self.id, self.state.buffer)
     }
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for ConnectedSender<T> {
+impl<T: Send + Sized> fmt::Debug for ConnectedSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected Sender {} : {:?}", self.id, self.state.buffer)
     }
 }
 
-struct SenderState<T: Send + Sized + Copy> {
+struct SenderState<T: Send + Sized> {
     buffer: Producer<T>,
 }
 
-struct ReceiverState<T: Send + Sized + Copy> {
+struct ReceiverState<T: Send + Sized> {
     buffer: Consumer<T>,
 }
 
@@ -142,7 +142,7 @@ impl<T: BufferHalf + Clone> Future for Connector<T> {
 /// Creates a a new `shared_channel` returning its sender and receiver endpoints.
 ///
 /// All shared channels must be bounded.
-pub fn new_bounded<T: Send + Sized + Copy>(size: usize) -> (SharedSender<T>, SharedReceiver<T>) {
+pub fn new_bounded<T: Send + Sized>(size: usize) -> (SharedSender<T>, SharedReceiver<T>) {
     let (producer, consumer) = make(size);
     (
         SharedSender {
@@ -154,7 +154,7 @@ pub fn new_bounded<T: Send + Sized + Copy>(size: usize) -> (SharedSender<T>, Sha
     )
 }
 
-impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
+impl<T: 'static + Send + Sized> SharedSender<T> {
     /// Connects this sender, returning a [`ConnectedSender`] that can be used
     /// to send data into this channel
     ///
@@ -183,7 +183,7 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> ConnectedSender<T> {
+impl<T: Send + Sized> ConnectedSender<T> {
     /// Sends data into this channel.
     ///
     /// It returns a [`GlommioError::Closed`] if the receiver is destroyed.
@@ -294,7 +294,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     }
 }
 
-impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
+impl<T: 'static + Send + Sized> SharedReceiver<T> {
     /// Connects this receiver, returning a [`ConnectedReceiver`] that can be used
     /// to send data into this channel
     ///
@@ -323,7 +323,7 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
+impl<T: Send + Sized> ConnectedReceiver<T> {
     /// Receives data from this channel
     ///
     /// If the sender is no longer available it returns [`None`]. Otherwise block until
@@ -386,7 +386,7 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Stream for ConnectedReceiver<T> {
+impl<T: Send + Sized> Stream for ConnectedReceiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -394,7 +394,7 @@ impl<T: Send + Sized + Copy> Stream for ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
+impl<T: Send + Sized> Drop for SharedSender<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
@@ -409,7 +409,7 @@ impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
+impl<T: Send + Sized> Drop for SharedReceiver<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
@@ -424,7 +424,7 @@ impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
+impl<T: Send + Sized> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.notifier.must_notify() {
@@ -438,7 +438,7 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
+impl<T: Send + Sized> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.notifier.must_notify() {
@@ -669,6 +669,53 @@ mod test {
                 let receiver = receiver.connect().await;
                 let x = receiver.recv().await.unwrap();
                 assert_eq!(32, x());
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[test]
+    fn pass_string() {
+        let (sender, receiver) = new_bounded(10);
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                sender.send("hello".to_owned()).await.unwrap();
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let x = receiver.recv().await.unwrap();
+                assert_eq!("hello", x);
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[test]
+    fn pass_arc() {
+        let (sender, receiver) = new_bounded(10);
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                let x = Arc::new("hello".to_owned());
+                sender.send(x).await.unwrap();
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let x = receiver.recv().await.unwrap();
+                assert_eq!("hello", x.as_ref());
             })
             .unwrap();
 
