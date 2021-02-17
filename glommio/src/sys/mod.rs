@@ -110,6 +110,12 @@ pub(crate) fn recv_syscall(fd: RawFd, buf: *mut u8, len: usize, flags: i32) -> i
     syscall!(recv(fd, buf as _, len, flags)).map(|x| x as usize)
 }
 
+pub(crate) fn accept_syscall(fd: RawFd) -> io::Result<RawFd> {
+    let mut addr: MaybeUninit<libc::sockaddr_storage> = MaybeUninit::uninit();
+    let mut length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    syscall!(accept(fd, addr.as_mut_ptr() as *mut _, &mut length))
+}
+
 // This essentially converts the nix errors into something we can integrate with the rest of the
 // crate.
 pub(crate) unsafe fn ssptr_to_sockaddr(

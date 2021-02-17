@@ -8,6 +8,25 @@ use crate::sys;
 use std::io;
 use std::os::unix::io::RawFd;
 
+fn yolo_accept(fd: RawFd) -> Option<io::Result<RawFd>> {
+    let flags =
+        nix::fcntl::OFlag::from_bits(nix::fcntl::fcntl(fd, nix::fcntl::F_GETFL).unwrap()).unwrap();
+    nix::fcntl::fcntl(
+        fd,
+        nix::fcntl::F_SETFL(flags | nix::fcntl::OFlag::O_NONBLOCK),
+    )
+    .unwrap();
+    let r = sys::accept_syscall(fd);
+    nix::fcntl::fcntl(fd, nix::fcntl::F_SETFL(flags)).unwrap();
+    match r {
+        Ok(x) => Some(Ok(x)),
+        Err(err) => match err.kind() {
+            io::ErrorKind::WouldBlock => None,
+            _ => Some(Err(err)),
+        },
+    }
+}
+
 fn yolo_send(fd: RawFd, buf: &[u8]) -> Option<io::Result<usize>> {
     match sys::send_syscall(
         fd,
