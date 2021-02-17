@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::fmt;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,8 +16,8 @@ const fn cacheline_pad(used: usize) -> usize {
 /// ring buffer, as well as a head and tail atomicUsize which the producer and consumer
 /// use to track location in the ring.
 #[repr(C)]
-pub(crate) struct Buffer<T: Copy> {
-    buffer_storage: Arc<Vec<Cell<T>>>,
+pub(crate) struct Buffer<T> {
+    buffer_storage: Arc<Vec<UnsafeCell<Option<T>>>>,
 
     /// The bounded size as specified by the user.  If the queue reaches capacity, it will block
     /// until values are poppped off.
@@ -47,7 +47,7 @@ pub(crate) struct Buffer<T: Copy> {
     _padding3: [usize; cacheline_pad(4)],
 }
 
-impl<T: Copy> fmt::Debug for Buffer<T> {
+impl<T> fmt::Debug for Buffer<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);
@@ -67,24 +67,24 @@ impl<T: Copy> fmt::Debug for Buffer<T> {
     }
 }
 
-unsafe impl<T: Sync + Copy> Sync for Buffer<T> {}
+unsafe impl<T: Sync> Sync for Buffer<T> {}
 
 /// A handle to the queue which allows consuming values from the buffer
 #[derive(Debug)]
-pub(crate) struct Consumer<T: Copy> {
+pub(crate) struct Consumer<T> {
     buffer: Arc<Buffer<T>>,
 }
 
 /// A handle to the queue which allows adding values onto the buffer
 #[derive(Debug)]
-pub(crate) struct Producer<T: Copy> {
+pub(crate) struct Producer<T> {
     buffer: Arc<Buffer<T>>,
 }
 
-unsafe impl<T: Send + Copy> Send for Consumer<T> {}
-unsafe impl<T: Send + Copy> Send for Producer<T> {}
+unsafe impl<T: Send> Send for Consumer<T> {}
+unsafe impl<T: Send> Send for Producer<T> {}
 
-impl<T: Copy> Buffer<T> {
+impl<T> Buffer<T> {
     /// Attempt to pop a value off the buffer.
     ///
     /// If the buffer is empty, this method will not block.  Instead, it will return `None`
@@ -101,10 +101,11 @@ impl<T: Copy> Buffer<T> {
         }
 
         let index = current_head & (self.allocated_size - 1);
-        let v = self.buffer_storage[index].get();
+        let resp = unsafe { self.buffer_storage[index].get().replace(None) };
         self.head
             .store(current_head.wrapping_add(1), Ordering::Release);
-        Some(v)
+
+        resp
     }
 
     /// Attempt to push a value onto the buffer.
@@ -126,9 +127,15 @@ impl<T: Copy> Buffer<T> {
         }
 
         let index = current_tail & (self.allocated_size - 1);
-        self.buffer_storage[index].set(v);
+        unsafe {
+            // SAFETY: this will drop the value at buffer_storage[index]. If we initialize these all
+            // with null pointers, we have to use std::ptr::write(..) but this won't call the value
+            // pointed to by the pointer's drop impl.
+            self.buffer_storage[index].get().write(Some(v));
+        }
         self.tail
             .store(current_tail.wrapping_add(1), Ordering::Release);
+
         None
     }
 
@@ -162,7 +169,7 @@ impl<T: Copy> Buffer<T> {
 }
 
 /// Handles deallocation of heap memory when the buffer is dropped
-impl<T: Copy> Drop for Buffer<T> {
+impl<T> Drop for Buffer<T> {
     fn drop(&mut self) {
         // Pop the rest of the values off the queue.  By moving them into this scope,
         // we implicitly call their destructor
@@ -179,7 +186,7 @@ impl<T: Copy> Drop for Buffer<T> {
     }
 }
 
-pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+pub(crate) fn make<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let buffer_storage = allocate_buffer(capacity);
 
     let arc = Arc::new(Buffer {
@@ -209,9 +216,9 @@ pub(crate) fn make<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     )
 }
 
-fn allocate_buffer<T: Copy>(capacity: usize) -> Arc<Vec<Cell<T>>> {
+fn allocate_buffer<T>(capacity: usize) -> Arc<Vec<UnsafeCell<Option<T>>>> {
     let size = capacity.next_power_of_two();
-    let mut vec = Vec::with_capacity(size);
+    let mut vec: Vec<UnsafeCell<Option<T>>> = Vec::with_capacity(size);
     unsafe {
         vec.set_len(size);
     }
@@ -219,7 +226,7 @@ fn allocate_buffer<T: Copy>(capacity: usize) -> Arc<Vec<Cell<T>>> {
 }
 
 pub(crate) trait BufferHalf {
-    type Item: Copy;
+    type Item;
 
     fn buffer(&self) -> &Buffer<Self::Item>;
     fn eventfd(&self) -> &Cell<Option<Arc<AtomicUsize>>>;
@@ -258,7 +265,7 @@ pub(crate) trait BufferHalf {
     }
 }
 
-impl<T: Copy> BufferHalf for Producer<T> {
+impl<T> BufferHalf for Producer<T> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
         &*self.buffer
@@ -271,7 +278,7 @@ impl<T: Copy> BufferHalf for Producer<T> {
     }
 }
 
-impl<T: Copy> Producer<T> {
+impl<T> Producer<T> {
     /// Attempt to push a value onto the buffer.
     ///
     /// This method does not block.  If the queue is not full, the value will be added to the
@@ -303,7 +310,7 @@ impl<T: Copy> Producer<T> {
     }
 }
 
-impl<T: Copy> BufferHalf for Consumer<T> {
+impl<T> BufferHalf for Consumer<T> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
         &(*self.buffer)
@@ -316,7 +323,7 @@ impl<T: Copy> BufferHalf for Consumer<T> {
     }
 }
 
-impl<T: Copy> Consumer<T> {
+impl<T> Consumer<T> {
     /// Disconnects the consumer, signaling to the producer that no new values are going to be
     /// consumed. After this is done, any attempt on the producer to try_push should fail
     ///

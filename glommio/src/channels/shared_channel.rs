@@ -31,7 +31,7 @@ type Result<T, V> = crate::Result<T, V>;
 ///
 /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-pub struct SharedReceiver<T: Send + Sized + Copy> {
+pub struct SharedReceiver<T: Send + Sized> {
     state: Option<Rc<ReceiverState<T>>>,
 }
 
@@ -48,16 +48,16 @@ pub struct SharedReceiver<T: Send + Sized + Copy> {
 ///
 /// [`ConnectedSender`]: struct.ConnectedSender.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-pub struct SharedSender<T: Send + Sized + Copy> {
+pub struct SharedSender<T: Send + Sized> {
     state: Option<Rc<SenderState<T>>>,
 }
 
-unsafe impl<T: Send + Sized + Copy> Send for SharedReceiver<T> {}
-unsafe impl<T: Send + Sized + Copy> Send for SharedSender<T> {}
+unsafe impl<T: Send + Sized> Send for SharedReceiver<T> {}
+unsafe impl<T: Send + Sized> Send for SharedSender<T> {}
 
 #[derive(Debug)]
 /// The `ConnectedReceiver` is the receiving end of the Shared Channel.
-pub struct ConnectedReceiver<T: Send + Sized + Copy> {
+pub struct ConnectedReceiver<T: Send + Sized> {
     id: u64,
     state: Rc<ReceiverState<T>>,
     reactor: Weak<Reactor>,
@@ -65,26 +65,156 @@ pub struct ConnectedReceiver<T: Send + Sized + Copy> {
 
 #[derive(Debug)]
 /// The `ConnectedReceiver` is the sending end of the Shared Channel.
-pub struct ConnectedSender<T: Send + Sized + Copy> {
+pub struct ConnectedSender<T: Send + Sized> {
     id: u64,
     state: Rc<SenderState<T>>,
     reactor: Weak<Reactor>,
 }
 
 #[derive(Debug)]
-struct SenderState<T: Send + Sized + Copy> {
-    buffer: Producer<T>,
+struct SenderState<V: Send + Sized> {
+    buffer: Producer<V>,
 }
 
 #[derive(Debug)]
-struct ReceiverState<T: Send + Sized + Copy> {
-    buffer: Consumer<T>,
+struct ReceiverState<V: Send + Sized> {
+    buffer: Consumer<V>,
+}
+
+mod private {
+    use std::ptr::NonNull;
+
+    /// ConvertInto trait
+    ///
+    pub trait ConvertInto<T> {
+        /// Convert self into T
+        fn convert_into(self) -> T;
+    }
+
+    impl<T: Send> ConvertInto<Shared<T, ()>> for Box<T> {
+        fn convert_into(self) -> Shared<T, ()> {
+            unsafe { Shared::Box(NonNull::new_unchecked(Box::into_raw(self))) }
+        }
+    }
+
+    impl<T: Send> ConvertInto<Box<T>> for Shared<T, ()> {
+        fn convert_into(self) -> Box<T> {
+            match self {
+                Shared::Box(ptr) => unsafe { Box::from_raw(ptr.as_ptr()) },
+                _ => unreachable!("invalid types, shouldn't be reachable"),
+            }
+        }
+    }
+
+    impl<T: Send> ConvertInto<Shared<T, ()>> for Vec<T> {
+        fn convert_into(mut self) -> Shared<T, ()> {
+            let (ptr, len, cap) = (self.as_mut_ptr(), self.len(), self.capacity());
+            std::mem::forget(self);
+            unsafe { Shared::Vec(NonNull::new_unchecked(ptr), len, cap) }
+        }
+    }
+
+    impl<T: Send> ConvertInto<Vec<T>> for Shared<T, ()> {
+        fn convert_into(self) -> Vec<T> {
+            match self {
+                Shared::Vec(ptr, len, cap) => unsafe {
+                    Vec::from_raw_parts(ptr.as_ptr(), len, cap)
+                },
+                _ => unreachable!("invalid types, shouldn't be reachable"),
+            }
+        }
+    }
+
+    impl ConvertInto<Shared<String, ()>> for String {
+        fn convert_into(mut self) -> Shared<String, ()> {
+            let (ptr, len, cap) = (self.as_mut_ptr(), self.len(), self.capacity());
+            std::mem::forget(self);
+            unsafe { Shared::String(NonNull::new_unchecked(ptr), len, cap) }
+        }
+    }
+
+    impl ConvertInto<String> for Shared<String, ()> {
+        fn convert_into(self) -> String {
+            match self {
+                Shared::String(ptr, len, cap) => unsafe {
+                    String::from_raw_parts(ptr.as_ptr(), len, cap)
+                },
+                _ => unreachable!("invalid types, shouldn't be reachable"),
+            }
+        }
+    }
+
+    impl<V: Send + Copy> ConvertInto<Shared<(), V>> for V {
+        fn convert_into(self) -> Shared<(), V> {
+            Shared::Copy(self)
+        }
+    }
+
+    impl<V: Send + Copy> ConvertInto<V> for Shared<(), V> {
+        fn convert_into(self) -> V {
+            match self {
+                Shared::Copy(inner) => inner,
+                _ => unreachable!("invalid types, shouldn't be reachable"),
+            }
+        }
+    }
+
+    /// Shared data type used for destructuring and reassembly of both heap allocated data, and
+    /// Copy types without copying.
+    #[derive(Debug, Clone, Copy)]
+    pub enum Shared<T: Send, V: Send + Copy> {
+        /// Boxed data
+        Box(NonNull<T>),
+        /// Strings
+        String(NonNull<u8>, usize, usize),
+        /// Vectors
+        Vec(NonNull<T>, usize, usize),
+        /// Copy types that are ok to actually just copy
+        Copy(V),
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use core::fmt;
+
+        fn test_convert_into<T, V>(i: impl ConvertInto<Shared<T, V>>)
+        where
+            T: Send + fmt::Debug,
+            V: Send + Copy + fmt::Debug,
+        {
+            dbg!(i.convert_into());
+        }
+
+        #[test]
+        fn shared_data() {
+            let ub: Shared<String, _> = String::from("some string data here..").convert_into();
+            let str_again: String = ub.convert_into();
+            dbg!(str_again);
+            test_convert_into(String::from("some string data here.."));
+
+            let ub: Shared<String, _> = vec!["a".to_string(), "b".to_string()].convert_into();
+            let vec_again: Vec<_> = ub.convert_into();
+            dbg!(vec_again);
+            test_convert_into(vec!["a".to_string(), "b".to_string()]);
+
+            let ub: Shared<_, _> = Box::new(String::from("something here..")).convert_into();
+            let box_again: Box<_> = ub.convert_into();
+            dbg!(box_again);
+            test_convert_into(Box::new(String::from("something here..")));
+
+            let ub = 100usize.convert_into();
+            let copy_again: usize = ub.convert_into();
+            dbg!(copy_again);
+            test_convert_into(100usize);
+        }
+    }
 }
 
 /// Creates a a new `shared_channel` returning its sender and receiver endpoints.
 ///
 /// All shared channels must be bounded.
-pub fn new_bounded<T: Send + Sized + Copy>(size: usize) -> (SharedSender<T>, SharedReceiver<T>) {
+pub fn new_bounded<T: Send + Sized>(size: usize) -> (SharedSender<T>, SharedReceiver<T>) {
     let (producer, consumer) = make(size);
     (
         SharedSender {
@@ -96,7 +226,7 @@ pub fn new_bounded<T: Send + Sized + Copy>(size: usize) -> (SharedSender<T>, Sha
     )
 }
 
-impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
+impl<T: 'static + Send + Sized> SharedSender<T> {
     /// Connects this sender, returning a [`ConnectedSender`] that can be used
     /// to send data into this channel
     ///
@@ -118,7 +248,7 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> ConnectedSender<T> {
+impl<T: Send + Sized> ConnectedSender<T> {
     /// Sends data into this channel.
     ///
     /// It returns a [`GlommioError::Closed`] if the receiver is destroyed.
@@ -216,7 +346,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     }
 }
 
-impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
+impl<T: 'static + Send + Sized> SharedReceiver<T> {
     /// Connects this receiver, returning a [`ConnectedReceiver`] that can be used
     /// to send data into this channel
     ///
@@ -238,7 +368,7 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
+impl<T: Send + Sized> ConnectedReceiver<T> {
     /// Receives data from this channel
     ///
     /// If the sender is no longer available it returns [`None`]. Otherwise block until
@@ -294,7 +424,7 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Stream for ConnectedReceiver<T> {
+impl<T: Send + Sized> Stream for ConnectedReceiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -302,7 +432,7 @@ impl<T: Send + Sized + Copy> Stream for ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
+impl<T: Send + Sized> Drop for SharedSender<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
@@ -314,7 +444,7 @@ impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
+impl<T: Send + Sized> Drop for SharedReceiver<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
@@ -326,7 +456,7 @@ impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
+impl<T: Send + Sized> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.state.buffer.must_notify() {
@@ -337,7 +467,7 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
+impl<T: Send + Sized> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.state.buffer.must_notify() {
@@ -569,6 +699,58 @@ mod test {
                 while status.load(Ordering::Relaxed) == 0 {}
                 let x = receiver.recv().await.unwrap();
                 assert_eq!(0, x);
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[test]
+    fn non_copy_shared() {
+        let (sender, receiver) = new_bounded(1);
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect();
+                let string1 = "Some string data here..".to_string();
+                sender.send(string1).await.unwrap();
+                let string2 = "different data..".to_string();
+                sender.send(string2).await.unwrap();
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect();
+                let x = receiver.recv().await.unwrap();
+                let y = receiver.recv().await;
+                dbg!(x, y);
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[test]
+    fn copy_shared() {
+        let (sender, receiver) = new_bounded(2);
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect();
+                sender.send(100usize).await.unwrap();
+                sender.send(200usize).await.unwrap();
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect();
+                let x = receiver.recv().await.unwrap();
+                let y = receiver.recv().await;
+                dbg!(x, y);
             })
             .unwrap();
 
