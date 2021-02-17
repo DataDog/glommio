@@ -455,7 +455,6 @@ mod tests {
         }
     }
 
-    /// TODO: lost inner_make in a merge, fix and re-enable this
     #[should_panic]
     #[test]
     fn test_wrap() {
