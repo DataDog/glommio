@@ -22,9 +22,7 @@ fn yolo_accept(fd: RawFd) -> Option<io::Result<RawFd>> {
         Ok(x) => Some(Ok(x)),
         Err(err) => match err.kind() {
             io::ErrorKind::WouldBlock => None,
-            _ => {
-                return Some(Err(err));
-            }
+            _ => Some(Err(err)),
         },
     }
 }
