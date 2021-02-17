@@ -1,11 +1,15 @@
 use std::fmt::{self, Debug, Formatter};
+use std::pin::Pin;
 use std::rc::Rc;
 
-use futures_lite::{Stream, StreamExt};
+use futures_lite::{Future, Stream, StreamExt};
 
 use crate::channels::channel_mesh::{FullMesh, Senders};
 use crate::task::JoinHandle;
 use crate::{GlommioError, Local, ResourceType, Result};
+
+/// Alias for return type of `Handler`
+pub type HandlerResult = Pin<Box<dyn Future<Output = ()>>>;
 
 /// Trait for handling sharded messages
 pub trait Handler<T>: Clone {
@@ -14,7 +18,7 @@ pub trait Handler<T>: Clone {
     /// * `msg` - The message to handle.
     /// * `src_shard` - Id of the shard where the msg is from.
     /// * `cur_shard` - Id of the local shard.
-    fn handle(&self, msg: T, src_shard: usize, cur_shard: usize);
+    fn handle(&self, msg: T, src_shard: usize, cur_shard: usize) -> HandlerResult;
 }
 
 /// The public interface for sharding
@@ -55,7 +59,7 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Sharded<T, H> {
             let cur_shard = shard.shard_id;
             let consumer = Local::local(async move {
                 while let Some(msg) = stream.recv().await {
-                    handler.handle(msg, src_shard, cur_shard)
+                    handler.handle(msg, src_shard, cur_shard).await;
                 }
             });
             forward_tasks.push(consumer.detach());
@@ -120,7 +124,7 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Shard<T, H> {
         while let Some(msg) = messages.next().await {
             let dst_shard = (self.shard_fn)(&msg, self.nr_shards);
             if dst_shard == self.shard_id {
-                self.handler.handle(msg, self.shard_id, self.shard_id);
+                self.handler.handle(msg, self.shard_id, self.shard_id).await;
             } else {
                 self.senders.send_to(dst_shard, msg).await.unwrap();
             }
@@ -134,11 +138,12 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Shard<T, H> {
 
 #[cfg(test)]
 mod tests {
+    use futures_lite::future::ready;
     use futures_lite::stream::repeat_with;
-    use futures_lite::StreamExt;
+    use futures_lite::{FutureExt, StreamExt};
 
     use crate::channels::channel_mesh::MeshBuilder;
-    use crate::channels::sharding::{Handler, Sharded};
+    use crate::channels::sharding::{Handler, HandlerResult, Sharded};
     use crate::enclose;
     use crate::prelude::*;
 
@@ -158,8 +163,9 @@ mod tests {
         };
 
         impl Handler<i32> for RequestHandler {
-            fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) {
+            fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
                 assert_eq!(shard_fn(&msg, self.nr_shards), cur_shard);
+                ready(()).boxed_local()
             }
         }
 

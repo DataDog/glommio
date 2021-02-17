@@ -248,12 +248,13 @@ pub mod channel_mesh;
 /// Examples
 ///
 /// ```
+/// use futures_lite::future::ready;
 /// use futures_lite::stream::repeat_with;
-/// use futures_lite::StreamExt;
+/// use futures_lite::{FutureExt, StreamExt};
 /// use glommio::enclose;
 /// use glommio::prelude::*;
 /// use glommio::channels::channel_mesh::MeshBuilder;
-/// use glommio::channels::sharding::{Handler, Sharded};
+/// use glommio::channels::sharding::{Handler, Sharded, HandlerResult};
 ///
 /// type Msg = i32;
 ///
@@ -269,9 +270,10 @@ pub mod channel_mesh;
 /// };
 ///
 /// impl Handler<i32> for RequestHandler {
-///     fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) {
+///     fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
 ///         println!("shard {} received {}", cur_shard, msg);
 ///         assert_eq!(get_shard_for(&msg, self.nr_shards), cur_shard);
+///         ready(()).boxed_local()
 ///     }
 /// }
 ///
