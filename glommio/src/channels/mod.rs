@@ -281,6 +281,7 @@ pub mod channel_mesh;
 ///     LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
 ///         let handler = RequestHandler { nr_shards };
 ///         let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
+///         let me = sharded.shard_id();
 ///         let messages = repeat_with(|| fastrand::i32(0..10)).take(1000).inspect(move |x| println!("shard {} generated {}", me, x));
 ///         sharded.handle(messages).unwrap();
 ///         sharded.close().await;
