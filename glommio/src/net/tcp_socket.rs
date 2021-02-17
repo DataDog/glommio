@@ -4,7 +4,9 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::stream::GlommioStream;
+use crate::net::yolo_accept;
 use crate::parking::Reactor;
+use crate::GlommioError;
 use crate::Local;
 use futures_lite::future::poll_fn;
 use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
@@ -100,7 +102,7 @@ impl TcpListener {
         let addr = socket2::SockAddr::from(addr);
         sk.set_reuse_port(true)?;
         sk.bind(&addr)?;
-        sk.listen(128)?;
+        sk.listen(1024)?;
         let listener = sk.into_tcp_listener();
 
         Ok(TcpListener {
@@ -139,6 +141,15 @@ impl TcpListener {
     /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
     pub async fn shared_accept(&self) -> Result<AcceptedTcpStream> {
         let reactor = self.reactor.upgrade().unwrap();
+        let raw_fd = self.listener.as_raw_fd();
+        if let Some(r) = yolo_accept(raw_fd) {
+            match r {
+                Ok(fd) => {
+                    return Ok(AcceptedTcpStream { fd });
+                }
+                Err(err) => return Err(GlommioError::IoError(err)),
+            }
+        }
         let source = reactor.accept(self.listener.as_raw_fd());
         let fd = source.collect_rw().await?;
         Ok(AcceptedTcpStream { fd: fd as RawFd })
