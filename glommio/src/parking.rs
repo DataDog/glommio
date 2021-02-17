@@ -35,7 +35,7 @@ use std::os::unix::io::RawFd;
 use std::panic::{self, RefUnwindSafe, UnwindSafe};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
@@ -43,7 +43,9 @@ use std::time::{Duration, Instant};
 use futures_lite::*;
 
 use crate::sys;
-use crate::sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, Source, SourceType};
+use crate::sys::{
+    DirectIO, DmaBuffer, IOBuffer, PollableStatus, SleepNotifier, Source, SourceType,
+};
 use crate::Local;
 use crate::{IoRequirements, Latency};
 
@@ -138,10 +140,12 @@ impl Timers {
         self.timer_id
     }
 
-    fn remove(&mut self, id: u64) {
+    fn remove(&mut self, id: u64) -> Option<Waker> {
         if let Some(when) = self.timers_by_id.remove(&id) {
-            self.timers.remove(&(when, id));
+            return self.timers.remove(&(when, id));
         }
+
+        None
     }
 
     fn insert(&mut self, id: u64, when: Instant, waker: Waker) {
@@ -183,20 +187,24 @@ struct SharedChannels {
     id: u64,
     check_map: BTreeMap<u64, Box<dyn Fn() -> usize>>,
     wakers_map: BTreeMap<u64, VecDeque<Waker>>,
+    connection_wakers: Vec<Waker>,
 }
 
 impl SharedChannels {
     fn new() -> SharedChannels {
         SharedChannels {
             id: 0,
+            connection_wakers: Vec::new(),
             check_map: BTreeMap::new(),
             wakers_map: BTreeMap::new(),
         }
     }
 
     fn process_shared_channels(&mut self, wakers: &mut Vec<Waker>) -> usize {
+        let mut added = self.connection_wakers.len();
+        wakers.append(&mut self.connection_wakers);
+
         let current_wakers = mem::take(&mut self.wakers_map);
-        let mut added = 0;
         for (id, mut pending) in current_wakers.into_iter() {
             let room = self.check_map.get(&id).unwrap()();
             let room = std::cmp::min(room, pending.len());
@@ -246,8 +254,9 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    pub(crate) fn new(io_memory: usize) -> Reactor {
-        let sys = sys::Reactor::new(io_memory).expect("cannot initialize I/O event notification");
+    pub(crate) fn new(notifier: Arc<SleepNotifier>, io_memory: usize) -> Reactor {
+        let sys = sys::Reactor::new(notifier, io_memory)
+            .expect("cannot initialize I/O event notification");
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
             sys,
@@ -265,8 +274,8 @@ impl Reactor {
         unsafe { *self.preempt_ptr_head != (*self.preempt_ptr_tail).load(Ordering::Acquire) }
     }
 
-    pub(crate) fn eventfd(&self) -> Arc<AtomicUsize> {
-        self.sys.eventfd()
+    pub(crate) fn id(&self) -> usize {
+        self.sys.id()
     }
 
     pub(crate) fn notify(&self, remote: RawFd) {
@@ -292,6 +301,17 @@ impl Reactor {
         let ret = channels.check_map.insert(id, test_function);
         assert_eq!(ret.is_none(), true);
         id
+    }
+
+    pub(crate) fn unregister_shared_channel(&self, id: u64) {
+        let mut channels = self.shared_channels.borrow_mut();
+        channels.wakers_map.remove(&id);
+        channels.check_map.remove(&id);
+    }
+
+    pub(crate) fn add_shared_channel_connection_waker(&self, waker: Waker) {
+        let mut channels = self.shared_channels.borrow_mut();
+        channels.connection_wakers.push(waker);
     }
 
     pub(crate) fn add_shared_channel_waker(&self, id: u64, waker: Waker) {
@@ -487,12 +507,19 @@ impl Reactor {
         dir: RawFd,
         path: &Path,
         flags: libc::c_int,
-        mode: libc::c_int,
+        mode: libc::mode_t,
     ) -> Source {
         let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
 
         let source = self.new_source(dir, SourceType::Open(path));
         self.sys.open_at(&source, flags, mode);
+        source
+    }
+
+    #[cfg(feature = "bench")]
+    pub(crate) fn nop(&self) -> Source {
+        let source = self.new_source(-1, SourceType::Noop);
+        self.sys.nop(&source);
         source
     }
 
@@ -507,15 +534,15 @@ impl Reactor {
     /// Registers a timer in the reactor.
     ///
     /// Returns the inserted timer's ID.
-    pub(crate) fn insert_timer(&self, id: u64, when: Instant, waker: &Waker) {
+    pub(crate) fn insert_timer(&self, id: u64, when: Instant, waker: Waker) {
         let mut timers = self.timers.borrow_mut();
-        timers.insert(id, when, waker.clone());
+        timers.insert(id, when, waker);
     }
 
     /// Deregisters a timer from the reactor.
-    pub(crate) fn remove_timer(&self, id: u64) {
+    pub(crate) fn remove_timer(&self, id: u64) -> Option<Waker> {
         let mut timers = self.timers.borrow_mut();
-        timers.remove(id);
+        timers.remove(id)
     }
 
     /// Processes ready timers and extends the list of wakers to wake.

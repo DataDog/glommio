@@ -108,6 +108,7 @@ mod buffered_file_stream;
 mod directory;
 mod dma_file;
 mod dma_file_stream;
+mod dma_open_options;
 mod glommio_file;
 mod read_result;
 
@@ -143,5 +144,6 @@ pub use self::dma_file::DmaFile;
 pub use self::dma_file_stream::{
     DmaStreamReader, DmaStreamReaderBuilder, DmaStreamWriter, DmaStreamWriterBuilder,
 };
+pub use self::dma_open_options::DmaOpenOptions;
 pub use self::read_result::ReadResult;
 pub use crate::sys::DmaBuffer;

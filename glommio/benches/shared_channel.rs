@@ -11,7 +11,7 @@ fn test_spsc(capacity: usize) {
         .pin_to_cpu(0)
         .spin_before_park(Duration::from_millis(10))
         .spawn(move || async move {
-            let sender = sender.connect();
+            let sender = sender.connect().await;
             let t = Instant::now();
             for _ in 0..runs {
                 sender.send(1).await.unwrap();
@@ -29,7 +29,7 @@ fn test_spsc(capacity: usize) {
         .spin_before_park(Duration::from_millis(10))
         .pin_to_cpu(1)
         .spawn(move || async move {
-            let receiver = receiver.connect();
+            let receiver = receiver.connect().await;
             let t = Instant::now();
             for _ in 0..runs {
                 receiver.recv().await.unwrap();

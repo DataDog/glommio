@@ -27,8 +27,6 @@ use crate::sys::{
 use crate::{IoRequirements, Latency};
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use iou::{MsgFlags, SockAddr, SockAddrStorage, SockFlag};
-use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use uring_sys::IoRingOp;
@@ -60,6 +58,8 @@ enum UringOpDescriptor {
     SockSendMsg(*mut libc::msghdr, i32),
     SockRecv(usize, i32),
     SockRecvMsg(usize, i32),
+    #[cfg(feature = "bench")]
+    Nop,
 }
 
 #[derive(Debug)]
@@ -399,6 +399,8 @@ where
                     _ => unreachable!(),
                 };
             }
+            #[cfg(feature = "bench")]
+            UringOpDescriptor::Nop => sqe.prep_nop(),
         }
     }
 
@@ -940,14 +942,10 @@ pub(crate) struct Reactor {
     poll_ring: RefCell<PollRing>,
 
     link_rings_src: RefCell<Source>,
-
     timeout_src: Cell<Option<Source>>,
 
     // This keeps the eventfd alive. Drop will close it when we're done
-    _eventfd: std::fs::File,
-    // This tells the other reactors whether we are sleeping or not, and if we
-    // are what is our eventfd
-    eventfd_memory: Arc<AtomicUsize>,
+    notifier: Arc<sys::SleepNotifier>,
     // This is the source used to handle the notifications into the ring
     eventfd_src: Source,
 }
@@ -993,7 +991,10 @@ fn align_up(v: usize, align: usize) -> usize {
 }
 
 impl Reactor {
-    pub(crate) fn new(mut io_memory: usize) -> io::Result<Reactor> {
+    pub(crate) fn new(
+        notifier: Arc<sys::SleepNotifier>,
+        mut io_memory: usize,
+    ) -> io::Result<Reactor> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
@@ -1035,7 +1036,6 @@ impl Reactor {
         }
 
         let latency_ring = SleepableRing::new(128, "latency", allocator.clone())?;
-
         let link_fd = latency_ring.ring_fd();
         let link_rings_src = Source::new(
             IoRequirements::default(),
@@ -1043,10 +1043,9 @@ impl Reactor {
             SourceType::LinkRings(LinkStatus::Freestanding),
         );
 
-        let eventfd = unsafe { std::fs::File::from_raw_fd(sys::create_eventfd()?) };
         let eventfd_src = Source::new(
             IoRequirements::default(),
-            eventfd.as_raw_fd(),
+            notifier.eventfd_fd(),
             SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
         );
         assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
@@ -1057,14 +1056,13 @@ impl Reactor {
             poll_ring: RefCell::new(poll_ring),
             link_rings_src: RefCell::new(link_rings_src),
             timeout_src: Cell::new(None),
-            _eventfd: eventfd,
-            eventfd_memory: Arc::new(AtomicUsize::new(0)),
+            notifier,
             eventfd_src,
         })
     }
 
-    pub(crate) fn eventfd(&self) -> Arc<AtomicUsize> {
-        self.eventfd_memory.clone()
+    pub(crate) fn id(&self) -> usize {
+        self.notifier.id()
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
@@ -1195,13 +1193,29 @@ impl Reactor {
         self.queue_standard_request(source, op);
     }
 
-    pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::c_int) {
+    pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::mode_t) {
         let pathptr = match &*source.source_type() {
             SourceType::Open(cstring) => cstring.as_c_str().as_ptr(),
             _ => panic!("Wrong source type!"),
         };
         let op = UringOpDescriptor::Open(pathptr as _, flags, mode as _);
         self.queue_standard_request(source, op);
+    }
+
+    #[cfg(feature = "bench")]
+    pub(crate) fn nop(&self, source: &Source) {
+        self.queue_standard_request(source, UringOpDescriptor::Nop)
+    }
+
+    // io_uring can return EBUSY when the CQE queue is full and we try to push more
+    // requests. This is fine: we just need to make sure that we don't sleep and that we
+    // dont' failed rushed polls. So we just ignore this error
+    fn busy_ok(x: std::io::Error) -> io::Result<usize> {
+        match x.raw_os_error() {
+            Some(libc::EBUSY) => Ok(0),
+            Some(_) => Err(x),
+            None => Err(x),
+        }
     }
 
     // We want to go to sleep but we can only go to sleep in one of the rings,
@@ -1217,13 +1231,14 @@ impl Reactor {
         eventfd_src: &Source,
     ) -> io::Result<()> {
         let mut link_rings = self.link_rings_src.borrow_mut();
-        ring.sleep(&mut link_rings, eventfd_src)?;
+        ring.sleep(&mut link_rings, eventfd_src)
+            .or_else(Self::busy_ok)?;
         Ok(())
     }
 
     fn simple_poll(ring: &RefCell<dyn UringCommon>, wakers: &mut Vec<Waker>) -> io::Result<()> {
         let mut ring = ring.borrow_mut();
-        ring.consume_submission_queue()?;
+        ring.consume_submission_queue().or_else(Self::busy_ok)?;
         ring.consume_completion_queue(wakers);
         Ok(())
     }
@@ -1324,12 +1339,14 @@ impl Reactor {
             // We have to sweep the remote channels function once more because since
             // last time until now it could be that something happened in a remote executor
             // that opened up room. If if did we bail on sleep and go process it.
-            self.eventfd_memory
-                .store(self.eventfd_src.raw() as _, Ordering::Release);
+            self.notifier.prepare_to_sleep();
+            // See https://www.scylladb.com/2018/02/15/memory-barriers-seastar-linux/ for
+            // details. This translates to sys_membarrier() / MEMBARRIER_CMD_PRIVATE_EXPEDITED
+            membarrier::heavy();
             if process_remote_channels(wakers) == 0 {
                 self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)?;
                 // woke up, so no need to notify us anymore.
-                self.eventfd_memory.store(0, Ordering::Release);
+                self.notifier.wake_up();
                 consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
             }
         }
@@ -1398,7 +1415,8 @@ mod tests {
 
     #[test]
     fn timeout_smoke_test() {
-        let reactor = Reactor::new(0).unwrap();
+        let notifier = sys::new_sleep_notifier().unwrap();
+        let reactor = Reactor::new(notifier, 0).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(

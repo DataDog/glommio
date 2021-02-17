@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use ahash::AHashMap;
 use iou::{SockAddr, SockAddrStorage};
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
@@ -10,9 +11,11 @@ use std::ffi::CString;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::{FromRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::task::Waker;
 use std::time::Duration;
 use std::{fmt, io};
@@ -198,7 +201,107 @@ mod uring;
 
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::uring::*;
-use crate::{error::ReactorErrorKind, GlommioError, IoRequirements};
+use crate::error::{ExecutorErrorKind, GlommioError, ReactorErrorKind};
+use crate::IoRequirements;
+
+#[derive(Debug, Default)]
+pub(crate) struct ReactorGlobalState {
+    idgen: usize,
+    // reactor_id -> notifier
+    sleep_notifiers: AHashMap<usize, std::sync::Weak<SleepNotifier>>,
+}
+
+impl ReactorGlobalState {
+    fn new_local_state(&mut self) -> io::Result<Arc<SleepNotifier>> {
+        // note how this starts from 1. 0 means "no notifier present"
+        self.idgen += 1;
+        let id = self.idgen;
+        if id == 0 || id == usize::MAX {
+            return Err(GlommioError::<()>::ExecutorError(ExecutorErrorKind::InvalidId(id)).into());
+        }
+
+        let notifier = SleepNotifier::new(id)?;
+        let res = self.sleep_notifiers.insert(id, Arc::downgrade(&notifier));
+        assert_eq!(res.is_none(), true);
+        Ok(notifier)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SleepNotifier {
+    id: usize,
+    eventfd: std::fs::File,
+    memory: Arc<AtomicUsize>,
+}
+
+lazy_static! {
+    static ref REACTOR_GLOBAL_STATE: RwLock<ReactorGlobalState> =
+        RwLock::new(ReactorGlobalState::default());
+    static ref REACTOR_DISCONNECTED: Arc<SleepNotifier> = SleepNotifier::new(usize::MAX).unwrap();
+}
+
+pub(super) fn new_sleep_notifier() -> io::Result<Arc<SleepNotifier>> {
+    let mut state = REACTOR_GLOBAL_STATE.write().unwrap();
+    state.new_local_state()
+}
+
+pub(crate) fn get_sleep_notifier_for(id: usize) -> Option<Arc<SleepNotifier>> {
+    if id == usize::MAX {
+        Some(REACTOR_DISCONNECTED.clone())
+    } else {
+        let state = REACTOR_GLOBAL_STATE.read().unwrap();
+        state.sleep_notifiers.get(&id).and_then(|x| x.upgrade())
+    }
+}
+
+impl SleepNotifier {
+    pub(crate) fn new(id: usize) -> io::Result<Arc<Self>> {
+        let eventfd = unsafe { std::fs::File::from_raw_fd(create_eventfd()?) };
+        Ok(Arc::new(Self {
+            eventfd,
+            id,
+            memory: Arc::new(AtomicUsize::new(0)),
+        }))
+    }
+
+    pub(crate) fn eventfd_fd(&self) -> RawFd {
+        self.eventfd.as_raw_fd()
+    }
+
+    pub(crate) fn id(&self) -> usize {
+        self.id
+    }
+
+    pub(crate) fn must_notify(&self) -> Option<RawFd> {
+        match self.memory.load(Ordering::Acquire) {
+            0 => None,
+            x => Some(x as _),
+        }
+    }
+
+    pub(super) fn prepare_to_sleep(&self) {
+        // This will allow this eventfd to be notified. This should not happen
+        // for the placeholder (disconnected) case.
+        assert_ne!(self.id, usize::MAX);
+        self.memory
+            .store(self.eventfd.as_raw_fd() as _, Ordering::SeqCst);
+    }
+
+    pub(super) fn wake_up(&self) {
+        self.memory.store(0, Ordering::Release);
+    }
+}
+
+impl Drop for SleepNotifier {
+    fn drop(&mut self) {
+        let mut state = REACTOR_GLOBAL_STATE.write().unwrap();
+        // The other side may still be holding a reference in which case the notifier will
+        // be freed later. However we can't receive notifications anymore so memory must be
+        // zeroed here.
+        self.wake_up();
+        state.sleep_notifiers.remove(&self.id).unwrap();
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum IOBuffer {
@@ -258,6 +361,8 @@ pub(crate) enum SourceType {
     Connect(SockAddr),
     Accept(SockAddrStorage),
     Invalid,
+    #[cfg(feature = "bench")]
+    Noop,
 }
 
 impl TryFrom<SourceType> for libc::statx {

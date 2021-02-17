@@ -215,6 +215,50 @@ impl TcpListener {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.listener.local_addr()?)
     }
+
+    /// Gets the value of the `IP_TTL` option for this socket.
+    ///
+    /// This option configures the time-to-live field that is used in every packet sent from this
+    /// socket.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::net::TcpListener;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
+    ///
+    ///     listener.set_ttl(100).expect("could not set TTL");
+    ///     assert_eq!(listener.ttl().unwrap(), 100);
+    /// });
+    /// ```
+    pub fn ttl(&self) -> Result<u32> {
+        Ok(self.listener.ttl()?)
+    }
+
+    /// Sets the value of the `IP_TTL` option for this socket.
+    ///
+    /// This option configures the time-to-live field that is used in every packet sent from this
+    /// socket.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::net::TcpListener;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
+    ///
+    ///     listener.set_ttl(100).expect("could not set TTL");
+    ///     assert_eq!(listener.ttl().unwrap(), 100);
+    /// });
+    /// ```
+    pub fn set_ttl(&self, ttl: u32) -> Result<()> {
+        Ok(self.listener.set_ttl(ttl)?)
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -248,7 +292,7 @@ impl AcceptedTcpStream {
     /// ex.run(async move {
     ///
     ///    let (sender, receiver) = shared_channel::new_bounded(1);
-    ///    let sender = sender.connect();
+    ///    let sender = sender.connect().await;
     ///
     ///    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     ///
@@ -256,7 +300,7 @@ impl AcceptedTcpStream {
     ///    sender.try_send(accepted).unwrap();
     ///
     ///   let ex1 = LocalExecutorBuilder::new().spawn(move || async move {
-    ///       let receiver = receiver.connect();
+    ///       let receiver = receiver.connect().await;
     ///       let accepted = receiver.recv().await.unwrap();
     ///       let _ = accepted.bind_to_executor();
     ///   }).unwrap();
@@ -350,11 +394,49 @@ impl TcpStream {
             .map_err(Into::into)
     }
 
-    /// Sets the `TCP_NODELAY` option to this socket.
+    /// Sets the value of the `TCP_NODELAY` option on this socket.
     ///
-    /// Setting this to true disabled the Nagle algorithm.
-    pub fn set_nodelay(&mut self, value: bool) -> Result<()> {
+    /// If set, this option disables the Nagle algorithm. This means that
+    /// segments are always sent as soon as possible, even if there is only a
+    /// small amount of data. When not set, data is buffered until there is a
+    /// sufficient amount to send out, thereby avoiding the frequent sending of
+    /// small packets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use glommio::net::TcpStream;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    ///     stream.set_nodelay(true).expect("set_nodelay call failed");
+    /// });
+    /// ```
+    pub fn set_nodelay(&self, value: bool) -> Result<()> {
         self.stream.stream.set_nodelay(value).map_err(Into::into)
+    }
+
+    /// Gets the `TCP_NODELAY` option on this socket.
+    ///
+    /// For more information about this option, see [`TcpStream::set_nodelay`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use glommio::net::TcpStream;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    ///     stream.set_nodelay(true).expect("set_nodelay call failed");
+    ///     assert_eq!(stream.nodelay().unwrap(), true);
+    /// });
+    /// ```
+    pub fn nodelay(&self) -> Result<bool> {
+        self.stream.stream.nodelay().map_err(Into::into)
     }
 
     /// Sets the buffer size used on the receive path
@@ -365,6 +447,48 @@ impl TcpStream {
     /// gets the buffer size used
     pub fn buffer_size(&mut self) -> usize {
         self.stream.rx_buf_size
+    }
+
+    /// Gets the value of the `IP_TTL` option for this socket.
+    ///
+    /// This option configures the time-to-live field that is used in every packet sent from this
+    /// socket.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::net::TcpStream;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    ///     stream.set_ttl(100).expect("could not set TTL");
+    ///     assert_eq!(stream.ttl().unwrap(), 100);
+    /// });
+    /// ```
+    pub fn ttl(&self) -> Result<u32> {
+        Ok(self.stream.stream.ttl()?)
+    }
+
+    /// Sets the value of the `IP_TTL` option for this socket.
+    ///
+    /// This option configures the time-to-live field that is used in every packet sent from this
+    /// socket.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::net::TcpStream;
+    /// use glommio::LocalExecutor;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    ///     stream.set_ttl(100).expect("could not set TTL");
+    ///     assert_eq!(stream.ttl().unwrap(), 100);
+    /// });
+    /// ```
+    pub fn set_ttl(&self, ttl: u32) -> Result<()> {
+        Ok(self.stream.stream.set_ttl(ttl)?)
     }
 
     /// Receives data on the socket from the remote address to which it is connected, without removing that data from the queue.
@@ -473,6 +597,37 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn tcp_listener_ttl() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_ttl(100).unwrap();
+            assert_eq!(listener.ttl().unwrap(), 100);
+        });
+    }
+
+    #[test]
+    fn tcp_stream_ttl() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let stream = TcpStream::connect(addr).await.unwrap();
+            stream.set_ttl(100).unwrap();
+            assert_eq!(stream.ttl().unwrap(), 100);
+        });
+    }
+
+    #[test]
+    fn tcp_stream_nodelay() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let stream = TcpStream::connect(addr).await.unwrap();
+            stream.set_nodelay(true).expect("set_nodelay call failed");
+            assert_eq!(stream.nodelay().unwrap(), true);
+        });
+    }
+
+    #[test]
     fn connect_local_server() {
         test_executor!(async move {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -504,7 +659,7 @@ mod tests {
 
             let ex1 = LocalExecutorBuilder::new()
                 .spawn(move || async move {
-                    let receiver = first_receiver.connect();
+                    let receiver = first_receiver.connect().await;
                     let _ = TcpListener::bind(addr).unwrap();
                     receiver.recv().await.unwrap();
                 })
@@ -512,7 +667,7 @@ mod tests {
 
             let ex2 = LocalExecutorBuilder::new()
                 .spawn(move || async move {
-                    let receiver = second_receiver.connect();
+                    let receiver = second_receiver.connect().await;
                     let _ = TcpListener::bind(addr).unwrap();
                     receiver.recv().await.unwrap();
                 })
@@ -520,9 +675,9 @@ mod tests {
 
             Timer::new(Duration::from_millis(100)).await;
 
-            let sender = first_sender.connect();
+            let sender = first_sender.connect().await;
             sender.try_send(0).unwrap();
-            let sender = second_sender.connect();
+            let sender = second_sender.connect().await;
             sender.try_send(0).unwrap();
 
             ex1.join().unwrap();
@@ -539,8 +694,8 @@ mod tests {
         let status = connected.clone();
         let ex1 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let sender = sender.connect();
-                let addr_sender = addr_sender.connect();
+                let sender = sender.connect().await;
+                let addr_sender = addr_sender.connect().await;
                 let listener = TcpListener::bind("127.0.0.1:0").unwrap();
                 let addr = listener.local_addr().unwrap();
                 addr_sender.try_send(addr).unwrap();
@@ -554,7 +709,7 @@ mod tests {
         let status = connected.clone();
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = receiver.connect();
+                let receiver = receiver.connect().await;
                 let accepted = receiver.recv().await.unwrap();
                 let _ = accepted.bind_to_executor();
                 status.store(2, Ordering::Relaxed);
@@ -563,7 +718,7 @@ mod tests {
 
         let ex3 = LocalExecutorBuilder::new()
             .spawn(move || async move {
-                let receiver = addr_receiver.connect();
+                let receiver = addr_receiver.connect().await;
                 let addr = receiver.recv().await.unwrap();
                 TcpStream::connect(addr).await.unwrap()
             })

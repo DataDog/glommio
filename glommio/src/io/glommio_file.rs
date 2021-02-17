@@ -69,7 +69,7 @@ impl GlommioFile {
         dir: RawFd,
         path: &Path,
         flags: libc::c_int,
-        mode: libc::c_int,
+        mode: libc::mode_t,
     ) -> io::Result<GlommioFile> {
         let reactor = Local::get_reactor();
         let path = if dir == -1 && path.is_relative() {
@@ -141,6 +141,10 @@ impl GlommioFile {
                     "operation requires a valid path",
                 ),
             })
+    }
+
+    pub(crate) fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     pub(crate) async fn pre_allocate(&self, size: u64) -> Result<()> {

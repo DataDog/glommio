@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 type Result<T> = crate::Result<T, ()>;
@@ -19,7 +19,7 @@ type Result<T> = crate::Result<T, ()>;
 struct Inner {
     id: u64,
 
-    waker: Option<Waker>,
+    is_charged: bool,
 
     /// When this timer fires.
     when: Instant,
@@ -29,15 +29,16 @@ struct Inner {
 
 impl Inner {
     fn reset(&mut self, dur: Duration) {
-        if self.waker.as_ref().is_some() {
+        let mut waker = None;
+        if self.is_charged {
             // Deregister the timer from the reactor.
-            self.reactor.upgrade().unwrap().remove_timer(self.id);
+            waker = self.reactor.upgrade().unwrap().remove_timer(self.id);
         }
 
         // Update the timeout.
         self.when = Instant::now() + dur;
 
-        if let Some(waker) = self.waker.as_mut() {
+        if let Some(waker) = waker {
             // Re-register the timer with the new timeout.
             self.reactor
                 .upgrade()
@@ -100,7 +101,7 @@ impl Timer {
         Timer {
             inner: Rc::new(RefCell::new(Inner {
                 id: reactor.register_timer(),
-                waker: None,
+                is_charged: false,
                 when: Instant::now() + dur,
                 reactor: Rc::downgrade(&reactor),
             })),
@@ -113,7 +114,7 @@ impl Timer {
         Timer {
             inner: Rc::new(RefCell::new(Inner {
                 id,
-                waker: None,
+                is_charged: false,
                 when: Instant::now() + dur,
                 reactor: Rc::downgrade(&Local::get_reactor()),
             })),
@@ -148,10 +149,14 @@ impl Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-        if inner.waker.take().is_some() {
-            // Deregister the timer from the reactor.
-            inner.reactor.upgrade().unwrap().remove_timer(inner.id);
+        let inner = self.inner.borrow_mut();
+        if inner.is_charged {
+            // Deregister the timer from the reactor. Reactor can be dropped already
+            //if that is the case then reactor already removed the timer and we do not need
+            //to do anything
+            if let Some(reactor) = inner.reactor.upgrade() {
+                reactor.remove_timer(inner.id);
+            }
         }
     }
 }
@@ -172,8 +177,8 @@ impl Future for Timer {
                 .reactor
                 .upgrade()
                 .unwrap()
-                .insert_timer(inner.id, inner.when, cx.waker());
-            inner.waker = Some(cx.waker().clone());
+                .insert_timer(inner.id, inner.when, cx.waker().clone());
+            inner.is_charged = true;
             Poll::Pending
         }
     }
@@ -688,6 +693,7 @@ impl TimerActionRepeat {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::LocalExecutorBuilder;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -985,5 +991,28 @@ mod test {
             let v = action.join().await;
             assert!(v.is_none());
         });
+    }
+
+    #[test]
+    fn test_memory_leak_unfinished_timer() {
+        //There are two targets of this test
+        // 1. To detect absence of memory leaks in case of unfinished
+        //timers. Right now we need to run tests with ASAN. There is a  crate https://github.com/lynnux/leak-detect-allocator
+        //which provides allocator with memory leak detection but it can not be used because it works
+        //only with nightly builds
+        // 2. Ensure correct clean up of resources in case of presence of unfinished tasks. Previous
+        // versions of timer and executor caused abort of the program at some cases.
+
+        let handle = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
+                    println!("hello");
+                });
+
+                action.rearm_in(Duration::from_millis(100));
+            })
+            .unwrap();
+
+        handle.join().unwrap();
     }
 }

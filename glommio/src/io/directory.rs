@@ -146,6 +146,12 @@ impl Directory {
     pub async fn close(self) -> Result<()> {
         self.file.close().await
     }
+
+    /// Returns an `Option` containing the path associated with this open
+    /// directory, or `None` if there isn't one.
+    pub fn path(&self) -> Option<&Path> {
+        self.file.path()
+    }
 }
 
 fn contains_dir(path: &Path) -> bool {

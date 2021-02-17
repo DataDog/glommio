@@ -478,7 +478,7 @@ macro_rules! do_seek {
                         .reactor
                         .upgrade()
                         .unwrap()
-                        .statx($fileobj.as_raw_fd(), $fileobj.path());
+                        .statx($fileobj.as_raw_fd(), $fileobj.path().unwrap());
                     source.add_waiter($cx.waker().clone());
                     $self.source = Some(source);
                     Poll::Pending

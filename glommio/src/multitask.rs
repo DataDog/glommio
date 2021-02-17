@@ -113,6 +113,7 @@ pub(crate) struct LocalExecutor {
 }
 
 impl UnwindSafe for LocalExecutor {}
+
 impl RefUnwindSafe for LocalExecutor {}
 
 impl LocalExecutor {
@@ -134,12 +135,15 @@ impl LocalExecutor {
 
         // The function that schedules a runnable task when it gets woken up.
         let schedule = move |runnable: Runnable| {
-            let tq = tq.upgrade().unwrap();
-            {
-                let queue = tq.borrow();
-                queue.ex.local_queue.push(runnable);
+            let tq = tq.upgrade();
+
+            if let Some(tq) = tq {
+                {
+                    let queue = tq.borrow();
+                    queue.ex.local_queue.push(runnable);
+                }
+                maybe_activate(tq);
             }
-            maybe_activate(tq);
         };
 
         // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
