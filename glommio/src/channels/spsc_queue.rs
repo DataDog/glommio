@@ -3,6 +3,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+#[derive(Debug)]
 #[repr(align(64))]
 struct ProducerCacheline {
     /// The bounded size as specified by the user.
@@ -16,6 +17,7 @@ struct ProducerCacheline {
     consumer_id: AtomicUsize,
 }
 
+#[derive(Debug)]
 #[repr(align(64))]
 struct ConsumerCacheline {
     /// The bounded size as specified by the user.
@@ -36,7 +38,7 @@ struct ConsumerCacheline {
 /// use to track location in the ring.
 #[repr(C)]
 pub(crate) struct Buffer<T> {
-    buffer_storage: Arc<Vec<UnsafeCell<Option<T>>>>,
+    buffer_storage: Vec<UnsafeCell<T>>,
 
     pcache: ProducerCacheline,
     ccache: ConsumerCacheline,
@@ -133,11 +135,10 @@ impl<T> Buffer<T> {
         let resp = unsafe {
             self.buffer_storage[current_head % self.ccache.capacity]
                 .get()
-                .replace(None)
+                .read()
         };
         self.ccache.head.store(current_head + 1, Ordering::Release);
-
-        resp
+        Some(resp)
     }
 
     /// Attempt to push a value onto the buffer.
@@ -161,15 +162,11 @@ impl<T> Buffer<T> {
         }
 
         unsafe {
-            // SAFETY: this will drop the value at buffer_storage[index]. If we initialize these all
-            // with null pointers, we have to use std::ptr::write(..) but this won't call the value
-            // pointed to by the pointer's drop impl.
             self.buffer_storage[current_tail % self.pcache.capacity]
                 .get()
-                .write(Some(v));
+                .write(v);
         }
         self.pcache.tail.store(current_tail + 1, Ordering::Release);
-
         None
     }
 
@@ -212,10 +209,7 @@ impl<T> Drop for Buffer<T> {
         // any of the constructors through the vector. And whatever object was
         // in fact still alive we popped above.
         unsafe {
-            match Arc::get_mut(&mut self.buffer_storage) {
-                Some(storage) => storage.set_len(0),
-                None => unreachable!(),
-            }
+            self.buffer_storage.set_len(0);
         }
     }
 }
@@ -253,13 +247,13 @@ fn inner_make<T>(capacity: usize, initial_value: usize) -> (Producer<T>, Consume
     )
 }
 
-fn allocate_buffer<T>(capacity: usize) -> Arc<Vec<UnsafeCell<Option<T>>>> {
+fn allocate_buffer<T>(capacity: usize) -> Vec<UnsafeCell<T>> {
     let size = capacity.next_power_of_two();
-    let mut vec: Vec<UnsafeCell<Option<T>>> = Vec::with_capacity(size);
+    let mut vec = Vec::with_capacity(size);
     unsafe {
         vec.set_len(size);
     }
-    Arc::new(vec)
+    vec
 }
 
 pub(crate) trait BufferHalf {

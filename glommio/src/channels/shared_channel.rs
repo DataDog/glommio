@@ -762,4 +762,179 @@ mod test {
         ex1.join().unwrap();
         ex2.join().unwrap();
     }
+
+    #[derive(Debug)]
+    struct WithDrop(Arc<AtomicUsize>, usize);
+
+    impl Drop for WithDrop {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn shared_drop_gets_called() {
+        let (sender, receiver) = new_bounded(1000);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..1000 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::Relaxed);
+                    match sender.send(val).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // dbg!(err);
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+                Timer::new(Duration::from_secs(1)).await;
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
+    }
+
+    #[test]
+    fn shared_drop_gets_called_reversed() {
+        let (sender, receiver) = new_bounded(100);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..110 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::Relaxed);
+                    match sender.send(val).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // dbg!(err);
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+            })
+            .unwrap();
+
+        ex2.join().unwrap();
+        ex1.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
+    }
+
+    #[test]
+    fn shared_drop_cascade_drop_executor() {
+        let (sender, receiver) = new_bounded(100);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..50 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::Relaxed);
+                    match sender.send(val).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // dbg!(err);
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let _resp = receiver.recv().await.unwrap();
+            })
+            .unwrap();
+
+        drop(ex2);
+        ex1.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
+    }
+
+    #[test]
+    fn shared_drop_cascade_drop_executor_reverse() {
+        let (sender, receiver) = new_bounded(100);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..50 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::SeqCst);
+                    match sender.send(val).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // dbg!(err);
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                for x in 0..50 {
+                    let resp = receiver.recv().await.unwrap();
+                    assert_eq!(x, resp.1);
+                }
+            })
+            .unwrap();
+
+        drop(ex1);
+        ex2.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
+    }
 }
