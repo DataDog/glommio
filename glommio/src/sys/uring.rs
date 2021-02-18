@@ -27,7 +27,7 @@ use std::{
 use crate::{
     free_list::{FreeList, Idx},
     iou,
-    iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, TimeoutFlags},
+    iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, SubmissionFlags, TimeoutFlags},
     sys::{
         self,
         dma_buffer::{BufferStorage, DmaBuffer},
@@ -86,6 +86,7 @@ enum UringOpDescriptor {
 #[derive(Debug)]
 struct UringDescriptor {
     fd: RawFd,
+    flags: SubmissionFlags,
     user_data: u64,
     args: UringOpDescriptor,
 }
@@ -430,6 +431,7 @@ where
             UringOpDescriptor::Nop => sqe.prep_nop(),
         }
         sqe.set_user_data(user_data);
+        sqe.set_flags(op.flags);
     }
 }
 
@@ -535,6 +537,7 @@ impl UringQueueState {
             None => self.cancellations.push_back(UringDescriptor {
                 args: UringOpDescriptor::Cancel(to_user_data(id)),
                 fd: -1,
+                flags: SubmissionFlags::empty(),
                 user_data: 0,
             }),
         }
@@ -839,6 +842,7 @@ impl SleepableRing {
         queue.submissions.push_front(UringDescriptor {
             args: op,
             fd: -1,
+            flags: SubmissionFlags::empty(),
             user_data: to_user_data(new_id),
         });
         // No need to submit, the next ring enter will submit for us. Because
@@ -854,6 +858,7 @@ impl SleepableRing {
             // If we can't then we can't sleep and will just bail immediately
             let op = UringDescriptor {
                 fd: eventfd_src.raw(),
+                flags: SubmissionFlags::empty(),
                 user_data: to_user_data(add_source(eventfd_src, self.submission_queue.clone())),
                 args: UringOpDescriptor::Read(0, 8),
             };
@@ -879,6 +884,7 @@ impl SleepableRing {
 
                 let op = UringDescriptor {
                     fd: link.raw(),
+                    flags: SubmissionFlags::empty(),
                     user_data: to_user_data(add_source(link, self.submission_queue.clone())),
                     args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
                 };
@@ -1418,6 +1424,7 @@ impl Reactor {
         queue.submissions.push_back(UringDescriptor {
             args: UringOpDescriptor::Close,
             fd,
+            flags: SubmissionFlags::empty(),
             user_data: 0,
         });
     }
@@ -1454,6 +1461,7 @@ fn queue_request_into_ring(
     queue.submissions.push_back(UringDescriptor {
         args: descriptor,
         fd: source.raw(),
+        flags: SubmissionFlags::empty(),
         user_data: to_user_data(id),
     });
 }
