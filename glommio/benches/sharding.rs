@@ -51,5 +51,9 @@ fn main() {
     for s in shards.collect::<Vec<_>>() {
         s.unwrap().join().unwrap();
     }
-    println!("elapsed: {:?}, {:?}", t.elapsed(), t.elapsed() / n as u32);
+    println!(
+        "elapsed: {:?}, average cost: {:?}",
+        t.elapsed(),
+        t.elapsed() / n as u32
+    );
 }
