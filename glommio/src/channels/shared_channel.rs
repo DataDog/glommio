@@ -786,12 +786,7 @@ mod test {
                 for x in 0..1000 {
                     let val = WithDrop(send_count.clone(), x);
                     drop_count.fetch_add(1, Ordering::Relaxed);
-                    match sender.send(val).await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // dbg!(err);
-                        }
-                    }
+                    let _ = sender.send(val).await;
                 }
             })
             .unwrap();
@@ -829,12 +824,7 @@ mod test {
                 for x in 0..110 {
                     let val = WithDrop(send_count.clone(), x);
                     drop_count.fetch_add(1, Ordering::Relaxed);
-                    match sender.send(val).await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // dbg!(err);
-                        }
-                    }
+                    let _ = sender.send(val).await;
                 }
             })
             .unwrap();
@@ -871,12 +861,7 @@ mod test {
                 for x in 0..50 {
                     let val = WithDrop(send_count.clone(), x);
                     drop_count.fetch_add(1, Ordering::Relaxed);
-                    match sender.send(val).await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // dbg!(err);
-                        }
-                    }
+                    let _ = sender.send(val).await;
                 }
             })
             .unwrap();
@@ -910,12 +895,7 @@ mod test {
                 for x in 0..50 {
                     let val = WithDrop(send_count.clone(), x);
                     drop_count.fetch_add(1, Ordering::SeqCst);
-                    match sender.send(val).await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // dbg!(err);
-                        }
-                    }
+                    let _ = sender.send(val).await;
                 }
             })
             .unwrap();
