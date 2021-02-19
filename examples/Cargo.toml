@@ -13,6 +13,7 @@ pretty-bytes = "0.2.2"
 clap = "2.33"
 sys-info = "0.7.0"
 fastrand = "1.4.0"
+fasthash = "0.3.2"
 
 [[example]]
 name = "echo"
@@ -41,3 +42,7 @@ path = "deadline_writer.rs"
 [[example]]
 name = "storage"
 path = "storage.rs"
+
+[[example]]
+name = "channel_mesh"
+path = "sharding.rs"

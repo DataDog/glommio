@@ -146,6 +146,156 @@ pub mod local_channel;
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
 pub mod shared_channel;
 
+/// A channel mesh consists of a group of participating executors (peers) and the channels between
+/// selected pairs of them. Two kinds of meshes are supported depending on the peer-pair selection
+/// criteria: full mesh and partial mesh.
+///
+/// With full mesh, every pair of distinct peers are selected, so messages can be sent to every
+/// other peer. Full mesh is useful for building kinds of sharding. With partial mesh, peers are
+/// assigned a role of either producer or consumer when they join the mesh, and channels are created
+/// from producers to consumers.
+///
+/// Within a mesh, peers are identified by unique peer ids, which are used to specify the
+/// source/destination which messages are sent to/received from. Peer ids are determined when the
+/// last peer joins the mesh by the indexes to the list of all peers sorted by their executor ids.
+/// In this way, multiple meshes can be built over the same set of peers, and the peer ids are
+/// guaranteed to be identical across meshes for each peer. This invariance makes it possible to
+/// cooperate with multiple meshes.
+///
+/// # Examples
+///
+/// Full mesh
+/// ```
+/// use glommio::enclose;
+/// use glommio::prelude::*;
+/// use glommio::channels::channel_mesh::MeshBuilder;
+///
+/// let nr_peers = 5;
+/// let channel_size = 100;
+/// let mesh_builder = MeshBuilder::full(nr_peers, channel_size);
+///
+/// let executors = (0..nr_peers).map(|_| {
+///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+///         let (sender, receiver) = mesh_builder.join().await.unwrap();
+///         Local::local(async move {
+///             for peer in 0..sender.nr_consumers() {
+///                 if peer != sender.peer_id() {
+///                     sender.send_to(peer, (sender.peer_id(), peer)).await.unwrap();
+///                 }
+///             }
+///         }).detach();
+///
+///         for peer in 0..receiver.nr_producers() {
+///             if peer != receiver.peer_id() {
+///                 assert_eq!((peer, receiver.peer_id()), receiver.recv_from(peer).await.unwrap().unwrap());
+///             }
+///         }
+///     }))
+/// });
+///
+/// for ex in executors.collect::<Vec<_>>() {
+///     ex.unwrap().join().unwrap();
+/// }
+/// ```
+///
+/// Partial mesh
+/// ```
+/// use glommio::enclose;
+/// use glommio::prelude::*;
+/// use glommio::channels::channel_mesh::{MeshBuilder, Role};
+///
+/// let nr_producers = 2;
+/// let nr_consumers = 3;
+/// let channel_size = 100;
+/// let mesh_builder = MeshBuilder::partial(nr_producers + nr_consumers, channel_size);
+///
+/// let producers = (0..nr_producers).map(|i| {
+///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+///         let (sender, receiver) = mesh_builder.join(Role::Producer).await.unwrap();
+///         assert_eq!(nr_consumers, sender.nr_consumers());
+///         assert_eq!(Some(i), sender.producer_id());
+///         assert_eq!(0, receiver.nr_producers());
+///         assert_eq!(None, receiver.consumer_id());
+///
+///         for consumer_id in 0..sender.nr_consumers() {
+///             sender.send_to(consumer_id, (sender.producer_id().unwrap(), consumer_id)).await.unwrap();
+///         }
+///     }))
+/// });
+///
+/// let consumers = (0..nr_consumers).map(|i| {
+///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+///         let (sender, receiver) = mesh_builder.join(Role::Consumer).await.unwrap();
+///         assert_eq!(0, sender.nr_consumers());
+///         assert_eq!(None, sender.producer_id());
+///         assert_eq!(nr_producers, receiver.nr_producers());
+///         assert_eq!(Some(i), receiver.consumer_id());
+///
+///         for producer_id in 0..receiver.nr_producers() {
+///             assert_eq!((producer_id, receiver.consumer_id().unwrap()), receiver.recv_from(producer_id).await.unwrap().unwrap());
+///         }
+///     }))
+/// });
+///
+/// for ex in producers.chain(consumers).collect::<Vec<_>>() {
+///     ex.unwrap().join().unwrap();
+/// }
+/// ```
+pub mod channel_mesh;
+
+/// Sharding utilities built on top of full mesh.
+///
+/// Examples
+///
+/// ```
+/// use futures_lite::future::ready;
+/// use futures_lite::stream::repeat_with;
+/// use futures_lite::{FutureExt, StreamExt};
+/// use glommio::enclose;
+/// use glommio::prelude::*;
+/// use glommio::channels::channel_mesh::MeshBuilder;
+/// use glommio::channels::sharding::{Handler, Sharded, HandlerResult};
+///
+/// type Msg = i32;
+///
+/// let nr_shards = 2;
+///
+/// fn get_shard_for(msg: &Msg, nr_shards: usize) -> usize {
+///     *msg as usize % nr_shards
+/// }
+///
+/// #[derive(Clone)]
+/// struct RequestHandler {
+///     nr_shards: usize,
+/// };
+///
+/// impl Handler<i32> for RequestHandler {
+///     fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
+///         println!("shard {} received {}", cur_shard, msg);
+///         assert_eq!(get_shard_for(&msg, self.nr_shards), cur_shard);
+///         ready(()).boxed_local()
+///     }
+/// }
+///
+/// let mesh = MeshBuilder::full(nr_shards, 1024);
+///
+/// let shards = (0..nr_shards).map(|_| {
+///     LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+///         let handler = RequestHandler { nr_shards };
+///         let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
+///         let me = sharded.shard_id();
+///         let messages = repeat_with(|| fastrand::i32(0..10)).take(1000).inspect(move |x| println!("shard {} generated {}", me, x));
+///         sharded.handle(messages).unwrap();
+///         sharded.close().await;
+///     }))
+/// });
+///
+/// for s in shards.collect::<Vec<_>>() {
+///     s.unwrap().join().unwrap();
+/// }
+/// ```
+pub mod sharding;
+
 use std::fmt::Debug;
 
 #[derive(Debug)]

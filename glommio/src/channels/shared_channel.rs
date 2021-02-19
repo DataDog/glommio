@@ -292,6 +292,20 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
             }
         }
     }
+
+    /// Close the sender
+    pub fn close(&self) {
+        if !self.state.buffer.disconnect() {
+            if let Some(fd) = self.notifier.must_notify() {
+                if let Some(r) = self.reactor.upgrade() {
+                    r.notify(fd);
+                }
+            }
+            if let Some(r) = self.reactor.upgrade() {
+                r.unregister_shared_channel(self.id)
+            }
+        }
+    }
 }
 
 impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
@@ -440,15 +454,7 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
 
 impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
-        self.state.buffer.disconnect();
-        if let Some(fd) = self.notifier.must_notify() {
-            if let Some(r) = self.reactor.upgrade() {
-                r.notify(fd);
-            }
-        }
-        if let Some(r) = self.reactor.upgrade() {
-            r.unregister_shared_channel(self.id)
-        }
+        self.close();
     }
 }
 

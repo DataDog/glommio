@@ -81,3 +81,7 @@ harness = false
 name = "nop"
 harness = false
 required-features = ["bench"]
+
+[[bench]]
+name = "sharding"
+harness = false
