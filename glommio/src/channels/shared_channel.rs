@@ -34,7 +34,7 @@ type Result<T, V> = crate::Result<T, V>;
 ///
 /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-pub struct SharedReceiver<T: Send + Sized + Copy> {
+pub struct SharedReceiver<T: Send + Sized> {
     state: Option<Rc<ReceiverState<T>>>,
 }
 
@@ -50,11 +50,11 @@ pub struct SharedReceiver<T: Send + Sized + Copy> {
 ///
 /// [`ConnectedSender`]: struct.ConnectedSender.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
-pub struct SharedSender<T: Send + Sized + Copy> {
+pub struct SharedSender<T: Send + Sized> {
     state: Option<Rc<SenderState<T>>>,
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for SharedSender<T> {
+impl<T: Send + Sized> fmt::Debug for SharedSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.state {
             Some(s) => write!(f, "Unbound SharedSender {:?}", s.buffer),
@@ -63,7 +63,7 @@ impl<T: Send + Sized + Copy> fmt::Debug for SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for SharedReceiver<T> {
+impl<T: Send + Sized> fmt::Debug for SharedReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.state {
             Some(s) => write!(f, "Unbound SharedReceiver: {:?}", s.buffer),
@@ -72,11 +72,11 @@ impl<T: Send + Sized + Copy> fmt::Debug for SharedReceiver<T> {
     }
 }
 
-unsafe impl<T: Send + Sized + Copy> Send for SharedReceiver<T> {}
-unsafe impl<T: Send + Sized + Copy> Send for SharedSender<T> {}
+unsafe impl<T: Send + Sized> Send for SharedReceiver<T> {}
+unsafe impl<T: Send + Sized> Send for SharedSender<T> {}
 
 /// The `ConnectedReceiver` is the receiving end of the Shared Channel.
-pub struct ConnectedReceiver<T: Send + Sized + Copy> {
+pub struct ConnectedReceiver<T: Send + Sized> {
     id: u64,
     state: Rc<ReceiverState<T>>,
     reactor: Weak<Reactor>,
@@ -84,31 +84,33 @@ pub struct ConnectedReceiver<T: Send + Sized + Copy> {
 }
 
 /// The `ConnectedReceiver` is the sending end of the Shared Channel.
-pub struct ConnectedSender<T: Send + Sized + Copy> {
+pub struct ConnectedSender<T: Send + Sized> {
     id: u64,
     state: Rc<SenderState<T>>,
     reactor: Weak<Reactor>,
     notifier: Arc<SleepNotifier>,
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for ConnectedReceiver<T> {
+impl<T: Send + Sized> fmt::Debug for ConnectedReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected Receiver {}: {:?}", self.id, self.state.buffer)
     }
 }
 
-impl<T: Send + Sized + Copy> fmt::Debug for ConnectedSender<T> {
+impl<T: Send + Sized> fmt::Debug for ConnectedSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected Sender {} : {:?}", self.id, self.state.buffer)
     }
 }
 
-struct SenderState<T: Send + Sized + Copy> {
-    buffer: Producer<T>,
+#[derive(Debug)]
+struct SenderState<V: Send + Sized> {
+    buffer: Producer<V>,
 }
 
-struct ReceiverState<T: Send + Sized + Copy> {
-    buffer: Consumer<T>,
+#[derive(Debug)]
+struct ReceiverState<V: Send + Sized> {
+    buffer: Consumer<V>,
 }
 
 struct Connector<T: BufferHalf + Clone> {
@@ -142,7 +144,7 @@ impl<T: BufferHalf + Clone> Future for Connector<T> {
 /// Creates a a new `shared_channel` returning its sender and receiver endpoints.
 ///
 /// All shared channels must be bounded.
-pub fn new_bounded<T: Send + Sized + Copy>(size: usize) -> (SharedSender<T>, SharedReceiver<T>) {
+pub fn new_bounded<T: Send + Sized>(size: usize) -> (SharedSender<T>, SharedReceiver<T>) {
     let (producer, consumer) = make(size);
     (
         SharedSender {
@@ -154,7 +156,7 @@ pub fn new_bounded<T: Send + Sized + Copy>(size: usize) -> (SharedSender<T>, Sha
     )
 }
 
-impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
+impl<T: 'static + Send + Sized> SharedSender<T> {
     /// Connects this sender, returning a [`ConnectedSender`] that can be used
     /// to send data into this channel
     ///
@@ -183,7 +185,7 @@ impl<T: 'static + Send + Sized + Copy> SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> ConnectedSender<T> {
+impl<T: Send + Sized> ConnectedSender<T> {
     /// Sends data into this channel.
     ///
     /// It returns a [`GlommioError::Closed`] if the receiver is destroyed.
@@ -308,7 +310,7 @@ impl<T: Send + Sized + Copy> ConnectedSender<T> {
     }
 }
 
-impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
+impl<T: 'static + Send + Sized> SharedReceiver<T> {
     /// Connects this receiver, returning a [`ConnectedReceiver`] that can be used
     /// to send data into this channel
     ///
@@ -337,7 +339,7 @@ impl<T: 'static + Send + Sized + Copy> SharedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
+impl<T: Send + Sized> ConnectedReceiver<T> {
     /// Receives data from this channel
     ///
     /// If the sender is no longer available it returns [`None`]. Otherwise block until
@@ -400,7 +402,7 @@ impl<T: Send + Sized + Copy> ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Stream for ConnectedReceiver<T> {
+impl<T: Send + Sized> Stream for ConnectedReceiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -408,7 +410,7 @@ impl<T: Send + Sized + Copy> Stream for ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
+impl<T: Send + Sized> Drop for SharedSender<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
@@ -423,7 +425,7 @@ impl<T: Send + Sized + Copy> Drop for SharedSender<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
+impl<T: Send + Sized> Drop for SharedReceiver<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
@@ -438,7 +440,7 @@ impl<T: Send + Sized + Copy> Drop for SharedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
+impl<T: Send + Sized> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
         self.state.buffer.disconnect();
         if let Some(fd) = self.notifier.must_notify() {
@@ -452,7 +454,7 @@ impl<T: Send + Sized + Copy> Drop for ConnectedReceiver<T> {
     }
 }
 
-impl<T: Send + Sized + Copy> Drop for ConnectedSender<T> {
+impl<T: Send + Sized> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
         self.close();
     }
@@ -711,5 +713,214 @@ mod test {
 
         ex1.join().unwrap();
         ex2.join().unwrap();
+    }
+
+    #[test]
+    fn non_copy_shared() {
+        let (sender, receiver) = new_bounded(1);
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                let string1 = "Some string data here..".to_string();
+                sender.send(string1).await.unwrap();
+                let string2 = "different data..".to_string();
+                sender.send(string2).await.unwrap();
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let x = receiver.recv().await.unwrap();
+                assert_eq!(x, "Some string data here..".to_string());
+                let y = receiver.recv().await.unwrap();
+                assert_eq!(y, "different data..".to_string());
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[test]
+    fn copy_shared() {
+        let (sender, receiver) = new_bounded(2);
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                sender.send(100usize).await.unwrap();
+                sender.send(200usize).await.unwrap();
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let x = receiver.recv().await.unwrap();
+                let y = receiver.recv().await.unwrap();
+                assert_eq!(x, 100usize);
+                assert_eq!(y, 200usize);
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[derive(Debug)]
+    struct WithDrop(Arc<AtomicUsize>, usize);
+
+    impl Drop for WithDrop {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn shared_drop_gets_called() {
+        let (sender, receiver) = new_bounded(1000);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..1000 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::Relaxed);
+                    let _ = sender.send(val).await;
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+                Timer::new(Duration::from_secs(1)).await;
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
+    }
+
+    #[test]
+    fn shared_drop_gets_called_reversed() {
+        let (sender, receiver) = new_bounded(100);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..110 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::Relaxed);
+                    let _ = sender.send(val).await;
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+                let y = receiver.recv().await.unwrap();
+                drop(y);
+            })
+            .unwrap();
+
+        ex2.join().unwrap();
+        ex1.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
+    }
+
+    #[test]
+    fn shared_drop_cascade_drop_executor() {
+        let (sender, receiver) = new_bounded(100);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..50 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::Relaxed);
+                    let _ = sender.send(val).await;
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let _resp = receiver.recv().await.unwrap();
+            })
+            .unwrap();
+
+        drop(ex2);
+        ex1.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
+    }
+
+    #[test]
+    fn shared_drop_cascade_drop_executor_reverse() {
+        let (sender, receiver) = new_bounded(100);
+
+        let original = Arc::new(AtomicUsize::new(0));
+        let send_count = original.clone();
+        let drop_count = original.clone();
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                for x in 0..50 {
+                    let val = WithDrop(send_count.clone(), x);
+                    drop_count.fetch_add(1, Ordering::SeqCst);
+                    let _ = sender.send(val).await;
+                }
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                for x in 0..50 {
+                    let resp = receiver.recv().await.unwrap();
+                    assert_eq!(x, resp.1);
+                }
+            })
+            .unwrap();
+
+        drop(ex1);
+        ex2.join().unwrap();
+
+        // make sure that our total is always 0, to ensure we have dropped all entries, despite
+        // differing conditions.
+        assert_eq!(original.load(Ordering::Relaxed), 0usize);
     }
 }
