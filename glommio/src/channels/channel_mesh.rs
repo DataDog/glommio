@@ -14,13 +14,13 @@ use crate::{GlommioError, Local, Result, Task};
 
 /// Sender side
 #[derive(Debug)]
-pub struct Senders<T: Send + Copy> {
+pub struct Senders<T: Send> {
     peer_id: usize,
     producer_id: Option<usize>,
     senders: Vec<Option<ConnectedSender<T>>>,
 }
 
-impl<T: Send + Copy> Senders<T> {
+impl<T: Send> Senders<T> {
     /// Index of the local executor in the list of all peers
     pub fn peer_id(&self) -> usize {
         self.peer_id
@@ -88,13 +88,13 @@ impl<T: Send + Copy> Senders<T> {
 
 /// Receiver side
 #[derive(Debug)]
-pub struct Receivers<T: Send + Copy> {
+pub struct Receivers<T: Send> {
     peer_id: usize,
     consumer_id: Option<usize>,
     receivers: Vec<Option<ConnectedReceiver<T>>>,
 }
 
-impl<T: Send + Copy> Receivers<T> {
+impl<T: Send> Receivers<T> {
     /// Index of the local executor in the list of all peers
     pub fn peer_id(&self) -> usize {
         self.peer_id
@@ -233,7 +233,7 @@ impl MeshAdapter for Partial {
 pub type PartialMesh<T> = MeshBuilder<T, Full>;
 
 /// A builder for channel mesh
-pub struct MeshBuilder<T: Send + Copy, A: MeshAdapter> {
+pub struct MeshBuilder<T: Send, A: MeshAdapter> {
     nr_peers: usize,
     channel_size: usize,
     peers: Arc<RwLock<Vec<Peer>>>,
@@ -241,9 +241,9 @@ pub struct MeshBuilder<T: Send + Copy, A: MeshAdapter> {
     adapter: A,
 }
 
-unsafe impl<T: Send + Copy, A: MeshAdapter> Send for MeshBuilder<T, A> {}
+unsafe impl<T: Send, A: MeshAdapter> Send for MeshBuilder<T, A> {}
 
-impl<T: Send + Copy, A: MeshAdapter> Clone for MeshBuilder<T, A> {
+impl<T: Send, A: MeshAdapter> Clone for MeshBuilder<T, A> {
     fn clone(&self) -> Self {
         Self {
             nr_peers: self.nr_peers,
@@ -255,7 +255,7 @@ impl<T: Send + Copy, A: MeshAdapter> Clone for MeshBuilder<T, A> {
     }
 }
 
-impl<T: Send + Copy, A: MeshAdapter> Debug for MeshBuilder<T, A> {
+impl<T: Send, A: MeshAdapter> Debug for MeshBuilder<T, A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
             "MeshBuilder {{ nr_peers: {} }}",
@@ -264,7 +264,7 @@ impl<T: Send + Copy, A: MeshAdapter> Debug for MeshBuilder<T, A> {
     }
 }
 
-impl<T: 'static + Send + Copy> MeshBuilder<T, Full> {
+impl<T: 'static + Send> MeshBuilder<T, Full> {
     /// Create a full mesh builder.
     pub fn full(nr_peers: usize, channel_size: usize) -> Self {
         Self::new(nr_peers, channel_size, Full)
@@ -276,7 +276,7 @@ impl<T: 'static + Send + Copy> MeshBuilder<T, Full> {
     }
 }
 
-impl<T: 'static + Send + Copy> MeshBuilder<T, Partial> {
+impl<T: 'static + Send> MeshBuilder<T, Partial> {
     /// Create a partial mesh builder.
     pub fn partial(nr_peers: usize, channel_size: usize) -> Self {
         Self::new(nr_peers, channel_size, Partial)
@@ -288,7 +288,7 @@ impl<T: 'static + Send + Copy> MeshBuilder<T, Partial> {
     }
 }
 
-impl<T: 'static + Send + Copy, A: MeshAdapter> MeshBuilder<T, A> {
+impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
     fn new(nr_peers: usize, channel_size: usize, adapter: A) -> Self {
         MeshBuilder {
             nr_peers,
@@ -437,7 +437,7 @@ impl<T: 'static + Send + Copy, A: MeshAdapter> MeshBuilder<T, A> {
     }
 }
 
-enum RegisterResult<T: Send + Copy> {
+enum RegisterResult<T: Send> {
     NotificationReceiver(SharedReceiver<T>),
     NotificationSenders(Vec<SharedSender<T>>),
 }
