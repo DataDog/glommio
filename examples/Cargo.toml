@@ -15,6 +15,10 @@ sys-info = "0.7.0"
 fastrand = "1.4.0"
 fasthash = "0.3.2"
 
+# hyper and tokio for the hyper example. We just need the traits from Tokio
+hyper = { version = "0.13.9", default-features = false }
+tokio = { version = "0.2.23", default-features = false }
+
 [[example]]
 name = "echo"
 path = "echo.rs"
@@ -46,3 +50,7 @@ path = "storage.rs"
 [[example]]
 name = "channel_mesh"
 path = "sharding.rs"
+
+[[example]]
+name = "hyper"
+path = "hyper.rs"
