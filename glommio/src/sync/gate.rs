@@ -13,6 +13,19 @@ enum State {
     Open,
 }
 
+/// A visitor pass which could be acquired when entering a gate, and should be
+/// released before the gate is closed.
+#[derive(Debug)]
+pub struct Pass {
+    gate: Rc<GateInner>,
+}
+
+impl Drop for Pass {
+    fn drop(&mut self) {
+        self.gate.leave()
+    }
+}
+
 /// Facility to achieve graceful shutdown by waiting for the dependent tasks
 /// to complete.
 #[derive(Clone, Debug)]
@@ -32,7 +45,16 @@ impl Gate {
         }
     }
 
-    /// Spawn a task for which the gate will wait on closing
+    /// Get a visitor pass which will be waited to be released on closing
+    pub fn enter(&self) -> Result<Pass, GlommioError<()>> {
+        self.inner.enter()?;
+        Ok(Pass {
+            gate: self.inner.clone(),
+        })
+    }
+
+    /// Spawn a task for which the gate will wait on closing into the current
+    /// task queue.
     pub fn spawn<T: 'static>(
         &self,
         future: impl Future<Output = T> + 'static,
@@ -46,12 +68,11 @@ impl Gate {
         future: impl Future<Output = T> + 'static,
         handle: TaskQueueHandle,
     ) -> Result<Task<T>, GlommioError<()>> {
-        let inner = self.inner.clone();
-        inner.enter()?;
+        let pass = self.enter()?;
         Task::<T>::local_into(
             async move {
                 let result = future.await;
-                inner.leave();
+                drop(pass);
                 result
             },
             handle,
@@ -129,10 +150,10 @@ impl GateInner {
 
 #[cfg(test)]
 mod tests {
-    use crate::sync::Semaphore;
-    use crate::{enclose, Local, LocalExecutor};
+    use crate::{enclose, LocalExecutor};
 
     use super::*;
+    use crate::sync::Semaphore;
 
     #[test]
     fn test_immediate_close() {
@@ -183,6 +204,25 @@ mod tests {
             close_future.await.unwrap().unwrap();
             println!("Main: gate is closed");
             assert_eq!(tasks_to_complete.available(), 0);
+        })
+    }
+
+    #[test]
+    fn test_dropped_task() {
+        LocalExecutor::default().run(async {
+            let gate = Gate::new();
+            let running = Rc::new(Cell::new(false));
+
+            let task = gate
+                .spawn(enclose!((running) async move {
+                    running.set(true);
+                }))
+                .unwrap();
+
+            drop(task);
+
+            gate.close().await.unwrap();
+            assert!(!running.get());
         })
     }
 }

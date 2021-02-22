@@ -342,7 +342,7 @@ impl<T> Debug for GlommioError<T> {
                 ResourceType::RwLock => write!(f, "RwLock operation would block {{ .. }}"),
                 ResourceType::Channel(_) => write!(f, "Channel operation  would block {{ .. }}"),
                 ResourceType::File(msg) => write!(f, "File operation would block (\"{}\")", msg),
-                ResourceType::Gate => unreachable!(),
+                ResourceType::Gate => write!(f, "Gate operation would block {{ .. }}"),
             },
             GlommioError::ExecutorError(kind) => match kind {
                 ExecutorErrorKind::QueueError { index, kind } => f.write_fmt(format_args!(
