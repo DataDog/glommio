@@ -1,4 +1,4 @@
-# glommio 
+# glommio
 
 [![CircleCI](https://circleci.com/gh/DataDog/glommio.svg?style=svg)](https://circleci.com/gh/DataDog/glommio)
 
@@ -36,8 +36,7 @@ Glommio is still considered an alpha release. The main reasons are:
 * The existing API is still evolving
 * There are still some uses of unsafe that can be avoided
 * There are features that are critical for a good thread per core system
-  that are not implemented yet. The top two are:
-  * communication channels between executors so we can pass `Send` data.
+  that are not implemented yet. The top one being:
   * per-shard memory allocator.
 
 Want to help bring us to production status sooner? PRs are welcome!
