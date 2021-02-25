@@ -9,7 +9,6 @@ use std::{
     io,
 };
 use std::{os::unix::io::RawFd, path::Path};
-use thiserror::Error;
 
 /// Result type alias that all Glommio public API functions can use.
 pub type Result<T, V> = std::result::Result<T, GlommioError<V>>;
@@ -110,21 +109,17 @@ impl fmt::Display for ExecutorErrorKind {
 /// assert!(will_error().is_err());
 ///
 /// ```
-#[derive(Error)]
 pub enum GlommioError<T> {
     /// IO error from standard library functions or libraries that produce
     /// std::io::Error's.
-    #[error("IO error occurred: {0}")]
-    IoError(#[from] io::Error),
+    IoError(io::Error),
 
     /// Enhanced IO error that gives more information in the error message
     /// than the basic [`IoError`](GlommioError::IoError). It includes the
     /// operation, path and file descriptor. It also contains the error
     /// from the source IO error from `std::io::*`.
-    #[error("{source}, op: {op} path: {path:?} with fd: {fd:?}")]
     EnhancedIoError {
         /// The source error from `std::io::Error`.
-        #[source]
         source: io::Error,
 
         /// The operation that was being attempted.
@@ -139,12 +134,10 @@ pub enum GlommioError<T> {
 
     /// Executor error variant(s) for signaling certain error conditions
     /// inside of the executor.
-    #[error("Executor error: {0}")]
     ExecutorError(ExecutorErrorKind),
 
     /// The resource in question is closed. Generic because the channel
     /// variant needs to return the actual item sent into the channel.
-    #[error("{0} is closed")]
     Closed(ResourceType<T>),
 
     /// Error encapsulating the `WouldBlock` error for types that don't have
@@ -152,14 +145,91 @@ pub enum GlommioError<T> {
     /// nonblocking types that need to indicate if they are blocking or not.
     /// This type allows for signaling when a function would otherwise block
     /// for a specific `ResourceType`.
-    #[error("{0} operation would block")]
     WouldBlock(ResourceType<T>),
 
     /// Reactor error variants. This includes errors specific to the operation
     /// of the io-uring instances or related.
-    #[error("Reactor error: {0}")]
     ReactorError(ReactorErrorKind),
 }
+
+impl<T> From<io::Error> for GlommioError<T> {
+    fn from(err: io::Error) -> Self {
+        GlommioError::IoError(err)
+    }
+}
+
+impl<T> fmt::Display for GlommioError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GlommioError::IoError(err) => {
+                write!(f, "IO error occurred: {}", err)
+            }
+            GlommioError::EnhancedIoError {
+                source,
+                op,
+                path,
+                fd,
+            } => {
+                write!(
+                    f,
+                    "{}, op: {} path: {:?} with fd: {:?}",
+                    source, op, path, fd
+                )
+            }
+            GlommioError::ExecutorError(err) => {
+                write!(f, "Executor error: {}", err)
+            }
+            GlommioError::Closed(rt) => match rt {
+                ResourceType::Semaphore {
+                    requested,
+                    available,
+                } => {
+                    write!(
+                        f,
+                        "Semaphore is closed (requested: {}, available: {})",
+                        requested, available
+                    )
+                }
+                ResourceType::RwLock => {
+                    write!(f, "RwLock is closed")
+                }
+                ResourceType::Channel(_) => {
+                    write!(f, "Channel is closed")
+                }
+                // TODO: look at what this format string should be as per bug report..
+                ResourceType::File(msg) => {
+                    write!(f, "File is closed ({})", msg)
+                }
+            },
+            GlommioError::WouldBlock(rt) => match rt {
+                ResourceType::Semaphore {
+                    requested,
+                    available,
+                } => {
+                    write!(
+                        f,
+                        "Semaphore operation would block (requested: {}, available: {})",
+                        requested, available
+                    )
+                }
+                ResourceType::RwLock => {
+                    write!(f, "RwLock operation would block")
+                }
+                ResourceType::Channel(_) => {
+                    write!(f, "Channel operation would block")
+                }
+                ResourceType::File(msg) => {
+                    write!(f, "File operation would block ({})", msg)
+                }
+            },
+            GlommioError::ReactorError(err) => {
+                write!(f, "Reactor error: {}", err)
+            }
+        }
+    }
+}
+
+impl<T> std::error::Error for GlommioError<T> {}
 
 impl GlommioError<()> {
     pub(crate) fn create_enhanced<P: AsRef<Path>>(
@@ -212,13 +282,16 @@ impl fmt::Display for QueueErrorKind {
     }
 }
 
+/// Note this is a tricky impl in the sense that you will not get the information
+/// you expect from just using this display impl on a value. On the other hand the
+/// display impl for the entire error will give correct results..
 impl<T> fmt::Display for ResourceType<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fmt_str = match self {
             ResourceType::Semaphore { .. } => "Semaphore".to_string(),
             ResourceType::RwLock => "RwLock".to_string(),
             ResourceType::Channel(_) => "Channel".to_string(),
-            ResourceType::File { .. } => "File".to_string(),
+            ResourceType::File(_) => "File".to_string(),
         };
         write!(f, "{}", &fmt_str)
     }
@@ -233,18 +306,31 @@ impl<T> Debug for GlommioError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GlommioError::IoError(err) => write!(f, "{:?}", err),
-            GlommioError::Closed(resource) | GlommioError::WouldBlock(resource) => match resource {
+            GlommioError::Closed(resource) => match resource {
                 ResourceType::Semaphore {
                     requested,
                     available,
                 } => write!(
                     f,
-                    "SemaphoreError {{ requested {}, available: {} }}",
+                    "Semaphore is closed {{ requested {}, available: {} }}",
                     requested, available
                 ),
-                ResourceType::RwLock => write!(f, "RwLockError {{ .. }}"),
-                ResourceType::Channel(_) => write!(f, "ChannelError {{ .. }}"),
-                ResourceType::File(msg) => write!(f, "File (\"{}\")", msg),
+                ResourceType::RwLock => write!(f, "RwLock is closed {{ .. }}"),
+                ResourceType::Channel(_) => write!(f, "Channel is closed {{ .. }}"),
+                ResourceType::File(msg) => write!(f, "File is closed (\"{}\")", msg),
+            },
+            GlommioError::WouldBlock(resource) => match resource {
+                ResourceType::Semaphore {
+                    requested,
+                    available,
+                } => write!(
+                    f,
+                    "Semaphore operation would block {{ requested {}, available: {} }}",
+                    requested, available
+                ),
+                ResourceType::RwLock => write!(f, "RwLock operation would block {{ .. }}"),
+                ResourceType::Channel(_) => write!(f, "Channel operation  would block {{ .. }}"),
+                ResourceType::File(msg) => write!(f, "File operation would block (\"{}\")", msg),
             },
             GlommioError::ExecutorError(kind) => match kind {
                 ExecutorErrorKind::QueueError { index, kind } => f.write_fmt(format_args!(
@@ -282,13 +368,8 @@ impl<T> From<GlommioError<T>> for io::Error {
         let display_err = err.to_string();
         match err {
             GlommioError::IoError(io_err) => io_err,
-            GlommioError::WouldBlock(resource) => io::Error::new(
-                io::ErrorKind::WouldBlock,
-                format!("{} operation would block", resource),
-            ),
-            GlommioError::Closed(resource) => {
-                io::Error::new(io::ErrorKind::BrokenPipe, format!("{} is closed", resource))
-            }
+            GlommioError::WouldBlock(_) => io::Error::new(io::ErrorKind::WouldBlock, display_err),
+            GlommioError::Closed(_) => io::Error::new(io::ErrorKind::BrokenPipe, display_err),
             GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => {
                 match kind {
                     QueueErrorKind::StillActive => io::Error::new(
@@ -319,6 +400,40 @@ impl<T> From<GlommioError<T>> for io::Error {
 mod test {
     use super::*;
     use std::io;
+
+    #[test]
+    #[should_panic(
+        expected = "File operation would block (\"Reading 100 bytes from position 90 would cross a buffer boundary (Buffer size 120)\")"
+    )]
+    fn extended_file_err_msg_unwrap() {
+        let _: () = Err(GlommioError::<()>::WouldBlock(ResourceType::File(format!(
+            "Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})",
+            100, 90, 120
+        ))))
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "File operation would block (Reading 100 bytes from position 90 would cross a buffer boundary (Buffer size 120))"
+    )]
+    fn extended_file_err_msg() {
+        let err: Result<(), ()> = Err(GlommioError::<()>::WouldBlock(ResourceType::File(format!(
+            "Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})",
+            100, 90, 120
+        ))));
+        panic!(err.unwrap_err().to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "File is closed (Some specific message here with value: 1001)")]
+    fn extended_closed_file_err_msg() {
+        let err: Result<(), ()> = Err(GlommioError::<()>::Closed(ResourceType::File(format!(
+            "Some specific message here with value: {}",
+            1001
+        ))));
+        panic!(err.unwrap_err().to_string());
+    }
 
     #[test]
     #[should_panic(expected = "Queue #0 is still active")]
@@ -383,7 +498,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "File operation would block")]
+    #[should_panic(expected = "File operation would block (specific error message here)")]
     fn file_wouldblock_err_msg() {
         let err: Result<(), ()> = Err(GlommioError::WouldBlock(ResourceType::File(
             "specific error message here".to_string(),

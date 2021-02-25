@@ -34,7 +34,6 @@ smallvec = "1.4.2"
 buddy-alloc = "0.4.1"
 ahash = "0.5.7"
 intrusive-collections = "0.9.0"
-thiserror = "1.0"
 membarrier = "0.2.2"
 
 [dev-dependencies]
