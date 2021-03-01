@@ -20,8 +20,10 @@
 //! exception that RwLock can not be poisoned but can be closed.
 //!
 
+mod gate;
 mod rwlock;
 mod semaphore;
 
+pub use self::gate::*;
 pub use self::rwlock::*;
 pub use self::semaphore::*;
