@@ -36,6 +36,9 @@ pub enum ResourceType<T> {
     /// File variant used for reporting errors for the Buffered ([`BufferedFile`](crate::io::BufferedFile))
     /// and Direct ([`DmaFile`](crate::io::DmaFile)) file I/O variants.
     File(String),
+
+    /// Gate variant used for reporting errors for the [`Gate`](crate::sync::Gate) type.
+    Gate,
 }
 
 /// Error variants for executor queues.
@@ -200,6 +203,9 @@ impl<T> fmt::Display for GlommioError<T> {
                 ResourceType::File(msg) => {
                     write!(f, "File is closed ({})", msg)
                 }
+                ResourceType::Gate => {
+                    write!(f, "Gate is closed")
+                }
             },
             GlommioError::WouldBlock(rt) => match rt {
                 ResourceType::Semaphore {
@@ -220,6 +226,9 @@ impl<T> fmt::Display for GlommioError<T> {
                 }
                 ResourceType::File(msg) => {
                     write!(f, "File operation would block ({})", msg)
+                }
+                ResourceType::Gate => {
+                    write!(f, "Gate operation would block")
                 }
             },
             GlommioError::ReactorError(err) => {
@@ -292,6 +301,7 @@ impl<T> fmt::Display for ResourceType<T> {
             ResourceType::RwLock => "RwLock".to_string(),
             ResourceType::Channel(_) => "Channel".to_string(),
             ResourceType::File(_) => "File".to_string(),
+            ResourceType::Gate => "Gate".to_string(),
         };
         write!(f, "{}", &fmt_str)
     }
@@ -318,6 +328,7 @@ impl<T> Debug for GlommioError<T> {
                 ResourceType::RwLock => write!(f, "RwLock is closed {{ .. }}"),
                 ResourceType::Channel(_) => write!(f, "Channel is closed {{ .. }}"),
                 ResourceType::File(msg) => write!(f, "File is closed (\"{}\")", msg),
+                ResourceType::Gate => write!(f, "Gate is closed"),
             },
             GlommioError::WouldBlock(resource) => match resource {
                 ResourceType::Semaphore {
@@ -331,6 +342,7 @@ impl<T> Debug for GlommioError<T> {
                 ResourceType::RwLock => write!(f, "RwLock operation would block {{ .. }}"),
                 ResourceType::Channel(_) => write!(f, "Channel operation  would block {{ .. }}"),
                 ResourceType::File(msg) => write!(f, "File operation would block (\"{}\")", msg),
+                ResourceType::Gate => write!(f, "Gate operation would block {{ .. }}"),
             },
             GlommioError::ExecutorError(kind) => match kind {
                 ExecutorErrorKind::QueueError { index, kind } => f.write_fmt(format_args!(

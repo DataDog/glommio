@@ -54,3 +54,7 @@ path = "sharding.rs"
 [[example]]
 name = "hyper"
 path = "hyper.rs"
+
+[[example]]
+name = "gate"
+path = "gate.rs"
