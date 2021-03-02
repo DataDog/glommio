@@ -21,18 +21,20 @@ use std::task::Waker;
 use std::time::Duration;
 
 use crate::free_list::{FreeList, Idx};
+use crate::iou;
+use crate::iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, TimeoutFlags};
 use crate::sys::dma_buffer::{BufferStorage, DmaBuffer};
 use crate::sys::{
     self, DirectIO, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType,
 };
+use crate::uring_sys;
 use crate::{IoRequirements, Latency};
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
-use iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, TimeoutFlags};
 use nix::sys::socket::{MsgFlags, SockAddr, SockFlag};
 use nix::sys::stat::Mode as OpenMode;
 use std::sync::Arc;
 
-use uring_sys::IoRingOp;
+use crate::uring_sys::IoRingOp;
 
 use super::{EnqueuedSource, TimeSpec64};
 
@@ -339,7 +341,7 @@ where
 
             UringOpDescriptor::WriteFixed(ptr, len, pos, buf_index) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
-                sqe.prep_write_fixed(op.fd, buf, pos, buf_index);
+                sqe.prep_write_fixed(op.fd, buf, pos, buf_index as _);
             }
 
             UringOpDescriptor::SockSend(ptr, len, flags) => {

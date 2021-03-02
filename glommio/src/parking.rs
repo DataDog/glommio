@@ -22,8 +22,8 @@
 //! no thread context switch is necessary when going between task execution and I/O.
 //!
 
+use crate::iou::sqe::SockAddrStorage;
 use ahash::AHashMap;
-use iou::sqe::SockAddrStorage;
 use nix::sys::socket::{MsgFlags, SockAddr};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};

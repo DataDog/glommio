@@ -17,11 +17,10 @@ readme = "../README.md"
 log = "0.4"
 concurrent-queue = "1.1.2"
 futures-lite = "1.11.1"
-libc = "0.2.73"
+libc = "0.2.77"
 socket2 = { version = "0.3.18", features = ["unix", "reuseport"] }
-iou = { path = "../../iou" }
-uring-sys = { path = "../../uring-sys" }
 nix = "0.19.0"
+bitflags = "1.2.0"
 bitmaps = "2.1.0"
 typenum = "1.12"
 scoped-tls = "1.0.0"
@@ -40,6 +39,9 @@ membarrier = "0.2.2"
 futures = "0.3.5"
 fastrand = "1.4.0"
 tokio = { version = "0.3.5", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[build-dependencies]
+cc = "1.0.47"
 
 [features]
 bench = []

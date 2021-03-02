@@ -3,8 +3,9 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::iou::sqe::SockAddrStorage;
+use crate::uring_sys;
 use ahash::AHashMap;
-use iou::sqe::SockAddrStorage;
 use nix::sys::socket::SockAddr;
 use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
