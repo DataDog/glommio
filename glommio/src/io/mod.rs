@@ -82,13 +82,12 @@ macro_rules! enhanced_try {
         match $expr {
             Ok(val) => Ok(val),
             Err(source) => {
-                let enhanced: std::io::Error = crate::error::GlommioError::<()>::EnhancedIoError {
+                let enhanced = crate::error::GlommioError::<()>::EnhancedIoError {
                     source,
                     op: $op,
                     path: $path.and_then(|x| Some(x.to_path_buf())),
                     fd: $fd,
-                }
-                .into();
+                };
                 Err(enhanced)
             }
         }
@@ -113,20 +112,22 @@ mod glommio_file;
 mod read_result;
 
 use crate::sys;
-use std::io;
 use std::path::Path;
+
+pub(super) type Result<T> = crate::Result<T, ()>;
 
 /// rename an existing file.
 ///
 /// Warning: synchronous operation, will block the reactor
-pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) -> io::Result<()> {
-    sys::rename_file(&old_path.as_ref(), &new_path.as_ref())
+pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) -> Result<()> {
+    sys::rename_file(&old_path.as_ref(), &new_path.as_ref())?;
+    Ok(())
 }
 
 /// remove an existing file given its name
 ///
 /// Warning: synchronous operation, will block the reactor
-pub async fn remove<P: AsRef<Path>>(path: P) -> io::Result<()> {
+pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
     enhanced_try!(
         sys::remove_file(path.as_ref()),
         "Removing",
@@ -147,3 +148,18 @@ pub use self::dma_file_stream::{
 pub use self::dma_open_options::DmaOpenOptions;
 pub use self::read_result::ReadResult;
 pub use crate::sys::DmaBuffer;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::LocalExecutor;
+
+    #[test]
+    fn remove_nonexistent() {
+        let local_ex = LocalExecutor::default();
+        local_ex.run(async {
+            let x = remove("/tmp/this_file_does_not_exist_and_if_you_created_just_to_mess_with_me_you_deserve_this_test_to_fail_and_I_am_not_even_sorry").await;
+            assert_eq!(x.unwrap_err().raw_os_error().unwrap(), libc::ENOENT);
+        });
+    }
+}
