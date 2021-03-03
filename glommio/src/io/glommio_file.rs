@@ -182,16 +182,7 @@ impl GlommioFile {
 
     pub(crate) async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
         let old_path = self.path_required("rename")?;
-        crate::io::rename(old_path, &new_path)
-            .await
-            .map_err(|source| {
-                GlommioError::create_enhanced(
-                    source,
-                    "Renaming",
-                    self.path.as_ref(),
-                    Some(self.as_raw_fd()),
-                )
-            })?;
+        crate::io::rename(old_path, &new_path).await?;
         self.path = Some(new_path.as_ref().to_owned());
         Ok(())
     }

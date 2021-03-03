@@ -267,6 +267,27 @@ impl<T> From<(io::Error, ResourceType<T>)> for GlommioError<T> {
 }
 
 impl<T> GlommioError<T> {
+    /// Returns the OS error that this error represents (if any).
+    ///
+    /// If this `Error` was constructed from an [`io::Error`] which encapsulates a
+    /// raw OS error, then this function will return [`Some`], otherwise it will return [`None`].
+    ///
+    /// [`io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
+    /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
+    /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
+    pub fn raw_os_error(&self) -> Option<i32> {
+        match self {
+            GlommioError::IoError(x) => x.raw_os_error(),
+            GlommioError::EnhancedIoError {
+                source,
+                op: _,
+                path: _,
+                fd: _,
+            } => source.raw_os_error(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn queue_still_active(index: usize) -> GlommioError<T> {
         GlommioError::ExecutorError(ExecutorErrorKind::QueueError {
             index,
