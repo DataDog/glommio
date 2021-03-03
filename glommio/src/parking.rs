@@ -24,6 +24,7 @@
 
 use crate::iou::sqe::SockAddrStorage;
 use ahash::AHashMap;
+use log::error;
 use nix::sys::socket::{MsgFlags, SockAddr};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
@@ -626,7 +627,9 @@ impl Reactor {
         // Wake up ready tasks.
         for waker in wakers.drain(..) {
             // Don't let a panicking waker blow everything up.
-            let _ = panic::catch_unwind(|| waker.wake());
+            if let Err(x) = panic::catch_unwind(|| waker.wake()) {
+                error!("Panic while calling waker! {:?}", x);
+            }
         }
 
         res
