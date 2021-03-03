@@ -5,6 +5,7 @@
 //
 //! This module provide glommio's networking support.
 use crate::sys;
+use nix::sys::socket::MsgFlags;
 use std::io;
 use std::os::unix::io::RawFd;
 
@@ -28,12 +29,7 @@ fn yolo_accept(fd: RawFd) -> Option<io::Result<RawFd>> {
 }
 
 fn yolo_send(fd: RawFd, buf: &[u8]) -> Option<io::Result<usize>> {
-    match sys::send_syscall(
-        fd,
-        buf.as_ptr(),
-        buf.len(),
-        iou::MsgFlags::MSG_DONTWAIT.bits(),
-    ) {
+    match sys::send_syscall(fd, buf.as_ptr(), buf.len(), MsgFlags::MSG_DONTWAIT.bits()) {
         Ok(x) => Some(Ok(x)),
         Err(err) => match err.kind() {
             io::ErrorKind::WouldBlock => None,
@@ -47,7 +43,7 @@ fn yolo_recv(fd: RawFd, buf: &mut [u8]) -> Option<io::Result<usize>> {
         fd,
         buf.as_mut_ptr(),
         buf.len(),
-        iou::MsgFlags::MSG_DONTWAIT.bits(),
+        MsgFlags::MSG_DONTWAIT.bits(),
     ) {
         Ok(x) => Some(Ok(x)),
         Err(err) => match err.kind() {
@@ -60,13 +56,13 @@ fn yolo_recv(fd: RawFd, buf: &mut [u8]) -> Option<io::Result<usize>> {
 fn yolo_recvmsg(
     fd: RawFd,
     buf: &mut [u8],
-    flags: iou::MsgFlags,
+    flags: MsgFlags,
 ) -> Option<io::Result<(usize, nix::sys::socket::SockAddr)>> {
     match sys::recvmsg_syscall(
         fd,
         buf.as_mut_ptr(),
         buf.len(),
-        (flags | iou::MsgFlags::MSG_DONTWAIT).bits(),
+        (flags | MsgFlags::MSG_DONTWAIT).bits(),
     ) {
         Ok(x) => Some(Ok(x)),
         Err(err) => match err.kind() {
@@ -86,7 +82,7 @@ fn yolo_sendmsg(
         buf.as_ptr(),
         buf.len(),
         addr,
-        iou::MsgFlags::MSG_DONTWAIT.bits(),
+        MsgFlags::MSG_DONTWAIT.bits(),
     ) {
         Ok(x) => Some(Ok(x)),
         Err(err) => match err.kind() {

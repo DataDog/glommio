@@ -266,9 +266,13 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 mod free_list;
+#[allow(dead_code)]
+mod iou;
 mod parking;
 mod sys;
 pub mod task;
+#[allow(dead_code)]
+mod uring_sys;
 
 #[cfg(feature = "bench")]
 pub mod nop;

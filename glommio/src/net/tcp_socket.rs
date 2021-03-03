@@ -12,7 +12,7 @@ use futures_lite::future::poll_fn;
 use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use futures_lite::ready;
 use futures_lite::stream::{self, Stream};
-use iou::{InetAddr, SockAddr};
+use nix::sys::socket::{InetAddr, SockAddr};
 use pin_project_lite::pin_project;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;

@@ -5,6 +5,7 @@
 //
 use crate::sys::{self, DmaBuffer, Source, SourceType};
 use crate::{ByteSliceMutExt, Local, Reactor};
+use nix::sys::socket::MsgFlags;
 use std::cell::Cell;
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -74,7 +75,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         let source = self.reactor.upgrade().unwrap().recv(
             self.socket.as_raw_fd(),
             buf.len(),
-            iou::MsgFlags::MSG_PEEK,
+            MsgFlags::MSG_PEEK,
         );
 
         self.consume_receive_buffer(&source, buf).await
@@ -84,9 +85,9 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         &self,
         buf: &mut [u8],
     ) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
-        match self.yolo_recvmsg(buf, iou::MsgFlags::MSG_PEEK) {
+        match self.yolo_recvmsg(buf, MsgFlags::MSG_PEEK) {
             Some(res) => res,
-            None => self.recv_from_blocking(buf, iou::MsgFlags::MSG_PEEK).await,
+            None => self.recv_from_blocking(buf, MsgFlags::MSG_PEEK).await,
         }
     }
 
@@ -107,7 +108,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     pub(crate) async fn recv_from_blocking(
         &self,
         buf: &mut [u8],
-        flags: iou::MsgFlags,
+        flags: MsgFlags,
     ) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
         let source = self.reactor.upgrade().unwrap().rushed_recvmsg(
             self.socket.as_raw_fd(),
@@ -132,9 +133,9 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         &self,
         buf: &mut [u8],
     ) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
-        match self.yolo_recvmsg(buf, iou::MsgFlags::empty()) {
+        match self.yolo_recvmsg(buf, MsgFlags::empty()) {
             Some(res) => res,
-            None => self.recv_from_blocking(buf, iou::MsgFlags::empty()).await,
+            None => self.recv_from_blocking(buf, MsgFlags::empty()).await,
         }
     }
 
@@ -203,7 +204,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     fn yolo_recvmsg(
         &self,
         buf: &mut [u8],
-        flags: iou::MsgFlags,
+        flags: MsgFlags,
     ) -> Option<io::Result<(usize, nix::sys::socket::SockAddr)>> {
         if self.rx_yolo.get() {
             super::yolo_recvmsg(self.socket.as_raw_fd(), buf, flags)
