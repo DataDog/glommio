@@ -469,6 +469,11 @@ impl<T: 'static> DeadlineQueue<T> {
         })
     }
 
+    /// Returns the TaskQueueHandle associated with this controller
+    pub fn task_queue(&self) -> TaskQueueHandle {
+        self.tq
+    }
+
     /// Temporarily bumps the priority of this DeadlineQueue
     ///
     /// The bump happens by making sure that the shares never fall below
