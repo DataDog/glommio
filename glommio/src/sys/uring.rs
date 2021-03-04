@@ -1379,6 +1379,19 @@ impl Reactor {
         (cq.khead, cq.ktail)
     }
 
+    // RAII-close asynchronously files that were not closed explicitly.
+    // We can't do this through a Source, because the Source will be dropped when the
+    // file is dropped.
+    pub(crate) fn async_close(&self, fd: RawFd) {
+        let q = self.main_ring.borrow_mut().submission_queue();
+        let mut queue = q.borrow_mut();
+        queue.submissions.push_back(UringDescriptor {
+            args: UringOpDescriptor::Close,
+            fd,
+            user_data: 0,
+        });
+    }
+
     fn queue_standard_request(&self, source: &Source, op: UringOpDescriptor) {
         let ring = match source.latency_req() {
             Latency::NotImportant => &self.main_ring,
