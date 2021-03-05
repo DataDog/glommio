@@ -282,19 +282,21 @@ struct ExecutorQueues {
     executor_index: usize,
     last_vruntime: u64,
     preempt_timer_duration: Duration,
+    default_preempt_timer_duration: Duration,
     spin_before_park: Option<Duration>,
     stats: ExecutorStats,
 }
 
 impl ExecutorQueues {
-    fn new() -> Rc<RefCell<Self>> {
+    fn new(preempt_timer_duration: Duration) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(ExecutorQueues {
             active_executors: BinaryHeap::new(),
             available_executors: AHashMap::new(),
             active_executing: None,
             executor_index: 1, // 0 is the default
             last_vruntime: 0,
-            preempt_timer_duration: Duration::from_millis(100),
+            preempt_timer_duration,
+            default_preempt_timer_duration: preempt_timer_duration,
             spin_before_park: None,
             stats: ExecutorStats::new(),
         }))
@@ -305,11 +307,11 @@ impl ExecutorQueues {
             .active_executors
             .iter()
             .map(|tq| match tq.borrow().io_requirements.latency_req {
-                Latency::NotImportant => Duration::from_millis(100),
+                Latency::NotImportant => self.default_preempt_timer_duration,
                 Latency::Matters(d) => d,
             })
             .min()
-            .unwrap_or_else(|| Duration::from_secs(1))
+            .unwrap_or(self.default_preempt_timer_duration)
     }
 
     fn maybe_activate(&mut self, queue: Rc<RefCell<TaskQueue>>) {
@@ -367,6 +369,8 @@ pub struct LocalExecutorBuilder {
     /// with io_uring. It is still possible to use more than that but it will come from the
     /// standard allocator and performance will suffer. Defaults to 10MB.
     io_memory: usize,
+    /// How often to yield to other task queues
+    preempt_timer_duration: Duration,
 }
 
 impl LocalExecutorBuilder {
@@ -378,6 +382,7 @@ impl LocalExecutorBuilder {
             spin_before_park: None,
             name: String::from("unnamed"),
             io_memory: 10 << 20,
+            preempt_timer_duration: Duration::from_millis(100),
         }
     }
 
@@ -411,6 +416,21 @@ impl LocalExecutorBuilder {
         self
     }
 
+    /// How often [`need_preempt`] will return true by default.
+    ///
+    /// Lower values mean task queues will switch execution more often, which can help latency
+    /// but harm throughput. When individual task queues are present, this value can still be
+    /// dynamically lowered through the [`Latency`] setting.
+    ///
+    /// Default is 100ms.
+    ///
+    /// [`need_preempt`]: Task::need_preempt
+    /// [`Latency`]: crate::Latency
+    pub fn preempt_timer(mut self, dur: Duration) -> LocalExecutorBuilder {
+        self.preempt_timer_duration = dur;
+        self
+    }
+
     /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and returns a
     /// [`Result`](crate::Result) to the executor.
     /// # Examples
@@ -422,7 +442,7 @@ impl LocalExecutorBuilder {
     /// ```
     pub fn make(self) -> Result<LocalExecutor> {
         let notifier = sys::new_sleep_notifier()?;
-        let mut le = LocalExecutor::new(notifier, self.io_memory);
+        let mut le = LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
         if let Some(cpu) = self.binding {
             le.bind_to_cpu(cpu)?;
             le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -481,7 +501,8 @@ impl LocalExecutorBuilder {
         Builder::new()
             .name(name)
             .spawn(move || {
-                let mut le = LocalExecutor::new(notifier, self.io_memory);
+                let mut le =
+                    LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
                 if let Some(cpu) = self.binding {
                     le.bind_to_cpu(cpu).unwrap();
                     le.queues.borrow_mut().spin_before_park = self.spin_before_park;
@@ -556,10 +577,14 @@ impl LocalExecutor {
         Ok(())
     }
 
-    fn new(notifier: Arc<sys::SleepNotifier>, io_memory: usize) -> LocalExecutor {
+    fn new(
+        notifier: Arc<sys::SleepNotifier>,
+        io_memory: usize,
+        preempt_timer: Duration,
+    ) -> LocalExecutor {
         let p = parking::Parker::new();
         LocalExecutor {
-            queues: ExecutorQueues::new(),
+            queues: ExecutorQueues::new(preempt_timer),
             parker: p,
             id: notifier.id(),
             reactor: Rc::new(parking::Reactor::new(notifier, io_memory)),
