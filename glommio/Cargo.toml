@@ -10,7 +10,7 @@ license = "Apache-2.0 OR MIT"
 repository = "https://github.com/DataDog/glommio"
 homepage = "https://github.com/DataDog/glommio"
 keywords = ["uring", "reactor", "thread-per-core"]
-categories = ["asynchronous", "os"]
+categories = ["asynchronous", "os", "filesystem", "network-programming"]
 readme = "../README.md"
 
 [dependencies]
