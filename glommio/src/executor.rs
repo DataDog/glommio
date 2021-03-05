@@ -1150,7 +1150,7 @@ impl<T> Task<T> {
     }
 
     /// Returns a [`Result`] with its `Ok` value wrapping a [`TaskQueueStats`] or
-    /// [`QueueNotFoundError`] if there is no task queue with this handle
+    /// a [`GlommioError`] of type `[QueueErrorKind`] if there is no task queue with this handle
     ///
     /// # Examples
     /// ```
@@ -1165,7 +1165,8 @@ impl<T> Task<T> {
     /// ```
     ///
     /// [`ExecutorStats`]: struct.ExecutorStats.html
-    /// [`QueueNotFoundError`]: struct.QueueNotFoundError.html
+    /// [`GlommioError`]: crate::error::GlommioError
+    /// [`QueueErrorKind`]: crate::error::QueueErrorKind
     /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
     pub fn task_queue_stats(handle: TaskQueueHandle) -> Result<TaskQueueStats> {
         LOCAL_EX.with(|local_ex| match local_ex.get_queue(&handle) {
