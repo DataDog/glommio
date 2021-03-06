@@ -705,12 +705,22 @@ impl UringCommon for PollRing {
             return Some(false);
         }
 
-        //let buffers = self.buffers.clone();
-        if let Some(mut sqe) = self.ring.prepare_sqe() {
-            self.submitted += 1;
-            let op = queue.pop_front().unwrap();
-            let allocator = self.allocator.clone();
-            fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
+        // find position of first element without a link
+        let chain_len = match queue.iter().position(|sqe| {
+            !sqe.flags
+                .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
+        }) {
+            Some(pos) => pos,
+            None => panic!("Unterminated SQE link chain: internal source prep bug"),
+        };
+
+        if let Some(sqes) = self.ring.prepare_sqes(chain_len as u32 + 1) {
+            for mut sqe in sqes {
+                self.submitted += 1;
+                let op = queue.pop_front().unwrap();
+                let allocator = self.allocator.clone();
+                fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
+            }
             Some(true)
         } else {
             None
@@ -966,14 +976,26 @@ impl UringCommon for SleepableRing {
             return Some(false);
         }
 
-        if let Some(mut sqe) = self.ring.prepare_sqe() {
-            self.waiting_submission += 1;
-            let op = queue.pop_front().unwrap();
-            let allocator = self.allocator.clone();
-            fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
-            return Some(true);
+        // find position of first element without a link
+        let chain_len = match queue.iter().position(|sqe| {
+            !sqe.flags
+                .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
+        }) {
+            Some(pos) => pos,
+            None => panic!("Unterminated SQE link chain: internal source prep bug"),
+        };
+
+        if let Some(sqes) = self.ring.prepare_sqes(chain_len as u32 + 1) {
+            for mut sqe in sqes {
+                self.waiting_submission += 1;
+                let op = queue.pop_front().unwrap();
+                let allocator = self.allocator.clone();
+                fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
+            }
+            Some(true)
+        } else {
+            None
         }
-        None
     }
 }
 
@@ -1572,5 +1594,24 @@ mod tests {
             Some(_) => panic!("Expected non-uring buffer"),
             None => {}
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "Unterminated SQE link chain")]
+    fn sqe_link_chain_too_long() {
+        let allocator = Rc::new(UringBufferAllocator::new(65536));
+        let mut ring = SleepableRing::new(2, "main", allocator).unwrap();
+        let q = ring.submission_queue();
+        let mut queue = q.borrow_mut();
+
+        queue.submissions.push_back(UringDescriptor {
+            args: UringOpDescriptor::Close,
+            fd: -1,
+            flags: SubmissionFlags::IO_LINK,
+            user_data: 0,
+        });
+
+        // If the link chain points outside of the queue, we panic
+        ring.submit_one_event(&mut queue.submissions);
     }
 }
