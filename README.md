@@ -25,6 +25,23 @@ Using Glommio is not hard if you are familiar with rust async. All you have to d
     }).unwrap();
 ```
 
+Please note Glommio requires at least 512 KiB of locked memory for `io_uring` to work. You can
+increase the `memlock` resource limit (rlimit) as follows:
+
+```sh
+$ vi /etc/security/limits.conf
+*    hard    memlock        512
+*    soft    memlock        512
+```
+
+ To make the new limits effective, you need to login to the machine again. You can verify that
+ the limits are updated by running the following:
+
+```sh
+$ ulimit -l
+512
+```
+
 For more details check out our [docs
 page](https://docs.rs/glommio/0.2.0-alpha/glommio/) and an [introductory
 article](https://www.datadoghq.com/blog/engineering/introducing-glommio/)

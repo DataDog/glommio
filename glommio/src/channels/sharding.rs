@@ -82,7 +82,7 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Sharded<T, H> {
     /// [`Sharded`] is closed. Otherwise, the function will return immediately after spawning a
     /// background task draining messages from the stream.
     ///
-    /// [`GlommioError::Closed`]: ../../error/enum.GlommioError.html#variant.Closed
+    /// [`GlommioError::Closed`]: crate::GlommioError::Closed
     pub fn handle<S: Stream<Item = T> + Unpin + 'static>(&mut self, messages: S) -> Result<(), S> {
         if self.closed {
             Err(GlommioError::Closed(ResourceType::Channel(messages)))
