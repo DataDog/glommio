@@ -1,5 +1,5 @@
-// unless explicitly stated otherwise all files in this repository are licensed under the
-// mit/apache-2.0 license, at your convenience
+// unless explicitly stated otherwise all files in this repository are licensed
+// under the mit/apache-2.0 license, at your convenience
 //
 // this product includes software developed at datadog (https://www.datadoghq.com/). copyright 2020 datadog, inc.
 use crate::sys::DmaBuffer;
@@ -58,23 +58,27 @@ impl ReadResult {
 
     /// Creates a slice of this ReadResult with the given offset and length.
     ///
-    /// Returns `None` if either offset or offset + len would not fit in the original buffer.
+    /// Returns `None` if either offset or offset + len would not fit in the
+    /// original buffer.
     pub fn slice(this: &Self, extra_offset: usize, len: usize) -> Option<Self> {
         Some(Self(if let Some(len) = NonZeroUsize::new(len) {
             Some(ReadResultInner::slice(this.0.as_ref()?, extra_offset, len)?)
         } else {
-            // This branch is needed to make sure that calls to `slice` with `len = 0` are handled.
-            // If they aren't valid, then `len` should be changed to `NonZeroUsize`.
+            // This branch is needed to make sure that calls to `slice` with `len = 0` are
+            // handled. If they aren't valid, then `len` should be changed to
+            // `NonZeroUsize`.
             None
         }))
     }
 
     /// Creates a slice of this ReadResult with the given offset and length.
-    /// Similiar to [`ReadResult::slice`], but does not check if the offset and length are correct.
+    /// Similiar to [`ReadResult::slice`], but does not check if the offset and
+    /// length are correct.
     ///
     /// # Safety
     ///
-    /// Any user of this function must guarantee that the offset and length are correct (not out of bounds).
+    /// Any user of this function must guarantee that the offset and length are
+    /// correct (not out of bounds).
     pub unsafe fn slice_unchecked(this: &Self, extra_offset: usize, len: usize) -> Self {
         Self(NonZeroUsize::new(len).map(|len| {
             ReadResultInner::slice_unchecked(this.0.as_ref().unwrap(), extra_offset, len)
@@ -88,7 +92,8 @@ impl ReadResultInner {
             let max_len = this.buffer.len();
             assert!(
                 (this.offset + this.len.get()) <= max_len,
-                "a ReadResult contains an out-of-range 'end': offset ({} + {}) > buffer length ({})",
+                "a ReadResult contains an out-of-range 'end': offset ({} + {}) > buffer length \
+                 ({})",
                 this.offset,
                 this.len,
                 max_len,

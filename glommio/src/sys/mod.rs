@@ -1,26 +1,33 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::iou::sqe::SockAddrStorage;
-use crate::uring_sys;
+use crate::{iou::sqe::SockAddrStorage, uring_sys};
 use ahash::AHashMap;
 use nix::sys::socket::SockAddr;
-use std::cell::{Cell, RefCell};
-use std::convert::TryFrom;
-use std::ffi::CString;
-use std::mem::{ManuallyDrop, MaybeUninit};
-use std::net::{Shutdown, TcpStream};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::path::Path;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
-use std::task::Waker;
-use std::time::Duration;
-use std::{fmt, io};
+use std::{
+    cell::{Cell, RefCell},
+    convert::TryFrom,
+    ffi::CString,
+    fmt,
+    io,
+    mem::{ManuallyDrop, MaybeUninit},
+    net::{Shutdown, TcpStream},
+    os::unix::{
+        ffi::OsStrExt,
+        io::{AsRawFd, FromRawFd, RawFd},
+    },
+    path::Path,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+        RwLock,
+    },
+    task::Waker,
+    time::Duration,
+};
 
 macro_rules! syscall {
     ($fn:ident $args:tt) => {{
@@ -118,16 +125,17 @@ pub(crate) fn accept_syscall(fd: RawFd) -> io::Result<RawFd> {
     syscall!(accept(fd, addr.as_mut_ptr() as *mut _, &mut length))
 }
 
-// This essentially converts the nix errors into something we can integrate with the rest of the
-// crate.
+// This essentially converts the nix errors into something we can integrate with
+// the rest of the crate.
 pub(crate) unsafe fn ssptr_to_sockaddr(
     ss: MaybeUninit<nix::sys::socket::sockaddr_storage>,
     len: usize,
 ) -> io::Result<nix::sys::socket::SockAddr> {
     let storage = ss.assume_init();
-    // unnamed unix sockets have a len of 0. Technically we should make sure this has
-    // family = AF_UNIX, but if len == 0 the OS may not have written anything here. If this
-    // is not supposed to be unix, the upper layers will complain.
+    // unnamed unix sockets have a len of 0. Technically we should make sure this
+    // has family = AF_UNIX, but if len == 0 the OS may not have written
+    // anything here. If this is not supposed to be unix, the upper layers will
+    // complain.
     if len == 0 {
         nix::sys::socket::SockAddr::new_unix("")
     } else {
@@ -209,8 +217,10 @@ mod uring;
 
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::uring::*;
-use crate::error::{ExecutorErrorKind, GlommioError, ReactorErrorKind};
-use crate::IoRequirements;
+use crate::{
+    error::{ExecutorErrorKind, GlommioError, ReactorErrorKind},
+    IoRequirements,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -303,9 +313,9 @@ impl SleepNotifier {
 impl Drop for SleepNotifier {
     fn drop(&mut self) {
         let mut state = REACTOR_GLOBAL_STATE.write().unwrap();
-        // The other side may still be holding a reference in which case the notifier will
-        // be freed later. However we can't receive notifications anymore so memory must be
-        // zeroed here.
+        // The other side may still be holding a reference in which case the notifier
+        // will be freed later. However we can't receive notifications anymore
+        // so memory must be zeroed here.
         self.wake_up();
         state.sleep_notifiers.remove(&self.id).unwrap();
     }
@@ -494,8 +504,8 @@ impl Source {
 ///
 /// If this source is not a socket, the `shutdown()` syscall error is ignored.
 pub(crate) fn shutdown(raw: RawFd, how: Shutdown) -> io::Result<()> {
-    // This may not be a TCP stream, but that's okay. All we do is call `shutdown()` on the raw
-    // descriptor and ignore errors if it's not a socket.
+    // This may not be a TCP stream, but that's okay. All we do is call `shutdown()`
+    // on the raw descriptor and ignore errors if it's not a socket.
     let res = unsafe {
         let stream = ManuallyDrop::new(TcpStream::from_raw_fd(raw));
         stream.shutdown(how)

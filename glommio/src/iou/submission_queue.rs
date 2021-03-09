@@ -1,10 +1,12 @@
-use std::fmt;
-use std::io;
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-use std::slice;
-use std::sync::atomic::{self, Ordering};
-use std::time::Duration;
+use std::{
+    fmt,
+    io,
+    marker::PhantomData,
+    ptr::NonNull,
+    slice,
+    sync::atomic::{self, Ordering},
+    time::Duration,
+};
 
 use super::{resultify, IoUring, SQEs, SQE};
 use crate::uring_sys;
@@ -13,7 +15,8 @@ use crate::uring_sys;
 ///
 /// Each element is a [`SQE`](crate::sqe::SQE).
 /// By default, events are processed in parallel after being submitted.
-/// You can modify this behavior for specific events using event [`SubmissionFlags`](crate::sqe::SubmissionFlags).
+/// You can modify this behavior for specific events using event
+/// [`SubmissionFlags`](crate::sqe::SubmissionFlags).
 ///
 /// # Examples
 /// Consider a read event that depends on a successful write beforehand.
@@ -32,7 +35,8 @@ impl<'ring> SubmissionQueue<'ring> {
         }
     }
 
-    /// Returns new [`SQE`s](crate::sqe::SQE) until the queue size is reached. After that, will return `None`.
+    /// Returns new [`SQE`s](crate::sqe::SQE) until the queue size is reached.
+    /// After that, will return `None`.
     pub fn prepare_sqe(&mut self) -> Option<SQE<'_>> {
         unsafe { prepare_sqe(self.ring.as_mut()) }
     }
@@ -46,7 +50,8 @@ impl<'ring> SubmissionQueue<'ring> {
 
     /// Submit all events in the queue. Returns the number of submitted events.
     ///
-    /// If this function encounters any IO errors an [`io::Error`](std::io::Result) variant is returned.
+    /// If this function encounters any IO errors an
+    /// [`io::Error`](std::io::Result) variant is returned.
     pub fn submit(&mut self) -> io::Result<u32> {
         resultify(unsafe { uring_sys::io_uring_submit(self.ring.as_ptr()) })
     }

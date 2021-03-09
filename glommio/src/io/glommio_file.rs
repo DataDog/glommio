@@ -1,23 +1,26 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
 use crate::{parking::Reactor, sys, GlommioError, Local};
 use log::debug;
-use std::convert::TryInto;
-use std::io;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::path::{Path, PathBuf};
-use std::rc::{Rc, Weak};
+use std::{
+    convert::TryInto,
+    io,
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    path::{Path, PathBuf},
+    rc::{Rc, Weak},
+};
 
 type Result<T> = crate::Result<T, ()>;
 
 /// A wrapper over `std::fs::File` which carries a path (for better error
 /// messages) and prints a warning if closed synchronously.
 ///
-/// It also implements some operations that are common among Buffered and non-Buffered files
+/// It also implements some operations that are common among Buffered and
+/// non-Buffered files
 #[derive(Debug)]
 pub(crate) struct GlommioFile {
     pub(crate) file: Option<RawFd>,
@@ -35,11 +38,13 @@ impl Drop for GlommioFile {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
             debug!(
-            "File dropped while still active. ({:?} / fd {}).
-That means that while the file is already out of scope, the file descriptor is still registered until the next I/O cycle.
-This is likely file, but in extreme situations can lead to resource exhaustion. An explicit asynchronous close is still preferred",
-            self.path,
-            file);
+                "File dropped while still active. ({:?} / fd {}).
+That means that while the file is already out of scope, the file descriptor is still registered \
+                 until the next I/O cycle.
+This is likely file, but in extreme situations can lead to resource exhaustion. An explicit \
+                 asynchronous close is still preferred",
+                self.path, file
+            );
             if let Some(r) = self.reactor.upgrade() {
                 r.sys.async_close(file);
             }
@@ -244,8 +249,7 @@ impl GlommioFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::test_utils::*;
-    use crate::timer::sleep;
+    use crate::{test_utils::*, timer::sleep};
     use std::time::Duration;
 
     #[test]

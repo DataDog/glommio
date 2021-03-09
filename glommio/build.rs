@@ -1,7 +1,4 @@
-use std::env;
-use std::fs;
-use std::path::*;
-use std::process::Command;
+use std::{env, fs, path::*, process::Command};
 
 use cc::Build;
 

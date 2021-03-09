@@ -1,23 +1,27 @@
 // Example on how to use the Hyper server in !Send mode.
 // The clients are harder, see https://github.com/hyperium/hyper/issues/2341 for details
 //
-// Essentially what we do is we wrap our types around the Tokio traits. The !Send limitation
-// makes it harder to deal with high level hyper primitives but it works in the end.
+// Essentially what we do is we wrap our types around the Tokio traits. The
+// !Send limitation makes it harder to deal with high level hyper primitives but
+// it works in the end.
 mod hyper_compat {
-    use futures_lite::Future;
-    use futures_lite::{AsyncRead, AsyncWrite};
+    use futures_lite::{AsyncRead, AsyncWrite, Future};
     use hyper::service::service_fn;
-    use std::net::SocketAddr;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
+    use std::{
+        net::SocketAddr,
+        pin::Pin,
+        task::{Context, Poll},
+    };
 
-    use glommio::net::{TcpListener, TcpStream};
-    use glommio::sync::Semaphore;
-    use glommio::{enclose, Local, Task};
-    use hyper::server::conn::Http;
-    use hyper::{Body, Request, Response};
-    use std::io;
-    use std::rc::Rc;
+    use glommio::{
+        enclose,
+        net::{TcpListener, TcpStream},
+        sync::Semaphore,
+        Local,
+        Task,
+    };
+    use hyper::{server::conn::Http, Body, Request, Response};
+    use std::{io, rc::Rc};
 
     #[derive(Clone)]
     struct HyperExecutor;

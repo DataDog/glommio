@@ -1,32 +1,36 @@
 use futures::join;
 use glommio::prelude::*;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 fn main() {
-    // Glommio is a cooperative thread per core system so once you start processing a future
-    // it will run it to completion. This is not great for latency, and may be outright wrong
-    // if you have tasks that may spin forever before returning, like a long-lived server.
+    // Glommio is a cooperative thread per core system so once you start processing
+    // a future it will run it to completion. This is not great for latency, and
+    // may be outright wrong if you have tasks that may spin forever before
+    // returning, like a long-lived server.
     //
-    // Applications using Glommio are then expected to be well-behaved and explicitly yield
-    // control if they are going to do something that may take too long (that is usually a
-    // loop!)
+    // Applications using Glommio are then expected to be well-behaved and
+    // explicitly yield control if they are going to do something that may take
+    // too long (that is usually a loop!)
     //
     // There are two ways of yielding control:
     //
-    //  * Local::yield_if_needed(), which will yield if the task has run for too long.
-    //    What "too long" means is an implementation detail, but it will be always somehow
-    //    related to the latency guarantees that the task queues want to uphold in their
-    //    `Latency::Matters` parameter (or Latency::NotImportant).
+    //  * Local::yield_if_needed(), which will yield if the task has run for too
+    //    long. What "too long" means is an implementation detail, but it will be
+    //    always somehow related to the latency guarantees that the task queues want
+    //    to uphold in their `Latency::Matters` parameter (or
+    //    Latency::NotImportant).
     //
-    //  * Local::later(), which will yield immediately (execute the rest of the function
-    //    later).
+    //  * Local::later(), which will yield immediately (execute the rest of the
+    //    function later).
     //
-    // Because yield_if_needed() returns a future that has to be .awaited, it cannot be used
-    // in situations where .await is illegal. For instance, if we are holding a borrow.
-    // For those, one can call need_preempt() which will tell you if yielding is needed, and
-    // then explicitly yield with later().
+    // Because yield_if_needed() returns a future that has to be .awaited, it cannot
+    // be used in situations where .await is illegal. For instance, if we are
+    // holding a borrow. For those, one can call need_preempt() which will tell
+    // you if yielding is needed, and then explicitly yield with later().
     let handle = LocalExecutorBuilder::new()
         .spawn(|| async move {
             let tq1 = Local::create_task_queue(

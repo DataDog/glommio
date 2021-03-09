@@ -1,19 +1,23 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use alloc::alloc::Layout;
-use core::future::Future;
-use core::mem::{self, ManuallyDrop};
-use core::pin::Pin;
-use core::ptr::NonNull;
-use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use core::{
+    future::Future,
+    mem::{self, ManuallyDrop},
+    pin::Pin,
+    ptr::NonNull,
+    task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
+};
 
-use crate::task::header::Header;
-use crate::task::state::*;
-use crate::task::utils::{abort, abort_on_panic, extend};
-use crate::task::Task;
+use crate::task::{
+    header::Header,
+    state::*,
+    utils::{abort, abort_on_panic, extend},
+    Task,
+};
 use std::thread::ThreadId;
 
 thread_local!(static THREAD_ID : ThreadId = std::thread::current().id());
@@ -97,9 +101,11 @@ where
 
     /// Allocates a task with the given `future` and `schedule` function.
     ///
-    /// It is assumed that initially only the `Task` reference and the `JoinHandle` exist.
+    /// It is assumed that initially only the `Task` reference and the
+    /// `JoinHandle` exist.
     pub(crate) fn allocate(future: F, schedule: S) -> NonNull<()> {
-        // Compute the layout of the task for allocation. Abort if the computation fails.
+        // Compute the layout of the task for allocation. Abort if the computation
+        // fails.
         let task_layout = abort_on_panic(Self::task_layout);
 
         unsafe {
@@ -172,7 +178,8 @@ where
         let align_union = layout_f.align().max(layout_r.align());
         let layout_union = unsafe { Layout::from_size_align_unchecked(size_union, align_union) };
 
-        // Compute the layout for `Header` followed by `T`, then `S`, and finally `union { F, R }`.
+        // Compute the layout for `Header` followed by `T`, then `S`, and finally `union
+        // { F, R }`.
         let layout = layout_header;
         let (layout, offset_s) = extend(layout, layout_s);
         let (layout, offset_union) = extend(layout, layout_union);
@@ -189,8 +196,9 @@ where
 
     /// Wakes a waker.
     unsafe fn wake(ptr: *const ()) {
-        // This is just an optimization. If the schedule function has captured variables, then
-        // we'll do less reference counting if we wake the waker by reference and then drop it.
+        // This is just an optimization. If the schedule function has captured
+        // variables, then we'll do less reference counting if we wake the waker
+        // by reference and then drop it.
         if mem::size_of::<S>() > 0 {
             Self::wake_by_ref(ptr);
             Self::drop_waker_reference(ptr);
@@ -201,8 +209,8 @@ where
         assert_eq!(
             Self::thread_id(),
             (*raw.header).thread_id,
-            "Waker::wake is called outside of working thread. \
-                   Waker instances can not be moved to or work with multiple threads"
+            "Waker::wake is called outside of working thread. Waker instances can not be moved to \
+             or work with multiple threads"
         );
 
         let state = (*raw.header).state;
@@ -238,8 +246,8 @@ where
         assert_eq!(
             Self::thread_id(),
             (*raw.header).thread_id,
-            "Waker::wake_by_ref is called outside of working thread. \
-                   Waker instances can not be moved to or work with multiple threads"
+            "Waker::wake_by_ref is called outside of working thread. Waker instances can not be \
+             moved to or work with multiple threads"
         );
 
         let state = (*raw.header).state;
@@ -249,8 +257,9 @@ where
             return;
         }
 
-        // If the task is already scheduled, we just need to synchronize with the thread that
-        // will run the task by "publishing" our current view of the memory.
+        // If the task is already scheduled, we just need to synchronize with the thread
+        // that will run the task by "publishing" our current view of the
+        // memory.
         if state & SCHEDULED == 0 {
             // If the task is not running, we can schedule right away.
             let new = if state & RUNNING == 0 {
@@ -287,8 +296,8 @@ where
         assert_eq!(
             Self::thread_id(),
             (*raw.header).thread_id,
-            "Waker::clone is called outside of working thread. \
-                   Waker instances can not be moved to or work with multiple threads"
+            "Waker::clone is called outside of working thread. Waker instances can not be moved \
+             to or work with multiple threads"
         );
 
         Self::increment_references(&mut *(raw.header as *mut Header));
@@ -309,17 +318,18 @@ where
 
     /// Drops a waker.
     ///
-    /// This function will decrement the reference count. If it drops down to zero, the associated
-    /// join handle has been dropped too, and the task has not been completed, then it will get
-    /// scheduled one more time so that its future gets dropped by the executor.
+    /// This function will decrement the reference count. If it drops down to
+    /// zero, the associated join handle has been dropped too, and the task
+    /// has not been completed, then it will get scheduled one more time so
+    /// that its future gets dropped by the executor.
     #[inline]
     unsafe fn drop_waker(ptr: *const ()) {
         let header = ptr as *const Header;
         assert_eq!(
             Self::thread_id(),
             (*header).thread_id,
-            "Waker::drop is called outside of working thread. \
-                   Waker instances can not be moved to or work with multiple threads"
+            "Waker::drop is called outside of working thread. Waker instances can not be moved to \
+             or work with multiple threads"
         );
 
         <RawTask<F, R, S>>::drop_waker_reference(ptr)
@@ -332,12 +342,12 @@ where
         let new = (*raw.header).state - REFERENCE;
         (*(raw.header as *mut Header)).state = new;
 
-        // If this was the last reference to the task and the `JoinHandle` has been dropped too,
-        // then we need to decide how to destroy the task.
+        // If this was the last reference to the task and the `JoinHandle` has been
+        // dropped too, then we need to decide how to destroy the task.
         if new & !(REFERENCE - 1) == 0 && new & HANDLE == 0 {
             if new & (COMPLETED | CLOSED) == 0 {
-                // If the task was not completed nor closed, close it and schedule one more time so
-                // that its future gets dropped by the executor.
+                // If the task was not completed nor closed, close it and schedule one more time
+                // so that its future gets dropped by the executor.
                 (*(raw.header as *mut Header)).state = SCHEDULED | CLOSED | REFERENCE;
                 Self::schedule(ptr);
             } else {
@@ -349,8 +359,9 @@ where
 
     /// Drops a task.
     ///
-    /// This function will decrement the reference count. If it drops down to zero and the
-    /// associated join handle has been dropped too, then the task gets destroyed.
+    /// This function will decrement the reference count. If it drops down to
+    /// zero and the associated join handle has been dropped too, then the
+    /// task gets destroyed.
     #[inline]
     unsafe fn drop_task(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
@@ -359,8 +370,8 @@ where
         let new = (*raw.header).state - REFERENCE;
         (*(raw.header as *mut Header)).state = new;
 
-        // If this was the last reference to the task and the `JoinHandle` has been dropped too,
-        // then destroy the task.
+        // If this was the last reference to the task and the `JoinHandle` has been
+        // dropped too, then destroy the task.
         if new & !(REFERENCE - 1) == 0 && new & HANDLE == 0 {
             Self::destroy(ptr);
         }
@@ -368,8 +379,8 @@ where
 
     /// Schedules a task for running.
     ///
-    /// This function doesn't modify the state of the task. It only passes the task reference to
-    /// its schedule function.
+    /// This function doesn't modify the state of the task. It only passes the
+    /// task reference to its schedule function.
     unsafe fn schedule(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
 
@@ -432,8 +443,8 @@ where
 
     /// Cleans up task's resources and deallocates it.
     ///
-    /// The schedule function will be dropped, and the task will then get deallocated.
-    /// The task must be closed before this function is called.
+    /// The schedule function will be dropped, and the task will then get
+    /// deallocated. The task must be closed before this function is called.
     #[inline]
     unsafe fn destroy(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
@@ -451,8 +462,8 @@ where
 
     /// Runs a task.
     ///
-    /// If polling its future panics, the task will be closed and the panic will be propagated into
-    /// the caller.
+    /// If polling its future panics, the task will be closed and the panic will
+    /// be propagated into the caller.
     unsafe fn run(ptr: *const ()) -> bool {
         let raw = Self::from_ptr(ptr);
 
@@ -480,12 +491,13 @@ where
         state = (state & !SCHEDULED) | RUNNING;
         (*(raw.header as *mut Header)).state = state;
 
-        // Create a context from the raw task pointer and the vtable inside the its header.
+        // Create a context from the raw task pointer and the vtable inside the its
+        // header.
         let waker = ManuallyDrop::new(Waker::from_raw(RawWaker::new(ptr, &Self::RAW_WAKER_VTABLE)));
         let cx = &mut Context::from_waker(&waker);
 
-        // Poll the inner future, but surround it with a guard that closes the task in case polling
-        // panics.
+        // Poll the inner future, but surround it with a guard that closes the task in
+        // case polling panics.
         let guard = Guard(raw);
         let poll = <F as Future>::poll(Pin::new_unchecked(&mut *raw.future), cx);
         mem::forget(guard);

@@ -1,15 +1,17 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use ahash::AHashMap;
-use std::cell::RefCell;
-use std::fs::{canonicalize, read_dir, read_to_string};
-use std::io;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::vec::Vec;
+use std::{
+    cell::RefCell,
+    fs::{canonicalize, read_dir, read_to_string},
+    io,
+    path::{Path, PathBuf},
+    str::FromStr,
+    vec::Vec,
+};
 
 thread_local!(static DEV_MAP: RefCell<AHashMap<(usize, usize), BlockDevice>> = RefCell::new(AHashMap::new()));
 

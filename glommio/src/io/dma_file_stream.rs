@@ -1,27 +1,34 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::read_result::ReadResult;
-use crate::io::DmaFile;
-use crate::sys::DmaBuffer;
 use crate::{
-    io::dma_file::align_down, task, ByteSliceExt, ByteSliceMutExt, GlommioError, Local,
+    io::{dma_file::align_down, read_result::ReadResult, DmaFile},
+    sys::DmaBuffer,
+    task,
+    ByteSliceExt,
+    ByteSliceMutExt,
+    GlommioError,
+    Local,
     ResourceType,
 };
 use ahash::AHashMap;
 use core::task::Waker;
-use futures_lite::future::poll_fn;
-use futures_lite::io::{AsyncRead, AsyncWrite};
-use futures_lite::stream::{self, StreamExt};
-use std::cell::RefCell;
-use std::cmp::Reverse;
-use std::io;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
-use std::vec::Vec;
+use futures_lite::{
+    future::poll_fn,
+    io::{AsyncRead, AsyncWrite},
+    stream::{self, StreamExt},
+};
+use std::{
+    cell::RefCell,
+    cmp::Reverse,
+    io,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+    vec::Vec,
+};
 
 type Result<T> = crate::Result<T, ()>;
 
@@ -44,19 +51,23 @@ pub struct DmaStreamReaderBuilder {
 }
 
 impl DmaStreamReaderBuilder {
-    /// Creates a new DmaStreamReaderBuilder, given a shared pointer to a [`DmaFile`]
+    /// Creates a new DmaStreamReaderBuilder, given a shared pointer to a
+    /// [`DmaFile`]
     ///
-    /// This method is useful in situations where a shared pointer was already present.
-    /// For example if you need to scan a header in the file and also make it available for
-    /// random reads.
+    /// This method is useful in situations where a shared pointer was already
+    /// present. For example if you need to scan a header in the file and
+    /// also make it available for random reads.
     ///
     /// Other than that, it is the same as [`new`]
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use glommio::{LocalExecutor, Local};
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamReaderBuilder},
+    ///     Local,
+    ///     LocalExecutor,
+    /// };
     /// use std::rc::Rc;
     ///
     /// let ex = LocalExecutor::default();
@@ -67,7 +78,8 @@ impl DmaStreamReaderBuilder {
     ///     // issue random I/O now, even though a stream is open.
     ///     Local::local(async move {
     ///         file.read_at(0, 8).await.unwrap();
-    ///     }).await;
+    ///     })
+    ///     .await;
     /// });
     /// ```
     /// [`DmaFile`]: struct.DmaFile.html
@@ -95,8 +107,10 @@ impl DmaStreamReaderBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamReaderBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -124,8 +138,8 @@ impl DmaStreamReaderBuilder {
 
     /// Define an end position.
     ///
-    /// Reads from the [`DmaStreamReader`] will end at this position even if the file
-    /// is larger.
+    /// Reads from the [`DmaStreamReader`] will end at this position even if the
+    /// file is larger.
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn with_end_pos(mut self, end: u64) -> Self {
@@ -133,9 +147,11 @@ impl DmaStreamReaderBuilder {
         self
     }
 
-    /// Define the number of read-ahead buffers that will be used by the [`DmaStreamReader`]
+    /// Define the number of read-ahead buffers that will be used by the
+    /// [`DmaStreamReader`]
     ///
-    /// Higher read-ahead numbers mean more parallelism but also more memory usage.
+    /// Higher read-ahead numbers mean more parallelism but also more memory
+    /// usage.
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     pub fn with_read_ahead(mut self, read_ahead: usize) -> Self {
@@ -152,7 +168,8 @@ impl DmaStreamReaderBuilder {
         self
     }
 
-    /// Builds a [`DmaStreamReader`] with the properties defined by this [`DmaStreamReaderBuilder`]
+    /// Builds a [`DmaStreamReader`] with the properties defined by this
+    /// [`DmaStreamReaderBuilder`]
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
     /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
@@ -250,7 +267,10 @@ impl DmaStreamReaderState {
 
         match self.buffermap.get(&buffer_id) {
             None => {
-                panic!("Buffer not found. But we should only call this function after we verified that all buffers exist");
+                panic!(
+                    "Buffer not found. But we should only call this function after we verified \
+                     that all buffers exist"
+                );
             }
             Some(buffer) => {
                 len = buffer.read_at(in_buffer_offset, &mut result[..max_len]);
@@ -316,27 +336,28 @@ impl Drop for DmaStreamReaderState {
 }
 
 #[derive(Debug)]
-/// Provides linear access to a [`DmaFile`]. The [`DmaFile`] is a convenient way to
-/// manage a file through Direct I/O, but its interface is conductive to random access,
-/// as a position must always be specified.
+/// Provides linear access to a [`DmaFile`]. The [`DmaFile`] is a convenient way
+/// to manage a file through Direct I/O, but its interface is conductive to
+/// random access, as a position must always be specified.
 ///
-/// In situations where the file must be scanned linearly - either because a large chunk
-/// is to be read or because we are scanning the whole file, it may be more convenient to use
-/// a linear scan API.
+/// In situations where the file must be scanned linearly - either because a
+/// large chunk is to be read or because we are scanning the whole file, it may
+/// be more convenient to use a linear scan API.
 ///
-/// The [`DmaStreamReader`] implements [`AsyncRead`], which can offer the user with a convenient
-/// way of issuing reads. However note that this mandates a copy between the Dma Buffer used
-/// to read the file contents and the user-specified buffer.
+/// The [`DmaStreamReader`] implements [`AsyncRead`], which can offer the user
+/// with a convenient way of issuing reads. However note that this mandates a
+/// copy between the Dma Buffer used to read the file contents and the
+/// user-specified buffer.
 ///
-/// To avoid that copy the [`DmaStreamReader`] provides the [`get_buffer_aligned`] method which
-/// exposes the buffer as a byte slice. Different situations will call for different APIs to
-/// be used.
+/// To avoid that copy the [`DmaStreamReader`] provides the
+/// [`get_buffer_aligned`] method which exposes the buffer as a byte slice.
+/// Different situations will call for different APIs to be used.
 ///
 /// [`DmaFile`]: struct.DmaFile.html
 /// [`DmaBuffer`]: struct.DmaBuffer.html
 /// [`DmaStreamReader`]: struct.DmaStreamReader.html
-/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
-/// [`AsyncRead`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncRead.html
+/// [`get_buffer_aligned`]:
+/// struct.DmaStreamReader.html#method.get_buffer_aligned [`AsyncRead`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncRead.html
 pub struct DmaStreamReader {
     start: u64,
     end: u64,
@@ -364,8 +385,10 @@ impl DmaStreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamReaderBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -435,8 +458,10 @@ impl DmaStreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamReaderBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -475,8 +500,10 @@ impl DmaStreamReader {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamReaderBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -494,25 +521,31 @@ impl DmaStreamReader {
         self.current_pos
     }
 
-    /// Allows access to the buffer that holds the current position with no extra copy
+    /// Allows access to the buffer that holds the current position with no
+    /// extra copy
     ///
-    /// In order to use this API, one must guarantee that reading the specified length may cross
-    /// into a different buffer.  Users of this API are expected to be aware of their buffer size
-    /// (selectable in the [`DmaStreamReaderBuilder`]) and act accordingly.
+    /// In order to use this API, one must guarantee that reading the specified
+    /// length may cross into a different buffer.  Users of this API are
+    /// expected to be aware of their buffer size (selectable in the
+    /// [`DmaStreamReaderBuilder`]) and act accordingly.
     ///
-    /// The buffer is also not released until the returned [`ReadResult`] goes out of scope. So
-    /// if you plan to keep this alive for a long time this is probably the wrong API.
+    /// The buffer is also not released until the returned [`ReadResult`] goes
+    /// out of scope. So if you plan to keep this alive for a long time this
+    /// is probably the wrong API.
     ///
-    /// Let's say you want to open a file and check if its header is sane: this is a good API for
-    /// that.
+    /// Let's say you want to open a file and check if its header is sane: this
+    /// is a good API for that.
     ///
-    /// But if after such header there is an index that you want to keep in memory, then you
-    /// are probably better off with one of the methods from [`AsyncReadExt`].
+    /// But if after such header there is an index that you want to keep in
+    /// memory, then you are probably better off with one of the methods
+    /// from [`AsyncReadExt`].
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamReaderBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamReaderBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -678,8 +711,10 @@ impl DmaStreamWriterBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamWriterBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -700,11 +735,12 @@ impl DmaStreamWriterBuilder {
         }
     }
 
-    /// Define the number of write-behind buffers that will be used by the [`DmaStreamWriter`]
+    /// Define the number of write-behind buffers that will be used by the
+    /// [`DmaStreamWriter`]
     ///
-    /// Higher write-behind numbers mean more parallelism but also more memory usage. As
-    /// long as there is still write-behind buffers available writing to this [`DmaStreamWriter`] will
-    /// not block.
+    /// Higher write-behind numbers mean more parallelism but also more memory
+    /// usage. As long as there is still write-behind buffers available
+    /// writing to this [`DmaStreamWriter`] will not block.
     ///
     /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
     pub fn with_write_behind(mut self, write_behind: usize) -> Self {
@@ -712,8 +748,8 @@ impl DmaStreamWriterBuilder {
         self
     }
 
-    /// Does not issue a sync operation when closing the file. This is dangerous and in most cases
-    /// may lead to data loss.
+    /// Does not issue a sync operation when closing the file. This is dangerous
+    /// and in most cases may lead to data loss.
     pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
         self.flush_on_close = !flush_disabled;
         self
@@ -728,7 +764,8 @@ impl DmaStreamWriterBuilder {
         self
     }
 
-    /// Builds a [`DmaStreamWriter`] with the properties defined by this [`DmaStreamWriterBuilder`]
+    /// Builds a [`DmaStreamWriter`] with the properties defined by this
+    /// [`DmaStreamWriterBuilder`]
     ///
     /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
     /// [`DmaStreamWriterBuilder`]: struct.DmaStreamWriterBuilder.html
@@ -885,21 +922,21 @@ impl Drop for DmaStreamWriterState {
 }
 
 #[derive(Debug)]
-/// Provides linear access to a [`DmaFile`]. The [`DmaFile`] is a convenient way to
-/// manage a file through Direct I/O, but its interface is conductive to random access,
-/// as a position must always be specified.
+/// Provides linear access to a [`DmaFile`]. The [`DmaFile`] is a convenient way
+/// to manage a file through Direct I/O, but its interface is conductive to
+/// random access, as a position must always be specified.
 ///
-/// Very rarely does one need to issue random writes to a file. Therefore, the [`DmaStreamWriter`] is
-/// likely your go-to API when it comes to writing files.
+/// Very rarely does one need to issue random writes to a file. Therefore, the
+/// [`DmaStreamWriter`] is likely your go-to API when it comes to writing files.
 ///
-/// The [`DmaStreamWriter`] implements [`AsyncWrite`]. Because it is backed by a Direct I/O
-/// file, the flush method has no effect. Closing the file issues a sync so that
-/// the data can be flushed from the internal NVMe caches.
+/// The [`DmaStreamWriter`] implements [`AsyncWrite`]. Because it is backed by a
+/// Direct I/O file, the flush method has no effect. Closing the file issues a
+/// sync so that the data can be flushed from the internal NVMe caches.
 ///
 /// [`DmaFile`]: struct.DmaFile.html
 /// [`DmaStreamReader`]: struct.DmaStreamReader.html
-/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
-/// [`AsyncWrite`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWrite.html
+/// [`get_buffer_aligned`]:
+/// struct.DmaStreamReader.html#method.get_buffer_aligned [`AsyncWrite`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWrite.html
 pub struct DmaStreamWriter {
     file: Option<Rc<DmaFile>>,
     state: Rc<RefCell<DmaStreamWriterState>>,
@@ -934,9 +971,11 @@ impl DmaStreamWriter {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamWriterBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -954,22 +993,26 @@ impl DmaStreamWriter {
         self.state.borrow().file_pos()
     }
 
-    /// Acquires the current position of this [`DmaStreamWriter`] that is flushed to the underlying
-    /// media.
+    /// Acquires the current position of this [`DmaStreamWriter`] that is
+    /// flushed to the underlying media.
     ///
-    /// Warning: the position reported by this API is not restart or crash safe. You need to call
-    /// [`sync`] for that. Although the DmaStreamWriter uses Direct I/O, modern storage devices have
-    /// their own caches and may still lose data that sits on those caches upon a restart until
+    /// Warning: the position reported by this API is not restart or crash safe.
+    /// You need to call [`sync`] for that. Although the DmaStreamWriter
+    /// uses Direct I/O, modern storage devices have their own caches and
+    /// may still lose data that sits on those caches upon a restart until
     /// [`sync`] is called (Note that [`close`] implies a sync).
     ///
-    /// However within the same session, new readers trying to read from any position before what
-    /// we return in this method will be guaranteed to read the data we just wrote.
+    /// However within the same session, new readers trying to read from any
+    /// position before what we return in this method will be guaranteed to
+    /// read the data we just wrote.
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamWriterBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -993,29 +1036,32 @@ impl DmaStreamWriter {
         self.state.borrow().flushed_pos()
     }
 
-    /// Waits for all currently in-flight buffers to return and be safely stored in the underlying
-    /// storage
+    /// Waits for all currently in-flight buffers to return and be safely stored
+    /// in the underlying storage
     ///
-    /// Note that the current buffer being written to is not flushed, as it may not be properly
-    /// aligned. Buffers that are currently in-flight will be waited on, and a sync operation
-    /// will be issued by the operating system.
+    /// Note that the current buffer being written to is not flushed, as it may
+    /// not be properly aligned. Buffers that are currently in-flight will
+    /// be waited on, and a sync operation will be issued by the operating
+    /// system.
     ///
     /// Returns the flushed position of the file at the time the sync started.
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::io::{DmaFile, DmaStreamWriterBuilder};
-    /// use glommio::LocalExecutor;
     /// use futures::io::AsyncWriteExt;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamWriterBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     let file = DmaFile::create("myfile.txt").await.unwrap();
-    ///        let mut writer = DmaStreamWriterBuilder::new(file)
-    ///             .with_buffer_size(4096)
-    ///             .with_write_behind(2)
-    ///             .build();
-    ///        let buffer = [0u8; 5000];
+    ///     let mut writer = DmaStreamWriterBuilder::new(file)
+    ///         .with_buffer_size(4096)
+    ///         .with_write_behind(2)
+    ///         .build();
+    ///     let buffer = [0u8; 5000];
     ///     writer.write_all(&buffer).await.unwrap();
     ///     // with 5000 bytes written into a 4096-byte buffer a flush
     ///     // has certainly started. But if very likely didn't finish right
@@ -1113,9 +1159,9 @@ impl AsyncWrite for DmaStreamWriter {
                 }
             }
             FileStatus::Closed => {
-                // We do it like this so that the write and read close errors are exactly the same.
-                // The reader uses enhanced errors, so it has a message in the inner attribute of
-                // io::Error
+                // We do it like this so that the write and read close errors are exactly the
+                // same. The reader uses enhanced errors, so it has a message in
+                // the inner attribute of io::Error
                 Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("{}", io::Error::from_raw_os_error(libc::EBADF)),
@@ -1128,12 +1174,12 @@ impl AsyncWrite for DmaStreamWriter {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::io::dma_file::align_up;
-    use crate::io::dma_file::test::make_test_directories;
-    use crate::timer::Timer;
+    use crate::{
+        io::dma_file::{align_up, test::make_test_directories},
+        timer::Timer,
+    };
     use futures::{AsyncReadExt, AsyncWriteExt};
-    use std::io::ErrorKind;
-    use std::time::Duration;
+    use std::{io::ErrorKind, time::Duration};
 
     macro_rules! file_stream_read_test {
         ( $name:ident, $dir:ident, $kind:ident, $file:ident, $file_size:ident: $size:tt, $code:block) => {
@@ -1208,8 +1254,8 @@ mod test {
         reader.close().await.unwrap();
     });
 
-    // other tests look like they may be doing this, but the buffer_size can be rounded up
-    // So this one writes a bit more data
+    // other tests look like they may be doing this, but the buffer_size can be
+    // rounded up So this one writes a bit more data
     file_stream_write_test!(write_more_than_write_behind, path, _k, filename, file, {
         let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(128 << 10)
@@ -1630,8 +1676,9 @@ mod test {
         reader.close().await.unwrap();
     });
 
-    // Unfortunately we don't record the file type so we won't know if it is writeable
-    // or not until we actually try. In this test we'll try on close, when we force a flush
+    // Unfortunately we don't record the file type so we won't know if it is
+    // writeable or not until we actually try. In this test we'll try on close,
+    // when we force a flush
     file_stream_write_test!(write_with_readable_file, path, _k, filename, _file, {
         let rfile = DmaFile::open(&filename).await.unwrap();
 

@@ -1,14 +1,18 @@
 use ansi_term::{Colour, Style};
 use futures_lite::io::AsyncBufReadExt;
-use glommio::controllers::{DeadlineQueue, DeadlineSource};
-use glommio::io::stdin;
-use glommio::prelude::*;
-use glommio::Task;
-use std::cell::Cell;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use glommio::{
+    controllers::{DeadlineQueue, DeadlineSource},
+    io::stdin,
+    prelude::*,
+    Task,
+};
+use std::{
+    cell::Cell,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 fn burn_cpu(dur: Duration) {
     let now = Instant::now();
@@ -134,7 +138,8 @@ async fn static_writer(how_many: usize, shares: usize, cpuhog_tq: TaskQueueHandl
 
     let writer = Task::local_into(
         async move {
-            // Last parameter is bogus outside the queue, but we're just reusing the same writer
+            // Last parameter is bogus outside the queue, but we're just reusing the same
+            // writer
             let test = IntWriter::new(how_many, Duration::from_secs(0));
             test.write_int().await
         },
@@ -157,30 +162,69 @@ async fn read_int() -> Result<usize, <usize as std::str::FromStr>::Err> {
 }
 
 fn main() {
-    let handle = LocalExecutorBuilder::new().pin_to_cpu(0)
+    let handle = LocalExecutorBuilder::new()
+        .pin_to_cpu(0)
         .spawn(|| async move {
+            let cpuhog_tq =
+                Local::create_task_queue(Shares::Static(1000), Latency::NotImportant, "cpuhog");
 
-            let cpuhog_tq = Local::create_task_queue(Shares::Static(1000), Latency::NotImportant, "cpuhog");
-
-            println!("{}", Style::new().bold().paint("Welcome to the Deadline Writer example"));
-            println!("In this example we will write a sequence of integers to a variable, busy looping for 500us after each write");
-            println!("While we do that, another CPU hog will be running constantly in a different TaskQueue");
-            println!("For {} results, this test is pinned to your CPU0. Make sure nothing else of significance is running there. You should be able to see it at 100% at all times!",
-                     Style::new().bold().paint("best"));
+            println!(
+                "{}",
+                Style::new()
+                    .bold()
+                    .paint("Welcome to the Deadline Writer example")
+            );
+            println!(
+                "In this example we will write a sequence of integers to a variable, busy looping \
+                 for 500us after each write"
+            );
+            println!(
+                "While we do that, another CPU hog will be running constantly in a different \
+                 TaskQueue"
+            );
+            println!(
+                "For {} results, this test is pinned to your CPU0. Make sure nothing else of \
+                 significance is running there. You should be able to see it at 100% at all times!",
+                Style::new().bold().paint("best")
+            );
 
             println!("\n\nPlease tell me how many integers you would like to write");
             let to_write = read_int().await.unwrap();
-            println!("Ok, now let's write {} integers with both the writer and the CPU hog having the same priority", Colour::Blue.paint(to_write.to_string()));
+            println!(
+                "Ok, now let's write {} integers with both the writer and the CPU hog having the \
+                 same priority",
+                Colour::Blue.paint(to_write.to_string())
+            );
             let dur = static_writer(to_write, 1000, cpuhog_tq).await;
-            println!("Finished writing in {}", Colour::Green.paint(format!("{:#.0?}", dur)));
-            println!("This was using {} shares, and short of reducing the priority of the CPU hog. {}",
-                Colour::Green.paint("1000"), Style::new().bold().paint("This is as fast as we can do!"));
-            println!("With {} shares, this would have taken approximately {}", Colour::Green.paint("100"), Colour::Green.paint(format!("{:#.1?}", dur * 10)));
-            println!("With {} shares, this would have taken approximately {}. {}.", Colour::Green.paint("1"),
-                     Colour::Green.paint(format!("{:#.1?}", dur * 1000)), Style::new().bold().paint("Can't go any slower than that!"));
+            println!(
+                "Finished writing in {}",
+                Colour::Green.paint(format!("{:#.0?}", dur))
+            );
+            println!(
+                "This was using {} shares, and short of reducing the priority of the CPU hog. {}",
+                Colour::Green.paint("1000"),
+                Style::new().bold().paint("This is as fast as we can do!")
+            );
+            println!(
+                "With {} shares, this would have taken approximately {}",
+                Colour::Green.paint("100"),
+                Colour::Green.paint(format!("{:#.1?}", dur * 10))
+            );
+            println!(
+                "With {} shares, this would have taken approximately {}. {}.",
+                Colour::Green.paint("1"),
+                Colour::Green.paint(format!("{:#.1?}", dur * 1000)),
+                Style::new().bold().paint("Can't go any slower than that!")
+            );
 
-            println!("\n\nLet's try the controlled process. How long would you like it to take? (seconds)");
-            println!("Keep in mind that very short processes will be inherently unstable because of the time the controller needs to adapt");
+            println!(
+                "\n\nLet's try the controlled process. How long would you like it to take? \
+                 (seconds)"
+            );
+            println!(
+                "Keep in mind that very short processes will be inherently unstable because of \
+                 the time the controller needs to adapt"
+            );
             let mut duration = read_int().await.unwrap();
 
             loop {
@@ -191,16 +235,23 @@ fn main() {
                 let deadline = DeadlineQueue::new("example", Duration::from_millis(250));
                 let test = IntWriter::new(to_write, Duration::from_secs(duration as u64));
                 let dur = deadline.push_work(test).await.unwrap();
-                println!("Finished writing in {}", Colour::Green.paint(format!("{:#.2?}", dur)));
+                println!(
+                    "Finished writing in {}",
+                    Colour::Green.paint(format!("{:#.2?}", dur))
+                );
                 stop.set(true);
                 hog.await.unwrap();
-                println!("If you want to try again tell me how long it should take this time, or press some non-number to exit");
+                println!(
+                    "If you want to try again tell me how long it should take this time, or press \
+                     some non-number to exit"
+                );
                 duration = match read_int().await {
                     Ok(num) => num,
                     Err(_) => break,
                 }
             }
-        }).unwrap();
+        })
+        .unwrap();
 
     handle.join().unwrap();
 }

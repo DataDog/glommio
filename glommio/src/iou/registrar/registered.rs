@@ -1,27 +1,31 @@
-use std::io;
-use std::ops::*;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::{
+    io,
+    ops::*,
+    os::unix::io::{AsRawFd, RawFd},
+};
 
-use crate::iou::sqe::SQE;
-use crate::uring_sys;
+use crate::{iou::sqe::SQE, uring_sys};
 
 pub const PLACEHOLDER_FD: RawFd = -1;
 
 /// A member of the kernel's registered fileset.
 ///
-/// Valid `RegisteredFd`s can be obtained through a [`Registrar`](crate::registrar::Registrar).
+/// Valid `RegisteredFd`s can be obtained through a
+/// [`Registrar`](crate::registrar::Registrar).
 ///
-/// Registered files handle kernel fileset indexing behind the scenes and can often be used in place
-/// of raw file descriptors. Not all IO operations support registered files.
+/// Registered files handle kernel fileset indexing behind the scenes and can
+/// often be used in place of raw file descriptors. Not all IO operations
+/// support registered files.
 ///
-/// Submission event prep methods on `RegisteredFd` will ensure that the submission event's
-/// `SubmissionFlags::FIXED_FILE` flag is properly set.
+/// Submission event prep methods on `RegisteredFd` will ensure that the
+/// submission event's `SubmissionFlags::FIXED_FILE` flag is properly set.
 pub type RegisteredFd = Registered<RawFd>;
 pub type RegisteredBuf = Registered<Box<[u8]>>;
 pub type RegisteredBufRef<'a> = Registered<&'a [u8]>;
 pub type RegisteredBufMut<'a> = Registered<&'a mut [u8]>;
 
-/// An object registered with an io-uring instance through a [`Registrar`](crate::Registrar).
+/// An object registered with an io-uring instance through a
+/// [`Registrar`](crate::Registrar).
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Registered<T> {
     data: T,
@@ -177,8 +181,9 @@ impl DerefMut for RegisteredBufMut<'_> {
 }
 /// A file descriptor that can be used to prepare SQEs.
 ///
-/// The standard library's [`RawFd`] type implements this trait, but so does [`RegisteredFd`], a
-/// type which is returned when a user pre-registers file descriptors with an io-uring instance.
+/// The standard library's [`RawFd`] type implements this trait, but so does
+/// [`RegisteredFd`], a type which is returned when a user pre-registers file
+/// descriptors with an io-uring instance.
 pub trait UringFd {
     fn as_raw_fd(&self) -> RawFd;
     fn update_sqe(&self, sqe: &mut SQE<'_>);

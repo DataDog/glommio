@@ -1,24 +1,23 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 //! Async executor.
 //!
-//! This crate offers two kinds of executors: single-threaded and multi-threaded.
+//! This crate offers two kinds of executors: single-threaded and
+//! multi-threaded.
 //!
 //! # Examples
 //!
 //! Run four single-threaded executors concurrently:
 //!
 //! ```
-//! use glommio::{LocalExecutor, LocalExecutorBuilder};
-//! use glommio::timer::Timer;
+//! use glommio::{timer::Timer, LocalExecutor, LocalExecutorBuilder};
 //!
 //! for i in 0..4 {
 //!     std::thread::spawn(move || {
-//!         let builder = LocalExecutorBuilder::new()
-//!                                             .pin_to_cpu(i);
+//!         let builder = LocalExecutorBuilder::new().pin_to_cpu(i);
 //!         let local_ex = builder.make().expect("failed to spawn local executor");
 //!         local_ex.run(async {
 //!             Timer::new(std::time::Duration::from_millis(100)).await;
@@ -30,28 +29,33 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
-use std::cell::RefCell;
-use std::collections::hash_map::Entry;
-use std::collections::BinaryHeap;
-use std::future::Future;
-use std::io;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::thread::{Builder, JoinHandle};
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    collections::{hash_map::Entry, BinaryHeap},
+    future::Future,
+    io,
+    pin::Pin,
+    rc::Rc,
+    sync::Arc,
+    task::{Context, Poll},
+    thread::{Builder, JoinHandle},
+    time::{Duration, Instant},
+};
 
 use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
-use crate::multitask;
-use crate::parking;
-use crate::sys;
-use crate::task::{self, waker_fn::waker_fn};
-use crate::GlommioError;
-use crate::{IoRequirements, Latency};
-use crate::{Reactor, Shares};
+use crate::{
+    multitask,
+    parking,
+    sys,
+    task::{self, waker_fn::waker_fn},
+    GlommioError,
+    IoRequirements,
+    Latency,
+    Reactor,
+    Shares,
+};
 use ahash::AHashMap;
 
 /// Result type alias that removes the need to specify a type parameter
@@ -185,10 +189,11 @@ fn bind_to_cpu(cpu: usize) -> Result<()> {
 }
 
 // Dealing with references would imply getting an Rc, RefCells, and all of that
-// Stats should be copied unfrequently, and if you have enough stats to fill a Kb of data from a
-// single source, maybe you should rethink your life choices.
+// Stats should be copied unfrequently, and if you have enough stats to fill a
+// Kb of data from a single source, maybe you should rethink your life choices.
 #[derive(Debug, Copy, Clone)]
-/// Allows information about the current state of this executor to be consumed by applications.
+/// Allows information about the current state of this executor to be consumed
+/// by applications.
 pub struct ExecutorStats {
     total_runtime: Duration,
     scheduler_runs: u64,
@@ -206,16 +211,18 @@ impl ExecutorStats {
 
     /// The total amount of runtime in this executor so far.
     ///
-    /// This is especially important for spinning executors, since the amount of CPU time
-    /// you will see in the operating system will be a far cry from the CPU time it actually
-    /// spent executing. Sleeping or Spinning are not accounted here
+    /// This is especially important for spinning executors, since the amount of
+    /// CPU time you will see in the operating system will be a far cry from
+    /// the CPU time it actually spent executing. Sleeping or Spinning are
+    /// not accounted here
     pub fn total_runtime(&self) -> Duration {
         self.total_runtime
     }
 
-    /// Returns the amount of times the scheduler loop was called. Glommio scheduler selects a task
-    /// queue to run and runs many tasks in that task queue. This number corresponds to the amount
-    /// of times was called upon to select a new queue.
+    /// Returns the amount of times the scheduler loop was called. Glommio
+    /// scheduler selects a task queue to run and runs many tasks in that
+    /// task queue. This number corresponds to the amount of times was
+    /// called upon to select a new queue.
     pub fn scheduler_runs(&self) -> u64 {
         self.scheduler_runs
     }
@@ -227,8 +234,8 @@ impl ExecutorStats {
 }
 
 #[derive(Debug, Copy, Clone)]
-/// Allows information about the current state of a particular task queue to be consumed
-/// by applications.
+/// Allows information about the current state of a particular task queue to be
+/// consumed by applications.
 pub struct TaskQueueStats {
     index: usize,
     // so we can easily produce a handle
@@ -254,21 +261,23 @@ impl TaskQueueStats {
 
     /// Returns the current number of shares in this task queue.
     ///
-    /// If the task queue is configured to use static shares this will never change.
-    /// If the task queue is configured to use dynamic shares, this returns a sample
-    /// of the shares values the last time the scheduler ran.
+    /// If the task queue is configured to use static shares this will never
+    /// change. If the task queue is configured to use dynamic shares, this
+    /// returns a sample of the shares values the last time the scheduler
+    /// ran.
     pub fn current_shares(&self) -> usize {
         ((1u64 << 22) / self.reciprocal_shares) as usize
     }
 
-    /// Returns the accumulated runtime this task queue had received since the beginning
-    /// of its execution
+    /// Returns the accumulated runtime this task queue had received since the
+    /// beginning of its execution
     pub fn runtime(&self) -> Duration {
         self.runtime
     }
 
-    /// Returns the number of times this queue was selected to be executed. In conjunction with the
-    /// runtime, you can extract an average of the amount of time this queue tends to runs for
+    /// Returns the number of times this queue was selected to be executed. In
+    /// conjunction with the runtime, you can extract an average of the
+    /// amount of time this queue tends to runs for
     pub fn queue_selected(&self) -> u64 {
         self.queue_selected
     }
@@ -326,20 +335,21 @@ impl ExecutorQueues {
     }
 }
 
-/// [`LocalExecutor`] factory, which can be used in order to configure the properties of a new
-/// [`LocalExecutor`].
+/// [`LocalExecutor`] factory, which can be used in order to configure the
+/// properties of a new [`LocalExecutor`].
 ///
 /// Methods can be chained on it in order to configure it.
 ///
-/// The [`spawn`] method will take ownership of the builder and create an `Result` to the
-/// [`LocalExecutor`] handle with the given configuration.
+/// The [`spawn`] method will take ownership of the builder and create an
+/// `Result` to the [`LocalExecutor`] handle with the given configuration.
 ///
-/// The [`LocalExecutor::default`] free function uses a Builder with default configuration and
-/// unwraps its return value.
+/// The [`LocalExecutor::default`] free function uses a Builder with default
+/// configuration and unwraps its return value.
 ///
-/// You may want to use [`LocalExecutorBuilder::spawn`] instead of [`LocalExecutor::default`],
-/// when you want to recover from a failure to launch a thread. The [`LocalExecutor::default`]
-/// function will panic where the Builder method will return a `io::Result`.
+/// You may want to use [`LocalExecutorBuilder::spawn`] instead of
+/// [`LocalExecutor::default`], when you want to recover from a failure to
+/// launch a thread. The [`LocalExecutor::default`] function will panic where
+/// the Builder method will return a `io::Result`.
 ///
 /// # Examples
 ///
@@ -354,7 +364,8 @@ impl ExecutorQueues {
 ///
 /// [`LocalExecutor::default`]: struct.LocalExecutor.html#method.default
 ///
-/// [`LocalExecutorBuilder::spawn`]: struct.LocalExecutorBuilder.html#method.spawn
+/// [`LocalExecutorBuilder::spawn`]:
+/// struct.LocalExecutorBuilder.html#method.spawn
 ///
 /// [`spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
@@ -363,19 +374,21 @@ pub struct LocalExecutorBuilder {
     binding: Option<usize>,
     /// Spin for duration before parking a reactor
     spin_before_park: Option<Duration>,
-    /// A name for the thread-to-be (if any), for identification in panic messages
+    /// A name for the thread-to-be (if any), for identification in panic
+    /// messages
     name: String,
-    /// Amount of memory to reserve for storage I/O. This will be preallocated and registered
-    /// with io_uring. It is still possible to use more than that but it will come from the
-    /// standard allocator and performance will suffer. Defaults to 10MB.
+    /// Amount of memory to reserve for storage I/O. This will be preallocated
+    /// and registered with io_uring. It is still possible to use more than
+    /// that but it will come from the standard allocator and performance
+    /// will suffer. Defaults to 10MB.
     io_memory: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
 }
 
 impl LocalExecutorBuilder {
-    /// Generates the base configuration for spawning a [`LocalExecutor`], from which configuration
-    /// methods can be chained.
+    /// Generates the base configuration for spawning a [`LocalExecutor`], from
+    /// which configuration methods can be chained.
     pub fn new() -> LocalExecutorBuilder {
         LocalExecutorBuilder {
             binding: None,
@@ -405,12 +418,13 @@ impl LocalExecutorBuilder {
         self
     }
 
-    /// Amount of memory to reserve for storage I/O. This will be preallocated and registered
-    /// with io_uring. It is still possible to use more than that but it will come from the
-    /// standard allocator and performance will suffer.
+    /// Amount of memory to reserve for storage I/O. This will be preallocated
+    /// and registered with io_uring. It is still possible to use more than
+    /// that but it will come from the standard allocator and performance
+    /// will suffer.
     ///
-    /// The system will always try to allocate at least 64kB for I/O memory, and the default
-    /// is 10MB.
+    /// The system will always try to allocate at least 64kB for I/O memory, and
+    /// the default is 10MB.
     pub fn io_memory(mut self, io_memory: usize) -> LocalExecutorBuilder {
         self.io_memory = io_memory;
         self
@@ -418,9 +432,10 @@ impl LocalExecutorBuilder {
 
     /// How often [`need_preempt`] will return true by default.
     ///
-    /// Lower values mean task queues will switch execution more often, which can help latency
-    /// but harm throughput. When individual task queues are present, this value can still be
-    /// dynamically lowered through the [`Latency`] setting.
+    /// Lower values mean task queues will switch execution more often, which
+    /// can help latency but harm throughput. When individual task queues
+    /// are present, this value can still be dynamically lowered through the
+    /// [`Latency`] setting.
     ///
     /// Default is 100ms.
     ///
@@ -431,8 +446,8 @@ impl LocalExecutorBuilder {
         self
     }
 
-    /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and returns a
-    /// [`Result`](crate::Result) to the executor.
+    /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and
+    /// returns a [`Result`](crate::Result) to the executor.
     /// # Examples
     ///
     /// ```
@@ -455,29 +470,34 @@ impl LocalExecutorBuilder {
 
     /// Spawn a new [`LocalExecutor`] in a new thread with a given task.
     ///
-    /// This `spawn` function is an ergonomic shortcut for calling `std::thread::spawn`,
-    /// [`LocalExecutorBuilder::make`] in the spawned thread, and then [`LocalExecutor::run`]. This
-    /// `spawn` function takes ownership of a [`LocalExecutorBuilder`] with the configuration for
-    /// the [`LocalExecutor`], spawns that executor in a new thread, and starts the task given by
-    /// `fut_gen()` in that thread.
+    /// This `spawn` function is an ergonomic shortcut for calling
+    /// `std::thread::spawn`, [`LocalExecutorBuilder::make`] in the spawned
+    /// thread, and then [`LocalExecutor::run`]. This `spawn` function takes
+    /// ownership of a [`LocalExecutorBuilder`] with the configuration for
+    /// the [`LocalExecutor`], spawns that executor in a new thread, and starts
+    /// the task given by `fut_gen()` in that thread.
     ///
-    /// The indirection of `fut_gen()` here (instead of taking a `Future`) allows for futures that
-    /// may not be `Send`-able once started. As this executor is thread-local, it can guarantee that
-    /// the futures will not be Sent once started.
+    /// The indirection of `fut_gen()` here (instead of taking a `Future`)
+    /// allows for futures that may not be `Send`-able once started. As this
+    /// executor is thread-local, it can guarantee that the futures will not
+    /// be Sent once started.
     ///
     /// # Panics
     ///
-    /// This function panics if creating the thread or the executor fails. If you need more
-    /// fine-grained error handling consider initializing those entities manually.
+    /// This function panics if creating the thread or the executor fails. If
+    /// you need more fine-grained error handling consider initializing
+    /// those entities manually.
     ///
     /// # Example
     ///
     /// ```
     /// use glommio::LocalExecutorBuilder;
     ///
-    /// let handle = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     println!("hello");
-    /// }).unwrap();
+    /// let handle = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         println!("hello");
+    ///     })
+    ///     .unwrap();
     ///
     /// handle.join().unwrap();
     /// ```
@@ -486,10 +506,12 @@ impl LocalExecutorBuilder {
     ///
     /// [`LocalExecutorBuilder`]: struct.LocalExecutorBuilder.html
     ///
-    /// [`LocalExecutorBuilder::make`]: struct.LocalExecutorBuilder.html#method.make
+    /// [`LocalExecutorBuilder::make`]:
+    /// struct.LocalExecutorBuilder.html#method.make
     ///
     /// [`LocalExecutor::run`]:struct.LocalExecutor.html#method.run
-    #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then join() to keep it alive"]
+    #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then \
+                  join() to keep it alive"]
     pub fn spawn<G, F, T>(self, fut_gen: G) -> Result<JoinHandle<()>>
     where
         G: FnOnce() -> F + std::marker::Send + 'static,
@@ -545,12 +567,14 @@ pub(crate) fn maybe_activate(tq: Rc<RefCell<TaskQueue>>) {
 /// });
 /// ```
 ///
-/// In many cases, use of [`LocalExecutorBuilder`] will provide more configuration options and more
-/// ergonomic methods. See [`LocalExecutorBuilder::spawn`] for examples.
+/// In many cases, use of [`LocalExecutorBuilder`] will provide more
+/// configuration options and more ergonomic methods. See
+/// [`LocalExecutorBuilder::spawn`] for examples.
 ///
 /// [`LocalExecutorBuilder`]: struct.LocalExecutorBuilder.html
 ///
-/// [`LocalExecutorBuilder::spawn`]: struct.LocalExecutorBuilder.html#method.spawn
+/// [`LocalExecutorBuilder::spawn`]:
+/// struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
 pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
@@ -853,15 +877,17 @@ impl LocalExecutor {
     }
 }
 
-/// Spawns a single-threaded executor with default settings on the current thread.
+/// Spawns a single-threaded executor with default settings on the current
+/// thread.
 ///
-/// This will create a executor using default parameters of `LocalExecutorBuilder`, if you
-/// want to further customize it, use this API instead.
+/// This will create a executor using default parameters of
+/// `LocalExecutorBuilder`, if you want to further customize it, use this API
+/// instead.
 ///
 /// # Panics
 ///
-/// Panics if creating the executor fails; use `LocalExecutorBuilder::make` to recover
-/// from such errors.
+/// Panics if creating the executor fails; use `LocalExecutorBuilder::make` to
+/// recover from such errors.
 ///
 /// # Examples
 ///
@@ -878,12 +904,15 @@ impl Default for LocalExecutor {
 
 /// A spawned future.
 ///
-/// Tasks are also futures themselves and yield the output of the spawned future.
+/// Tasks are also futures themselves and yield the output of the spawned
+/// future.
 ///
-/// When a task is dropped, its gets canceled and won't be polled again. To cancel a task a bit
-/// more gracefully and wait until it stops running, use the [`cancel()`][`Task::cancel()`] method.
+/// When a task is dropped, its gets canceled and won't be polled again. To
+/// cancel a task a bit more gracefully and wait until it stops running, use the
+/// [`cancel()`][`Task::cancel()`] method.
 ///
-/// Tasks that panic get immediately canceled. Awaiting a canceled task also causes a panic.
+/// Tasks that panic get immediately canceled. Awaiting a canceled task also
+/// causes a panic.
 ///
 /// # Examples
 ///
@@ -931,9 +960,9 @@ impl<T> Task<T> {
         LOCAL_EX.with(|local_ex| local_ex.spawn(future))
     }
 
-    /// Unconditionally yields the current task, moving it back to the end of its queue.
-    /// It is not possible to yield futures that are not spawn'd, as they don't have a task
-    /// associated with them.
+    /// Unconditionally yields the current task, moving it back to the end of
+    /// its queue. It is not possible to yield futures that are not spawn'd,
+    /// as they don't have a task associated with them.
     pub async fn later() {
         Self::cond_yield(|_| true).await
     }
@@ -956,56 +985,60 @@ impl<T> Task<T> {
         }
     }
 
-    /// checks if this task has ran for too long and need to be preempted. This is useful for
-    /// situations where we can't call .await, for instance, if a [`RefMut`] is held. If this
-    /// tests true, then the user is responsible for making any preparations necessary for
-    /// calling .await and doing it themselves.
+    /// checks if this task has ran for too long and need to be preempted. This
+    /// is useful for situations where we can't call .await, for instance,
+    /// if a [`RefMut`] is held. If this tests true, then the user is
+    /// responsible for making any preparations necessary for calling .await
+    /// and doing it themselves.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutorBuilder, Local};
+    /// use glommio::{Local, LocalExecutorBuilder};
     ///
-    /// let ex = LocalExecutorBuilder::new().spawn(|| async {
-    ///     loop {
-    ///         if Local::need_preempt() {
-    ///             break;
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async {
+    ///         loop {
+    ///             if Local::need_preempt() {
+    ///                 break;
+    ///             }
     ///         }
-    ///     }
-    /// }).unwrap();
+    ///     })
+    ///     .unwrap();
     ///
     /// ex.join().unwrap();
     /// ```
     ///
     /// [`RefMut`]: https://doc.rust-lang.org/std/cell/struct.RefMut.html
     #[inline(always)]
-    // FIXME: This is a bit less efficient than it needs, because the scoped thread local key
-    // does lazy initialization. Every time we call into this, we are paying to test if this
-    // is initialized. This is what I got from objdump:
+    // FIXME: This is a bit less efficient than it needs, because the scoped thread
+    // local key does lazy initialization. Every time we call into this, we are
+    // paying to test if this is initialized. This is what I got from objdump:
     //
     // 0:    50                      push   %rax
     // 1:    ff 15 00 00 00 00       callq  *0x0(%rip)
     // 7:    48 85 c0                test   %rax,%rax
-    // a:    74 17                   je     23  <== will call into the initialization routine
-    // c:    48 8b 88 38 03 00 00    mov    0x338(%rax),%rcx <== address of the head
-    // 13:   48 8b 80 40 03 00 00    mov    0x340(%rax),%rax <== address of the tail
-    // 1a:   8b 00                   mov    (%rax),%eax
-    // 1c:   3b 01                   cmp    (%rcx),%eax <== need preempt
-    // 1e:   0f 95 c0                setne  %al
+    // a:    74 17                   je     23  <== will call into the
+    // initialization routine c:    48 8b 88 38 03 00 00    mov
+    // 0x338(%rax),%rcx <== address of the head 13:   48 8b 80 40 03 00 00
+    // mov    0x340(%rax),%rax <== address of the tail 1a:   8b 00
+    // mov    (%rax),%eax 1c:   3b 01                   cmp    (%rcx),%eax <==
+    // need preempt 1e:   0f 95 c0                setne  %al
     // 21:   59                      pop    %rcx
     // 22:   c3                      retq
     // 23    <== initialization stuff
     //
-    // Rust has a thread local feature that is under experimental so we can maybe switch to
-    // that someday.
+    // Rust has a thread local feature that is under experimental so we can maybe
+    // switch to that someday.
     //
-    // We will prefer to use the stable compiler and pay that unfortunate price for now.
+    // We will prefer to use the stable compiler and pay that unfortunate price for
+    // now.
     pub fn need_preempt() -> bool {
         LOCAL_EX.with(|local_ex| local_ex.need_preempt())
     }
 
-    /// Conditionally yields the current task, moving it back to the end of its queue, if the task
-    /// has run for too long
+    /// Conditionally yields the current task, moving it back to the end of its
+    /// queue, if the task has run for too long
     #[inline]
     pub async fn yield_if_needed() {
         Self::cond_yield(|local_ex| local_ex.need_preempt()).await;
@@ -1016,7 +1049,8 @@ impl<T> Task<T> {
         LOCAL_EX.with(|local_ex| local_ex.get_reactor())
     }
 
-    /// Spawns a task onto the current single-threaded executor, in a particular task queue
+    /// Spawns a task onto the current single-threaded executor, in a particular
+    /// task queue
     ///
     /// If called from a [`LocalExecutor`], the task is spawned on it.
     ///
@@ -1025,12 +1059,17 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Task, Shares, Local};
+    /// use glommio::{Local, LocalExecutor, Shares, Task};
     ///
     /// let local_ex = LocalExecutor::default();
     /// local_ex.run(async {
-    ///     let handle = Local::create_task_queue(Shares::default(), glommio::Latency::NotImportant, "test_queue");
-    ///     let task = Task::<usize>::local_into(async { 1 + 2 }, handle).expect("failed to spawn task");
+    ///     let handle = Local::create_task_queue(
+    ///         Shares::default(),
+    ///         glommio::Latency::NotImportant,
+    ///         "test_queue",
+    ///     );
+    ///     let task =
+    ///         Task::<usize>::local_into(async { 1 + 2 }, handle).expect("failed to spawn task");
     ///     assert_eq!(task.await, 3);
     /// })
     /// ```
@@ -1073,19 +1112,18 @@ impl<T> Task<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Local};
-    /// use glommio::timer::Timer;
     /// use futures_lite::future;
+    /// use glommio::{timer::Timer, Local, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
-    ///
     ///     Local::local(async {
     ///         loop {
     ///             println!("I'm a background task looping forever.");
     ///             Local::later().await;
     ///         }
-    ///     }).detach();
+    ///     })
+    ///     .detach();
     ///     Timer::new(std::time::Duration::from_micros(100)).await;
     /// })
     /// ```
@@ -1093,26 +1131,35 @@ impl<T> Task<T> {
         self.0.detach()
     }
 
-    /// Creates a new task queue, with a given latency hint and the provided name
+    /// Creates a new task queue, with a given latency hint and the provided
+    /// name
     ///
-    /// Each task queue is scheduled based on the [`Shares`] and [`Latency`] system, and tasks
-    /// within a queue will be scheduled in serial.
+    /// Each task queue is scheduled based on the [`Shares`] and [`Latency`]
+    /// system, and tasks within a queue will be scheduled in serial.
     ///
-    /// Returns an opaque handle that can later be used to launch tasks into that queue with
-    /// [`local_into`].
+    /// Returns an opaque handle that can later be used to launch tasks into
+    /// that queue with [`local_into`].
     ///
     /// # Examples
     ///
     /// ```
+    /// use glommio::{Latency, Local, LocalExecutor, Shares};
     /// use std::time::Duration;
-    /// use glommio::{LocalExecutor, Latency, Shares, Local};
     ///
     /// let local_ex = LocalExecutor::default();
     /// local_ex.run(async move {
-    ///     let task_queue = Local::create_task_queue(Shares::default(), Latency::Matters(Duration::from_secs(1)), "my_tq");
-    ///     let task = Local::local_into(async {
-    ///         println!("Hello world");
-    ///     }, task_queue).expect("failed to spawn task");
+    ///     let task_queue = Local::create_task_queue(
+    ///         Shares::default(),
+    ///         Latency::Matters(Duration::from_secs(1)),
+    ///         "my_tq",
+    ///     );
+    ///     let task = Local::local_into(
+    ///         async {
+    ///             println!("Hello world");
+    ///         },
+    ///         task_queue,
+    ///     )
+    ///     .expect("failed to spawn task");
     /// });
     /// ```
     ///
@@ -1123,25 +1170,36 @@ impl<T> Task<T> {
         LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
     }
 
-    /// Returns the [`TaskQueueHandle`] that represents the TaskQueue currently running.
-    /// This can be passed directly into [`Task::local_into`]. This must be run from a task that
-    /// was generated through [`Task::local`] or [`Task::local_into`]
+    /// Returns the [`TaskQueueHandle`] that represents the TaskQueue currently
+    /// running. This can be passed directly into [`Task::local_into`]. This
+    /// must be run from a task that was generated through [`Task::local`]
+    /// or [`Task::local_into`]
     ///
     /// # Examples
     /// ```
-    /// use glommio::{LocalExecutor, Local, Latency, LocalExecutorBuilder, Shares};
+    /// use glommio::{Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares};
     ///
-    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     let original_tq = Local::current_task_queue();
-    ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         let original_tq = Local::current_task_queue();
+    ///         let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
     ///
-    ///     let task = Local::local_into(async move {
-    ///         Local::local_into(async move {
-    ///             assert_eq!(Local::current_task_queue(), original_tq);
-    ///         }, original_tq).unwrap();
-    ///     }, new_tq).unwrap();
-    ///     task.await;
-    /// }).unwrap();
+    ///         let task = Local::local_into(
+    ///             async move {
+    ///                 Local::local_into(
+    ///                     async move {
+    ///                         assert_eq!(Local::current_task_queue(), original_tq);
+    ///                     },
+    ///                     original_tq,
+    ///                 )
+    ///                 .unwrap();
+    ///             },
+    ///             new_tq,
+    ///         )
+    ///         .unwrap();
+    ///         task.await;
+    ///     })
+    ///     .unwrap();
     ///
     /// ex.join().unwrap();
     /// ```
@@ -1149,17 +1207,23 @@ impl<T> Task<T> {
         LOCAL_EX.with(|local_ex| local_ex.current_task_queue())
     }
 
-    /// Returns a [`Result`] with its `Ok` value wrapping a [`TaskQueueStats`] or
-    /// a [`GlommioError`] of type `[QueueErrorKind`] if there is no task queue with this handle
+    /// Returns a [`Result`] with its `Ok` value wrapping a [`TaskQueueStats`]
+    /// or a [`GlommioError`] of type `[QueueErrorKind`] if there is no task
+    /// queue with this handle
     ///
     /// # Examples
     /// ```
-    /// use glommio::{Local, Latency, LocalExecutorBuilder, Shares};
+    /// use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
     ///
-    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
-    ///     println!("Stats for test: {:?}", Local::task_queue_stats(new_tq).unwrap());
-    /// }).unwrap();
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         println!(
+    ///             "Stats for test: {:?}",
+    ///             Local::task_queue_stats(new_tq).unwrap()
+    ///         );
+    ///     })
+    ///     .unwrap();
     ///
     /// ex.join().unwrap();
     /// ```
@@ -1175,21 +1239,24 @@ impl<T> Task<T> {
         })
     }
 
-    /// Returns a collection of [`TaskQueueStats`] with information about all task queues
-    /// in the system
+    /// Returns a collection of [`TaskQueueStats`] with information about all
+    /// task queues in the system
     ///
-    /// The collection can be anything that implements [`Extend`] and it is initially passed
-    /// by the user so they can control how allocations are done.
+    /// The collection can be anything that implements [`Extend`] and it is
+    /// initially passed by the user so they can control how allocations are
+    /// done.
     ///
     /// # Examples
     /// ```
-    /// use glommio::{Local, Latency, LocalExecutorBuilder, Shares};
+    /// use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
     ///
-    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
-    ///     let v = Vec::new();
-    ///     println!("Stats for all queues: {:?}", Local::all_task_queue_stats(v));
-    /// }).unwrap();
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         let v = Vec::new();
+    ///         println!("Stats for all queues: {:?}", Local::all_task_queue_stats(v));
+    ///     })
+    ///     .unwrap();
     ///
     /// ex.join().unwrap();
     /// ```
@@ -1215,9 +1282,11 @@ impl<T> Task<T> {
     /// ```
     /// use glommio::{Local, LocalExecutorBuilder};
     ///
-    /// let ex = LocalExecutorBuilder::new().spawn(|| async move {
-    ///     println!("Stats for executor: {:?}", Local::executor_stats());
-    /// }).unwrap();
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         println!("Stats for executor: {:?}", Local::executor_stats());
+    ///     })
+    ///     .unwrap();
     ///
     /// ex.join().unwrap();
     /// ```
@@ -1229,17 +1298,18 @@ impl<T> Task<T> {
 
     /// Cancels the task and waits for it to stop running.
     ///
-    /// Returns the task's output if it was completed just before it got canceled, or [`None`] if
-    /// it didn't complete.
+    /// Returns the task's output if it was completed just before it got
+    /// canceled, or [`None`] if it didn't complete.
     ///
-    /// While it's possible to simply drop the [`Task`] to cancel it, this is a cleaner way of
-    /// canceling because it also waits for the task to stop running.
+    /// While it's possible to simply drop the [`Task`] to cancel it, this is a
+    /// cleaner way of canceling because it also waits for the task to stop
+    /// running.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::{LocalExecutor, Local};
     /// use futures_lite::future;
+    /// use glommio::{Local, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     ///
@@ -1270,8 +1340,12 @@ impl<T> Future for Task<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::timer::{self, Timer};
-    use crate::{enclose, Local, SharesManager};
+    use crate::{
+        enclose,
+        timer::{self, Timer},
+        Local,
+        SharesManager,
+    };
     use core::mem::MaybeUninit;
     use futures::join;
     use std::cell::Cell;
@@ -1600,8 +1674,8 @@ mod test {
         );
     }
 
-    // Spin for 2ms and then yield. How many shares we have should control how many quantas
-    // we manage to execute.
+    // Spin for 2ms and then yield. How many shares we have should control how many
+    // quantas we manage to execute.
     async fn work_quanta() {
         let now = Instant::now();
         while now.elapsed().as_millis() < 2 {}
@@ -1759,10 +1833,11 @@ mod test {
             .unwrap();
 
             join!(t1, t2);
-            // Keep this very simple because every new processor, every load condition, will yield
-            // different results. All we want to validate is: for a large part of the first two
-            // seconds shares were very low, we should have received very low ratio. On the second
-            // half we should have accumulated much more. Real numbers are likely much higher than
+            // Keep this very simple because every new processor, every load condition, will
+            // yield different results. All we want to validate is: for a large
+            // part of the first two seconds shares were very low, we should
+            // have received very low ratio. On the second half we should have
+            // accumulated much more. Real numbers are likely much higher than
             // the targets, but those targets are safe.
             let ratios: Vec<f64> = tq1_count
                 .borrow()

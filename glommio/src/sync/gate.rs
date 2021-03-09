@@ -1,10 +1,18 @@
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use futures_lite::Future;
 
-use crate::channels::local_channel::{self, LocalSender};
-use crate::{GlommioError, Local, ResourceType, Task, TaskQueueHandle};
+use crate::{
+    channels::local_channel::{self, LocalSender},
+    GlommioError,
+    Local,
+    ResourceType,
+    Task,
+    TaskQueueHandle,
+};
 
 #[derive(Debug)]
 enum State {

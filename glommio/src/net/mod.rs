@@ -1,13 +1,12 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 //! This module provide glommio's networking support.
 use crate::sys;
 use nix::sys::socket::MsgFlags;
-use std::io;
-use std::os::unix::io::RawFd;
+use std::{io, os::unix::io::RawFd};
 
 fn yolo_accept(fd: RawFd) -> Option<io::Result<RawFd>> {
     let flags =
@@ -97,6 +96,8 @@ mod stream;
 mod tcp_socket;
 mod udp_socket;
 mod unix;
-pub use self::tcp_socket::{AcceptedTcpStream, TcpListener, TcpStream};
-pub use self::udp_socket::UdpSocket;
-pub use self::unix::{AcceptedUnixStream, UnixDatagram, UnixListener, UnixStream};
+pub use self::{
+    tcp_socket::{AcceptedTcpStream, TcpListener, TcpStream},
+    udp_socket::UdpSocket,
+    unix::{AcceptedUnixStream, UnixDatagram, UnixListener, UnixStream},
+};

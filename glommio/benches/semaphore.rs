@@ -1,9 +1,5 @@
-use glommio::enclose;
-use glommio::prelude::*;
-use glommio::sync::Semaphore;
-use std::cell::Cell;
-use std::rc::Rc;
-use std::time::Instant;
+use glommio::{enclose, prelude::*, sync::Semaphore};
+use std::{cell::Cell, rc::Rc, time::Instant};
 
 fn main() {
     let local_ex = LocalExecutorBuilder::new()

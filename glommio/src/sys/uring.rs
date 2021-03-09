@@ -1,37 +1,53 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use alloc::alloc::Layout;
 use log::warn;
-use nix::fcntl::{FallocateFlags, OFlag};
-use nix::poll::PollFlags;
-use rlimit::Resource;
-use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::collections::VecDeque;
-use std::ffi::CStr;
-use std::fmt;
-use std::io;
-use std::io::{Error, ErrorKind};
-use std::os::unix::io::RawFd;
-use std::ptr;
-use std::rc::Rc;
-use std::task::Waker;
-use std::time::Duration;
-
-use crate::free_list::{FreeList, Idx};
-use crate::iou;
-use crate::iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, TimeoutFlags};
-use crate::sys::dma_buffer::{BufferStorage, DmaBuffer};
-use crate::sys::{
-    self, DirectIO, IOBuffer, InnerSource, LinkStatus, PollableStatus, Source, SourceType,
+use nix::{
+    fcntl::{FallocateFlags, OFlag},
+    poll::PollFlags,
 };
-use crate::uring_sys;
-use crate::{IoRequirements, Latency};
+use rlimit::Resource;
+use std::{
+    cell::{Cell, Ref, RefCell, RefMut},
+    collections::VecDeque,
+    ffi::CStr,
+    fmt,
+    io,
+    io::{Error, ErrorKind},
+    os::unix::io::RawFd,
+    ptr,
+    rc::Rc,
+    task::Waker,
+    time::Duration,
+};
+
+use crate::{
+    free_list::{FreeList, Idx},
+    iou,
+    iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, TimeoutFlags},
+    sys::{
+        self,
+        dma_buffer::{BufferStorage, DmaBuffer},
+        DirectIO,
+        IOBuffer,
+        InnerSource,
+        LinkStatus,
+        PollableStatus,
+        Source,
+        SourceType,
+    },
+    uring_sys,
+    IoRequirements,
+    Latency,
+};
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
-use nix::sys::socket::{MsgFlags, SockAddr, SockFlag};
-use nix::sys::stat::Mode as OpenMode;
+use nix::sys::{
+    socket::{MsgFlags, SockAddr, SockFlag},
+    stat::Mode as OpenMode,
+};
 use std::sync::Arc;
 
 use crate::uring_sys::IoRingOp;
@@ -190,7 +206,10 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
     unsafe {
         let probe = uring_sys::io_uring_get_probe();
         if probe.is_null() {
-            panic!("Failed to register a probe. The most likely reason is that your kernel witnessed Romulus killing Remus (too old!!)");
+            panic!(
+                "Failed to register a probe. The most likely reason is that your kernel witnessed \
+                 Romulus killing Remus (too old!!)"
+            );
         }
 
         let mut ret = true;
@@ -199,7 +218,11 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
             let sup = uring_sys::io_uring_opcode_supported(probe, opint) > 0;
             ret &= sup;
             if !sup {
-                println!("Yo kernel is so old it was with Hannibal when he crossed the Alps! Missing {:?}", op);
+                println!(
+                    "Yo kernel is so old it was with Hannibal when he crossed the Alps! Missing \
+                     {:?}",
+                    op
+                );
             }
         }
         uring_sys::io_uring_free_probe(probe);
@@ -522,8 +545,9 @@ trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
     fn needs_kernel_enter(&self) -> bool;
-    // None if it wasn't possible to acquire an sqe. Some(true) if it was possible and there was
-    // something to dispatch. Some(false) if there was nothing to dispatch
+    // None if it wasn't possible to acquire an sqe. Some(true) if it was possible
+    // and there was something to dispatch. Some(false) if there was nothing to
+    // dispatch
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool>;
     fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
     fn name(&self) -> &'static str;
@@ -876,7 +900,8 @@ impl SleepableRing {
             }
             Some(res) => {
                 if self.install_eventfd(eventfd_src) {
-                    // Do not expect any failures reading from eventfd. This will panic if we failed.
+                    // Do not expect any failures reading from eventfd. This will panic if we
+                    // failed.
                     res.unwrap();
                     // Now must wait on the eventfd in case someone wants to wake us up.
                     // If we can't then we can't sleep and will just bail immediately
@@ -1219,8 +1244,8 @@ impl Reactor {
     }
 
     // io_uring can return EBUSY when the CQE queue is full and we try to push more
-    // requests. This is fine: we just need to make sure that we don't sleep and that we
-    // dont' failed rushed polls. So we just ignore this error
+    // requests. This is fine: we just need to make sure that we don't sleep and
+    // that we dont' failed rushed polls. So we just ignore this error
     fn busy_ok(x: std::io::Error) -> io::Result<usize> {
         match x.raw_os_error() {
             Some(libc::EBUSY) => Ok(0),
@@ -1231,11 +1256,11 @@ impl Reactor {
 
     // We want to go to sleep but we can only go to sleep in one of the rings,
     // as we only have one thread. There are more than one sleepable rings, so
-    // what we do is we take advantage of the fact that the ring's ring_fd is pollable
-    // and register a POLL_ADD event into the ring we will wait on.
+    // what we do is we take advantage of the fact that the ring's ring_fd is
+    // pollable and register a POLL_ADD event into the ring we will wait on.
     //
-    // We may not be able to register an SQE at this point, so we return an Error and
-    // will just not sleep.
+    // We may not be able to register an SQE at this point, so we return an Error
+    // and will just not sleep.
     fn link_rings_and_sleep(
         &self,
         ring: &mut SleepableRing,
@@ -1266,39 +1291,43 @@ impl Reactor {
         }
     }
 
-    // This function can be passed two timers. Because they play different roles we keep them
-    // separate instead of overloading the same parameter.
+    // This function can be passed two timers. Because they play different roles we
+    // keep them separate instead of overloading the same parameter.
     //
-    // * The first is the preempt timer. It is designed to take the current task queue out of the
-    //   cpu. If nothing else fires in the latency ring the preempt timer will, making need_preempt
-    //   return true. Currently we always install a preempt timer in the upper layers but from the
-    //   point of view of the io_uring implementation it is optional: it is perfectly valid not to
-    //   have one. Preempt timers are installed by Glommio executor runtime.
+    // * The first is the preempt timer. It is designed to take the current task
+    //   queue out of the cpu. If nothing else fires in the latency ring the preempt
+    //   timer will, making need_preempt return true. Currently we always install a
+    //   preempt timer in the upper layers but from the point of view of the
+    //   io_uring implementation it is optional: it is perfectly valid not to have
+    //   one. Preempt timers are installed by Glommio executor runtime.
     //
-    // * The second is the user timer. It is installed per a user request when the user creates a
-    //   Timer (or TimerAction).
+    // * The second is the user timer. It is installed per a user request when the
+    //   user creates a Timer (or TimerAction).
     //
-    // At some level, those are both just timers and can be coalesced. And they certainly are: if
-    // there is a user timer that needs to fire in 1ms and we want the preempt_timer to also fire
-    // around 1ms, there is no need to register two timers. At the end of the day, all that matters
-    // is that the latency ring flares and that we leave the CPU. That is because unlike I/O, we
-    // don't have one Source per timer, and parking.rs just keeps them on a wheel and just tell us
-    // about what is the next expiration.
+    // At some level, those are both just timers and can be coalesced. And they
+    // certainly are: if there is a user timer that needs to fire in 1ms and we
+    // want the preempt_timer to also fire around 1ms, there is no need to
+    // register two timers. At the end of the day, all that matters is that the
+    // latency ring flares and that we leave the CPU. That is because unlike I/O, we
+    // don't have one Source per timer, and parking.rs just keeps them on a wheel
+    // and just tell us about what is the next expiration.
     //
-    // However they are also different. The main source of difference is sleep and wake behavior:
+    // However they are also different. The main source of difference is sleep and
+    // wake behavior:
     //
-    // * When there is no more work to do and we go to sleep, we do not want to register the
-    //   preempt timer: it is designed to fire periodically to take us out of the CPU and if
-    //   there is no task queue running, we don't want to wake up and spend power just for
-    //   that. However if there is a user timer that needs to fire in the future we must
-    //   register it. Otherwise we will sleep and never wake up.
+    // * When there is no more work to do and we go to sleep, we do not want to
+    //   register the preempt timer: it is designed to fire periodically to take us
+    //   out of the CPU and if there is no task queue running, we don't want to wake
+    //   up and spend power just for that. However if there is a user timer that
+    //   needs to fire in the future we must register it. Otherwise we will sleep
+    //   and never wake up.
     //
-    // * The user timer point of expiration never changes. So once we register it we don't need
-    //   to rearm it until it fires. But the preempt timer has to be rearmed every time. Moreover
-    //   it needs to give every task queue a fair shot at running. So it needs to be rearmed as
-    //   close as possible to the point where we *leave* this method. For instance: if we spin here
-    //   for 3ms and the preempt timer is 10ms that would leave the next task queue just 7ms to
-    //   run.
+    // * The user timer point of expiration never changes. So once we register it we
+    //   don't need to rearm it until it fires. But the preempt timer has to be
+    //   rearmed every time. Moreover it needs to give every task queue a fair shot
+    //   at running. So it needs to be rearmed as close as possible to the point
+    //   where we *leave* this method. For instance: if we spin here for 3ms and the
+    //   preempt timer is 10ms that would leave the next task queue just 7ms to run.
     pub(crate) fn wait<F>(
         &self,
         wakers: &mut Vec<Waker>,
@@ -1352,7 +1381,8 @@ impl Reactor {
             // that opened up room. If if did we bail on sleep and go process it.
             self.notifier.prepare_to_sleep();
             // See https://www.scylladb.com/2018/02/15/memory-barriers-seastar-linux/ for
-            // details. This translates to sys_membarrier() / MEMBARRIER_CMD_PRIVATE_EXPEDITED
+            // details. This translates to sys_membarrier() /
+            // MEMBARRIER_CMD_PRIVATE_EXPEDITED
             membarrier::heavy();
             if process_remote_channels(wakers) == 0 {
                 self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)
@@ -1380,8 +1410,8 @@ impl Reactor {
     }
 
     // RAII-close asynchronously files that were not closed explicitly.
-    // We can't do this through a Source, because the Source will be dropped when the
-    // file is dropped.
+    // We can't do this through a Source, because the Source will be dropped when
+    // the file is dropped.
     pub(crate) fn async_close(&self, fd: RawFd) {
         let q = self.main_ring.borrow_mut().submission_queue();
         let mut queue = q.borrow_mut();

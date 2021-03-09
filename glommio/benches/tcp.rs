@@ -1,13 +1,19 @@
-use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
-use futures_lite::stream::StreamExt;
-use glommio::enclose;
-use glommio::net::{TcpListener, TcpStream};
-use glommio::prelude::*;
-use glommio::Task;
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use futures_lite::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    stream::StreamExt,
+};
+use glommio::{
+    enclose,
+    net::{TcpListener, TcpStream},
+    prelude::*,
+    Task,
+};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 fn main() {
     let runs: u32 = 100_000;

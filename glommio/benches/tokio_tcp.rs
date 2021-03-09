@@ -1,12 +1,17 @@
 use enclose::enclose;
-use std::io;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::prelude::*;
-use tokio::time::sleep;
+use std::{
+    io,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    prelude::*,
+    time::sleep,
+};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {

@@ -1,5 +1,5 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
@@ -18,9 +18,7 @@ pub trait ByteSliceExt {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::ByteSliceExt;
-    /// use glommio::LocalExecutor;
-    /// use glommio::io::DmaFile;
+    /// use glommio::{io::DmaFile, ByteSliceExt, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -31,7 +29,7 @@ pub trait ByteSliceExt {
     ///     assert_eq!(n, 64); // read 64 bytes, the size of the buffer
     ///
     ///     let n = buf.read_at(4090, &mut vec);
-    ///     assert_eq!(n, 6);  // read 6 bytes, as there are only 6 bytes left from this offset
+    ///     assert_eq!(n, 6); // read 6 bytes, as there are only 6 bytes left from this offset
     ///     file.close().await.unwrap();
     /// });
     /// ```
@@ -40,8 +38,8 @@ pub trait ByteSliceExt {
 
 /// Utility methods for working with mutable byte slices/buffers.
 pub trait ByteSliceMutExt {
-    /// Writes data to this buffer from a user-provided byte slice, starting at a particular
-    /// offset
+    /// Writes data to this buffer from a user-provided byte slice, starting at
+    /// a particular offset
     ///
     /// ## Returns
     ///
@@ -50,9 +48,7 @@ pub trait ByteSliceMutExt {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::ByteSliceMutExt;
-    /// use glommio::LocalExecutor;
-    /// use glommio::io::DmaFile;
+    /// use glommio::{io::DmaFile, ByteSliceMutExt, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -63,7 +59,7 @@ pub trait ByteSliceMutExt {
     ///     assert_eq!(n, 64); // wrote 64 bytes.
     ///
     ///     let n = buf.write_at(4090, &vec);
-    ///     assert_eq!(n, 6);  // wrote 6 bytes, as there are only 6 bytes left from this offset
+    ///     assert_eq!(n, 6); // wrote 6 bytes, as there are only 6 bytes left from this offset
     ///     file.close().await.unwrap();
     /// });
     /// ```
@@ -102,8 +98,8 @@ fn slice_memset(destination: &mut [u8], value: u8) {
     }
 }
 
-// A NOTE about `#[inline]`: rustc currently only inlines code *across crate boundaries*
-// if it is marked with `#[inline]`.
+// A NOTE about `#[inline]`: rustc currently only inlines code *across crate
+// boundaries* if it is marked with `#[inline]`.
 
 impl<T: AsRef<[u8]> + ?Sized> ByteSliceExt for T {
     #[inline]

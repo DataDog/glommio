@@ -1,8 +1,10 @@
-use std::fmt;
-use std::io;
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-use std::ptr::{self, NonNull};
+use std::{
+    fmt,
+    io,
+    marker::PhantomData,
+    mem::MaybeUninit,
+    ptr::{self, NonNull},
+};
 
 use super::{resultify, CQEs, CQEsBlocking, IoUring, CQE};
 use crate::uring_sys;
@@ -11,7 +13,8 @@ use crate::uring_sys;
 ///
 /// Each element is a [`CQE`](crate::cqe::CQE).
 ///
-/// Completion does not imply success. Completed events may be [timeouts](crate::cqe::CQE::is_iou_timeout).
+/// Completion does not imply success. Completed events may be
+/// [timeouts](crate::cqe::CQE::is_iou_timeout).
 pub struct CompletionQueue<'ring> {
     pub(crate) ring: NonNull<uring_sys::io_uring>,
     _marker: PhantomData<&'ring mut IoUring>,
@@ -39,7 +42,8 @@ impl<'ring> CompletionQueue<'ring> {
         }
     }
 
-    /// Returns the next CQE, blocking the thread until one is ready if necessary.
+    /// Returns the next CQE, blocking the thread until one is ready if
+    /// necessary.
     pub fn wait_for_cqe(&mut self) -> io::Result<CQE> {
         self.wait_for_cqes(1)
     }
@@ -76,16 +80,16 @@ impl<'ring> CompletionQueue<'ring> {
 
     /// Returns an iterator of ready CQEs.
     ///
-    /// When there are no CQEs ready to process, the iterator will end. It will never
-    /// block the thread to wait for CQEs to be completed.
+    /// When there are no CQEs ready to process, the iterator will end. It will
+    /// never block the thread to wait for CQEs to be completed.
     pub fn cqes(&mut self) -> CQEs<'_> {
         CQEs::new(self.ring)
     }
 
     /// Returns an iterator of ready CQEs, blocking when there are none ready.
     ///
-    /// This iterator never ends. Whenever there are no CQEs ready, it will block
-    /// the thread until at least `wait_for` CQEs are ready.
+    /// This iterator never ends. Whenever there are no CQEs ready, it will
+    /// block the thread until at least `wait_for` CQEs are ready.
     pub fn cqes_blocking(&mut self, wait_for: u32) -> CQEsBlocking<'_> {
         CQEsBlocking::new(self.ring, wait_for)
     }

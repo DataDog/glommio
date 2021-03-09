@@ -1,7 +1,8 @@
-use glommio::channels::shared_channel;
-use glommio::prelude::*;
-use std::sync::mpsc::sync_channel;
-use std::time::{Duration, Instant};
+use glommio::{channels::shared_channel, prelude::*};
+use std::{
+    sync::mpsc::sync_channel,
+    time::{Duration, Instant},
+};
 
 fn test_spsc(capacity: usize) {
     let runs: u32 = 10_000_000;

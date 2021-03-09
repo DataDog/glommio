@@ -1,17 +1,18 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use core::fmt;
-use core::future::Future;
-use core::marker::{PhantomData, Unpin};
-use core::pin::Pin;
-use core::ptr::NonNull;
-use core::task::{Context, Poll};
+use core::{
+    fmt,
+    future::Future,
+    marker::{PhantomData, Unpin},
+    pin::Pin,
+    ptr::NonNull,
+    task::{Context, Poll},
+};
 
-use crate::task::header::Header;
-use crate::task::state::*;
+use crate::task::{header::Header, state::*};
 
 /// A handle that awaits the result of a task.
 ///
@@ -32,7 +33,8 @@ impl<R> Unpin for JoinHandle<R> {}
 impl<R> JoinHandle<R> {
     /// Cancels the task.
     ///
-    /// If the task has already completed, calling this method will have no effect.
+    /// If the task has already completed, calling this method will have no
+    /// effect.
     ///
     /// When a task is canceled, its future will not be polled again.
     pub fn cancel(&self) {
@@ -78,9 +80,9 @@ impl<R> Drop for JoinHandle<R> {
         let mut output = None;
 
         unsafe {
-            // Optimistically assume the `JoinHandle` is being dropped just after creating the
-            // task. This is a common case so if the handle is not used, the overhead of it is only
-            // one compare-exchange operation.
+            // Optimistically assume the `JoinHandle` is being dropped just after creating
+            // the task. This is a common case so if the handle is not used, the
+            // overhead of it is only one compare-exchange operation.
             if (*header).state == SCHEDULED | HANDLE | REFERENCE {
                 (*header).state = SCHEDULED | REFERENCE;
                 return;

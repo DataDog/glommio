@@ -1,8 +1,11 @@
 use std::rc::Rc;
 
-use glommio::prelude::*;
-use glommio::sync::{Gate, Semaphore};
-use glommio::{enclose, Task};
+use glommio::{
+    enclose,
+    prelude::*,
+    sync::{Gate, Semaphore},
+    Task,
+};
 
 fn main() {
     LocalExecutor::default().run(async {

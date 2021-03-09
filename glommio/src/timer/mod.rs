@@ -1,5 +1,5 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
@@ -11,8 +11,7 @@ pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
 /// Sleep for some time.
 ///
 /// ```
-/// use glommio::LocalExecutor;
-/// use glommio::timer::sleep;
+/// use glommio::{timer::sleep, LocalExecutor};
 /// use std::time::Duration;
 ///
 /// let ex = LocalExecutor::default();

@@ -1,50 +1,56 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 
 //! Read-write locks.
 //!
-//! Provides functionality similar to the ['std::sync::RwLock'] except that lock can not be poisoned.
+//! Provides functionality similar to the ['std::sync::RwLock'] except that lock
+//! can not be poisoned.
 //!
 //! # Examples
 //!
 //! ```
-//! use glommio::sync::RwLock;
-//! use glommio::LocalExecutor;
+//! use glommio::{sync::RwLock, LocalExecutor};
 //! let lock = RwLock::new(5);
 //! let ex = LocalExecutor::default();
 //!
-//! ex.run( async move {
-//!    // many reader locks can be held at once
-//!    {
-//!        let r1 = lock.read().await.unwrap();
-//!        let r2 = lock.read().await.unwrap();
-//!        assert_eq!(*r1, 5);
-//!        assert_eq!(*r2, 5);
-//!    } // read locks are dropped at this point
+//! ex.run(async move {
+//!     // many reader locks can be held at once
+//!     {
+//!         let r1 = lock.read().await.unwrap();
+//!         let r2 = lock.read().await.unwrap();
+//!         assert_eq!(*r1, 5);
+//!         assert_eq!(*r2, 5);
+//!     } // read locks are dropped at this point
 //!
-//!    // only one write lock may be held, however
-//!    {
-//!        let mut w = lock.write().await.unwrap();
-//!        *w += 1;
-//!        assert_eq!(*w, 6);
-//!    } // write lock is dropped here
+//!     // only one write lock may be held, however
+//!     {
+//!         let mut w = lock.write().await.unwrap();
+//!         *w += 1;
+//!         assert_eq!(*w, 6);
+//!     } // write lock is dropped here
 //! });
 //! ```
-//!
 use core::fmt::Debug;
-use std::cell::{Ref, RefCell, RefMut};
-use std::future::Future;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
+use std::{
+    cell::{Ref, RefCell, RefMut},
+    future::Future,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
 
-use intrusive_collections::linked_list::LinkOps;
-use intrusive_collections::{container_of, offset_of, Adapter, PointerOps};
-use intrusive_collections::{LinkedList, LinkedListLink};
+use intrusive_collections::{
+    container_of,
+    linked_list::LinkOps,
+    offset_of,
+    Adapter,
+    LinkedList,
+    LinkedListLink,
+    PointerOps,
+};
 
 use crate::{GlommioError, ResourceType};
-use std::marker::PhantomPinned;
-use std::ptr::NonNull;
+use std::{marker::PhantomPinned, ptr::NonNull};
 
 /// A type alias for the result of a lock method which can be suspended.
 pub type LockResult<T> = Result<T, GlommioError<()>>;
@@ -105,8 +111,8 @@ impl WaiterAdapter {
     }
 }
 
-///adapter which converts pointer to link to the pointer to the object which is hold
-///in collection and vice versa
+///adapter which converts pointer to link to the pointer to the object which is
+/// hold in collection and vice versa
 unsafe impl Adapter for WaiterAdapter {
     type LinkOps = LinkOps;
     type PointerOps = WaiterPointerOps;
@@ -154,44 +160,43 @@ unsafe impl Adapter for WaiterAdapter {
 /// An `RwLock` will allow any number of readers to acquire the
 /// lock as long as a writer is not holding the lock.
 ///
-/// The priority policy of the lock is based on FIFO policy. Fibers will be granted access in the
-/// order in which access to the lock was requested.
+/// The priority policy of the lock is based on FIFO policy. Fibers will be
+/// granted access in the order in which access to the lock was requested.
 ///
-/// Lock is not reentrant, yet. That means that two subsequent calls to request write access
-/// to the lock will lead to dead lock problem.
+/// Lock is not reentrant, yet. That means that two subsequent calls to request
+/// write access to the lock will lead to dead lock problem.
 ///
-/// The type parameter `T` represents the data that this lock protects. The RAII guards
-/// returned from the locking methods implement [`Deref`] (and [`DerefMut`]
-/// for the `write` methods) to allow access to the content of the lock.
+/// The type parameter `T` represents the data that this lock protects. The RAII
+/// guards returned from the locking methods implement [`Deref`] (and
+/// [`DerefMut`] for the `write` methods) to allow access to the content of the
+/// lock.
 ///
 ///
 /// # Examples
 ///
 /// ```
-///use glommio::sync::RwLock;
-///use glommio::LocalExecutor;
+/// use glommio::{sync::RwLock, LocalExecutor};
 ///
 /// let lock = RwLock::new(5);
 /// let ex = LocalExecutor::default();
 ///
-/// ex.run( async move {
-///    // many reader locks can be held at once
-///    {
-///        let r1 = lock.read().await.unwrap();
-///        let r2 = lock.read().await.unwrap();
-///        assert_eq!(*r1, 5);
-///        assert_eq!(*r2, 5);
-///    } // read locks are dropped at this point
+/// ex.run(async move {
+///     // many reader locks can be held at once
+///     {
+///         let r1 = lock.read().await.unwrap();
+///         let r2 = lock.read().await.unwrap();
+///         assert_eq!(*r1, 5);
+///         assert_eq!(*r2, 5);
+///     } // read locks are dropped at this point
 ///
-///    // only one write lock may be held, however
-///    {
-///        let mut w = lock.write().await.unwrap();
-///        *w += 1;
-///        assert_eq!(*w, 6);
-///    } // write lock is dropped here
+///     // only one write lock may be held, however
+///     {
+///         let mut w = lock.write().await.unwrap();
+///         *w += 1;
+///         assert_eq!(*w, 6);
+///     } // write lock is dropped here
 /// });
 /// ```
-///
 #[derive(Debug)]
 pub struct RwLock<T> {
     state: RefCell<State>,
@@ -483,8 +488,7 @@ impl<T> RwLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::RwLock;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{sync::RwLock, LocalExecutor};
     ///
     /// let mut lock = RwLock::new(0);
     /// let ex = LocalExecutor::default();
@@ -506,9 +510,9 @@ impl<T> RwLock<T> {
     /// Locks this RwLock with shared read access, suspending the current fiber
     /// until lock can be acquired.
     ///
-    /// The calling fiber will be suspended until there are no more writers which
-    /// hold the lock. There may be other readers currently inside the lock when
-    /// this method returns.
+    /// The calling fiber will be suspended until there are no more writers
+    /// which hold the lock. There may be other readers currently inside the
+    /// lock when this method returns.
     ///
     /// Returns an RAII guard which will release this fiber's shared access
     /// once guard is dropped.
@@ -520,10 +524,9 @@ impl<T> RwLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::RwLock;
-    /// use glommio::{Local, LocalExecutor};
-    /// use std::rc::Rc;
     /// use futures::future::join;
+    /// use glommio::{sync::RwLock, Local, LocalExecutor};
+    /// use std::rc::Rc;
     ///
     /// let lock = Rc::new(RwLock::new(1));
     /// let c_lock = lock.clone();
@@ -534,12 +537,14 @@ impl<T> RwLock<T> {
     ///     let first_reader = Local::local(async move {
     ///         let n = lock.read().await.unwrap();
     ///         assert_eq!(*n, 1);
-    ///     }).detach();
+    ///     })
+    ///     .detach();
     ///
     ///     let second_reader = Local::local(async move {
     ///         let r = c_lock.read().await;
     ///         assert!(r.is_ok());
-    ///     }).detach();
+    ///     })
+    ///     .detach();
     ///
     ///     join(first_reader, second_reader).await;
     /// });
@@ -581,8 +586,7 @@ impl<T> RwLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::RwLock;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{sync::RwLock, LocalExecutor};
     ///
     /// let lock = RwLock::new(1);
     /// let ex = LocalExecutor::default();
@@ -619,8 +623,8 @@ impl<T> RwLock<T> {
     /// Attempts to acquire this RwLock with shared read access.
     ///
     /// If the access could not be granted at this time, then `Err` is returned.
-    /// Otherwise, an RAII guard is returned which will release the shared access
-    /// when guard is dropped.
+    /// Otherwise, an RAII guard is returned which will release the shared
+    /// access when guard is dropped.
     ///
     /// This function does not suspend.
     ///
@@ -669,17 +673,16 @@ impl<T> RwLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::RwLock;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{sync::RwLock, LocalExecutor};
     ///
     /// let lock = RwLock::new(1);
     /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
-    ///   let n = lock.read().await.unwrap();
-    ///   assert_eq!(*n, 1);
+    ///     let n = lock.read().await.unwrap();
+    ///     assert_eq!(*n, 1);
     ///
-    ///   assert!(lock.try_write().is_err());
+    ///     assert!(lock.try_write().is_err());
     /// });
     /// ```
     pub fn try_write(&self) -> TryLockResult<RwLockWriteGuard<'_, T>> {
@@ -696,8 +699,9 @@ impl<T> RwLock<T> {
         Err(GlommioError::WouldBlock(ResourceType::RwLock))
     }
 
-    ///Indicates whether current RwLock is closed. Once lock is closed all subsequent calls
-    ///to the methods which requests lock access will return `Err`.
+    ///Indicates whether current RwLock is closed. Once lock is closed all
+    /// subsequent calls to the methods which requests lock access will
+    /// return `Err`.
     ///
     /// # Examples
     ///
@@ -714,18 +718,19 @@ impl<T> RwLock<T> {
         self.state.borrow().closed
     }
 
-    ///Closes current RwLock. Once lock is closed all being hold accesses will be released
-    ///and all subsequent calls to the methods to request lock access will return `Err`.
+    ///Closes current RwLock. Once lock is closed all being hold accesses will
+    /// be released and all subsequent calls to the methods to request lock
+    /// access will return `Err`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::RwLock;
-    /// use glommio::{LocalExecutor, Local};
-    /// use std::rc::Rc;
-    /// use std::cell::RefCell;
-    /// use glommio::sync::Semaphore;
-    ///
+    /// use glommio::{
+    ///     sync::{RwLock, Semaphore},
+    ///     Local,
+    ///     LocalExecutor,
+    /// };
+    /// use std::{cell::RefCell, rc::Rc};
     ///
     /// let lock = Rc::new(RwLock::new(()));
     /// let c_lock = lock.clone();
@@ -735,13 +740,14 @@ impl<T> RwLock<T> {
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///      let closer = Local::local(async move {
-    ///          //await till read lock will be acquired
+    ///     let closer = Local::local(async move {
+    ///         //await till read lock will be acquired
     ///         c_semaphore.acquire(1).await.unwrap();
     ///         c_lock.close();
     ///
     ///         assert!(c_lock.try_write().is_err());
-    ///     }).detach();
+    ///     })
+    ///     .detach();
     ///
     ///     let dead_locker = Local::local(async move {
     ///         let _r = lock.read().await.unwrap();
@@ -752,7 +758,8 @@ impl<T> RwLock<T> {
     ///         // this situation leads to deadlock unless lock is closed
     ///         let lock_result = lock.write().await;
     ///         assert!(lock_result.is_err());
-    ///     }).detach();
+    ///     })
+    ///     .detach();
     ///
     ///     dead_locker.await;
     /// });
@@ -780,8 +787,7 @@ impl<T> RwLock<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::sync::RwLock;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{sync::RwLock, LocalExecutor};
     ///
     /// let lock = RwLock::new(String::new());
     /// let ex = LocalExecutor::default();
@@ -810,11 +816,12 @@ impl<T> RwLock<T> {
     }
 
     fn wake_up_fibers(rw: &mut State) {
-        //created with assumption in mind that waker will trigger delayed execution of fibers
-        //such behaviour supports users intuition about fibers.
+        //created with assumption in mind that waker will trigger delayed execution of
+        // fibers such behaviour supports users intuition about fibers.
 
-        //All fibers waked up in the fair order (in the order of acquiring of the lock) if that matters.
-        //That allows to avoid lock starvation as much as possible.
+        //All fibers waked up in the fair order (in the order of acquiring of the lock)
+        // if that matters. That allows to avoid lock starvation as much as
+        // possible.
         if rw.readers == 0 && rw.writers == 0 {
             if rw.queued_writers == 0 {
                 //only readers are waiting in the queue and no one holding a lock
@@ -914,16 +921,11 @@ impl<T> Drop for RwLock<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::sync::rwlock::RwLock;
-    use crate::timer::Timer;
-    use crate::LocalExecutor;
-    use crate::Task;
+    use crate::{sync::rwlock::RwLock, timer::Timer, LocalExecutor, Task};
     use std::time::Duration;
 
-    use crate::sync::Semaphore;
-    use crate::Local;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use crate::{sync::Semaphore, Local};
+    use std::{cell::RefCell, rc::Rc};
 
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);
