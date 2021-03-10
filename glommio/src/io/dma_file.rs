@@ -1,18 +1,19 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::dma_open_options::DmaOpenOptions;
-use crate::io::glommio_file::GlommioFile;
-use crate::io::read_result::ReadResult;
-use crate::sys::sysfs;
-use crate::sys::{DirectIO, DmaBuffer, PollableStatus};
+use crate::{
+    io::{dma_open_options::DmaOpenOptions, glommio_file::GlommioFile, read_result::ReadResult},
+    sys::{sysfs, DirectIO, DmaBuffer, PollableStatus},
+};
 use nix::sys::statfs::*;
-use std::io;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::path::Path;
-use std::rc::Rc;
+use std::{
+    io,
+    os::unix::io::{AsRawFd, RawFd},
+    path::Path,
+    rc::Rc,
+};
 
 pub(super) type Result<T> = crate::Result<T, ()>;
 
@@ -27,13 +28,15 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 #[derive(Debug)]
 /// An asynchronously accessed Direct Memory Access (DMA) file.
 ///
-/// All access uses Direct I/O, and all operations including open and close are asynchronous (with
-/// some exceptions noted). Reads from and writes to this struct must come and go through the
-/// `DmaBuffer` type, which will buffer them in memory; on calling `write_at` and `read_at`, the
-/// buffers will be passed to the OS to asynchronously write directly to the file on disk, bypassing
+/// All access uses Direct I/O, and all operations including open and close are
+/// asynchronous (with some exceptions noted). Reads from and writes to this
+/// struct must come and go through the `DmaBuffer` type, which will buffer them
+/// in memory; on calling `write_at` and `read_at`, the buffers will be passed
+/// to the OS to asynchronously write directly to the file on disk, bypassing
 /// page caches.
 ///
-/// See the module-level [documentation](index.html) for more details and examples.
+/// See the module-level [documentation](index.html) for more details and
+/// examples.
 pub struct DmaFile {
     file: GlommioFile,
     o_direct_alignment: u64,
@@ -60,21 +63,22 @@ impl AsRawFd for DmaFile {
 }
 
 impl DmaFile {
-    /// Returns true if the DmaFiles represent the same file on the underlying device.
+    /// Returns true if the DmaFiles represent the same file on the underlying
+    /// device.
     ///
-    /// Files are considered to be the same if they live in the same file system and
-    /// have the same Linux inode. Note that based on this rule a symlink is *not*
-    /// considered to be the same file.
+    /// Files are considered to be the same if they live in the same file system
+    /// and have the same Linux inode. Note that based on this rule a
+    /// symlink is *not* considered to be the same file.
     ///
     /// Files will be considered to be the same if:
-    /// * A file is opened multiple times (different file descriptors, but same file!)
+    /// * A file is opened multiple times (different file descriptors, but same
+    ///   file!)
     /// * they are hard links.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::LocalExecutor;
-    /// use glommio::io::DmaFile;
+    /// use glommio::{io::DmaFile, LocalExecutor};
     /// use std::os::unix::io::AsRawFd;
     ///
     /// let ex = LocalExecutor::default();
@@ -187,20 +191,20 @@ impl DmaFile {
     /// write_at_aligned, since a non aligned write would require a
     /// read-modify-write.
     ///
-    /// Buffers should be allocated through [`alloc_dma_buffer`], which guarantees
-    /// proper alignment, but alignment on position is still up to the user.
+    /// Buffers should be allocated through [`alloc_dma_buffer`], which
+    /// guarantees proper alignment, but alignment on position is still up
+    /// to the user.
     ///
-    /// This method acquires ownership of the buffer so the buffer can be kept alive
-    /// while the kernel has it.
+    /// This method acquires ownership of the buffer so the buffer can be kept
+    /// alive while the kernel has it.
     ///
-    /// Note that it is legal to return fewer bytes than the buffer size. That is the
-    /// situation, for example, when the device runs out of space (See the man page for
-    /// write(2) for details)
+    /// Note that it is legal to return fewer bytes than the buffer size. That
+    /// is the situation, for example, when the device runs out of space
+    /// (See the man page for write(2) for details)
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::LocalExecutor;
-    /// use glommio::io::DmaFile;
+    /// use glommio::{io::DmaFile, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -243,8 +247,9 @@ impl DmaFile {
 
     /// Reads into buffer in buf from a specific position in the file.
     ///
-    /// It is not necessary to respect the O_DIRECT alignment of the file, and this
-    /// API will internally convert the positions and sizes to match, at a cost.
+    /// It is not necessary to respect the O_DIRECT alignment of the file, and
+    /// this API will internally convert the positions and sizes to match,
+    /// at a cost.
     ///
     /// If you can guarantee proper alignment, prefer read_at_aligned instead
     pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
@@ -266,33 +271,36 @@ impl DmaFile {
         Ok(ReadResult::from_whole_buffer(buffer))
     }
 
-    /// Issues `fdatasync` for the underlying file, instructing the OS to flush all writes to the
-    /// device, providing durability even if the system crashes or is rebooted.
+    /// Issues `fdatasync` for the underlying file, instructing the OS to flush
+    /// all writes to the device, providing durability even if the system
+    /// crashes or is rebooted.
     ///
-    /// As this is a DMA file, the OS will not be caching this file; however, there may be caches on
-    /// the drive itself.
+    /// As this is a DMA file, the OS will not be caching this file; however,
+    /// there may be caches on the drive itself.
     pub async fn fdatasync(&self) -> Result<()> {
         self.file.fdatasync().await.map_err(Into::into)
     }
 
-    /// pre-allocates space in the filesystem to hold a file at least as big as the size argument.
+    /// pre-allocates space in the filesystem to hold a file at least as big as
+    /// the size argument.
     pub async fn pre_allocate(&self, size: u64) -> Result<()> {
         self.file.pre_allocate(size).await
     }
 
-    /// Hint to the OS the size of increase of this file, to allow more efficient allocation of
-    /// blocks.
+    /// Hint to the OS the size of increase of this file, to allow more
+    /// efficient allocation of blocks.
     ///
-    /// Allocating blocks at the filesystem level turns asynchronous writes into threaded
-    /// synchronous writes, as we need to first find the blocks to host the file.
+    /// Allocating blocks at the filesystem level turns asynchronous writes into
+    /// threaded synchronous writes, as we need to first find the blocks to
+    /// host the file.
     ///
-    /// If the extent is larger, that means many blocks are allocated at a time. For instance, if
-    /// the extent size is 1MB, that means that only 1 out of 4 256kB writes will be turned
-    /// synchronous. Combined with diligent use of `fallocate` we can greatly minimize context
-    /// switches.
+    /// If the extent is larger, that means many blocks are allocated at a time.
+    /// For instance, if the extent size is 1MB, that means that only 1 out
+    /// of 4 256kB writes will be turned synchronous. Combined with diligent
+    /// use of `fallocate` we can greatly minimize context switches.
     ///
-    /// It is important not to set the extent size too big. Writes can fail otherwise if the extent
-    /// can't be allocated.
+    /// It is important not to set the extent size too big. Writes can fail
+    /// otherwise if the extent can't be allocated.
     pub async fn hint_extent_size(&self, size: usize) -> nix::Result<i32> {
         self.file.hint_extent_size(size).await
     }
@@ -353,22 +361,23 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::test_utils::*;
-    use crate::{ByteSliceMutExt, Local};
+    use crate::{test_utils::*, ByteSliceMutExt, Local};
 
     #[cfg(test)]
     pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
         let mut vec = Vec::new();
 
-        // Glommio currently only supports NVMe-backed volumes formatted with XFS or EXT4.
-        // We therefore let the user decide what directory glommio should use to host the unit tests in.
-        // For more information regarding this limitation, see the README
+        // Glommio currently only supports NVMe-backed volumes formatted with XFS or
+        // EXT4. We therefore let the user decide what directory glommio should
+        // use to host the unit tests in. For more information regarding this
+        // limitation, see the README
         match std::env::var("GLOMMIO_TEST_POLLIO_ROOTDIR") {
             Err(_) => {
                 eprintln!(
-                    "Glommio currently only supports NVMe-backed volumes formatted with XFS \
-                    or EXT4. To run poll io-related tests, please set GLOMMIO_TEST_POLLIO_ROOTDIR to a \
-                    NVMe-backed directory path in your environment.\nPoll io tests will not run."
+                    "Glommio currently only supports NVMe-backed volumes formatted with XFS or \
+                     EXT4. To run poll io-related tests, please set GLOMMIO_TEST_POLLIO_ROOTDIR \
+                     to a NVMe-backed directory path in your environment.\nPoll io tests will not \
+                     run."
                 );
             }
             Ok(path) => {
@@ -600,7 +609,8 @@ pub(crate) mod test {
         file.close().await.unwrap();
     });
 
-    // Futures polled. Should be a mixture of in the ring and in the in the submission queue
+    // Futures polled. Should be a mixture of in the ring and in the in the
+    // submission queue
     dma_file_test!(cancellation_doest_crash_futures_polled, p, _k, {
         let mut handles = vec![];
         for i in 0..200 {

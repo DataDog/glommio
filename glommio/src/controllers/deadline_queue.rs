@@ -1,22 +1,31 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
-use crate::channels::local_channel::{self, LocalReceiver, LocalSender};
-use crate::controllers::ControllerStatus;
-use crate::{enclose, task};
-use crate::{Latency, Local, Shares, SharesManager, TaskQueueHandle};
+use crate::{
+    channels::local_channel::{self, LocalReceiver, LocalSender},
+    controllers::ControllerStatus,
+    enclose,
+    task,
+    Latency,
+    Local,
+    Shares,
+    SharesManager,
+    TaskQueueHandle,
+};
 use futures_lite::StreamExt;
 use log::{trace, warn};
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::fmt;
-use std::future::Future;
-use std::io;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    fmt,
+    future::Future,
+    io,
+    pin::Pin,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 /// Items going into the [`DeadlineQueue`] must implement this trait.
 ///
@@ -30,14 +39,16 @@ pub trait DeadlineSource {
     /// [`action`]: trait.DeadlineSource.html#tymethod.action
     type Output;
 
-    /// Returns a [`Duration`] indicating when we would like this operation to complete.
+    /// Returns a [`Duration`] indicating when we would like this operation to
+    /// complete.
     ///
-    /// It is calculated from the point of Queueing, not from the point in which the operation
-    /// starts.
+    /// It is calculated from the point of Queueing, not from the point in which
+    /// the operation starts.
     fn expected_duration(&self) -> Duration;
 
-    /// The action to execute. Usually your struct will implement an async function that you want
-    /// to see completed at a particular deadline, and then the implementation of this would be:
+    /// The action to execute. Usually your struct will implement an async
+    /// function that you want to see completed at a particular deadline,
+    /// and then the implementation of this would be:
     ///
     /// ```ignore
     /// fn action(&self) -> Pin<Box<dyn Future<Output = io::Result<Duration>> + 'static>> {
@@ -49,14 +60,17 @@ pub trait DeadlineSource {
     /// The total amount of units to be processed.
     ///
     /// This could be anything you want:
-    /// * If you are flushing a file, this could indicate the size in bytes of the buffer
+    /// * If you are flushing a file, this could indicate the size in bytes of
+    ///   the buffer
     /// * If you are scanning an array, this could be the number of elements.
     ///
-    /// As long as this quantity is consistent with [`processed_units`] the controllers should work.
+    /// As long as this quantity is consistent with [`processed_units`] the
+    /// controllers should work.
     ///
-    /// This need not be static. On the contrary: as you are filling a new buffer you can already
-    /// add it to the queue and increase its total units as the buffer is written to. This can
-    /// lead to smoother operation as opposed to just adding a lot of units at once.
+    /// This need not be static. On the contrary: as you are filling a new
+    /// buffer you can already add it to the queue and increase its total
+    /// units as the buffer is written to. This can lead to smoother
+    /// operation as opposed to just adding a lot of units at once.
     ///
     /// [`processed_units`]: trait.DeadlineSource.html#tymethod.processed_units
     fn total_units(&self) -> u64;
@@ -64,11 +78,12 @@ pub trait DeadlineSource {
     /// The amount of units that were already processed.
     ///
     /// The units should match the quantities specified in [`total_units`].
-    /// The more often the system is made aware of processed units, the smoother the
-    /// controller will be.
+    /// The more often the system is made aware of processed units, the smoother
+    /// the controller will be.
     ///
-    /// For example, you can buffer all updates and just inform that processed_units == total_units
-    /// at the end of the process, but then the controller would be a step function.
+    /// For example, you can buffer all updates and just inform that
+    /// processed_units == total_units at the end of the process, but then
+    /// the controller would be a step function.
     ///
     /// [`total_units`]: trait.DeadlineSource.html#tymethod.total_units
     fn processed_units(&self) -> u64;
@@ -89,11 +104,11 @@ impl<T> fmt::Debug for dyn DeadlineSource<Output = T> {
 /// Allows the priority of the [`DeadlineQueue`] to be temporarily bumped.
 ///
 /// The priority is bumped for as long as this object is alive. This is useful
-/// in situations where, despite having a deadline we may never want the priority
-/// to fall too low.
+/// in situations where, despite having a deadline we may never want the
+/// priority to fall too low.
 ///
-/// This could be because a user started watching the process, a shutdown sequence
-/// was initiated, etc.
+/// This could be because a user started watching the process, a shutdown
+/// sequence was initiated, etc.
 ///
 /// [`DeadlineQueue`]: struct.DeadlineQueue.html
 pub struct PriorityBump<T> {
@@ -133,14 +148,16 @@ struct InnerQueue<T> {
 impl<T> SharesManager for InnerQueue<T> {
     // PI controller for shares.
     //
-    // We are not dealing with the derivative constant here: it is too risky given the generic
-    // nature of the processes under control.
+    // We are not dealing with the derivative constant here: it is too risky given
+    // the generic nature of the processes under control.
     //
-    // The variable we are controlling is the speed at which the units are processed.
-    // Also because we don't know what units are and different items in the queue may have
-    // different magnitudes we need to work with normalized units.
+    // The variable we are controlling is the speed at which the units are
+    // processed. Also because we don't know what units are and different items
+    // in the queue may have different magnitudes we need to work with
+    // normalized units.
     //
-    // The error is the difference between our effective speed and the desired speed:
+    // The error is the difference between our effective speed and the desired
+    // speed:
     //
     //    e(t) = units_expected/delta_t -  units_processed/ delta_t,
     //
@@ -157,8 +174,8 @@ impl<T> SharesManager for InnerQueue<T> {
     //  * The first is that the output of the controller would be zero if we there
     //    is no error
     //  * The second is that our integral term would accumulate errors that may not
-    //    be comparable as we accumulate artifacts of the delta_t calculation (as we'll
-    //    never in practice keep delta_t constant)
+    //    be comparable as we accumulate artifacts of the delta_t calculation (as
+    //    we'll never in practice keep delta_t constant)
     //
     //  The way we'll solve this is by expressing an alternate error E(T) which is
     //  essentially the integral of e(t) in time:
@@ -217,14 +234,18 @@ impl<T> SharesManager for InnerQueue<T> {
         self.last_error.set(error);
 
         // How did we pick our constants:
-        //  * As with any stable PI controller we want the bulk of our gain to come from P.
-        //  * As we normalize the maximum error to 1 we know that the gain should be at most 1000
-        //  * physically, Ki can be expressed as Kp / Tau where Tau is a time constant, roughly
-        //    equivalent to how many periods need to pass for the integral term to generate the
-        //    same gain as the proportional term. We set that to 6 so the controller is not too
-        //    slugish, which is around 1.5 seconds on the default 250ms adjustment period.
+        //  * As with any stable PI controller we want the bulk of our gain to come from
+        //    P.
+        //  * As we normalize the maximum error to 1 we know that the gain should be at
+        //    most 1000
+        //  * physically, Ki can be expressed as Kp / Tau where Tau is a time constant,
+        //    roughly equivalent to how many periods need to pass for the integral term
+        //    to generate the same gain as the proportional term. We set that to 6 so
+        //    the controller is not too slugish, which is around 1.5 seconds on the
+        //    default 250ms adjustment period.
         //
-        //  We can then write X + X/6 = 1000, and solving for X we have the constants below
+        //  We can then write X + X/6 = 1000, and solving for X we have the constants
+        // below
         let kp = 850.0;
         let ki = kp / 6.0;
         let dshares = ki * error + kp * delta_error;
@@ -234,7 +255,17 @@ impl<T> SharesManager for InnerQueue<T> {
         shares = std::cmp::max(shares, self.min_shares.get() as isize);
         let shares = shares as usize;
 
-        trace!("processed: {}. expected: {} error: {}, delta_error {} , kp term {}, ki term {}, shares: {}", processed, expected, error, delta_error, ki * error, kp * delta_error, shares);
+        trace!(
+            "processed: {}. expected: {} error: {}, delta_error {} , kp term {}, ki term {}, \
+             shares: {}",
+            processed,
+            expected,
+            error,
+            delta_error,
+            ki * error,
+            kp * delta_error,
+            shares
+        );
         self.last_shares.set(shares);
         shares
     }
@@ -275,53 +306,65 @@ impl<T> InnerQueue<T> {
 }
 
 #[derive(Debug)]
-/// Glommio's scheduler is based on [`Shares`]: the more shares, the more resources the task
-/// will receive.
+/// Glommio's scheduler is based on [`Shares`]: the more shares, the more
+/// resources the task will receive.
 ///
-/// There are situations however in which we don't want shares to grow too high: for instance,
-/// a background process that is flushing a file to storage. If it were to run at full speed,
-/// it would rob us of precious resources that we'd rather dedicate to the rest of the application.
+/// There are situations however in which we don't want shares to grow too high:
+/// for instance, a background process that is flushing a file to storage. If it
+/// were to run at full speed, it would rob us of precious resources that we'd
+/// rather dedicate to the rest of the application.
 ///
-/// However we don't want it to to run too slowly either, as it may never complete.
+/// However we don't want it to to run too slowly either, as it may never
+/// complete.
 ///
-/// The "right amount" of shares is not even application dependent: it is time dependent! As the
-/// load of the system changes, what is "too high" or "too low" changes too.
+/// The "right amount" of shares is not even application dependent: it is time
+/// dependent! As the load of the system changes, what is "too high" or "too
+/// low" changes too.
 ///
-/// The `DeadlineQueue` uses a feedback loop controller, not unlike the ones in car's cruise
-/// controls to dynamically and automatically adjust shares so that the process is slowed down
-/// using as few resources as possible but still finishes before its deadline.
+/// The `DeadlineQueue` uses a feedback loop controller, not unlike the ones in
+/// car's cruise controls to dynamically and automatically adjust shares so that
+/// the process is slowed down using as few resources as possible but still
+/// finishes before its deadline.
 ///
-/// For example, you may want to flush a file and would like it to finish in 10min because you
-/// have an agent that copies files every 10 minutes. You name it!
+/// For example, you may want to flush a file and would like it to finish in
+/// 10min because you have an agent that copies files every 10 minutes. You name
+/// it!
 ///
-/// Controlling processes is tricky and you should keep some things in mind for best results:
+/// Controlling processes is tricky and you should keep some things in mind for
+/// best results:
 ///
-/// * Control loops have a set time. It takes a while for the system to stabilize so this is better
-///   suited for long processes (Deadline is much higher than the adjustment period)
-/// * Control loops add overhead, so setting the adjustment period too low may not be the best way
-///   to make sure that the dealine is much higher than the adjustment period =)
-/// * Control loops have *dead time*. In control theory, dead time is the time that passes
-///   between the application of the control decision and its effects being seen. In our case, the
-///   scheduler may not schedule us for a long time, especially if the shares are low.
-/// * Control loops work better the faster and smoother the response is. Let's use an example flushing a
-///   file: you may be moving data to the file internal buffers but they are not *flushed* to the
-///   media. When the data is finally flushed a giant bubble is inserted into the control loop. The
-///   characteristics of the system will radically change. Contract that for instance with O_DIRECT
-///   files, where writing to the file means writing to the media: smooth and fast feedback!
+/// * Control loops have a set time. It takes a while for the system to
+///   stabilize so this is better suited for long processes (Deadline is much
+///   higher than the adjustment period)
+/// * Control loops add overhead, so setting the adjustment period too low may
+///   not be the best way to make sure that the dealine is much higher than the
+///   adjustment period =)
+/// * Control loops have *dead time*. In control theory, dead time is the time
+///   that passes between the application of the control decision and its
+///   effects being seen. In our case, the scheduler may not schedule us for a
+///   long time, especially if the shares are low.
+/// * Control loops work better the faster and smoother the response is. Let's
+///   use an example flushing a file: you may be moving data to the file
+///   internal buffers but they are not *flushed* to the media. When the data is
+///   finally flushed a giant bubble is inserted into the control loop. The
+///   characteristics of the system will radically change. Contract that for
+///   instance with O_DIRECT files, where writing to the file means writing to
+///   the media: smooth and fast feedback!
 ///
 ///   The moral of the story is:
-///    * do not use this with buffered files or other buffered sinks where the real physical response
-///      is delayed
+///    * do not use this with buffered files or other buffered sinks where the
+///      real physical response is delayed
 ///    * do not set the adjustment period too low
 ///    * do not use this very short lived processes.
 ///
-/// To calculate the speed of the process, the needs of all elements in the queue are considered.
+/// To calculate the speed of the process, the needs of all elements in the
+/// queue are considered.
 ///
-/// Let's say, for instance, that you queue items A, B and C, each with 10,000 units finishing
-/// respectively in 1, 2 and 3 minutes. From the point of view of the system, all units from A
-/// and B need to be flushed before C can start so that is taken into account: the system needs
-/// to set its speed to 10,000 points per minute so that the entire queue is flushed in 3
-/// minutes.
+/// Let's say, for instance, that you queue items A, B and C, each with 10,000
+/// units finishing respectively in 1, 2 and 3 minutes. From the point of view
+/// of the system, all units from A and B need to be flushed before C can start
+/// so that is taken into account: the system needs to set its speed to 10,000
+/// points per minute so that the entire queue is flushed in 3 minutes.
 pub struct DeadlineQueue<T> {
     tq: TaskQueueHandle,
     sender: LocalSender<Rc<dyn DeadlineSource<Output = T>>>,
@@ -331,15 +374,15 @@ pub struct DeadlineQueue<T> {
 }
 
 impl<T: 'static> DeadlineQueue<T> {
-    /// Creates a new `DeadlineQueue` with a given `name` and `adjustment period`
+    /// Creates a new `DeadlineQueue` with a given `name` and `adjustment
+    /// period`
     ///
-    /// Internally the `DeadlineQueue` spawns a new task queue with dynamic shares
-    /// in which it will execute the tasks that were registered.
+    /// Internally the `DeadlineQueue` spawns a new task queue with dynamic
+    /// shares in which it will execute the tasks that were registered.
     ///
     /// # Examples
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::controllers::DeadlineQueue;
+    /// use glommio::{controllers::DeadlineQueue, LocalExecutor};
     /// use std::time::Duration;
     ///
     /// let ex = LocalExecutor::default();
@@ -350,10 +393,11 @@ impl<T: 'static> DeadlineQueue<T> {
     /// ```
     pub fn new(name: &'static str, adjustment_period: Duration) -> DeadlineQueue<T> {
         let queue = Rc::new(InnerQueue::new(adjustment_period));
-        // We could always dispatch into the latency queue, but since that effectively means
-        // putting requests in a different io_uring we'll avoid doing that unless the process
-        // is very sensitive. Because of dead time it wouldn't be a bad idea to even have a minimum
-        // here. But we'll just document it and leave it to the user.
+        // We could always dispatch into the latency queue, but since that effectively
+        // means putting requests in a different io_uring we'll avoid doing that
+        // unless the process is very sensitive. Because of dead time it
+        // wouldn't be a bad idea to even have a minimum here. But we'll just
+        // document it and leave it to the user.
         let lat = {
             if adjustment_period < Duration::from_millis(100) {
                 Latency::Matters(adjustment_period)
@@ -420,35 +464,32 @@ impl<T: 'static> DeadlineQueue<T> {
     /// # Examples:
     ///
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::controllers::{DeadlineQueue, DeadlineSource};
-    /// use std::time::Duration;
-    /// use futures_lite::future::ready;
-    /// use std::io;
-    /// use std::pin::Pin;
-    /// use futures_lite::Future;
-    /// use std::rc::Rc;
+    /// use futures_lite::{future::ready, Future};
+    /// use glommio::{
+    ///     controllers::{DeadlineQueue, DeadlineSource},
+    ///     LocalExecutor,
+    /// };
+    /// use std::{io, pin::Pin, rc::Rc, time::Duration};
     ///
-    /// struct Example {
-    /// }
+    /// struct Example {}
     ///
     /// impl DeadlineSource for Example {
     ///     type Output = usize;
     ///
     ///     fn expected_duration(&self) -> Duration {
-    ///        Duration::from_secs(1)
+    ///         Duration::from_secs(1)
     ///     }
     ///
     ///     fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Self::Output> + 'static>> {
-    ///        Box::pin(ready(1))
+    ///         Box::pin(ready(1))
     ///     }
     ///
     ///     fn total_units(&self) -> u64 {
-    ///        1
+    ///         1
     ///     }
     ///
     ///     fn processed_units(&self) -> u64 {
-    ///        1
+    ///         1
     ///     }
     /// }
     ///
@@ -460,7 +501,6 @@ impl<T: 'static> DeadlineQueue<T> {
     ///     assert_eq!(res.unwrap(), 1);
     /// });
     /// ```
-    ///
     pub async fn push_work(&self, source: Rc<dyn DeadlineSource<Output = T>>) -> io::Result<T> {
         self.queue.admit(source.clone())?;
         self.sender.send(source.clone()).await?;
@@ -477,16 +517,16 @@ impl<T: 'static> DeadlineQueue<T> {
     /// Temporarily bumps the priority of this DeadlineQueue
     ///
     /// The bump happens by making sure that the shares never fall below
-    /// a minimum (250). If the output of the controller is already higher than that
-    /// then this has no effect.
+    /// a minimum (250). If the output of the controller is already higher than
+    /// that then this has no effect.
     pub fn bump_priority(&self) -> PriorityBump<T> {
         PriorityBump::new(self.queue.clone())
     }
 
     /// Disables the controller.
     ///
-    /// Instead the process being controlled will now have static shares defined by
-    /// the `shares` argument (between 1 and 1000).
+    /// Instead the process being controlled will now have static shares defined
+    /// by the `shares` argument (between 1 and 1000).
     pub fn disable(&self, mut shares: usize) {
         shares = std::cmp::min(shares, 1000);
         shares = std::cmp::max(shares, 1);
@@ -495,8 +535,8 @@ impl<T: 'static> DeadlineQueue<T> {
 
     /// Enables the controller.
     ///
-    /// This is a no-op if the controller was already enabled. If it had been manually
-    /// disabled then it moves back to automatic mode.
+    /// This is a no-op if the controller was already enabled. If it had been
+    /// manually disabled then it moves back to automatic mode.
     pub fn enable(&self) {
         self.queue.state.set(ControllerStatus::Enabled);
     }
@@ -514,8 +554,10 @@ impl<T: 'static> DeadlineQueue<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::enclose;
-    use crate::timer::{Timer, TimerActionRepeat};
+    use crate::{
+        enclose,
+        timer::{Timer, TimerActionRepeat},
+    };
 
     struct DeadlineSourceTest {
         duration: Duration,

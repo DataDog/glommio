@@ -1,9 +1,11 @@
-//! Provides a [`NopSubmitter`] which can be used to submit nop operations to the ring. This is mainly useful for benchmarking Glommio.
-use std::io;
-use std::rc::{Rc, Weak};
+//! Provides a [`NopSubmitter`] which can be used to submit nop operations to
+//! the ring. This is mainly useful for benchmarking Glommio.
+use std::{
+    io,
+    rc::{Rc, Weak},
+};
 
-use crate::parking::Reactor;
-use crate::Local;
+use crate::{parking::Reactor, Local};
 
 /// Submit no-op operations to io_uring.
 ///

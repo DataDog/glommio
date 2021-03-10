@@ -1,6 +1,4 @@
-use glommio::channels::shared_channel;
-use glommio::net::UdpSocket;
-use glommio::prelude::*;
+use glommio::{channels::shared_channel, net::UdpSocket, prelude::*};
 use std::time::Instant;
 
 fn main() {

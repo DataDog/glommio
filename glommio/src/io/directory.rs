@@ -1,15 +1,19 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::glommio_file::GlommioFile;
-use crate::sys;
-use crate::Local;
-use crate::{io::dma_file::DmaFile, GlommioError};
-use std::io;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::path::Path;
+use crate::{
+    io::{dma_file::DmaFile, glommio_file::GlommioFile},
+    sys,
+    GlommioError,
+    Local,
+};
+use std::{
+    io,
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    path::Path,
+};
 
 type Result<T> = crate::Result<T, ()>;
 

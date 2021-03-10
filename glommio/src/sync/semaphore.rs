@@ -1,21 +1,26 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::error::GlommioError;
-use crate::error::ResourceType;
-use std::cell::RefCell;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
+use crate::error::{GlommioError, ResourceType};
+use std::{
+    cell::RefCell,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
 
-use intrusive_collections::linked_list::LinkOps;
-use intrusive_collections::{container_of, offset_of, Adapter, PointerOps};
-use intrusive_collections::{LinkedList, LinkedListLink};
-use std::marker::PhantomPinned;
-use std::ptr::NonNull;
-use std::rc::Rc;
+use intrusive_collections::{
+    container_of,
+    linked_list::LinkOps,
+    offset_of,
+    Adapter,
+    LinkedList,
+    LinkedListLink,
+    PointerOps,
+};
+use std::{marker::PhantomPinned, ptr::NonNull, rc::Rc};
 
 type Result<T> = crate::error::Result<T, ()>;
 
@@ -145,8 +150,8 @@ impl<'a> Waiter<'a> {
         }
 
         sem_state.waiters_list.push_back(unsafe {
-            //it is safe to use unchecked call here because we convert passed in reference which
-            //can not be null
+            //it is safe to use unchecked call here because we convert passed in reference
+            // which can not be null
             NonNull::new_unchecked(Pin::into_inner_unchecked(waiter_node) as *mut _)
         });
     }
@@ -252,14 +257,15 @@ impl SemaphoreState {
 /// Resources are held while the Permit is alive, and released when the
 /// permit is dropped.
 #[derive(Debug)]
-#[must_use = "units are only held while the permit is alive. If unused then semaphore will immediately release units"]
+#[must_use = "units are only held while the permit is alive. If unused then semaphore will \
+              immediately release units"]
 pub struct Permit<'a> {
     units: u64,
     sem: &'a Semaphore,
 }
 
-/// The static permit is A RAII-friendly way to acquire semaphore resources in long-lived
-/// operations that require a static lifetime.
+/// The static permit is A RAII-friendly way to acquire semaphore resources in
+/// long-lived operations that require a static lifetime.
 ///
 /// Resources are held while the Permit is alive, and released when the
 /// permit is dropped.
@@ -352,7 +358,6 @@ impl Semaphore {
     /// use glommio::sync::Semaphore;
     ///
     /// let _ = Semaphore::new(1);
-    ///
     /// ```
     pub fn new(avail: u64) -> Semaphore {
         Semaphore {
@@ -369,26 +374,26 @@ impl Semaphore {
     ///
     /// let sem = Semaphore::new(1);
     /// assert_eq!(sem.available(), 1);
-    ///
     /// ```
     pub fn available(&self) -> u64 {
         self.state.borrow().available()
     }
 
-    /// Suspends until a permit can be acquired with the specified amount of units.
+    /// Suspends until a permit can be acquired with the specified amount of
+    /// units.
     ///
     /// Returns Err() if the semaphore is closed during the wait.
     ///
-    /// Similar to [`acquire_static_permit`], except that it requires the permit never
-    /// to be passed to contexts that require a static lifetime. As this is cheaper than
-    /// [`acquire_static_permit`], it is useful in situations where the permit tracks an
-    /// a asynchronous operation whose lifetime is simple and well-defined.
+    /// Similar to [`acquire_static_permit`], except that it requires the permit
+    /// never to be passed to contexts that require a static lifetime. As
+    /// this is cheaper than [`acquire_static_permit`], it is useful in
+    /// situations where the permit tracks an a asynchronous operation whose
+    /// lifetime is simple and well-defined.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::sync::Semaphore;
+    /// use glommio::{sync::Semaphore, LocalExecutor};
     ///
     /// let sem = Semaphore::new(1);
     ///
@@ -409,22 +414,21 @@ impl Semaphore {
         Ok(Permit::new(units, self))
     }
 
-    /// Suspends until a permit can be acquired with the specified amount of units.
+    /// Suspends until a permit can be acquired with the specified amount of
+    /// units.
     ///
     /// Returns Err() if the semaphore is closed during the wait.
     ///
-    /// Similar to [`acquire_permit`], except that it requires the semaphore to be
-    /// contained in an [`Rc`]. This is useful in situations where the permit tracks
-    /// a long-lived asynchronous operation whose lifetime is complex.
+    /// Similar to [`acquire_permit`], except that it requires the semaphore to
+    /// be contained in an [`Rc`]. This is useful in situations where the
+    /// permit tracks a long-lived asynchronous operation whose lifetime is
+    /// complex.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::{Local, LocalExecutor};
-    /// use glommio::timer::sleep;
-    /// use glommio::sync::Semaphore;
-    /// use std::time::Duration;
-    /// use std::rc::Rc;
+    /// use glommio::{sync::Semaphore, timer::sleep, Local, LocalExecutor};
+    /// use std::{rc::Rc, time::Duration};
     ///
     /// let sem = Rc::new(Semaphore::new(1));
     ///
@@ -435,7 +439,8 @@ impl Semaphore {
     ///         Local::local(async move {
     ///             let _guard = permit;
     ///             sleep(Duration::from_secs(1)).await;
-    ///         }).detach();
+    ///         })
+    ///         .detach();
     ///         // once it is dropped it can be acquired again
     ///         // going out of scope will drop
     ///     }
@@ -458,8 +463,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::sync::Semaphore;
+    /// use glommio::{sync::Semaphore, LocalExecutor};
     ///
     /// let sem = Semaphore::new(1);
     ///
@@ -503,8 +507,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::sync::Semaphore;
+    /// use glommio::{sync::Semaphore, LocalExecutor};
     ///
     /// let sem = Semaphore::new(1);
     ///
@@ -537,8 +540,9 @@ impl Semaphore {
     /// This method does not suspend.
     ///
     /// # Errors
-    ///  If semaphore is closed `Err(GlommioError::Closed(ResourceType::Semaphore { .. }))` will be returned.
-    ///  If semaphore does not have sufficient amount of units
+    ///  If semaphore is closed
+    /// `Err(GlommioError::Closed(ResourceType::Semaphore { .. }))` will be
+    /// returned.  If semaphore does not have sufficient amount of units
     ///  `
     ///  Err(GlommioError::WouldBlock(ResourceType::Semaphore {
     ///      requested: u64,
@@ -550,17 +554,16 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::sync::Semaphore;
+    /// use glommio::{sync::Semaphore, LocalExecutor};
     ///
     /// let sem = Semaphore::new(1);
     ///
     /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
-    ///   let permit = sem.acquire_permit(1).await.unwrap();
-    ///         // once it is dropped it can be acquired again
-    ///         // going out of scope will drop
+    ///     let permit = sem.acquire_permit(1).await.unwrap();
+    ///     // once it is dropped it can be acquired again
+    ///     // going out of scope will drop
     /// });
     /// ```
     pub fn try_acquire_permit(&self, units: u64) -> Result<Permit<'_>> {
@@ -583,8 +586,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::sync::Semaphore;
+    /// use glommio::{sync::Semaphore, LocalExecutor};
     ///
     /// let sem = Semaphore::new(0);
     ///
@@ -606,8 +608,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::LocalExecutor;
-    /// use glommio::sync::Semaphore;
+    /// use glommio::{sync::Semaphore, LocalExecutor};
     ///
     /// let sem = Semaphore::new(0);
     ///
@@ -635,13 +636,19 @@ impl Drop for Semaphore {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::timer::{sleep, Timer};
-    use crate::{enclose, Local, LocalExecutor};
+    use crate::{
+        enclose,
+        timer::{sleep, Timer},
+        Local,
+        LocalExecutor,
+    };
 
     use futures_lite::future::or;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::time::{Duration, Instant};
+    use std::{
+        cell::Cell,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn semaphore_acquisition_for_zero_unit_works() {

@@ -1,7 +1,11 @@
-use std::cell::{Cell, UnsafeCell};
-use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    cell::{Cell, UnsafeCell},
+    fmt,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 #[derive(Debug)]
 #[repr(align(64))]
@@ -34,8 +38,8 @@ struct ConsumerCacheline {
 /// The internal memory buffer used by the queue.
 ///
 /// Buffer holds a pointer to allocated memory which represents the bounded
-/// ring buffer, as well as a head and tail atomicUsize which the producer and consumer
-/// use to track location in the ring.
+/// ring buffer, as well as a head and tail atomicUsize which the producer and
+/// consumer use to track location in the ring.
 #[repr(C)]
 pub(crate) struct Buffer<T> {
     buffer_storage: Vec<UnsafeCell<T>>,
@@ -117,9 +121,10 @@ unsafe impl<T: Send> Send for Producer<T> {}
 impl<T> Buffer<T> {
     /// Attempt to pop a value off the buffer.
     ///
-    /// If the buffer is empty, this method will not block.  Instead, it will return `None`
-    /// signifying the buffer was empty.  The caller may then decide what to do next (e.g. spin-wait,
-    /// sleep, process something else, etc)
+    /// If the buffer is empty, this method will not block.  Instead, it will
+    /// return `None` signifying the buffer was empty.  The caller may then
+    /// decide what to do next (e.g. spin-wait, sleep, process something
+    /// else, etc)
     fn try_pop(&self) -> Option<T> {
         let current_head = self.ccache.head.load(Ordering::Relaxed);
 
@@ -143,9 +148,10 @@ impl<T> Buffer<T> {
 
     /// Attempt to push a value onto the buffer.
     ///
-    /// If the buffer is full, this method will not block.  Instead, it will return `Some(v)`, where
-    /// `v` was the value attempting to be pushed onto the buffer.  If the value was successfully
-    /// pushed onto the buffer, `None` will be returned signifying success.
+    /// If the buffer is full, this method will not block.  Instead, it will
+    /// return `Some(v)`, where `v` was the value attempting to be pushed
+    /// onto the buffer.  If the value was successfully pushed onto the
+    /// buffer, `None` will be returned signifying success.
     fn try_push(&self, v: T) -> Option<T> {
         if self.consumer_disconnected() {
             return Some(v);
@@ -170,30 +176,34 @@ impl<T> Buffer<T> {
         None
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already disconnected
+    /// Disconnects the consumer, and returns whether or not it was already
+    /// disconnected
     pub(crate) fn disconnect_consumer(&self) -> bool {
         self.pcache.consumer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already disconnected
+    /// Disconnects the consumer, and returns whether or not it was already
+    /// disconnected
     pub(crate) fn disconnect_producer(&self) -> bool {
         self.ccache.producer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already disconnected
+    /// Disconnects the consumer, and returns whether or not it was already
+    /// disconnected
     pub(crate) fn producer_disconnected(&self) -> bool {
         self.ccache.producer_id.load(Ordering::Acquire) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already disconnected
+    /// Disconnects the consumer, and returns whether or not it was already
+    /// disconnected
     pub(crate) fn consumer_disconnected(&self) -> bool {
         self.pcache.consumer_id.load(Ordering::Acquire) == usize::MAX
     }
 
     /// Returns the current size of the queue
     ///
-    /// This value represents the current size of the queue.  This value can be from 0-`capacity`
-    /// inclusive.
+    /// This value represents the current size of the queue.  This value can be
+    /// from 0-`capacity` inclusive.
     pub(crate) fn size(&self) -> usize {
         self.pcache.tail.load(Ordering::Acquire) - self.ccache.head.load(Ordering::Acquire)
     }
@@ -265,14 +275,14 @@ pub(crate) trait BufferHalf {
 
     /// Returns the total capacity of this queue
     ///
-    /// This value represents the total capacity of the queue when it is full.  It does not
-    /// represent the current usage.  For that, call `size()`.
+    /// This value represents the total capacity of the queue when it is full.
+    /// It does not represent the current usage.  For that, call `size()`.
     fn capacity(&self) -> usize;
 
     /// Returns the current size of the queue
     ///
-    /// This value represents the current size of the queue.  This value can be from 0-`capacity`
-    /// inclusive.
+    /// This value represents the current size of the queue.  This value can be
+    /// from 0-`capacity` inclusive.
     fn size(&self) -> usize {
         self.buffer().size()
     }
@@ -305,15 +315,16 @@ impl<T> BufferHalf for Producer<T> {
 impl<T> Producer<T> {
     /// Attempt to push a value onto the buffer.
     ///
-    /// This method does not block.  If the queue is not full, the value will be added to the
-    /// queue and the method will return `None`, signifying success.  If the queue is full,
-    /// this method will return `Some(v)``, where `v` is your original value.
+    /// This method does not block.  If the queue is not full, the value will be
+    /// added to the queue and the method will return `None`, signifying
+    /// success.  If the queue is full, this method will return `Some(v)``,
+    /// where `v` is your original value.
     pub(crate) fn try_push(&self, v: T) -> Option<T> {
         (*self.buffer).try_push(v)
     }
 
-    /// Disconnects the producer, signaling to the consumer that no new values are going to be
-    /// produced.
+    /// Disconnects the producer, signaling to the consumer that no new values
+    /// are going to be produced.
     ///
     /// Returns the buffer status before the disconnect
     pub(crate) fn disconnect(&self) -> bool {
@@ -326,8 +337,8 @@ impl<T> Producer<T> {
 
     /// Returns the available space in the queue
     ///
-    /// This value represents the number of items that can be pushed onto the queue before it
-    /// becomes full.
+    /// This value represents the number of items that can be pushed onto the
+    /// queue before it becomes full.
     pub(crate) fn free_space(&self) -> usize {
         self.capacity() - self.size()
     }
@@ -358,8 +369,9 @@ impl<T> BufferHalf for Consumer<T> {
 }
 
 impl<T> Consumer<T> {
-    /// Disconnects the consumer, signaling to the producer that no new values are going to be
-    /// consumed. After this is done, any attempt on the producer to try_push should fail
+    /// Disconnects the consumer, signaling to the producer that no new values
+    /// are going to be consumed. After this is done, any attempt on the
+    /// producer to try_push should fail
     ///
     /// Returns the buffer status before the disconnect
     pub(crate) fn disconnect(&self) -> bool {
@@ -372,9 +384,9 @@ impl<T> Consumer<T> {
 
     /// Attempt to pop a value off the queue.
     ///
-    /// This method does not block.  If the queue is empty, the method will return `None`.  If
-    /// there is a value available, the method will return `Some(v)`, where `v` is the value
-    /// being popped off the queue.
+    /// This method does not block.  If the queue is empty, the method will
+    /// return `None`.  If there is a value available, the method will
+    /// return `Some(v)`, where `v` is the value being popped off the queue.
     pub(crate) fn try_pop(&self) -> Option<T> {
         (*self.buffer).try_pop()
     }

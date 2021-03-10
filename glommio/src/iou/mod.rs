@@ -1,37 +1,39 @@
 //! Idiomatic Rust bindings to liburing.
 //!
-//! This gives users an idiomatic Rust interface for interacting with the Linux kernel's `io_uring`
-//! interface for async IO. Despite being idiomatic Rust, this interface is still very low level
-//! and some fundamental operations remain unsafe.
+//! This gives users an idiomatic Rust interface for interacting with the Linux
+//! kernel's `io_uring` interface for async IO. Despite being idiomatic Rust,
+//! this interface is still very low level and some fundamental operations
+//! remain unsafe.
 //!
-//! The core entry point to the API is the `IoUring` type, which manages an `io_uring` object for
-//! interfacing with the kernel. Using this, users can submit IO events and wait for their
-//! completion.
+//! The core entry point to the API is the `IoUring` type, which manages an
+//! `io_uring` object for interfacing with the kernel. Using this, users can
+//! submit IO events and wait for their completion.
 //!
-//! It is also possible to "split" an `IoUring` instance into its constituent components - a
-//! `SubmissionQueue`, a `CompletionQueue`, and a `Registrar` - in order to operate on them
-//! separately without synchronization.
+//! It is also possible to "split" an `IoUring` instance into its constituent
+//! components - a `SubmissionQueue`, a `CompletionQueue`, and a `Registrar` -
+//! in order to operate on them separately without synchronization.
 //!
 //! # Submitting events
 //!
 //! You can prepare new IO events using the `SQE` type. Once an event has been
-//! prepared, the next call to submit will submit that event. Eventually, those events will
-//! complete, and that a `CQE` will appear on the completion queue indicating that
-//! the event is complete.
+//! prepared, the next call to submit will submit that event. Eventually, those
+//! events will complete, and that a `CQE` will appear on the completion queue
+//! indicating that the event is complete.
 //!
-//! Preparing IO events is inherently unsafe, as you must guarantee that the buffers and file
-//! descriptors used for that IO are alive long enough for the kernel to perform the IO operation
-//! with them.
+//! Preparing IO events is inherently unsafe, as you must guarantee that the
+//! buffers and file descriptors used for that IO are alive long enough for the
+//! kernel to perform the IO operation with them.
 //!
 //! # Timeouts
 //!
-//! Some APIs allow you to time out a call into the kernel. It's important to note how this works
-//! with io_uring.
+//! Some APIs allow you to time out a call into the kernel. It's important to
+//! note how this works with io_uring.
 //!
-//! A timeout is submitted as an additional IO event which completes after the specified time.
-//! Therefore when you create a timeout, all that happens is that a completion event will appear
-//! after that specified time. This also means that when processing completion events, you need to
-//! be prepared for the possibility that the completion represents a timeout and not a normal IO
+//! A timeout is submitted as an additional IO event which completes after the
+//! specified time. Therefore when you create a timeout, all that happens is
+//! that a completion event will appear after that specified time. This also
+//! means that when processing completion events, you need to be prepared for
+//! the possibility that the completion represents a timeout and not a normal IO
 //! event (`CQE` has a method to check for this).
 use crate::uring_sys;
 
@@ -39,11 +41,13 @@ use crate::uring_sys;
 pub mod cqe;
 /// Types related to submission queue events.
 ///
-/// The most important types here are [`SQE`], which represents a single submission queue event,
-/// and [`SQEs`], which represents a sequence of events that can be prepared at once.
+/// The most important types here are [`SQE`], which represents a single
+/// submission queue event, and [`SQEs`], which represents a sequence of events
+/// that can be prepared at once.
 ///
-/// Many of the types in this module are re-exported from the `nix` crate, and are used when
-/// preparing [`SQE`]s associated with specific Linux system operations.
+/// Many of the types in this module are re-exported from the `nix` crate, and
+/// are used when preparing [`SQE`]s associated with specific Linux system
+/// operations.
 pub mod sqe;
 
 mod completion_queue;
@@ -53,12 +57,14 @@ mod probe;
 
 pub mod registrar;
 
-use std::fmt;
-use std::io;
-use std::mem::{self, MaybeUninit};
-use std::os::unix::io::RawFd;
-use std::ptr::{self, NonNull};
-use std::time::Duration;
+use std::{
+    fmt,
+    io,
+    mem::{self, MaybeUninit},
+    os::unix::io::RawFd,
+    ptr::{self, NonNull},
+    time::Duration,
+};
 
 #[doc(inline)]
 pub use cqe::{CQEs, CQEsBlocking, CQE};
@@ -105,11 +111,12 @@ bitflags::bitflags! {
 
 /// The main interface to kernel IO using `io_uring`.
 ///
-/// `IoUring` is a high-level wrapper around an [`io_uring`](uring_sys::io_uring) object.
+/// `IoUring` is a high-level wrapper around an
+/// [`io_uring`](uring_sys::io_uring) object.
 ///
-/// `IoUring`s are constructed with a requested number of ring buffer entries and possibly a set of
-/// [`SetupFlags`](SetupFlags). Allocations for `IoUring` are `memlocked` and will not be paged
-/// out.
+/// `IoUring`s are constructed with a requested number of ring buffer entries
+/// and possibly a set of [`SetupFlags`](SetupFlags). Allocations for `IoUring`
+/// are `memlocked` and will not be paged out.
 ///
 /// `IoUring`s can either be used directly, or split into separate parts and
 /// operated on without synchronization.
@@ -118,20 +125,20 @@ pub struct IoUring {
 }
 
 impl IoUring {
-    /// Creates a new `IoUring` without any setup flags. `IoUring`'s created using this method will
-    /// use interrupt-driven IO.
+    /// Creates a new `IoUring` without any setup flags. `IoUring`'s created
+    /// using this method will use interrupt-driven IO.
     ///
     /// The number of entries must be in the range of 1..4096 (inclusive) and
     /// it's recommended to be a power of two.
     ///
-    /// The underlying `SubmissionQueue` and `CompletionQueue` will each have this number of
-    /// entries.
+    /// The underlying `SubmissionQueue` and `CompletionQueue` will each have
+    /// this number of entries.
     pub fn new(entries: u32) -> io::Result<IoUring> {
         IoUring::new_with_flags(entries, SetupFlags::empty(), SetupFeatures::empty())
     }
 
-    /// Creates a new `IoUring` using a set of `SetupFlags` and `SetupFeatures` for advanced
-    /// use cases.
+    /// Creates a new `IoUring` using a set of `SetupFlags` and `SetupFeatures`
+    /// for advanced use cases.
     pub fn new_with_flags(
         entries: u32,
         flags: SetupFlags,
@@ -186,9 +193,11 @@ impl IoUring {
         unsafe { submission_queue::prepare_sqe(&mut self.ring) }
     }
 
-    /// Returns the next `count` [`SQE`]s which can be prepared to submit as an iterator.
+    /// Returns the next `count` [`SQE`]s which can be prepared to submit as an
+    /// iterator.
     ///
-    /// See the [`SQEs`] type for more information about how these multiple SQEs can be used.
+    /// See the [`SQEs`] type for more information about how these multiple SQEs
+    /// can be used.
     pub fn prepare_sqes(&mut self, count: u32) -> Option<SQEs<'_>> {
         unsafe { submission_queue::prepare_sqes(&mut self.ring.sq, count) }
     }
@@ -198,14 +207,14 @@ impl IoUring {
         self.sq().submit()
     }
 
-    /// Submit all prepared [`SQE`]s to the kernel and wait until at least `wait_for` events have
-    /// completed.
+    /// Submit all prepared [`SQE`]s to the kernel and wait until at least
+    /// `wait_for` events have completed.
     pub fn submit_sqes_and_wait(&mut self, wait_for: u32) -> io::Result<u32> {
         self.sq().submit_and_wait(wait_for)
     }
 
-    /// Submit all prepared [`SQE`]s to the kernel and wait until at least `wait_for` events have
-    /// completed or `duration` has passed.
+    /// Submit all prepared [`SQE`]s to the kernel and wait until at least
+    /// `wait_for` events have completed or `duration` has passed.
     pub fn submit_sqes_and_wait_with_timeout(
         &mut self,
         wait_for: u32,
@@ -214,8 +223,8 @@ impl IoUring {
         self.sq().submit_and_wait_with_timeout(wait_for, duration)
     }
 
-    /// Peek for any [`CQE`] that is already completed, without blocking. This will consume that
-    /// CQE.
+    /// Peek for any [`CQE`] that is already completed, without blocking. This
+    /// will consume that CQE.
     pub fn peek_for_cqe(&mut self) -> Option<CQE> {
         unsafe {
             let mut cqe = MaybeUninit::uninit();
@@ -229,7 +238,8 @@ impl IoUring {
         }
     }
 
-    /// Block until at least one [`CQE`] is completed. This will consume that CQE.
+    /// Block until at least one [`CQE`] is completed. This will consume that
+    /// CQE.
     pub fn wait_for_cqe(&mut self) -> io::Result<CQE> {
         let ring = NonNull::from(&self.ring);
         self.inner_wait_for_cqes(1, ptr::null())
@@ -253,11 +263,12 @@ impl IoUring {
         CQEs::new(NonNull::from(&mut self.ring))
     }
 
-    /// Returns an iterator of [`CQE`]s which will block when there are no CQEs ready. It will
-    /// block until at least `count` are ready, and then continue iterating.
+    /// Returns an iterator of [`CQE`]s which will block when there are no CQEs
+    /// ready. It will block until at least `count` are ready, and then
+    /// continue iterating.
     ///
-    /// This iterator will never be exhausted; every time it runs out of CQEs it will block the
-    /// thread and wait for more to be ready.
+    /// This iterator will never be exhausted; every time it runs out of CQEs it
+    /// will block the thread and wait for more to be ready.
     pub fn cqes_blocking(&mut self, count: u32) -> CQEsBlocking<'_> {
         CQEsBlocking::new(NonNull::from(&mut self.ring), count)
     }

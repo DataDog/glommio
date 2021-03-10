@@ -1,5 +1,5 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
@@ -8,41 +8,48 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-use crate::executor::{maybe_activate, TaskQueue};
-use crate::task::task_impl;
-use crate::task::JoinHandle;
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use crate::{
+    executor::{maybe_activate, TaskQueue},
+    task::{task_impl, JoinHandle},
+};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    future::Future,
+    marker::PhantomData,
+    panic::{RefUnwindSafe, UnwindSafe},
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+};
 
 /// A runnable future, ready for execution.
 ///
-/// When a future is internally spawned using `task::spawn()` or `task::spawn_local()`,
-/// we get back two values:
+/// When a future is internally spawned using `task::spawn()` or
+/// `task::spawn_local()`, we get back two values:
 ///
 /// 1. an `task::Task<()>`, which we refer to as a `Runnable`
 /// 2. an `task::JoinHandle<T, ()>`, which is wrapped inside a `Task<T>`
 ///
-/// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken. When it's
-/// woken up, its schedule function is called, which means the `Runnable` gets pushed into a task
-/// queue in an executor.
+/// Once a `Runnable` is run, it "vanishes" and only reappears when its future
+/// is woken. When it's woken up, its schedule function is called, which means
+/// the `Runnable` gets pushed into a task queue in an executor.
 pub(crate) type Runnable = task_impl::Task;
 
 /// A spawned future.
 ///
-/// Tasks are also futures themselves and yield the output of the spawned future.
+/// Tasks are also futures themselves and yield the output of the spawned
+/// future.
 ///
-/// When a task is dropped, its gets canceled and won't be polled again. To cancel a task a bit
-/// more gracefully and wait until it stops running, use the [`cancel()`][Task::cancel()] method.
+/// When a task is dropped, its gets canceled and won't be polled again. To
+/// cancel a task a bit more gracefully and wait until it stops running, use the
+/// [`cancel()`][Task::cancel()] method.
 ///
-/// Tasks that panic get immediately canceled. Awaiting a canceled task also causes a panic.
+/// Tasks that panic get immediately canceled. Awaiting a canceled task also
+/// causes a panic.
 ///
-/// If a task panics, the panic will be thrown by the [`Ticker::tick()`] invocation that polled it.
+/// If a task panics, the panic will be thrown by the [`Ticker::tick()`]
+/// invocation that polled it.
 ///
 /// ```
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
@@ -146,7 +153,8 @@ impl LocalExecutor {
             }
         };
 
-        // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
+        // Create a task, push it into the queue by scheduling it, and return its `Task`
+        // handle.
         let (runnable, handle) = task_impl::spawn_local(future, schedule);
         runnable.schedule();
         Task(Some(handle))

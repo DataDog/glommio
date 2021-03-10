@@ -1,56 +1,60 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::stream::GlommioStream;
-use crate::net::yolo_accept;
-use crate::parking::Reactor;
-use crate::GlommioError;
-use crate::Local;
-use futures_lite::future::poll_fn;
-use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
-use futures_lite::ready;
-use futures_lite::stream::{self, Stream};
+use crate::{net::yolo_accept, parking::Reactor, GlommioError, Local};
+use futures_lite::{
+    future::poll_fn,
+    io::{AsyncBufRead, AsyncRead, AsyncWrite},
+    ready,
+    stream::{self, Stream},
+};
 use nix::sys::socket::{InetAddr, SockAddr};
 use pin_project_lite::pin_project;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::io;
-use std::net::{self, Shutdown, SocketAddr, ToSocketAddrs};
-use std::os::unix::io::RawFd;
-use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::task::{Context, Poll};
+use std::{
+    io,
+    net::{self, Shutdown, SocketAddr, ToSocketAddrs},
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    pin::Pin,
+    rc::{Rc, Weak},
+    task::{Context, Poll},
+};
 
 type Result<T> = crate::Result<T, ()>;
 
 #[derive(Debug)]
 /// A TCP socket server, listening for connections.
 ///
-/// After creating a TcpListener by binding it to a socket address, it listens for incoming TCP connections.
-/// These can be accepted by calling [`accept`] or [`shared_accept`], or by iterating over the Incoming iterator returned by [`incoming`].
+/// After creating a TcpListener by binding it to a socket address, it listens
+/// for incoming TCP connections. These can be accepted by calling [`accept`] or
+/// [`shared_accept`], or by iterating over the Incoming iterator returned by
+/// [`incoming`].
 ///
-/// A good networking architecture within a thread-per-core model needs to take into account
-/// parallelism and spawn work into multiple executors. If everything happens inside the same
-/// Executor, then at most one thread is used. Sometimes this is what you want: you may want to
-/// dedicate a CPU entirely for networking, or even use specialized ports for each CPU of the
+/// A good networking architecture within a thread-per-core model needs to take
+/// into account parallelism and spawn work into multiple executors. If
+/// everything happens inside the same Executor, then at most one thread is
+/// used. Sometimes this is what you want: you may want to dedicate a CPU
+/// entirely for networking, or even use specialized ports for each CPU of the
 /// application, but most likely it isn't.
 ///
 /// There are two approaches to load balancing possible with the `TcpListener`:
 ///
-/// * By default, the ReusePort flag is set in the socket automatically. The OS already provides
-///   some load balancing capabilities with that so you can simply [`bind`] to the same address
-///   from many executors.
+/// * By default, the ReusePort flag is set in the socket automatically. The OS
+///   already provides some load balancing capabilities with that so you can
+///   simply [`bind`] to the same address from many executors.
 ///
-/// * If that is insufficient or otherwise not desirable, it is possible to use [`shared_accept`]
-///   instead of [`accept`]: that returns an object that implements [`Send`]. You can then use a
-///   [`shared_channel`] to send the accepted connection into multiple executors. The object
-///   returned by [`shared_accept`] can then be bound to its executor with [`bind_to_executor`], at
-///   which point it becomes a standard [`TcpStream`].
+/// * If that is insufficient or otherwise not desirable, it is possible to use
+///   [`shared_accept`] instead of [`accept`]: that returns an object that
+///   implements [`Send`]. You can then use a [`shared_channel`] to send the
+///   accepted connection into multiple executors. The object returned by
+///   [`shared_accept`] can then be bound to its executor with
+///   [`bind_to_executor`], at which point it becomes a standard [`TcpStream`].
 ///
-/// Relying on the OS is definitely simpler, but which approach is better depends on the specific
-/// needs of your application.
+/// Relying on the OS is definitely simpler, but which approach is better
+/// depends on the specific needs of your application.
 ///
 /// The socket will be closed when the value is dropped.
 ///
@@ -71,14 +75,14 @@ impl TcpListener {
     ///
     /// Binding with port number 0 will request an available port from the OS.
     ///
-    /// This method sets the ReusePort option in the bound socket, so it is designed to
-    /// be called from multiple executors to achieve parallelism.
+    /// This method sets the ReusePort option in the bound socket, so it is
+    /// designed to be called from multiple executors to achieve
+    /// parallelism.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::TcpListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -111,22 +115,22 @@ impl TcpListener {
         })
     }
 
-    /// Accepts a new incoming TCP connection and allows the result to be sent to a foreign
-    /// executor
+    /// Accepts a new incoming TCP connection and allows the result to be sent
+    /// to a foreign executor
     ///
-    /// This is similar to [`accept`], except it returns an [`AcceptedTcpStream`] instead of
-    /// a [`TcpStream`]. [`AcceptedTcpStream`] implements [`Send`], so it can be safely sent
+    /// This is similar to [`accept`], except it returns an
+    /// [`AcceptedTcpStream`] instead of a [`TcpStream`].
+    /// [`AcceptedTcpStream`] implements [`Send`], so it can be safely sent
     /// for processing over a shared channel to a different executor.
     ///
-    /// This is useful when the user wants to do her own load balancing across multiple executors
-    /// instead of relying on the load balancing the OS would do with the ReusePort property of
-    /// the bound socket.
+    /// This is useful when the user wants to do her own load balancing across
+    /// multiple executors instead of relying on the load balancing the OS
+    /// would do with the ReusePort property of the bound socket.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -157,18 +161,17 @@ impl TcpListener {
 
     /// Accepts a new incoming TCP connection in this executor
     ///
-    /// This is similar to calling [`shared_accept`] and [`bind_to_executor`] in a single
-    /// operation.
+    /// This is similar to calling [`shared_accept`] and [`bind_to_executor`] in
+    /// a single operation.
     ///
-    /// If this connection once accepted is to be handled by the same executor in which it
-    /// was accepted, this version is preferred.
+    /// If this connection once accepted is to be handled by the same executor
+    /// in which it was accepted, this version is preferred.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpListener;
-    /// use glommio::LocalExecutor;
     /// use futures_lite::stream::StreamExt;
+    /// use glommio::{net::TcpListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -190,9 +193,8 @@ impl TcpListener {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpListener;
-    /// use glommio::LocalExecutor;
     /// use futures_lite::stream::StreamExt;
+    /// use glommio::{net::TcpListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -214,8 +216,7 @@ impl TcpListener {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::TcpListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -229,13 +230,12 @@ impl TcpListener {
 
     /// Gets the value of the `IP_TTL` option for this socket.
     ///
-    /// This option configures the time-to-live field that is used in every packet sent from this
-    /// socket.
+    /// This option configures the time-to-live field that is used in every
+    /// packet sent from this socket.
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::TcpListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -251,13 +251,12 @@ impl TcpListener {
 
     /// Sets the value of the `IP_TTL` option for this socket.
     ///
-    /// This option configures the time-to-live field that is used in every packet sent from this
-    /// socket.
+    /// This option configures the time-to-live field that is used in every
+    /// packet sent from this socket.
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::TcpListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -275,12 +274,13 @@ impl TcpListener {
 #[derive(Copy, Clone, Debug)]
 /// An Accepted Tcp connection that can be moved to a different executor
 ///
-/// This is useful in situations where the load balancing provided by the Operating System
-/// through ReusePort is not desirable. The user can accept the connection in one executor
-/// through [`shared_accept`] which returns an AcceptedTcpStream.
+/// This is useful in situations where the load balancing provided by the
+/// Operating System through ReusePort is not desirable. The user can accept the
+/// connection in one executor through [`shared_accept`] which returns an
+/// AcceptedTcpStream.
 ///
-/// Once the `AcceptedTcpStream` arrives at its destination it can then be made active with
-/// [`bind_to_executor`]
+/// Once the `AcceptedTcpStream` arrives at its destination it can then be made
+/// active with [`bind_to_executor`]
 ///
 /// [`shared_accept`]: TcpListener::shared_accept
 /// [`bind_to_executor`]: AcceptedTcpStream::bind_to_executor
@@ -295,28 +295,32 @@ impl AcceptedTcpStream {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::TcpListener;
-    /// use glommio::{LocalExecutorBuilder, LocalExecutor};
-    /// use glommio::channels::shared_channel;
+    /// use glommio::{
+    ///     channels::shared_channel,
+    ///     net::TcpListener,
+    ///     LocalExecutor,
+    ///     LocalExecutorBuilder,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
+    ///     let (sender, receiver) = shared_channel::new_bounded(1);
+    ///     let sender = sender.connect().await;
     ///
-    ///    let (sender, receiver) = shared_channel::new_bounded(1);
-    ///    let sender = sender.connect().await;
+    ///     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     ///
-    ///    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    ///     let accepted = listener.shared_accept().await.unwrap();
+    ///     sender.try_send(accepted).unwrap();
     ///
-    ///    let accepted = listener.shared_accept().await.unwrap();
-    ///    sender.try_send(accepted).unwrap();
+    ///     let ex1 = LocalExecutorBuilder::new()
+    ///         .spawn(move || async move {
+    ///             let receiver = receiver.connect().await;
+    ///             let accepted = receiver.recv().await.unwrap();
+    ///             let _ = accepted.bind_to_executor();
+    ///         })
+    ///         .unwrap();
     ///
-    ///   let ex1 = LocalExecutorBuilder::new().spawn(move || async move {
-    ///       let receiver = receiver.connect().await;
-    ///       let accepted = receiver.recv().await.unwrap();
-    ///       let _ = accepted.bind_to_executor();
-    ///   }).unwrap();
-    ///
-    ///   ex1.join().unwrap();
+    ///     ex1.join().unwrap();
     /// });
     /// ```
     pub fn bind_to_executor(self) -> TcpStream {
@@ -367,8 +371,7 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -416,8 +419,7 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -436,8 +438,7 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -462,13 +463,12 @@ impl TcpStream {
 
     /// Gets the value of the `IP_TTL` option for this socket.
     ///
-    /// This option configures the time-to-live field that is used in every packet sent from this
-    /// socket.
+    /// This option configures the time-to-live field that is used in every
+    /// packet sent from this socket.
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -483,13 +483,12 @@ impl TcpStream {
 
     /// Sets the value of the `IP_TTL` option for this socket.
     ///
-    /// This option configures the time-to-live field that is used in every packet sent from this
-    /// socket.
+    /// This option configures the time-to-live field that is used in every
+    /// packet sent from this socket.
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -502,10 +501,12 @@ impl TcpStream {
         Ok(self.stream.stream.set_ttl(ttl)?)
     }
 
-    /// Receives data on the socket from the remote address to which it is connected, without removing that data from the queue.
+    /// Receives data on the socket from the remote address to which it is
+    /// connected, without removing that data from the queue.
     ///
     /// On success, returns the number of bytes peeked.
-    /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
+    /// Successive calls return the same data. This is accomplished by passing
+    /// MSG_PEEK as a flag to the underlying recv system call.
     pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
         self.stream.peek(buf).await.map_err(Into::into)
     }
@@ -515,8 +516,7 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -533,8 +533,7 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -596,16 +595,19 @@ impl AsyncWrite for TcpStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channels::shared_channel;
-    use crate::enclose;
-    use crate::timer::Timer;
-    use crate::LocalExecutorBuilder;
-    use futures_lite::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-    use futures_lite::StreamExt;
-    use std::cell::Cell;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
+    use crate::{channels::shared_channel, enclose, timer::Timer, LocalExecutorBuilder};
+    use futures_lite::{
+        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
+        StreamExt,
+    };
+    use std::{
+        cell::Cell,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
 
     #[test]
     fn tcp_listener_ttl() {
@@ -794,7 +796,8 @@ mod tests {
             // the ring
             Timer::new(Duration::from_millis(100)).await;
 
-            // Now we should be able to establish 128 connections and all of that would accept
+            // Now we should be able to establish 128 connections and all of that would
+            // accept
             for _ in 0..128 {
                 handles.push(
                     Local::local(async move {

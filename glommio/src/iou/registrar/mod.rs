@@ -1,39 +1,38 @@
 //! Types related to registration and registered resources.
 //!
-//! The [`Registrar`] type can be used to register resources with the kernel that will be used with
-//! a particular [`IoUring`] instance. This can improve performance by avoiding the kernel from
-//! reallocating resources for each IO events performed against those resources.
+//! The [`Registrar`] type can be used to register resources with the kernel
+//! that will be used with a particular [`IoUring`] instance. This can improve
+//! performance by avoiding the kernel from reallocating resources for each IO
+//! events performed against those resources.
 //!
-//! When file descriptors and buffers are registered with the kernel, an iterator of the type-safe
-//! [`Registered`] wrapper is returned. This wrapper makes it easier to correctly use
-//! pre-registered resources. By passing a [`RegisteredFd`] or the correct type of registered
-//! buffer to an `SQE`s prep methods, the SQE will be properly prepared to use the
-//! pre-registered object.
+//! When file descriptors and buffers are registered with the kernel, an
+//! iterator of the type-safe [`Registered`] wrapper is returned. This wrapper
+//! makes it easier to correctly use pre-registered resources. By passing a
+//! [`RegisteredFd`] or the correct type of registered buffer to an `SQE`s prep
+//! methods, the SQE will be properly prepared to use the pre-registered object.
 mod registered;
 
-use std::fmt;
-use std::io;
-use std::marker::PhantomData;
-use std::os::unix::io::RawFd;
-use std::ptr::NonNull;
+use std::{fmt, io, marker::PhantomData, os::unix::io::RawFd, ptr::NonNull};
 
 use super::{resultify, IoUring, Probe};
 use crate::uring_sys;
 
 pub use registered::*;
 
-/// A `Registrar` creates ahead-of-time kernel references to files and user buffers.
+/// A `Registrar` creates ahead-of-time kernel references to files and user
+/// buffers.
 ///
-/// Preregistration significantly reduces per-IO overhead, so consider registering frequently
-/// used files and buffers. For file IO, preregistration lets the kernel skip the atomic acquire and
-/// release of a kernel-specific file descriptor. For buffer IO, the kernel can avoid mapping kernel
+/// Preregistration significantly reduces per-IO overhead, so consider
+/// registering frequently used files and buffers. For file IO, preregistration
+/// lets the kernel skip the atomic acquire and release of a kernel-specific
+/// file descriptor. For buffer IO, the kernel can avoid mapping kernel
 /// memory for every operation.
 ///
-/// Beware that registration is relatively expensive and should be done before any performance
-/// sensitive code.
+/// Beware that registration is relatively expensive and should be done before
+/// any performance sensitive code.
 ///
-/// If you want to register a file but don't have an open file descriptor yet, you can register
-/// a [placeholder](PLACEHOLDER_FD) descriptor and
+/// If you want to register a file but don't have an open file descriptor yet,
+/// you can register a [placeholder](PLACEHOLDER_FD) descriptor and
 /// [update](crate::registrar::Registrar::update_registered_files) it later.
 pub struct Registrar<'ring> {
     ring: NonNull<uring_sys::io_uring>,
@@ -93,22 +92,24 @@ impl<'ring> Registrar<'ring> {
             .map(|(i, buf)| Registered::new(i as u32, &mut **buf)))
     }
 
-    /// Unregister all currently registered buffers. An explicit call to this method is often unecessary,
-    /// because all buffers will be unregistered automatically when the ring is dropped.
+    /// Unregister all currently registered buffers. An explicit call to this
+    /// method is often unecessary, because all buffers will be unregistered
+    /// automatically when the ring is dropped.
     pub fn unregister_buffers(&self) -> io::Result<()> {
         resultify(unsafe { uring_sys::io_uring_unregister_buffers(self.ring.as_ptr()) })?;
         Ok(())
     }
 
-    /// Register a set of files with the kernel. Registered files handle kernel fileset indexing
-    /// behind the scenes and can often be used in place of raw file descriptors.
+    /// Register a set of files with the kernel. Registered files handle kernel
+    /// fileset indexing behind the scenes and can often be used in place of
+    /// raw file descriptors.
     ///
     /// # Errors
     /// Returns an error if
     /// * there is a preexisting set of registered files,
     /// * the `files` slice was empty,
-    /// * the inner [`io_uring_register_files`](uring_sys::io_uring_register_files) call failed for
-    ///   another reason
+    /// * the inner [`io_uring_register_files`](uring_sys::
+    ///   io_uring_register_files) call failed for another reason
     pub fn register_files<'a>(
         &self,
         files: &'a [RawFd],
@@ -127,8 +128,9 @@ impl<'ring> Registrar<'ring> {
             .map(|(i, &fd)| RegisteredFd::new(i as u32, fd)))
     }
 
-    /// Update the currently registered kernel fileset. It is usually more efficient to reserve space
-    /// for files before submitting events, because `IoUring` will wait until the submission queue is
+    /// Update the currently registered kernel fileset. It is usually more
+    /// efficient to reserve space for files before submitting events,
+    /// because `IoUring` will wait until the submission queue is
     /// empty before registering files.
     /// # Errors
     /// Returns an error if
@@ -136,8 +138,8 @@ impl<'ring> Registrar<'ring> {
     /// * the `files` slice was empty,
     /// * `offset` is out of bounds,
     /// * the `files` slice was too large,
-    /// * the inner [`io_uring_register_files_update`](uring_sys::io_uring_register_files_update) call
-    ///   failed for another reason
+    /// * the inner [`io_uring_register_files_update`](uring_sys::
+    ///   io_uring_register_files_update) call failed for another reason
     pub fn update_registered_files<'a>(
         &mut self,
         offset: usize,

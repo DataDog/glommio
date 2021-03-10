@@ -1,15 +1,15 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use futures_lite::{AsyncReadExt, AsyncWriteExt};
-use glommio::net::{TcpListener, TcpStream};
-use glommio::prelude::*;
-use glommio::Task;
-use std::io::Result;
-use std::rc::Rc;
-use std::time::Instant;
+use glommio::{
+    net::{TcpListener, TcpStream},
+    prelude::*,
+    Task,
+};
+use std::{io::Result, rc::Rc, time::Instant};
 
 async fn server(conns: usize) -> Result<()> {
     let listener = Rc::new(TcpListener::bind("127.0.0.1:10000").unwrap());
@@ -20,9 +20,10 @@ async fn server(conns: usize) -> Result<()> {
     );
 
     // After we are already listening, we will spawn the client.
-    // Not only this will guarantee that we are listening on the port already (so no need
-    // for sleep or retry), but it also demonstrates how a more complex application may not
-    // necessarily spawn all executors at once running symmetrical code.
+    // Not only this will guarantee that we are listening on the port already (so no
+    // need for sleep or retry), but it also demonstrates how a more complex
+    // application may not necessarily spawn all executors at once running
+    // symmetrical code.
     let client_handle = LocalExecutorBuilder::new()
         .pin_to_cpu(2)
         .name("client")
@@ -107,7 +108,8 @@ fn main() -> Result<()> {
 
     // Congrats for getting to the end of this example!
     //
-    // Now can you adapt it so it uses multiple executors and all CPUs in your system?
+    // Now can you adapt it so it uses multiple executors and all CPUs in your
+    // system?
     server_handle.join().unwrap();
     Ok(())
 }

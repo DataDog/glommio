@@ -1,21 +1,27 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
-use crate::io::BufferedFile;
-use crate::parking::Reactor;
-use crate::sys::{DmaBuffer, Source};
-use crate::Local;
-use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom};
-use futures_lite::ready;
+use crate::{
+    io::BufferedFile,
+    parking::Reactor,
+    sys::{DmaBuffer, Source},
+    Local,
+};
+use futures_lite::{
+    io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom},
+    ready,
+};
 use pin_project_lite::pin_project;
-use std::convert::TryInto;
-use std::io;
-use std::os::unix::io::AsRawFd;
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::task::{Context, Poll, Waker};
+use std::{
+    convert::TryInto,
+    io,
+    os::unix::io::AsRawFd,
+    pin::Pin,
+    rc::{Rc, Weak},
+    task::{Context, Poll, Waker},
+};
 
 type Result<T> = crate::Result<T, ()>;
 
@@ -59,9 +65,8 @@ pin_project! {
 /// # Examples
 ///
 /// ```no_run
-/// use glommio::io::stdin;
-/// use glommio::LocalExecutor;
 /// use futures_lite::AsyncBufReadExt;
+/// use glommio::{io::stdin, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async {
@@ -119,7 +124,8 @@ pub struct StreamReaderBuilder {
 }
 
 #[derive(Debug)]
-/// Builds a [`StreamWriter`], allowing linear write access to a [`BufferedFile`]
+/// Builds a [`StreamWriter`], allowing linear write access to a
+/// [`BufferedFile`]
 ///
 /// [`BufferedFile`]: struct.BufferedFile.html
 /// [`StreamWriter`]: struct.StreamWriter.html
@@ -176,7 +182,8 @@ impl Buffer {
         self.buffer_pos += amt;
     }
 
-    // copies as many bytes as possible from buf to ourselves, return how many bytes we copied.
+    // copies as many bytes as possible from buf to ourselves, return how many bytes
+    // we copied.
     fn copy_from_buffer(&mut self, buf: &[u8]) -> usize {
         let max_size = self.max_buffer_size;
         let copy_size = std::cmp::min(max_size - self.data.len(), buf.len());
@@ -223,8 +230,10 @@ impl StreamReaderBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::io::{BufferedFile, StreamReaderBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{BufferedFile, StreamReaderBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -257,8 +266,8 @@ impl StreamReaderBuilder {
 
     /// Define an end position.
     ///
-    /// Reads from the [`StreamReader`] will end at this position even if the file
-    /// is larger.
+    /// Reads from the [`StreamReader`] will end at this position even if the
+    /// file is larger.
     ///
     /// [`StreamReader`]: struct.StreamReader.html
     pub fn with_end_pos(mut self, end: u64) -> Self {
@@ -274,7 +283,8 @@ impl StreamReaderBuilder {
         self
     }
 
-    /// Builds a [`StreamReader`] with the properties defined by this [`StreamReaderBuilder`]
+    /// Builds a [`StreamReader`] with the properties defined by this
+    /// [`StreamReaderBuilder`]
     ///
     /// [`StreamReader`]: struct.StreamReader.html
     /// [`StreamReaderBuilder`]: struct.StreamReaderBuilder.html
@@ -294,8 +304,10 @@ impl StreamWriterBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::io::{BufferedFile, StreamWriterBuilder};
-    /// use glommio::LocalExecutor;
+    /// use glommio::{
+    ///     io::{BufferedFile, StreamWriterBuilder},
+    ///     LocalExecutor,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
@@ -315,8 +327,9 @@ impl StreamWriterBuilder {
         }
     }
 
-    /// Chooses whether or not to issue a sync operation when closing the file (default enabled).
-    /// Disabling this is dangerous and in most cases may lead to data loss upon power failure.
+    /// Chooses whether or not to issue a sync operation when closing the file
+    /// (default enabled). Disabling this is dangerous and in most cases may
+    /// lead to data loss upon power failure.
     pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
         self.sync_on_close = !flush_disabled;
         self
@@ -330,7 +343,8 @@ impl StreamWriterBuilder {
         self
     }
 
-    /// Builds a [`StreamWriter`] with the properties defined by this [`StreamWriterBuilder`]
+    /// Builds a [`StreamWriter`] with the properties defined by this
+    /// [`StreamWriterBuilder`]
     ///
     /// [`StreamWriter`]: struct.StreamWriter.html
     /// [`StreamWriterBuilder`]: struct.StreamWriterBuilder.html

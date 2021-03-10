@@ -1,55 +1,61 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 //! Thread parking
 //!
-//! This module exposes a similar API as [`parking`][docs-parking]. However it is adapted to be
-//! used in a thread-per-core environment. Because there is a single thread per reactor, there
-//! is no way to forceably unpark a parked reactor so we don't expose an unpark function.
+//! This module exposes a similar API as [`parking`][docs-parking]. However it
+//! is adapted to be used in a thread-per-core environment. Because there is a
+//! single thread per reactor, there is no way to forceably unpark a parked
+//! reactor so we don't expose an unpark function.
 //!
 //! Also, we expose a function called poll_io aside from park.
 //!
-//! poll_io will poll for I/O, but not ever sleep. This is useful when we know there are more
-//! events and are just doing I/O so we don't starve anybody.
+//! poll_io will poll for I/O, but not ever sleep. This is useful when we know
+//! there are more events and are just doing I/O so we don't starve anybody.
 //!
-//! park() is different in that it may sleep if no new events arrive. It essentially means:
-//! "I, the executor, have nothing else to do. If you don't find work feel free to sleep"
+//! park() is different in that it may sleep if no new events arrive. It
+//! essentially means: "I, the executor, have nothing else to do. If you don't
+//! find work feel free to sleep"
 //!
-//! Executors may use this mechanism to go to sleep when idle and wake up when more work is
-//! scheduled. By waking tasks blocked on I/O and then running those tasks on the same thread,
-//! no thread context switch is necessary when going between task execution and I/O.
-//!
+//! Executors may use this mechanism to go to sleep when idle and wake up when
+//! more work is scheduled. By waking tasks blocked on I/O and then running
+//! those tasks on the same thread, no thread context switch is necessary when
+//! going between task execution and I/O.
 
 use crate::iou::sqe::SockAddrStorage;
 use ahash::AHashMap;
 use log::error;
 use nix::sys::socket::{MsgFlags, SockAddr};
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, VecDeque};
-use std::ffi::CString;
-use std::fmt;
-use std::io;
-use std::mem;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::RawFd;
-use std::panic::{self, RefUnwindSafe, UnwindSafe};
-use std::path::Path;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
-use std::task::{Poll, Waker};
-use std::time::{Duration, Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, VecDeque},
+    ffi::CString,
+    fmt,
+    io,
+    mem,
+    os::unix::{ffi::OsStrExt, io::RawFd},
+    panic::{self, RefUnwindSafe, UnwindSafe},
+    path::Path,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+    task::{Poll, Waker},
+    time::{Duration, Instant},
+};
 
 use futures_lite::*;
 
-use crate::sys;
-use crate::sys::{
-    DirectIO, DmaBuffer, IOBuffer, PollableStatus, SleepNotifier, Source, SourceType,
+use crate::{
+    sys,
+    sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, SleepNotifier, Source, SourceType},
+    IoRequirements,
+    Latency,
+    Local,
 };
-use crate::Local;
-use crate::{IoRequirements, Latency};
 
 /// Waits for a notification.
 pub(crate) struct Parker {
@@ -62,7 +68,8 @@ impl RefUnwindSafe for Parker {}
 impl Parker {
     /// Creates a new parker.
     pub(crate) fn new() -> Parker {
-        // Ensure `Reactor` is initialized now to prevent it from being initialized in `Drop`.
+        // Ensure `Reactor` is initialized now to prevent it from being initialized in
+        // `Drop`.
         Parker {
             inner: Rc::new(Inner {}),
         }
@@ -122,9 +129,9 @@ struct Timers {
 
     /// An ordered map of registered timers.
     ///
-    /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used to
-    /// distinguish timers that fire at the same time. The `Waker` represents the task awaiting the
-    /// timer.
+    /// Timers are in the order in which they fire. The `usize` in this type is
+    /// a timer ID used to distinguish timers that fire at the same time.
+    /// The `Waker` represents the task awaiting the timer.
     timers: BTreeMap<(Instant, u64), Waker>,
 }
 
@@ -225,9 +232,11 @@ impl SharedChannels {
 /// The reactor.
 ///
 /// Every async I/O handle and every timer is registered here. Invocations of
-/// [`run()`][`crate::run()`] poll the reactor to check for new events every now and then.
+/// [`run()`][`crate::run()`] poll the reactor to check for new events every now
+/// and then.
 ///
-/// There is only one global instance of this type, accessible by [`Local::get_reactor()`].
+/// There is only one global instance of this type, accessible by
+/// [`Local::get_reactor()`].
 pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
     pub(crate) sys: sys::Reactor,
@@ -245,12 +254,12 @@ pub(crate) struct Reactor {
     ///
     /// There will be events if the head and tail of the CQ ring are different.
     /// liburing has an inline function in its header to do this, but it becomes
-    /// a function call if I use through uring-sys. This is quite critical and already
-    /// more expensive than it should be (see comments for need_preempt()), so implement
-    /// this ourselves.
+    /// a function call if I use through uring-sys. This is quite critical and
+    /// already more expensive than it should be (see comments for
+    /// need_preempt()), so implement this ourselves.
     ///
-    /// Also we don't want to acquire these addresses (which are behind a refcell)
-    /// every time. Acquire during initialization
+    /// Also we don't want to acquire these addresses (which are behind a
+    /// refcell) every time. Acquire during initialization
     preempt_ptr_head: *const u32,
     preempt_ptr_tail: *const AtomicU32,
 }
@@ -380,7 +389,8 @@ impl Reactor {
             iov_base: buf.as_ptr() as *mut libc::c_void,
             iov_len: 1,
         };
-        // note that the iov and addresses we have above are stack addresses. We will leave it blank and the io_uring callee will fill that up
+        // note that the iov and addresses we have above are stack addresses. We will
+        // leave it blank and the io_uring callee will fill that up
         let hdr = libc::msghdr {
             msg_name: std::ptr::null_mut(),
             msg_namelen: 0,
@@ -636,8 +646,8 @@ impl Reactor {
     }
 }
 
-// FIXME: source should be partitioned in two, write_dma and read_dma should not be allowed
-// in files that don't support it, and same for readable() writable()
+// FIXME: source should be partitioned in two, write_dma and read_dma should not
+// be allowed in files that don't support it, and same for readable() writable()
 impl Source {
     pub(crate) async fn collect_rw(&self) -> io::Result<usize> {
         future::poll_fn(|cx| {

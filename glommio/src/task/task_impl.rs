@@ -1,26 +1,19 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use core::fmt;
-use core::future::Future;
-use core::marker::PhantomData;
-use core::mem;
-use core::ptr::NonNull;
+use core::{fmt, future::Future, marker::PhantomData, mem, ptr::NonNull};
 
-use crate::task::header::Header;
-use crate::task::raw::RawTask;
-use crate::task::state::*;
-use crate::task::JoinHandle;
+use crate::task::{header::Header, raw::RawTask, state::*, JoinHandle};
 
 /// Creates a new local task.
 ///
-/// This constructor returns a [`Task`] reference that runs the future and a [`JoinHandle`] that
-/// awaits its result.
+/// This constructor returns a [`Task`] reference that runs the future and a
+/// [`JoinHandle`] that awaits its result.
 ///
-/// When run, the task polls `future`. When woken up, it gets scheduled for running by the
-/// `schedule` function.
+/// When run, the task polls `future`. When woken up, it gets scheduled for
+/// running by the `schedule` function.
 ///
 /// [`Task`]: struct.Task.html
 /// [`JoinHandle`]: struct.JoinHandle.html
@@ -47,18 +40,21 @@ where
 
 /// A task reference that runs its future.
 ///
-/// At any moment in time, there is at most one [`Task`] reference associated with a particular
-/// task. Running consumes the [`Task`] reference and polls its internal future. If the future is
-/// still pending after getting polled, the [`Task`] reference simply won't exist until a [`Waker`]
-/// notifies the task. If the future completes, its result becomes available to the [`JoinHandle`].
+/// At any moment in time, there is at most one [`Task`] reference associated
+/// with a particular task. Running consumes the [`Task`] reference and polls
+/// its internal future. If the future is still pending after getting polled,
+/// the [`Task`] reference simply won't exist until a [`Waker`] notifies the
+/// task. If the future completes, its result becomes available to the
+/// [`JoinHandle`].
 ///
-/// When a task is woken up, its [`Task`] reference is recreated and passed to the schedule
-/// function. In most executors, scheduling simply pushes the [`Task`] reference into a queue of
-/// runnable tasks.
+/// When a task is woken up, its [`Task`] reference is recreated and passed to
+/// the schedule function. In most executors, scheduling simply pushes the
+/// [`Task`] reference into a queue of runnable tasks.
 ///
-/// If the [`Task`] reference is dropped without getting run, the task is automatically canceled.
-/// When canceled, the task won't be scheduled again even if a [`Waker`] wakes it. It is possible
-/// for the [`JoinHandle`] to cancel while the [`Task`] reference exists, in which case an attempt
+/// If the [`Task`] reference is dropped without getting run, the task is
+/// automatically canceled. When canceled, the task won't be scheduled again
+/// even if a [`Waker`] wakes it. It is possible for the [`JoinHandle`] to
+/// cancel while the [`Task`] reference exists, in which case an attempt
 /// to run the task won't do anything.
 ///
 /// [`run()`]: struct.Task.html#method.run
@@ -73,8 +69,8 @@ pub struct Task {
 impl Task {
     /// Schedules the task.
     ///
-    /// This is a convenience method that simply reschedules the task by passing it to its schedule
-    /// function.
+    /// This is a convenience method that simply reschedules the task by passing
+    /// it to its schedule function.
     ///
     /// If the task is canceled, this method won't do anything.
     pub fn schedule(self) {
@@ -89,19 +85,21 @@ impl Task {
 
     /// Runs the task.
     ///
-    /// Returns `true` if the task was woken while running, in which case it gets rescheduled at
-    /// the end of this method invocation.
+    /// Returns `true` if the task was woken while running, in which case it
+    /// gets rescheduled at the end of this method invocation.
     ///
-    /// This method polls the task's future. If the future completes, its result will become
-    /// available to the [`JoinHandle`]. And if the future is still pending, the task will have to
-    /// be woken up in order to be rescheduled and run again.
+    /// This method polls the task's future. If the future completes, its result
+    /// will become available to the [`JoinHandle`]. And if the future is
+    /// still pending, the task will have to be woken up in order to be
+    /// rescheduled and run again.
     ///
-    /// If the task was canceled by a [`JoinHandle`] before it gets run, then this method won't do
-    /// anything.
+    /// If the task was canceled by a [`JoinHandle`] before it gets run, then
+    /// this method won't do anything.
     ///
-    /// It is possible that polling the future panics, in which case the panic will be propagated
-    /// into the caller. It is advised that invocations of this method are wrapped inside
-    /// [`catch_unwind`]. If a panic occurs, the task is automatically canceled.
+    /// It is possible that polling the future panics, in which case the panic
+    /// will be propagated into the caller. It is advised that invocations
+    /// of this method are wrapped inside [`catch_unwind`]. If a panic
+    /// occurs, the task is automatically canceled.
     ///
     /// [`JoinHandle`]: struct.JoinHandle.html
     /// [`catch_unwind`]: https://doc.rust-lang.org/std/panic/fn.catch_unwind.html

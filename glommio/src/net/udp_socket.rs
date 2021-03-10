@@ -1,14 +1,16 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::datagram::GlommioDatagram;
 use nix::sys::socket::{InetAddr, SockAddr};
 use socket2::{Domain, Protocol, Socket, Type};
-use std::io;
-use std::net::{self, SocketAddr, ToSocketAddrs};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::{
+    io,
+    net::{self, SocketAddr, ToSocketAddrs},
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+};
 
 type Result<T> = crate::Result<T, ()>;
 
@@ -45,14 +47,13 @@ impl UdpSocket {
     /// Binding with port number 0 will request an available port from the OS.
     ///
     /// This sets the ReusePort option on the socket, so if the OS-provided load
-    /// balancing is enough, it is possible to just bind to the same address from
-    /// multiple executors.
+    /// balancing is enough, it is possible to just bind to the same address
+    /// from multiple executors.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UdpSocket;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UdpSocket, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -81,28 +82,35 @@ impl UdpSocket {
         })
     }
 
-    /// Connects this UDP socket to a remote address, allowing the [`send`] and [`recv`] methods to be
-    /// used to send data and also applies filters to only receive data from the specified address.
+    /// Connects this UDP socket to a remote address, allowing the [`send`] and
+    /// [`recv`] methods to be used to send data and also applies filters to
+    /// only receive data from the specified address.
     ///
-    /// If addr yields multiple addresses, connect will be attempted with each of the addresses
-    /// until the underlying OS function returns no error. Note that usually, a successful connect
-    /// call does not specify that there is a remote server listening on the port, rather, such an
-    /// error would only be detected after the first send. If the OS returns an error for each of
-    /// the specified addresses, the error returned from the last connection attempt (the last
-    /// address) is returned.
+    /// If addr yields multiple addresses, connect will be attempted with each
+    /// of the addresses until the underlying OS function returns no error.
+    /// Note that usually, a successful connect call does not specify that
+    /// there is a remote server listening on the port, rather, such an
+    /// error would only be detected after the first send. If the OS returns an
+    /// error for each of the specified addresses, the error returned from
+    /// the last connection attempt (the last address) is returned.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UdpSocket;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UdpSocket, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     ///     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-    ///     receiver.connect(sender.local_addr().unwrap()).await.unwrap();
-    ///     sender.connect(receiver.local_addr().unwrap()).await.unwrap();
+    ///     receiver
+    ///         .connect(sender.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
+    ///     sender
+    ///         .connect(receiver.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
     /// });
     /// ```
     ///
@@ -136,28 +144,33 @@ impl UdpSocket {
         self.socket.rx_buf_size
     }
 
-    /// Receives single datagram on the socket from the remote address to which it is connected,
-    /// without removing the message from input queue. On success, returns the number of bytes
-    /// peeked.
+    /// Receives single datagram on the socket from the remote address to which
+    /// it is connected, without removing the message from input queue. On
+    /// success, returns the number of bytes peeked.
     ///
-    /// The function must be called with valid byte array buf of sufficient size to hold the
-    /// message bytes. If a message is too long to fit in the supplied buffer, excess bytes may be
-    /// discarded.
+    /// The function must be called with valid byte array buf of sufficient size
+    /// to hold the message bytes. If a message is too long to fit in the
+    /// supplied buffer, excess bytes may be discarded.
     ///
     /// To use this function, [`connect`] must have been called
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UdpSocket;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UdpSocket, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     ///     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-    ///     receiver.connect(sender.local_addr().unwrap()).await.unwrap();
-    ///     sender.send_to(&[1; 1], receiver.local_addr().unwrap()).await.unwrap();
+    ///     receiver
+    ///         .connect(sender.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
+    ///     sender
+    ///         .send_to(&[1; 1], receiver.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
     ///     let mut buf = vec![0; 32];
     ///     let sz = receiver.peek(&mut buf).await.unwrap();
     ///     assert_eq!(sz, 1);
@@ -170,12 +183,13 @@ impl UdpSocket {
         self.socket.peek(buf).await.map_err(Into::into)
     }
 
-    ///Receives a single datagram message on the socket, without removing it from the queue. On
-    ///success, returns the number of bytes read and the origin.
+    ///Receives a single datagram message on the socket, without removing it
+    /// from the queue. On success, returns the number of bytes read and the
+    /// origin.
     ///
-    /// The function must be called with valid byte array buf of sufficient size to hold the
-    /// message bytes. If a message is too long to fit in the supplied buffer, excess bytes may be
-    /// discarded.
+    /// The function must be called with valid byte array buf of sufficient size
+    /// to hold the message bytes. If a message is too long to fit in the
+    /// supplied buffer, excess bytes may be discarded.
     #[track_caller]
     pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         let (sz, addr) = self.socket.peek_from(buf).await?;
@@ -187,7 +201,8 @@ impl UdpSocket {
         Ok((sz, addr.to_std()))
     }
 
-    /// Returns the socket address of the remote peer this socket was connected to.
+    /// Returns the socket address of the remote peer this socket was connected
+    /// to.
     pub fn peer_addr(&self) -> Result<SocketAddr> {
         self.socket.socket.peer_addr().map_err(Into::into)
     }
@@ -197,12 +212,13 @@ impl UdpSocket {
         self.socket.socket.local_addr().map_err(Into::into)
     }
 
-    /// Receives a single datagram message on the socket from the remote address to which it is
-    /// connected.
+    /// Receives a single datagram message on the socket from the remote address
+    /// to which it is connected.
     ///
-    /// On success, returns the number of bytes read.  The function must be called with
-    /// valid byte array buf of sufficient size to hold the message bytes. If a message is too long
-    /// to fit in the supplied buffer, excess bytes may be discarded.
+    /// On success, returns the number of bytes read.  The function must be
+    /// called with valid byte array buf of sufficient size to hold the
+    /// message bytes. If a message is too long to fit in the supplied
+    /// buffer, excess bytes may be discarded.
     ///
     ///
     /// To use this function, [`connect`] must have been called
@@ -210,15 +226,20 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UdpSocket;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UdpSocket, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     ///     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-    ///     receiver.connect(sender.local_addr().unwrap()).await.unwrap();
-    ///     sender.send_to(&[1; 1], receiver.local_addr().unwrap()).await.unwrap();
+    ///     receiver
+    ///         .connect(sender.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
+    ///     sender
+    ///         .send_to(&[1; 1], receiver.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
     ///     let mut buf = vec![0; 32];
     ///     let sz = receiver.recv(&mut buf).await.unwrap();
     ///     assert_eq!(sz, 1);
@@ -231,22 +252,26 @@ impl UdpSocket {
         self.socket.recv(buf).await.map_err(Into::into)
     }
 
-    /// Receives a single datagram message on the socket. On success, returns the number of bytes read and the origin.
+    /// Receives a single datagram message on the socket. On success, returns
+    /// the number of bytes read and the origin.
     ///
-    /// The function must be called with valid byte array buf of sufficient size to hold the message bytes.
-    /// If a message is too long to fit in the supplied buffer, excess bytes may be discarded.
+    /// The function must be called with valid byte array buf of sufficient size
+    /// to hold the message bytes. If a message is too long to fit in the
+    /// supplied buffer, excess bytes may be discarded.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UdpSocket;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UdpSocket, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     ///     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-    ///     sender.send_to(&[1; 1], receiver.local_addr().unwrap()).await.unwrap();
+    ///     sender
+    ///         .send_to(&[1; 1], receiver.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
     ///     let mut buf = vec![0; 32];
     ///     let (sz, addr) = receiver.recv_from(&mut buf).await.unwrap();
     ///     assert_eq!(sz, 1);
@@ -263,21 +288,25 @@ impl UdpSocket {
         Ok((sz, addr.to_std()))
     }
 
-    /// Sends data on the socket to the given address. On success, returns the number of bytes written.
-    /// Address type can be any implementor of [`ToSocketAddrs`] trait. See its documentation for concrete examples.
-    /// It is possible for addr to yield multiple addresses, but send_to will only send data to the first address yielded by addr.
+    /// Sends data on the socket to the given address. On success, returns the
+    /// number of bytes written. Address type can be any implementor of
+    /// [`ToSocketAddrs`] trait. See its documentation for concrete examples.
+    /// It is possible for addr to yield multiple addresses, but send_to will
+    /// only send data to the first address yielded by addr.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UdpSocket;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UdpSocket, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     ///     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-    ///     sender.send_to(&[1; 1], receiver.local_addr().unwrap()).await.unwrap();
+    ///     sender
+    ///         .send_to(&[1; 1], receiver.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
     ///     let mut buf = vec![0; 32];
     ///     let (sz, addr) = receiver.recv_from(&mut buf).await.unwrap();
     ///     assert_eq!(sz, 1);
@@ -300,19 +329,22 @@ impl UdpSocket {
 
     /// Sends data on the socket to the remote address to which it is connected.
     ///
-    /// [`UdpSocket::connect`] will connect this socket to a remote address. This method will fail if the socket is not connected.
+    /// [`UdpSocket::connect`] will connect this socket to a remote address.
+    /// This method will fail if the socket is not connected.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UdpSocket;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UdpSocket, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     ///     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-    ///     sender.connect(receiver.local_addr().unwrap()).await.unwrap();
+    ///     sender
+    ///         .connect(receiver.local_addr().unwrap())
+    ///         .await
+    ///         .unwrap();
     ///     sender.send(&[1; 1]).await.unwrap();
     /// })
     /// ```
@@ -326,9 +358,7 @@ impl UdpSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timer::Timer;
-    use crate::Local;
-    use crate::LocalExecutorBuilder;
+    use crate::{timer::Timer, Local, LocalExecutorBuilder};
     use nix::sys::socket::MsgFlags;
     use std::time::Duration;
 

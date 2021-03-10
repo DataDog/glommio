@@ -1,50 +1,58 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use super::datagram::GlommioDatagram;
-use super::stream::GlommioStream;
-use crate::parking::Reactor;
-use crate::Local;
-use futures_lite::future::poll_fn;
-use futures_lite::io::{AsyncBufRead, AsyncRead, AsyncWrite};
-use futures_lite::ready;
-use futures_lite::stream::{self, Stream};
+use super::{datagram::GlommioDatagram, stream::GlommioStream};
+use crate::{parking::Reactor, Local};
+use futures_lite::{
+    future::poll_fn,
+    io::{AsyncBufRead, AsyncRead, AsyncWrite},
+    ready,
+    stream::{self, Stream},
+};
 use nix::sys::socket::{SockAddr, UnixAddr};
 use pin_project_lite::pin_project;
 use socket2::{Domain, Socket, Type};
-use std::io;
-use std::net::Shutdown;
-use std::os::unix::io::RawFd;
-use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::os::unix::net::{self, SocketAddr};
-use std::path::Path;
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::task::{Context, Poll};
+use std::{
+    io,
+    net::Shutdown,
+    os::unix::{
+        io::{AsRawFd, FromRawFd, RawFd},
+        net::{self, SocketAddr},
+    },
+    path::Path,
+    pin::Pin,
+    rc::{Rc, Weak},
+    task::{Context, Poll},
+};
 
 type Result<T> = crate::Result<T, ()>;
 
 #[derive(Debug)]
 /// A Unix socket server, listening for connections.
 ///
-/// After creating a UnixListener by binding it to a socket address, it listens for incoming Unix connections.
-/// These can be accepted by calling [`accept`] or [`shared_accept`], or by iterating over the Incoming iterator returned by [`incoming`].
+/// After creating a UnixListener by binding it to a socket address, it listens
+/// for incoming Unix connections. These can be accepted by calling [`accept`]
+/// or [`shared_accept`], or by iterating over the Incoming iterator returned by
+/// [`incoming`].
 ///
-/// A good networking architecture within a thread-per-core model needs to take into account
-/// parallelism and spawn work into multiple executors. If everything happens inside the same
-/// Executor, then at most one thread is used. Sometimes this is what you want: you may want to
-/// dedicate a CPU entirely for networking, or even use specialized ports for each CPU of the
+/// A good networking architecture within a thread-per-core model needs to take
+/// into account parallelism and spawn work into multiple executors. If
+/// everything happens inside the same Executor, then at most one thread is
+/// used. Sometimes this is what you want: you may want to dedicate a CPU
+/// entirely for networking, or even use specialized ports for each CPU of the
 /// application, but most likely it isn't.
 ///
-/// There are so far only one approach to load balancing possible with the `UnixListener`:
+/// There are so far only one approach to load balancing possible with the
+/// `UnixListener`:
 ///
-/// * It is possible to use [`shared_accept`]
-///   instead of [`accept`]: that returns an object that implements [`Send`]. You can then use a
-///   [`shared_channel`] to send the accepted connection into multiple executors. The object
-///   returned by [`shared_accept`] can then be bound to its executor with [`bind_to_executor`], at
-///   which point it becomes a standard [`UnixStream`].
+/// * It is possible to use [`shared_accept`] instead of [`accept`]: that
+///   returns an object that implements [`Send`]. You can then use a
+///   [`shared_channel`] to send the accepted connection into multiple
+///   executors. The object returned by [`shared_accept`] can then be bound to
+///   its executor with [`bind_to_executor`], at which point it becomes a
+///   standard [`UnixStream`].
 ///
 ///
 /// The socket will be closed when the value is dropped.
@@ -66,14 +74,14 @@ impl UnixListener {
     ///
     /// Binding with port number 0 will request an available port from the OS.
     ///
-    /// This method sets the ReusePort option in the bound socket, so it is designed to
-    /// be called from multiple executors to achieve parallelism.
+    /// This method sets the ReusePort option in the bound socket, so it is
+    /// designed to be called from multiple executors to achieve
+    /// parallelism.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -94,22 +102,22 @@ impl UnixListener {
         })
     }
 
-    /// Accepts a new incoming Unix connection and allows the result to be sent to a foreign
-    /// executor
+    /// Accepts a new incoming Unix connection and allows the result to be sent
+    /// to a foreign executor
     ///
-    /// This is similar to [`accept`], except it returns an [`AcceptedUnixStream`] instead of
-    /// a [`UnixStream`]. [`AcceptedUnixStream`] implements [`Send`], so it can be safely sent
+    /// This is similar to [`accept`], except it returns an
+    /// [`AcceptedUnixStream`] instead of a [`UnixStream`].
+    /// [`AcceptedUnixStream`] implements [`Send`], so it can be safely sent
     /// for processing over a shared channel to a different executor.
     ///
-    /// This is useful when the user wants to do her own load balancing across multiple executors
-    /// instead of relying on the load balancing the OS would do with the ReusePort property of
-    /// the bound socket.
+    /// This is useful when the user wants to do her own load balancing across
+    /// multiple executors instead of relying on the load balancing the OS
+    /// would do with the ReusePort property of the bound socket.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -131,18 +139,17 @@ impl UnixListener {
 
     /// Accepts a new incoming Unix connection in this executor
     ///
-    /// This is similar to calling [`shared_accept`] and [`bind_to_executor`] in a single
-    /// operation.
+    /// This is similar to calling [`shared_accept`] and [`bind_to_executor`] in
+    /// a single operation.
     ///
-    /// If this connection once accepted is to be handled by the same executor in which it
-    /// was accepted, this version is preferred.
+    /// If this connection once accepted is to be handled by the same executor
+    /// in which it was accepted, this version is preferred.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixListener;
-    /// use glommio::LocalExecutor;
     /// use futures_lite::stream::StreamExt;
+    /// use glommio::{net::UnixListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -163,16 +170,15 @@ impl UnixListener {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixListener;
-    /// use glommio::LocalExecutor;
     /// use futures_lite::stream::StreamExt;
+    /// use glommio::{net::UnixListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
     ///     let listener = UnixListener::bind("/tmp/named").unwrap();
     ///     let mut incoming = listener.incoming();
     ///     while let Some(conn) = incoming.next().await {
-    ///        // handle
+    ///         // handle
     ///     }
     /// });
     /// ```
@@ -187,8 +193,7 @@ impl UnixListener {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::UnixListener;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixListener, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -204,12 +209,13 @@ impl UnixListener {
 #[derive(Copy, Clone, Debug)]
 /// An Accepted Unix connection that can be moved to a different executor
 ///
-/// This is useful in situations where the load balancing provided by the Operating System
-/// through ReusePort is not desirable. The user can accept the connection in one executor
-/// through [`shared_accept`] which returns an AcceptedUnixStream.
+/// This is useful in situations where the load balancing provided by the
+/// Operating System through ReusePort is not desirable. The user can accept the
+/// connection in one executor through [`shared_accept`] which returns an
+/// AcceptedUnixStream.
 ///
-/// Once the `AcceptedUnixStream` arrives at its destination it can then be made active with
-/// [`bind_to_executor`]
+/// Once the `AcceptedUnixStream` arrives at its destination it can then be made
+/// active with [`bind_to_executor`]
 ///
 /// [`shared_accept`]: UnixListener::shared_accept
 /// [`bind_to_executor`]: AcceptedUnixStream::bind_to_executor
@@ -224,28 +230,32 @@ impl AcceptedUnixStream {
     ///
     /// # Examples
     /// ```no_run
-    /// use glommio::net::UnixListener;
-    /// use glommio::{LocalExecutorBuilder, LocalExecutor};
-    /// use glommio::channels::shared_channel;
+    /// use glommio::{
+    ///     channels::shared_channel,
+    ///     net::UnixListener,
+    ///     LocalExecutor,
+    ///     LocalExecutorBuilder,
+    /// };
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
+    ///     let (sender, receiver) = shared_channel::new_bounded(1);
+    ///     let sender = sender.connect().await;
     ///
-    ///    let (sender, receiver) = shared_channel::new_bounded(1);
-    ///    let sender = sender.connect().await;
+    ///     let listener = UnixListener::bind("/tmp/named").unwrap();
     ///
-    ///    let listener = UnixListener::bind("/tmp/named").unwrap();
+    ///     let accepted = listener.shared_accept().await.unwrap();
+    ///     sender.try_send(accepted).unwrap();
     ///
-    ///    let accepted = listener.shared_accept().await.unwrap();
-    ///    sender.try_send(accepted).unwrap();
+    ///     let ex1 = LocalExecutorBuilder::new()
+    ///         .spawn(move || async move {
+    ///             let receiver = receiver.connect().await;
+    ///             let accepted = receiver.recv().await.unwrap();
+    ///             let _ = accepted.bind_to_executor();
+    ///         })
+    ///         .unwrap();
     ///
-    ///   let ex1 = LocalExecutorBuilder::new().spawn(move || async move {
-    ///       let receiver = receiver.connect().await;
-    ///       let accepted = receiver.recv().await.unwrap();
-    ///       let _ = accepted.bind_to_executor();
-    ///   }).unwrap();
-    ///
-    ///   ex1.join().unwrap();
+    ///     ex1.join().unwrap();
     /// });
     /// ```
     pub fn bind_to_executor(self) -> UnixStream {
@@ -273,9 +283,8 @@ impl UnixStream {
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UnixStream;
-    /// use glommio::LocalExecutor;
     /// use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
+    /// use glommio::{net::UnixStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -299,8 +308,7 @@ impl UnixStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -338,10 +346,12 @@ impl UnixStream {
         self.stream.rx_buf_size
     }
 
-    /// Receives data on the socket from the remote address to which it is connected, without removing that data from the queue.
+    /// Receives data on the socket from the remote address to which it is
+    /// connected, without removing that data from the queue.
     ///
     /// On success, returns the number of bytes peeked.
-    /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
+    /// Successive calls return the same data. This is accomplished by passing
+    /// MSG_PEEK as a flag to the underlying recv system call.
     pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
         self.stream.peek(buf).await.map_err(Into::into)
     }
@@ -351,8 +361,7 @@ impl UnixStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -369,8 +378,7 @@ impl UnixStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixStream, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -441,8 +449,7 @@ impl UnixDatagram {
     /// # Examples
     ///
     /// ```
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -466,8 +473,7 @@ impl UnixDatagram {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -492,21 +498,22 @@ impl UnixDatagram {
         })
     }
 
-    /// Connects an unbounded Unix Datagram socket to a remote address, allowing the [`send`] and [`recv`] methods to be
-    /// used to send data and also applies filters to only receive data from the specified address.
+    /// Connects an unbounded Unix Datagram socket to a remote address, allowing
+    /// the [`send`] and [`recv`] methods to be used to send data and also
+    /// applies filters to only receive data from the specified address.
     ///
-    /// If addr yields multiple addresses, connect will be attempted with each of the addresses
-    /// until the underlying OS function returns no error. Note that usually, a successful connect
-    /// call does not specify that there is a remote server listening on the port, rather, such an
-    /// error would only be detected after the first send. If the OS returns an error for each of
-    /// the specified addresses, the error returned from the last connection attempt (the last
-    /// address) is returned.
+    /// If addr yields multiple addresses, connect will be attempted with each
+    /// of the addresses until the underlying OS function returns no error.
+    /// Note that usually, a successful connect call does not specify that
+    /// there is a remote server listening on the port, rather, such an
+    /// error would only be detected after the first send. If the OS returns an
+    /// error for each of the specified addresses, the error returned from
+    /// the last connection attempt (the last address) is returned.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -537,21 +544,20 @@ impl UnixDatagram {
         self.socket.rx_buf_size
     }
 
-    /// Receives single datagram on the socket from the remote address to which it is connected,
-    /// without removing the message from input queue. On success, returns the number of bytes
-    /// peeked.
+    /// Receives single datagram on the socket from the remote address to which
+    /// it is connected, without removing the message from input queue. On
+    /// success, returns the number of bytes peeked.
     ///
-    /// The function must be called with valid byte array buf of sufficient size to hold the
-    /// message bytes. If a message is too long to fit in the supplied buffer, excess bytes may be
-    /// discarded.
+    /// The function must be called with valid byte array buf of sufficient size
+    /// to hold the message bytes. If a message is too long to fit in the
+    /// supplied buffer, excess bytes may be discarded.
     ///
     /// To use this function, [`connect`] must have been called
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -571,12 +577,13 @@ impl UnixDatagram {
         self.socket.peek(buf).await.map_err(Into::into)
     }
 
-    ///Receives a single datagram message on the socket, without removing it from the queue. On
-    ///success, returns the number of bytes read and the origin.
+    ///Receives a single datagram message on the socket, without removing it
+    /// from the queue. On success, returns the number of bytes read and the
+    /// origin.
     ///
-    /// The function must be called with valid byte array buf of sufficient size to hold the
-    /// message bytes. If a message is too long to fit in the supplied buffer, excess bytes may be
-    /// discarded.
+    /// The function must be called with valid byte array buf of sufficient size
+    /// to hold the message bytes. If a message is too long to fit in the
+    /// supplied buffer, excess bytes may be discarded.
     #[track_caller]
     pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, UnixAddr)> {
         let (sz, addr) = self.socket.peek_from(buf).await?;
@@ -588,22 +595,25 @@ impl UnixDatagram {
         Ok((sz, addr))
     }
 
-    /// Returns the socket address of the remote peer this socket was connected to.
+    /// Returns the socket address of the remote peer this socket was connected
+    /// to.
     pub fn peer_addr(&self) -> Result<SocketAddr> {
         self.socket.socket.peer_addr().map_err(Into::into)
     }
 
-    /// Returns the socket address of the local half of this Unix Datagram connection.
+    /// Returns the socket address of the local half of this Unix Datagram
+    /// connection.
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.socket.socket.local_addr().map_err(Into::into)
     }
 
-    /// Receives a single datagram message on the socket from the remote address to which it is
-    /// connected.
+    /// Receives a single datagram message on the socket from the remote address
+    /// to which it is connected.
     ///
-    /// On success, returns the number of bytes read.  The function must be called with
-    /// valid byte array buf of sufficient size to hold the message bytes. If a message is too long
-    /// to fit in the supplied buffer, excess bytes may be discarded.
+    /// On success, returns the number of bytes read.  The function must be
+    /// called with valid byte array buf of sufficient size to hold the
+    /// message bytes. If a message is too long to fit in the supplied
+    /// buffer, excess bytes may be discarded.
     ///
     ///
     /// To use this function, [`connect`] must have been called
@@ -611,12 +621,11 @@ impl UnixDatagram {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///    let receiver = UnixDatagram::bind("/tmp/dgram").unwrap();
+    ///     let receiver = UnixDatagram::bind("/tmp/dgram").unwrap();
     ///     let sender = UnixDatagram::unbound().unwrap();
     ///     sender.connect("/tmp/dgram").await.unwrap();
     ///     sender.send(&[1; 1]).await.unwrap();
@@ -631,16 +640,17 @@ impl UnixDatagram {
         self.socket.recv(buf).await.map_err(Into::into)
     }
 
-    /// Receives a single datagram message on the socket. On success, returns the number of bytes read and the origin.
+    /// Receives a single datagram message on the socket. On success, returns
+    /// the number of bytes read and the origin.
     ///
-    /// The function must be called with valid byte array buf of sufficient size to hold the message bytes.
-    /// If a message is too long to fit in the supplied buffer, excess bytes may be discarded.
+    /// The function must be called with valid byte array buf of sufficient size
+    /// to hold the message bytes. If a message is too long to fit in the
+    /// supplied buffer, excess bytes may be discarded.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -662,13 +672,13 @@ impl UnixDatagram {
         Ok((sz, addr))
     }
 
-    /// Sends data on the socket to the given address. On success, returns the number of bytes written.
+    /// Sends data on the socket to the given address. On success, returns the
+    /// number of bytes written.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -684,13 +694,13 @@ impl UnixDatagram {
 
     /// Sends data on the socket to the remote address to which it is connected.
     ///
-    /// [`UnixDatagram::connect`] will connect this socket to a remote address. This method will fail if the socket is not connected.
+    /// [`UnixDatagram::connect`] will connect this socket to a remote address.
+    /// This method will fail if the socket is not connected.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::UnixDatagram;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::UnixDatagram, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -710,8 +720,7 @@ impl UnixDatagram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enclose;
-    use crate::test_utils::*;
+    use crate::{enclose, test_utils::*};
     use futures_lite::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
     use std::cell::Cell;
 

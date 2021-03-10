@@ -1,24 +1,27 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 //
-use crate::parking::Reactor;
-use crate::sys::{self, SleepNotifier};
 use crate::{
     channels::spsc_queue::{make, BufferHalf, Consumer, Producer},
-    GlommioError, ResourceType,
+    enclose,
+    parking::Reactor,
+    sys::{self, SleepNotifier},
+    GlommioError,
+    Local,
+    ResourceType,
 };
-use crate::{enclose, Local};
-use futures_lite::future;
-use futures_lite::stream::Stream;
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use futures_lite::{future, stream::Stream};
+use std::{
+    fmt,
+    future::Future,
+    pin::Pin,
+    rc::{Rc, Weak},
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 type Result<T, V> = crate::Result<T, V>;
 
@@ -141,7 +144,8 @@ impl<T: BufferHalf + Clone> Future for Connector<T> {
     }
 }
 
-/// Creates a a new `shared_channel` returning its sender and receiver endpoints.
+/// Creates a a new `shared_channel` returning its sender and receiver
+/// endpoints.
 ///
 /// All shared channels must be bounded.
 pub fn new_bounded<T: Send + Sized>(size: usize) -> (SharedSender<T>, SharedReceiver<T>) {
@@ -189,29 +193,31 @@ impl<T: Send + Sized> ConnectedSender<T> {
     /// Sends data into this channel.
     ///
     /// It returns a [`GlommioError::Closed`] if the receiver is destroyed.
-    /// It returns a [`GlommioError::WouldBlock`] if this is a bounded channel that has no more capacity
+    /// It returns a [`GlommioError::WouldBlock`] if this is a bounded channel
+    /// that has no more capacity
     ///
     /// # Examples
     /// ```
-    /// use glommio::prelude::*;
-    /// use glommio::channels::shared_channel;
     /// use futures_lite::StreamExt;
+    /// use glommio::{channels::shared_channel, prelude::*};
     ///
     /// let (sender, receiver) = shared_channel::new_bounded(1);
     /// let producer = LocalExecutorBuilder::new()
-    ///    .name("producer")
-    ///    .spawn(move || async move {
+    ///     .name("producer")
+    ///     .spawn(move || async move {
     ///         let sender = sender.connect().await;
     ///         sender.try_send(0);
-    ///  }).unwrap();
-    ///  let receiver = LocalExecutorBuilder::new()
-    ///    .name("receiver")
-    ///    .spawn(move || async move {
-    ///     let mut receiver = receiver.connect().await;
-    ///     receiver.next().await.unwrap(); // now we have capacity again
-    ///  }).unwrap();
-    ///  producer.join().unwrap();
-    ///  receiver.join().unwrap();
+    ///     })
+    ///     .unwrap();
+    /// let receiver = LocalExecutorBuilder::new()
+    ///     .name("receiver")
+    ///     .spawn(move || async move {
+    ///         let mut receiver = receiver.connect().await;
+    ///         receiver.next().await.unwrap(); // now we have capacity again
+    ///     })
+    ///     .unwrap();
+    /// producer.join().unwrap();
+    /// receiver.join().unwrap();
     /// ```
     ///
     /// [`BrokenPipe`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.BrokenPipe
@@ -252,24 +258,25 @@ impl<T: Send + Sized> ConnectedSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::prelude::*;
-    /// use glommio::channels::shared_channel;
+    /// use glommio::{channels::shared_channel, prelude::*};
     ///
     /// let (sender, receiver) = shared_channel::new_bounded(1);
     /// let producer = LocalExecutorBuilder::new()
-    ///    .name("producer")
-    ///    .spawn(move || async move {
+    ///     .name("producer")
+    ///     .spawn(move || async move {
     ///         let sender = sender.connect().await;
     ///         sender.send(0).await;
-    ///  }).unwrap();
-    ///  let receiver = LocalExecutorBuilder::new()
-    ///    .name("receiver")
-    ///    .spawn(move || async move {
-    ///     let mut receiver = receiver.connect().await;
-    ///     receiver.recv().await.unwrap();
-    ///  }).unwrap();
-    ///  producer.join().unwrap();
-    ///  receiver.join().unwrap();
+    ///     })
+    ///     .unwrap();
+    /// let receiver = LocalExecutorBuilder::new()
+    ///     .name("receiver")
+    ///     .spawn(move || async move {
+    ///         let mut receiver = receiver.connect().await;
+    ///         receiver.recv().await.unwrap();
+    ///     })
+    ///     .unwrap();
+    /// producer.join().unwrap();
+    /// receiver.join().unwrap();
     /// ```
     #[track_caller]
     pub async fn send(&self, item: T) -> Result<(), T> {
@@ -311,8 +318,8 @@ impl<T: Send + Sized> ConnectedSender<T> {
 }
 
 impl<T: 'static + Send + Sized> SharedReceiver<T> {
-    /// Connects this receiver, returning a [`ConnectedReceiver`] that can be used
-    /// to send data into this channel
+    /// Connects this receiver, returning a [`ConnectedReceiver`] that can be
+    /// used to send data into this channel
     ///
     /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
     pub async fn connect(mut self) -> ConnectedReceiver<T> {
@@ -342,35 +349,37 @@ impl<T: 'static + Send + Sized> SharedReceiver<T> {
 impl<T: Send + Sized> ConnectedReceiver<T> {
     /// Receives data from this channel
     ///
-    /// If the sender is no longer available it returns [`None`]. Otherwise block until
-    /// an item is available and returns it wrapped in [`Some`]
+    /// If the sender is no longer available it returns [`None`]. Otherwise
+    /// block until an item is available and returns it wrapped in [`Some`]
     ///
-    /// Notice that this is also available as a Stream. Whether to consume from a stream
-    /// or `recv` is up to the application. The biggest difference is that [`StreamExt`]'s
-    /// [`next`] method takes a mutable reference to self. If the LocalReceiver is, say,
-    /// behind an [`Rc`] it may be more ergonomic to recv.
+    /// Notice that this is also available as a Stream. Whether to consume from
+    /// a stream or `recv` is up to the application. The biggest difference
+    /// is that [`StreamExt`]'s [`next`] method takes a mutable reference to
+    /// self. If the LocalReceiver is, say, behind an [`Rc`] it may be more
+    /// ergonomic to recv.
     ///
     /// # Examples
     /// ```
-    /// use glommio::prelude::*;
-    /// use glommio::channels::shared_channel;
+    /// use glommio::{channels::shared_channel, prelude::*};
     ///
     /// let (sender, receiver) = shared_channel::new_bounded(1);
     /// let producer = LocalExecutorBuilder::new()
-    ///    .name("producer")
-    ///    .spawn(move || async move {
+    ///     .name("producer")
+    ///     .spawn(move || async move {
     ///         let sender = sender.connect().await;
     ///         sender.try_send(0u32);
-    ///  }).unwrap();
-    ///  let receiver = LocalExecutorBuilder::new()
-    ///    .name("receiver")
-    ///    .spawn(move || async move {
-    ///     let mut receiver = receiver.connect().await;
-    ///     let x = receiver.recv().await.unwrap();
-    ///     assert_eq!(x, 0);
-    ///  }).unwrap();
-    ///  producer.join().unwrap();
-    ///  receiver.join().unwrap();
+    ///     })
+    ///     .unwrap();
+    /// let receiver = LocalExecutorBuilder::new()
+    ///     .name("receiver")
+    ///     .spawn(move || async move {
+    ///         let mut receiver = receiver.connect().await;
+    ///         let x = receiver.recv().await.unwrap();
+    ///         assert_eq!(x, 0);
+    ///     })
+    ///     .unwrap();
+    /// producer.join().unwrap();
+    /// receiver.join().unwrap();
     /// ```
     ///
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
@@ -463,13 +472,18 @@ impl<T: Send + Sized> Drop for ConnectedSender<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::timer::{sleep, Timer};
-    use crate::LocalExecutorBuilder;
-    use futures_lite::FutureExt;
-    use futures_lite::StreamExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
+    use crate::{
+        timer::{sleep, Timer},
+        LocalExecutorBuilder,
+    };
+    use futures_lite::{FutureExt, StreamExt};
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
 
     #[test]
     fn producer_consumer() {
@@ -811,8 +825,8 @@ mod test {
         ex1.join().unwrap();
         ex2.join().unwrap();
 
-        // make sure that our total is always 0, to ensure we have dropped all entries, despite
-        // differing conditions.
+        // make sure that our total is always 0, to ensure we have dropped all entries,
+        // despite differing conditions.
         assert_eq!(original.load(Ordering::Relaxed), 0usize);
     }
 
@@ -848,8 +862,8 @@ mod test {
         ex2.join().unwrap();
         ex1.join().unwrap();
 
-        // make sure that our total is always 0, to ensure we have dropped all entries, despite
-        // differing conditions.
+        // make sure that our total is always 0, to ensure we have dropped all entries,
+        // despite differing conditions.
         assert_eq!(original.load(Ordering::Relaxed), 0usize);
     }
 
@@ -882,8 +896,8 @@ mod test {
         drop(ex2);
         ex1.join().unwrap();
 
-        // make sure that our total is always 0, to ensure we have dropped all entries, despite
-        // differing conditions.
+        // make sure that our total is always 0, to ensure we have dropped all entries,
+        // despite differing conditions.
         assert_eq!(original.load(Ordering::Relaxed), 0usize);
     }
 
@@ -919,8 +933,8 @@ mod test {
         drop(ex1);
         ex2.join().unwrap();
 
-        // make sure that our total is always 0, to ensure we have dropped all entries, despite
-        // differing conditions.
+        // make sure that our total is always 0, to ensure we have dropped all entries,
+        // despite differing conditions.
         assert_eq!(original.load(Ordering::Relaxed), 0usize);
     }
 }

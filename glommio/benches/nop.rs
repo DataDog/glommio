@@ -1,7 +1,10 @@
-//! Benchmark the performance of the submission ring by timing tasks which submit and wait on noop requests.
+//! Benchmark the performance of the submission ring by timing tasks which
+//! submit and wait on noop requests.
 use glommio::{LocalExecutorBuilder, Task};
-use std::fmt;
-use std::time::{Duration, Instant};
+use std::{
+    fmt,
+    time::{Duration, Instant},
+};
 
 struct Bench {
     num_tasks: u32,

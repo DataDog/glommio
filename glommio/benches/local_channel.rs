@@ -1,6 +1,5 @@
 use futures_lite::stream::StreamExt;
-use glommio::channels::local_channel;
-use glommio::prelude::*;
+use glommio::{channels::local_channel, prelude::*};
 use std::time::Instant;
 
 fn main() {

@@ -1,16 +1,23 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use std::cell::Cell;
-use std::fmt::{self, Debug, Formatter};
-use std::io::{Error, ErrorKind};
+use std::{
+    cell::Cell,
+    fmt::{self, Debug, Formatter},
+    io::{Error, ErrorKind},
+};
 
 use std::sync::{Arc, RwLock};
 
-use crate::channels::shared_channel::{self, *};
-use crate::{GlommioError, Local, Result, Task};
+use crate::{
+    channels::shared_channel::{self, *},
+    GlommioError,
+    Local,
+    Result,
+    Task,
+};
 
 /// Sender side
 #[derive(Debug)]
@@ -38,14 +45,16 @@ impl<T: Send> Senders<T> {
 
     /// Send a message to the idx-th consumer
     ///
-    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`] if the idx is out of
-    /// the range of available senders, or the sender is a placeholder in the case of full mesh.
+    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`]
+    /// if the idx is out of the range of available senders, or the sender
+    /// is a placeholder in the case of full mesh.
     ///
     /// See [`ConnectedSender.send`] for how the underlying sender works.
     ///
     /// [`GlommioError::IoError`]: crate::GlommioError::IoError
     /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidInput
-    /// [`ConnectedSender.send`]: crate::channels::shared_channel::ConnectedSender::send
+    /// [`ConnectedSender.send`]:
+    /// crate::channels::shared_channel::ConnectedSender::send
     pub async fn send_to(&self, idx: usize, msg: T) -> Result<(), T> {
         match self.senders.get(idx) {
             Some(Some(consumer)) => consumer.send(msg).await,
@@ -58,14 +67,16 @@ impl<T: Send> Senders<T> {
 
     /// Send a message to the idx-th consumer
     ///
-    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`] if the idx is out of
-    /// the range of available senders, or the sender is a placeholder in the case of full mesh.
+    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`]
+    /// if the idx is out of the range of available senders, or the sender
+    /// is a placeholder in the case of full mesh.
     ///
     /// See [`ConnectedSender.try_send`] for how the underlying sender works.
     ///
     /// [`GlommioError::IoError`]: crate::GlommioError::IoError
     /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidInput
-    /// [`ConnectedSender.try_send`]: crate::channels::shared_channel::ConnectedSender::try_send
+    /// [`ConnectedSender.try_send`]:
+    /// crate::channels::shared_channel::ConnectedSender::try_send
     pub fn try_send_to(&self, idx: usize, msg: T) -> Result<(), T> {
         match self.senders.get(idx) {
             Some(Some(consumer)) => consumer.try_send(msg),
@@ -112,14 +123,16 @@ impl<T: Send> Receivers<T> {
 
     /// Receive a message from the idx-th producer
     ///
-    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`] if the idx is out of
-    /// the range of available receivers, or the receiver is a placeholder in the case of full mesh.
+    /// It returns a [`GlommioError::IoError`] encapsulating a [`InvalidInput`]
+    /// if the idx is out of the range of available receivers, or the
+    /// receiver is a placeholder in the case of full mesh.
     ///
     /// See [`ConnectedReceiver.recv`] for how the underlying sender works.
     ///
     /// [`GlommioError::IoError`]: crate::GlommioError::IoError
     /// [`InvalidInput`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidInput
-    /// [`ConnectedReceiver.recv`]: crate::channels::shared_channel::ConnectedReceiver::recv
+    /// [`ConnectedReceiver.recv`]:
+    /// crate::channels::shared_channel::ConnectedReceiver::recv
     pub async fn recv_from(&self, idx: usize) -> Result<Option<T>, ()> {
         match self.receivers.get(idx) {
             Some(Some(producer)) => Ok(producer.recv().await),
@@ -446,8 +459,7 @@ enum RegisterResult<T: Send> {
 mod tests {
     use futures::future;
 
-    use crate::enclose;
-    use crate::prelude::*;
+    use crate::{enclose, prelude::*};
 
     use super::*;
 

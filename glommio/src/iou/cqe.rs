@@ -1,7 +1,9 @@
-use std::io;
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-use std::ptr::{self, NonNull};
+use std::{
+    io,
+    marker::PhantomData,
+    mem::MaybeUninit,
+    ptr::{self, NonNull},
+};
 
 use super::{resultify, IoUring};
 use crate::uring_sys;
@@ -70,9 +72,11 @@ impl CQE {
 unsafe impl Send for CQE {}
 unsafe impl Sync for CQE {}
 
-/// An iterator of [`CQE`]s from the [`CompletionQueue`](crate::CompletionQueue).
+/// An iterator of [`CQE`]s from the
+/// [`CompletionQueue`](crate::CompletionQueue).
 ///
-/// This iterator will be exhausted when there are no `CQE`s ready, and return `None`.
+/// This iterator will be exhausted when there are no `CQE`s ready, and return
+/// `None`.
 pub struct CQEs<'a> {
     ring: NonNull<uring_sys::io_uring>,
     ready: u32,
@@ -124,10 +128,11 @@ impl Iterator for CQEs<'_> {
     }
 }
 
-/// An iterator of [`CQE`]s from the [`CompletionQueue`](crate::CompletionQueue).
+/// An iterator of [`CQE`]s from the
+/// [`CompletionQueue`](crate::CompletionQueue).
 ///
-/// This iterator will never be exhausted; if there are no `CQE`s ready, it will block until there
-/// are.
+/// This iterator will never be exhausted; if there are no `CQE`s ready, it will
+/// block until there are.
 pub struct CQEsBlocking<'a> {
     ring: NonNull<uring_sys::io_uring>,
     ready: u32,

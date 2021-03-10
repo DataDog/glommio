@@ -1,14 +1,11 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use core::fmt;
-use core::task::Waker;
+use core::{fmt, task::Waker};
 
-use crate::task::raw::TaskVTable;
-use crate::task::state::*;
-use crate::task::utils::abort_on_panic;
+use crate::task::{raw::TaskVTable, state::*, utils::abort_on_panic};
 use std::thread::ThreadId;
 
 /// The header of a task.
@@ -30,16 +27,17 @@ pub(crate) struct Header {
 
     /// The virtual table.
     ///
-    /// In addition to the actual waker virtual table, it also contains pointers to several other
-    /// methods necessary for bookkeeping the heap-allocated task.
+    /// In addition to the actual waker virtual table, it also contains pointers
+    /// to several other methods necessary for bookkeeping the
+    /// heap-allocated task.
     pub(crate) vtable: &'static TaskVTable,
 }
 
 impl Header {
     /// Cancels the task.
     ///
-    /// This method will mark the task as closed, but it won't reschedule the task or drop its
-    /// future.
+    /// This method will mark the task as closed, but it won't reschedule the
+    /// task or drop its future.
     pub(crate) fn cancel(&mut self) {
         // If the task has been completed or closed, it can't be canceled.
         if self.state & (COMPLETED | CLOSED) != 0 {
@@ -52,7 +50,8 @@ impl Header {
 
     /// Notifies the awaiter blocked on this task.
     ///
-    /// If the awaiter is the same as the current waker, it will not be notified.
+    /// If the awaiter is the same as the current waker, it will not be
+    /// notified.
     #[inline]
     pub(crate) fn notify(&mut self, current: Option<&Waker>) {
         // Take the waker out.
@@ -73,7 +72,8 @@ impl Header {
 
     /// Registers a new awaiter blocked on this task.
     ///
-    /// This method is called when `JoinHandle` is polled and the task has not completed.
+    /// This method is called when `JoinHandle` is polled and the task has not
+    /// completed.
     #[inline]
     pub(crate) fn register(&mut self, waker: &Waker) {
         // Put the waker into the awaiter field.

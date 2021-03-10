@@ -1,17 +1,31 @@
 use clap::{App, Arg};
-use futures_lite::stream::{self, StreamExt};
-use futures_lite::{AsyncReadExt, AsyncWriteExt};
-use glommio::io::{
-    BufferedFile, DmaFile, DmaStreamReader, DmaStreamReaderBuilder, DmaStreamWriterBuilder,
-    StreamReaderBuilder, StreamWriterBuilder,
+use futures_lite::{
+    stream::{self, StreamExt},
+    AsyncReadExt,
+    AsyncWriteExt,
 };
-use glommio::{enclose, Local, LocalExecutorBuilder};
+use glommio::{
+    enclose,
+    io::{
+        BufferedFile,
+        DmaFile,
+        DmaStreamReader,
+        DmaStreamReaderBuilder,
+        DmaStreamWriterBuilder,
+        StreamReaderBuilder,
+        StreamWriterBuilder,
+    },
+    Local,
+    LocalExecutorBuilder,
+};
 use pretty_bytes::converter;
-use std::cell::Cell;
-use std::fs;
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::{
+    cell::Cell,
+    fs,
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 struct BenchDirectory {
     path: PathBuf,

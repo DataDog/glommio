@@ -1,10 +1,12 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use core::mem::{self, ManuallyDrop};
-use core::task::{RawWaker, RawWakerVTable, Waker};
+use core::{
+    mem::{self, ManuallyDrop},
+    task::{RawWaker, RawWakerVTable, Waker},
+};
 use std::rc::Rc;
 
 /// Creates a waker from a wake function.
@@ -28,8 +30,9 @@ impl<F: Fn() + Send + Sync + 'static> Helper<F> {
 
     #[allow(clippy::redundant_clone)]
     // Clippy sees this rc.clone() call as redundant. However what we are doing here
-    // is making sure that the waker is alive until a later explicit call to drop_waker
-    // We need to leave this function with the reference count bumped.
+    // is making sure that the waker is alive until a later explicit call to
+    // drop_waker We need to leave this function with the reference count
+    // bumped.
     unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
         let rc = ManuallyDrop::new(Rc::from_raw(ptr as *const F));
         mem::forget(rc.clone());

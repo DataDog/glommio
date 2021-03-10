@@ -1,21 +1,28 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::channels::ChannelCapacity;
-use crate::{GlommioError, ResourceType};
+use crate::{channels::ChannelCapacity, GlommioError, ResourceType};
 use futures_lite::{stream::Stream, Future};
-use std::task::{Context, Poll, Waker};
-use std::{cell::RefCell, pin::Pin, rc::Rc};
+use std::{
+    cell::RefCell,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll, Waker},
+};
 
-use intrusive_collections::linked_list::LinkOps;
-use intrusive_collections::{container_of, offset_of, Adapter, PointerOps};
-use intrusive_collections::{LinkedList, LinkedListLink};
+use intrusive_collections::{
+    container_of,
+    linked_list::LinkOps,
+    offset_of,
+    Adapter,
+    LinkedList,
+    LinkedListLink,
+    PointerOps,
+};
 
-use std::collections::VecDeque;
-use std::marker::PhantomPinned;
-use std::ptr::NonNull;
+use std::{collections::VecDeque, marker::PhantomPinned, ptr::NonNull};
 
 #[derive(Debug)]
 /// Send endpoint to the `local_channel`
@@ -26,15 +33,14 @@ pub struct LocalSender<T> {
 #[derive(Debug)]
 /// Receive endpoint to the `local_channel`
 ///
-/// The `LocalReceiver` provides an interface compatible with [`StreamExt`] and will
-/// keep yielding elements until the sender is destroyed.
+/// The `LocalReceiver` provides an interface compatible with [`StreamExt`] and
+/// will keep yielding elements until the sender is destroyed.
 ///
 /// # Examples
 ///
 /// ```
-/// use glommio::{LocalExecutor, Local};
-/// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
+/// use glommio::{channels::local_channel, Local, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
@@ -43,7 +49,8 @@ pub struct LocalSender<T> {
 ///     let h = Local::local(async move {
 ///         let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
 ///         assert_eq!(sum, 45);
-///     }).detach();
+///     })
+///     .detach();
 ///
 ///     for i in 0..10 {
 ///         sender.try_send(i);
@@ -429,16 +436,16 @@ impl<T> LocalChannel<T> {
 ///
 /// # Examples
 /// ```
-/// use glommio::{LocalExecutor, Local};
-/// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
+/// use glommio::{channels::local_channel, Local, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, receiver) = local_channel::new_unbounded();
 ///     let h = Local::local(async move {
 ///         assert_eq!(receiver.stream().next().await.unwrap(), 0);
-///     }).detach();
+///     })
+///     .detach();
 ///     sender.try_send(0);
 ///     drop(sender);
 ///     h.await;
@@ -452,9 +459,8 @@ pub fn new_unbounded<T>() -> (LocalSender<T>, LocalReceiver<T>) {
 ///
 /// # Examples
 /// ```
-/// use glommio::{LocalExecutor, Local};
-/// use glommio::channels::local_channel;
 /// use futures_lite::StreamExt;
+/// use glommio::{channels::local_channel, Local, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
@@ -474,14 +480,15 @@ pub fn new_bounded<T>(size: usize) -> (LocalSender<T>, LocalReceiver<T>) {
 impl<T> LocalSender<T> {
     /// Sends data into this channel.
     ///
-    /// It returns a [`GlommioError::Closed`] encapsulating a [`BrokenPipe`] if the receiver is destroyed.
-    /// It returns a [`GlommioError::WouldBlock`] encapsulating a [`WouldBlock`] if this is a bounded channel that has no more capacity
+    /// It returns a [`GlommioError::Closed`] encapsulating a [`BrokenPipe`] if
+    /// the receiver is destroyed. It returns a [`GlommioError::WouldBlock`]
+    /// encapsulating a [`WouldBlock`] if this is a bounded channel that has no
+    /// more capacity
     ///
     /// # Examples
     /// ```
-    /// use glommio::{LocalExecutor, Local};
-    /// use glommio::channels::local_channel;
     /// use futures_lite::StreamExt;
+    /// use glommio::{channels::local_channel, Local, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -507,16 +514,15 @@ impl<T> LocalSender<T> {
 
     /// Sends data into this channel when it is ready to receive it
     ///
-    /// For an unbounded channel this is just a more expensive version of [`try_send`]. Prefer
-    /// to use [`try_send`] instead.
+    /// For an unbounded channel this is just a more expensive version of
+    /// [`try_send`]. Prefer to use [`try_send`] instead.
     ///
-    /// For a bounded channel this will push to the channel when the channel is ready to
-    /// receive data.
+    /// For a bounded channel this will push to the channel when the channel is
+    /// ready to receive data.
     ///
     /// # Examples
     /// ```
-    /// use glommio::{LocalExecutor, Local};
-    /// use glommio::channels::local_channel;
+    /// use glommio::{channels::local_channel, Local, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -536,8 +542,7 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{LocalExecutor, Local};
-    /// use glommio::channels::local_channel;
+    /// use glommio::{channels::local_channel, Local, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -557,9 +562,8 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{LocalExecutor, Local};
-    /// use glommio::channels::local_channel;
     /// use futures_lite::StreamExt;
+    /// use glommio::{channels::local_channel, Local, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -696,18 +700,18 @@ impl<'a, T> Drop for ChannelStream<'a, T> {
 impl<T> LocalReceiver<T> {
     /// Receives data from this channel
     ///
-    /// If the sender is no longer available it returns [`None`]. Otherwise block until
-    /// an item is available and returns it wrapped in [`Some`]
+    /// If the sender is no longer available it returns [`None`]. Otherwise
+    /// block until an item is available and returns it wrapped in [`Some`]
     ///
-    /// Notice that this is also available as a Stream. Whether to consume from a stream
-    /// or `recv` is up to the application. The biggest difference is that [`StreamExt`]'s
-    /// [`next`] method takes a mutable reference to self. If the LocalReceiver is, say,
-    /// behind an [`Rc`] it may be more ergonomic to recv.
+    /// Notice that this is also available as a Stream. Whether to consume from
+    /// a stream or `recv` is up to the application. The biggest difference
+    /// is that [`StreamExt`]'s [`next`] method takes a mutable reference to
+    /// self. If the LocalReceiver is, say, behind an [`Rc`] it may be more
+    /// ergonomic to recv.
     ///
     /// # Examples
     /// ```
-    /// use glommio::{LocalExecutor, Local};
-    /// use glommio::channels::local_channel;
+    /// use glommio::{channels::local_channel, Local, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -728,8 +732,8 @@ impl<T> LocalReceiver<T> {
     }
 
     /// Converts receiver into the ['Stream'] instance.
-    /// Each ['Stream'] instance may handle only single receiver and can not be shared
-    /// between ['Tasks'].
+    /// Each ['Stream'] instance may handle only single receiver and can not be
+    /// shared between ['Tasks'].
     pub fn stream(&self) -> impl Stream<Item = T> + '_ {
         ChannelStream::new(&self.channel)
     }
@@ -776,8 +780,7 @@ mod test {
 
     #[test]
     fn producer_parallel_consumer() {
-        use futures::future;
-        use futures::stream::StreamExt;
+        use futures::{future, stream::StreamExt};
 
         test_executor!(async move {
             let (sender, receiver) = new_unbounded();

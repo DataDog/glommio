@@ -37,6 +37,11 @@ jobs:
           name: Version information
           command: rustc --version; cargo --version; rustup --version
       - run:
+          name: Install nightly for rustfmt features
+          command: |
+            rustup install nightly
+            rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
+      - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
       - restore_cache:
@@ -44,7 +49,7 @@ jobs:
             - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Check formatting
-          command: cargo fmt --all -- --check
+          command: cargo +nightly fmt --all -- --check
       - save_cache:
           paths:
             - /usr/local/cargo/registry

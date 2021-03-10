@@ -1,20 +1,24 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::parking::Reactor;
-use crate::sys::{self, DmaBuffer, Source, SourceType};
-use crate::{ByteSliceMutExt, Local};
+use crate::{
+    parking::Reactor,
+    sys::{self, DmaBuffer, Source, SourceType},
+    ByteSliceMutExt,
+    Local,
+};
 use futures_lite::ready;
 use nix::sys::socket::MsgFlags;
-use std::convert::TryFrom;
-use std::io;
-use std::net::Shutdown;
-use std::os::unix::io::RawFd;
-use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::rc::{Rc, Weak};
-use std::task::{Context, Poll};
+use std::{
+    convert::TryFrom,
+    io,
+    net::Shutdown,
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    rc::{Rc, Weak},
+    task::{Context, Poll},
+};
 
 struct RecvBuffer {
     buf: DmaBuffer,
@@ -45,11 +49,13 @@ pub(crate) struct GlommioStream<S: AsRawFd + FromRawFd + From<socket2::Socket>> 
     pub(crate) source_tx: Option<Source>,
     pub(crate) source_rx: Option<Source>,
 
-    // you only live once, you've got no time to block! if this is set to true try a direct non-blocking syscall otherwise schedule for sending later over the ring
+    // you only live once, you've got no time to block! if this is set to true try a direct
+    // non-blocking syscall otherwise schedule for sending later over the ring
     //
     // If you are familiar with high throughput networking code you might have seen similar
-    // techniques with names such as "optimistic" "speculative" or things like that. But frankly "yolo" is such a
-    // better name. Calling this "yolo" is likely glommio's biggest contribution to humankind.
+    // techniques with names such as "optimistic" "speculative" or things like that. But frankly
+    // "yolo" is such a better name. Calling this "yolo" is likely glommio's biggest
+    // contribution to humankind.
     pub(crate) tx_yolo: bool,
     pub(crate) rx_yolo: bool,
 
@@ -90,10 +96,12 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> FromRawFd for GlommioStream
 }
 
 impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
-    /// Receives data on the socket from the remote address to which it is connected, without removing that data from the queue.
+    /// Receives data on the socket from the remote address to which it is
+    /// connected, without removing that data from the queue.
     ///
     /// On success, returns the number of bytes peeked.
-    /// Successive calls return the same data. This is accomplished by passing MSG_PEEK as a flag to the underlying recv system call.
+    /// Successive calls return the same data. This is accomplished by passing
+    /// MSG_PEEK as a flag to the underlying recv system call.
     pub(crate) async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         let source = self.reactor.upgrade().unwrap().recv(
             self.stream.as_raw_fd(),
@@ -129,8 +137,8 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
 
     // io_uring has support for shutdown now but it is not in any released kernel.
     // Even with my "let's use latest" policy it would be crazy to mandate a kernel
-    // that doesn't even exist. So in preparation for that we'll sync-emulate this but
-    // already on an async wrapper
+    // that doesn't even exist. So in preparation for that we'll sync-emulate this
+    // but already on an async wrapper
     pub(crate) fn poll_shutdown(
         &self,
         _cx: &mut Context<'_>,
@@ -174,11 +182,12 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
     ) -> Poll<io::Result<usize>> {
         let source = match self.source_rx.take() {
             Some(source) => source,
-            None => poll_err!(self
-                .reactor
-                .upgrade()
-                .unwrap()
-                .rushed_recv(self.stream.as_raw_fd(), size)),
+            None => poll_err!(
+                self.reactor
+                    .upgrade()
+                    .unwrap()
+                    .rushed_recv(self.stream.as_raw_fd(), size)
+            ),
         };
 
         if !source.has_result() {
@@ -200,11 +209,12 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
     ) -> Poll<io::Result<usize>> {
         let source = match self.source_tx.take() {
             Some(source) => source,
-            None => poll_err!(self
-                .reactor
-                .upgrade()
-                .unwrap()
-                .rushed_send(self.stream.as_raw_fd(), buf)),
+            None => poll_err!(
+                self.reactor
+                    .upgrade()
+                    .unwrap()
+                    .rushed_send(self.stream.as_raw_fd(), buf)
+            ),
         };
 
         match source.take_result() {

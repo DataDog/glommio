@@ -1,17 +1,17 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::dma_file::{DmaFile, Result};
-use std::io;
-use std::path::Path;
+use std::{io, path::Path};
 
 /// Options and flags which can be used to configure how a file is opened.
 ///
 /// This builder exposes the ability to configure how a [`DmaFile`] is opened
 /// and what operations are permitted on the open file.
-/// The [`DmaFile::open`] and [`DmaFile::create`] methods are aliases for commonly used options using this builder.
+/// The [`DmaFile::open`] and [`DmaFile::create`] methods are aliases for
+/// commonly used options using this builder.
 #[derive(Clone, Debug)]
 pub struct DmaOpenOptions {
     read: bool,
@@ -54,7 +54,8 @@ impl DmaOpenOptions {
 
     /// Sets the option for read access.
     ///
-    /// This option, when true, will indicate that the file should be read-able if opened.
+    /// This option, when true, will indicate that the file should be read-able
+    /// if opened.
     pub fn read(&mut self, read: bool) -> &mut Self {
         self.read = read;
         self
@@ -62,9 +63,11 @@ impl DmaOpenOptions {
 
     /// Sets the option for write access.
     ///
-    /// This option, when true, will indicate that the file should be write-able if opened.
+    /// This option, when true, will indicate that the file should be write-able
+    /// if opened.
     ///
-    /// If the file already exists, any write calls on it will overwrite its contents, without truncating it.
+    /// If the file already exists, any write calls on it will overwrite its
+    /// contents, without truncating it.
     pub fn write(&mut self, write: bool) -> &mut Self {
         self.write = write;
         self
@@ -72,7 +75,8 @@ impl DmaOpenOptions {
 
     /// Sets the option for truncating a previous file.
     ///
-    /// If a file is successfully opened with this option set it will truncate the file to 0 length if it already exists.
+    /// If a file is successfully opened with this option set it will truncate
+    /// the file to 0 length if it already exists.
     ///
     /// The file must be opened with write access for truncate to work.
     pub fn truncate(&mut self, truncate: bool) -> &mut Self {
@@ -82,7 +86,8 @@ impl DmaOpenOptions {
 
     /// Sets the option to create a new file, or open it if it already exists.
     ///
-    /// In order for the file to be created, [`DmaOpenOptions::write`] access must be used.
+    /// In order for the file to be created, [`DmaOpenOptions::write`] access
+    /// must be used.
     pub fn create(&mut self, create: bool) -> &mut Self {
         self.create = create;
         self
@@ -90,13 +95,19 @@ impl DmaOpenOptions {
 
     /// Sets the option to create a new file, failing if it already exists.
     ///
-    /// No file is allowed to exist at the target location, also no (dangling) symlink. In this way, if the call succeeds, the file returned is guaranteed to be new.
+    /// No file is allowed to exist at the target location, also no (dangling)
+    /// symlink. In this way, if the call succeeds, the file returned is
+    /// guaranteed to be new.
     ///
-    /// This option is useful because it is atomic. Otherwise between checking whether a file exists and creating a new one, the file may have been created by another process (a TOCTOU race condition / attack).
+    /// This option is useful because it is atomic. Otherwise between checking
+    /// whether a file exists and creating a new one, the file may have been
+    /// created by another process (a TOCTOU race condition / attack).
     ///
-    /// If `.create_new(true)` is set, `.create()` and `.truncate()` are ignored.
+    /// If `.create_new(true)` is set, `.create()` and `.truncate()` are
+    /// ignored.
     ///
-    /// The file must be opened with write or append access in order to create a new file.
+    /// The file must be opened with write or append access in order to create a
+    /// new file.
     pub fn create_new(&mut self, create_new: bool) -> &mut Self {
         self.create_new = create_new;
         self
@@ -137,7 +148,8 @@ impl DmaOpenOptions {
         }
     }
 
-    /// Similiar to `OpenOptions::open()` in the standard library, but returns a DMA file
+    /// Similiar to `OpenOptions::open()` in the standard library, but returns a
+    /// DMA file
     pub async fn open<P: AsRef<Path>>(&self, path: P) -> Result<DmaFile> {
         DmaFile::open_with_options(
             -1_i32,

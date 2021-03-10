@@ -1,10 +1,9 @@
-// Unless explicitly stated otherwise all files in this repository are licensed under the
-// MIT/Apache-2.0 License, at your convenience
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the MIT/Apache-2.0 License, at your convenience
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use core::alloc::Layout;
-use core::mem;
+use core::{alloc::Layout, mem};
 
 /// Aborts the process.
 ///
@@ -57,10 +56,11 @@ pub(crate) fn extend(a: Layout, b: Layout) -> (Layout, usize) {
     (layout, offset)
 }
 
-/// Returns the padding after `layout` that aligns the following address to `align`.
+/// Returns the padding after `layout` that aligns the following address to
+/// `align`.
 ///
-/// This function was adapted from the currently unstable `Layout::padding_needed_for()`:
-/// https://doc.rust-lang.org/nightly/std/alloc/struct.Layout.html#method.padding_needed_for
+/// This function was adapted from the currently unstable
+/// `Layout::padding_needed_for()`: https://doc.rust-lang.org/nightly/std/alloc/struct.Layout.html#method.padding_needed_for
 #[inline]
 pub(crate) fn padding_needed_for(layout: Layout, align: usize) -> usize {
     let len = layout.size();

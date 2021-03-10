@@ -1,11 +1,13 @@
-use futures_lite::future::ready;
-use futures_lite::stream::repeat_with;
-use futures_lite::{FutureExt, StreamExt};
+use futures_lite::{future::ready, stream::repeat_with, FutureExt, StreamExt};
 
-use glommio::channels::channel_mesh::MeshBuilder;
-use glommio::channels::sharding::{Handler, HandlerResult, Sharded};
-use glommio::enclose;
-use glommio::prelude::*;
+use glommio::{
+    channels::{
+        channel_mesh::MeshBuilder,
+        sharding::{Handler, HandlerResult, Sharded},
+    },
+    enclose,
+    prelude::*,
+};
 
 fn main() {
     type Msg = i32;
