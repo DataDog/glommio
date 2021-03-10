@@ -44,7 +44,7 @@ jobs:
             - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Check formatting
-          command: cargo fmt --all -- --check
+          command: cargo +nightly fmt --all -- --check
       - save_cache:
           paths:
             - /usr/local/cargo/registry
