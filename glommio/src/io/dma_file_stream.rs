@@ -6,12 +6,7 @@
 use crate::{
     io::{dma_file::align_down, read_result::ReadResult, DmaFile},
     sys::DmaBuffer,
-    task,
-    ByteSliceExt,
-    ByteSliceMutExt,
-    GlommioError,
-    Local,
-    ResourceType,
+    task, ByteSliceExt, ByteSliceMutExt, GlommioError, Local, ResourceType,
 };
 use ahash::AHashMap;
 use core::task::Waker;
@@ -356,8 +351,8 @@ impl Drop for DmaStreamReaderState {
 /// [`DmaFile`]: struct.DmaFile.html
 /// [`DmaBuffer`]: struct.DmaBuffer.html
 /// [`DmaStreamReader`]: struct.DmaStreamReader.html
-/// [`get_buffer_aligned`]:
-/// struct.DmaStreamReader.html#method.get_buffer_aligned [`AsyncRead`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncRead.html
+/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
+/// [`AsyncRead`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncRead.html
 pub struct DmaStreamReader {
     start: u64,
     end: u64,
@@ -935,8 +930,8 @@ impl Drop for DmaStreamWriterState {
 ///
 /// [`DmaFile`]: struct.DmaFile.html
 /// [`DmaStreamReader`]: struct.DmaStreamReader.html
-/// [`get_buffer_aligned`]:
-/// struct.DmaStreamReader.html#method.get_buffer_aligned [`AsyncWrite`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWrite.html
+/// [`get_buffer_aligned`]: struct.DmaStreamReader.html#method.get_buffer_aligned
+/// [`AsyncWrite`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWrite.html
 pub struct DmaStreamWriter {
     file: Option<Rc<DmaFile>>,
     state: Rc<RefCell<DmaStreamWriterState>>,
