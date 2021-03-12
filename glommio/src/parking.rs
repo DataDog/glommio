@@ -51,7 +51,16 @@ use futures_lite::*;
 
 use crate::{
     sys,
-    sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, SleepNotifier, Source, SourceType, TimeSpec64},
+    sys::{
+        DirectIO,
+        DmaBuffer,
+        IOBuffer,
+        PollableStatus,
+        SleepNotifier,
+        Source,
+        SourceType,
+        TimeSpec64,
+    },
     IoRequirements,
     Latency,
     Local,

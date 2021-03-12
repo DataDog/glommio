@@ -412,14 +412,15 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::net::TcpStream;
-    /// use glommio::LocalExecutor;
+    /// use glommio::{net::TcpStream, LocalExecutor};
     ///
     /// use std::time::Duration;
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///     TcpStream::connect_timeout("127.0.0.1:10000", Duration::from_secs(10)).await.unwrap();
+    ///     TcpStream::connect_timeout("127.0.0.1:10000", Duration::from_secs(10))
+    ///         .await
+    ///         .unwrap();
     /// })
     /// ```
     pub async fn connect_timeout<A: ToSocketAddrs>(
