@@ -80,7 +80,6 @@ enum UringOpDescriptor {
     SockSendMsg(*mut libc::msghdr, i32),
     SockRecv(usize, i32),
     SockRecvMsg(usize, i32),
-    #[cfg(feature = "bench")]
     Nop,
 }
 
@@ -433,7 +432,6 @@ where
                     _ => unreachable!(),
                 };
             }
-            #[cfg(feature = "bench")]
             UringOpDescriptor::Nop => sqe.prep_nop(),
         }
         sqe.set_user_data(user_data);
@@ -1635,6 +1633,40 @@ mod tests {
             Some(_) => panic!("Expected non-uring buffer"),
             None => {}
         }
+    }
+
+    #[test]
+    fn sqe_link_chain() {
+        let allocator = Rc::new(UringBufferAllocator::new(65536));
+        let mut ring = SleepableRing::new(4, "main", allocator).unwrap();
+        let q = ring.submission_queue();
+        let mut queue = q.borrow_mut();
+
+        // enqueue three nops. The second is soft-linked to the third
+        for i in 0..3 {
+            queue.submissions.push_back(UringDescriptor {
+                args: UringOpDescriptor::Nop,
+                fd: -1,
+                flags: if i == 1 {
+                    SubmissionFlags::IO_LINK
+                } else {
+                    SubmissionFlags::empty()
+                },
+                user_data: 0,
+            });
+        }
+
+        // the first nop is unlinked, so we're only expecting one SQE
+        ring.submit_one_event(&mut queue.submissions);
+        assert_eq!(1, ring.submit_sqes().unwrap());
+        let mut wakers = Vec::new();
+        assert_eq!(1, ring.consume_completion_queue(&mut wakers));
+
+        // the following nops are linked, so we expect two submissions and completions
+        ring.submit_one_event(&mut queue.submissions);
+        assert_eq!(2, ring.submit_sqes().unwrap());
+        let mut wakers = Vec::new();
+        assert_eq!(2, ring.consume_completion_queue(&mut wakers));
     }
 
     #[test]
