@@ -21,6 +21,7 @@ use std::{
     pin::Pin,
     rc::{Rc, Weak},
     task::{Context, Poll},
+    time::Duration,
 };
 
 type Result<T> = crate::Result<T, ()>;
@@ -395,6 +396,68 @@ impl TcpStream {
 
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
+
+        Ok(TcpStream {
+            stream: GlommioStream::from(socket),
+        })
+    }
+
+    /// Creates a TCP connection to the specified address with a timeout.
+    ///
+    /// It is an error to pass a zero `Duration` to this function.
+    ///
+    /// Timeouts are implemented using `io_uring`'s `IORING_OP_LINK_TIMEOUT`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use glommio::net::TcpStream;
+    /// use glommio::LocalExecutor;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async move {
+    ///     TcpStream::connect_timeout("127.0.0.1:10000", Duration::from_secs(10)).await.unwrap();
+    /// })
+    /// ```
+    pub async fn connect_timeout<A: ToSocketAddrs>(
+        addr: A,
+        duration: Duration,
+    ) -> Result<TcpStream> {
+        if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot set a 0 duration timeout",
+            )
+            .into());
+        }
+
+        let addr = addr.to_socket_addrs()?.next().unwrap();
+        let domain = if addr.is_ipv6() {
+            Domain::ipv6()
+        } else {
+            Domain::ipv4()
+        };
+        let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
+        let inet = InetAddr::from_std(&addr);
+        let addr = SockAddr::new_inet(inet);
+
+        let reactor = Local::get_reactor();
+        let source = reactor.connect_timeout(socket.as_raw_fd(), addr, duration);
+
+        // connect_timeout submits two sqes to io_uring: a connect sqe soft-linked
+        // with a LINK_TIMEOUT sqe. If the timeout fires, the connect sqe fails with
+        // ECANCELED. We map that error to TimedOut to match the standard library's API.
+        source
+            .collect_rw()
+            .await
+            .map_err(|err| match err.raw_os_error() {
+                Some(libc::ECANCELED) => {
+                    io::Error::new(io::ErrorKind::TimedOut, "connection timed out")
+                }
+                _ => err,
+            })?;
 
         Ok(TcpStream {
             stream: GlommioStream::from(socket),
@@ -1016,6 +1079,32 @@ mod tests {
             stream.close().await.unwrap();
             let res = listener_handle.await.unwrap().unwrap();
             assert_eq!(res, 0);
+        });
+    }
+
+    #[test]
+    fn tcp_connect_timeout() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            match TcpStream::connect_timeout(addr, Duration::from_millis(250)).await {
+                Ok(_) => {}
+                Err(e) => panic!("unexpected error {}", e),
+            }
+        });
+    }
+
+    // adapted from socket2 test:
+    // https://docs.rs/socket2/0.3.19/src/socket2/socket.rs.html#971-982
+    #[test]
+    fn tcp_connect_timeout_error() {
+        test_executor!(async move {
+            // this IP is unroutable, so connections should always time out
+            match TcpStream::connect_timeout("10.255.255.1:80", Duration::from_millis(250)).await {
+                Ok(_) => panic!("unexpected success"),
+                Err(GlommioError::IoError(ref e)) if e.kind() == io::ErrorKind::TimedOut => {}
+                Err(e) => panic!("unexpected error {}", e),
+            }
         });
     }
 }

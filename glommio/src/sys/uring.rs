@@ -70,6 +70,7 @@ enum UringOpDescriptor {
     Close,
     FDataSync,
     Connect(*const SockAddr),
+    LinkTimeout(*const uring_sys::__kernel_timespec),
     Accept(*mut SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
@@ -249,6 +250,7 @@ static GLOMMIO_URING_OPS: &[IoRingOp] = &[
     IoRingOp::IORING_OP_TIMEOUT,
     IoRingOp::IORING_OP_TIMEOUT_REMOVE,
     IoRingOp::IORING_OP_ACCEPT,
+    IoRingOp::IORING_OP_LINK_TIMEOUT,
     IoRingOp::IORING_OP_CONNECT,
     IoRingOp::IORING_OP_FALLOCATE,
     IoRingOp::IORING_OP_OPENAT,
@@ -313,6 +315,10 @@ where
             }
             UringOpDescriptor::Connect(addr) => {
                 sqe.prep_connect(op.fd, &*addr);
+            }
+
+            UringOpDescriptor::LinkTimeout(timespec) => {
+                sqe.prep_link_timeout(&*timespec);
             }
 
             UringOpDescriptor::Accept(addr) => {
@@ -452,10 +458,8 @@ where
         let src = consume_source(from_user_data(value.user_data()));
 
         let result = value.result();
-        let was_cancelled =
-            matches!(&result, Err(err) if err.raw_os_error() == Some(libc::ECANCELED));
 
-        if !was_cancelled && try_process(&*src).is_none() {
+        if try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
             w.result = Some(result.map(|x| x as usize));
             if let Some(waiter) = w.waiter.take() {
@@ -1150,16 +1154,14 @@ impl Reactor {
     }
 
     pub(crate) fn write_buffered(&self, source: &Source, pos: u64) {
-        match &*source.source_type() {
+        let op = match &*source.source_type() {
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIO::Disabled),
                 IOBuffer::Buffered(buf),
-            ) => {
-                let op = UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos);
-                self.queue_standard_request(source, op);
-            }
+            ) => UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos),
             x => panic!("Unexpected source type for write: {:?}", x),
-        }
+        };
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn read_dma(&self, source: &Source, pos: u64, size: usize) {
@@ -1173,18 +1175,17 @@ impl Reactor {
     }
 
     pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
-        match &*source.source_type() {
+        let op = match &*source.source_type() {
             SourceType::SockSend(buf) => {
-                let op =
-                    UringOpDescriptor::SockSend(buf.as_ptr() as *const u8, buf.len(), flags.bits());
-                self.queue_standard_request(source, op);
+                UringOpDescriptor::SockSend(buf.as_ptr() as *const u8, buf.len(), flags.bits())
             }
             _ => unreachable!(),
-        }
+        };
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn sendmsg(&self, source: &Source, flags: MsgFlags) {
-        match &mut *source.source_type_mut() {
+        let op = match &mut *source.source_type_mut() {
             SourceType::SockSendMsg(_, iov, hdr, addr) => {
                 let (msg_name, msg_namelen) = addr.as_ffi_pair();
                 let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
@@ -1194,11 +1195,11 @@ impl Reactor {
                 hdr.msg_name = msg_name;
                 hdr.msg_namelen = msg_namelen;
 
-                let op = UringOpDescriptor::SockSendMsg(hdr, flags.bits());
-                self.queue_standard_request(source, op);
+                UringOpDescriptor::SockSendMsg(hdr, flags.bits())
             }
             _ => unreachable!(),
-        }
+        };
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn recv(&self, source: &Source, len: usize, flags: MsgFlags) {
@@ -1212,23 +1213,21 @@ impl Reactor {
     }
 
     pub(crate) fn connect(&self, source: &Source) {
-        match &*source.source_type() {
-            SourceType::Connect(addr) => {
-                let op = UringOpDescriptor::Connect(addr as *const SockAddr);
-                self.queue_standard_request(source, op);
+        let op = match &*source.source_type() {
+            SourceType::Connect(addr) | SourceType::ConnectTimeout(addr, _) => {
+                UringOpDescriptor::Connect(addr as *const SockAddr)
             }
             x => panic!("Unexpected source type for connect: {:?}", x),
-        }
+        };
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn accept(&self, source: &Source) {
-        match &mut *source.source_type_mut() {
-            SourceType::Accept(addr) => {
-                let op = UringOpDescriptor::Accept(addr as *mut SockAddrStorage);
-                self.queue_standard_request(source, op);
-            }
+        let op = match &mut *source.source_type_mut() {
+            SourceType::Accept(addr) => UringOpDescriptor::Accept(addr as *mut SockAddrStorage),
             x => panic!("Unexpected source type for accept: {:?}", x),
-        }
+        };
+        self.queue_standard_request(source, op);
     }
 
     pub(crate) fn fdatasync(&self, source: &Source) {
@@ -1479,13 +1478,27 @@ fn queue_request_into_ring(
     let q = ring.borrow_mut().submission_queue();
     let id = add_source(source, Rc::clone(&q));
 
+    let flags = match &*source.source_type() {
+        SourceType::ConnectTimeout(_, _) => SubmissionFlags::IO_LINK,
+        _ => SubmissionFlags::empty(),
+    };
+
     let mut queue = q.borrow_mut();
     queue.submissions.push_back(UringDescriptor {
         args: descriptor,
         fd: source.raw(),
-        flags: SubmissionFlags::empty(),
+        flags,
         user_data: to_user_data(id),
     });
+
+    if let SourceType::ConnectTimeout(_, ts) = &*source.source_type() {
+        queue.submissions.push_back(UringDescriptor {
+            args: UringOpDescriptor::LinkTimeout(&ts.raw as *const _),
+            flags: SubmissionFlags::empty(),
+            fd: -1,
+            user_data: 0,
+        });
+    }
 }
 
 impl Drop for Reactor {
