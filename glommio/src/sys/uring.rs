@@ -636,6 +636,7 @@ trait UringCommon {
 
 struct PollRing {
     ring: iou::IoUring,
+    size: usize,
     submission_queue: ReactorQueue,
     submitted: u64,
     completed: u64,
@@ -652,6 +653,7 @@ impl PollRing {
         Ok(PollRing {
             submitted: 0,
             completed: 0,
+            size,
             ring,
             submission_queue: UringQueueState::with_capacity(size * 4),
             allocator,
@@ -715,8 +717,20 @@ impl UringCommon for PollRing {
                 .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
         }) {
             Some(pos) => pos,
-            None => panic!("Unterminated SQE link chain: internal source prep bug"),
+            None => panic!(
+                "Unterminated SQE link chain: internal source prep bug, {:?}",
+                queue
+            ),
         };
+
+        if chain_len + 1 > self.size {
+            panic!(
+                "Link chain length ({:?}) overflows submission queue bounds ({:?}): {:?}",
+                chain_len + 1,
+                self.size,
+                queue
+            );
+        }
 
         if let Some(sqes) = self.ring.prepare_sqes(chain_len as u32 + 1) {
             for mut sqe in sqes {
@@ -810,6 +824,7 @@ impl Drop for Source {
 
 struct SleepableRing {
     ring: iou::IoUring,
+    size: usize,
     submission_queue: ReactorQueue,
     waiting_submission: usize,
     name: &'static str,
@@ -825,6 +840,7 @@ impl SleepableRing {
         assert_eq!(*IO_URING_RECENT_ENOUGH, true);
         Ok(SleepableRing {
             ring: iou::IoUring::new(size as _)?,
+            size,
             submission_queue: UringQueueState::with_capacity(size * 4),
             waiting_submission: 0,
             name,
@@ -986,8 +1002,20 @@ impl UringCommon for SleepableRing {
                 .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
         }) {
             Some(pos) => pos,
-            None => panic!("Unterminated SQE link chain: internal source prep bug"),
+            None => panic!(
+                "Unterminated SQE link chain: internal source prep bug, {:?}",
+                queue
+            ),
         };
+
+        if chain_len + 1 > self.size {
+            panic!(
+                "Link chain length ({:?}) overflows submission queue bounds ({:?}): {:?}",
+                chain_len + 1,
+                self.size,
+                queue
+            );
+        }
 
         if let Some(sqes) = self.ring.prepare_sqes(chain_len as u32 + 1) {
             for mut sqe in sqes {
@@ -1611,7 +1639,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Unterminated SQE link chain")]
-    fn sqe_link_chain_too_long() {
+    fn unterminated_sqe_link_chain() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
         let mut ring = SleepableRing::new(2, "main", allocator).unwrap();
         let q = ring.submission_queue();
@@ -1625,6 +1653,34 @@ mod tests {
         });
 
         // If the link chain points outside of the queue, we panic
+        ring.submit_one_event(&mut queue.submissions);
+    }
+
+    #[test]
+    #[should_panic(expected = "Link chain length (3) overflows submission queue bounds (2)")]
+    fn sqe_link_chain_overflow() {
+        let allocator = Rc::new(UringBufferAllocator::new(65536));
+        let mut ring = SleepableRing::new(2, "main", allocator).unwrap();
+        let q = ring.submission_queue();
+        let mut queue = q.borrow_mut();
+
+        for _ in 0..2 {
+            queue.submissions.push_back(UringDescriptor {
+                args: UringOpDescriptor::Close,
+                fd: -1,
+                flags: SubmissionFlags::IO_LINK,
+                user_data: 0,
+            });
+        }
+
+        queue.submissions.push_back(UringDescriptor {
+            args: UringOpDescriptor::Close,
+            fd: -1,
+            flags: SubmissionFlags::empty(),
+            user_data: 0,
+        });
+
+        // If the link chain is longer than the io_uring submission queue, we panic
         ring.submit_one_event(&mut queue.submissions);
     }
 }
