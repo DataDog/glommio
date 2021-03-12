@@ -366,6 +366,18 @@ impl FromRawFd for TcpStream {
     }
 }
 
+fn make_tcp_socket(addr: &SocketAddr) -> io::Result<(SockAddr, Socket)> {
+    let domain = if addr.is_ipv6() {
+        Domain::ipv6()
+    } else {
+        Domain::ipv4()
+    };
+    let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
+    let inet = InetAddr::from_std(&addr);
+    let addr = SockAddr::new_inet(inet);
+    Ok((addr, socket))
+}
+
 impl TcpStream {
     /// Creates a TCP connection to the specified address.
     ///
@@ -381,19 +393,8 @@ impl TcpStream {
     /// ```
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<TcpStream> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
-
+        let (addr, socket) = make_tcp_socket(&addr)?;
         let reactor = Local::get_reactor();
-
-        // Create a socket.
-        let domain = if addr.is_ipv6() {
-            Domain::ipv6()
-        } else {
-            Domain::ipv4()
-        };
-        let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
-        let inet = InetAddr::from_std(&addr);
-        let addr = SockAddr::new_inet(inet);
-
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
 
@@ -434,15 +435,7 @@ impl TcpStream {
         }
 
         let addr = addr.to_socket_addrs()?.next().unwrap();
-        let domain = if addr.is_ipv6() {
-            Domain::ipv6()
-        } else {
-            Domain::ipv4()
-        };
-        let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
-        let inet = InetAddr::from_std(&addr);
-        let addr = SockAddr::new_inet(inet);
-
+        let (addr, socket) = make_tcp_socket(&addr)?;
         let reactor = Local::get_reactor();
         let source = reactor.connect_timeout(socket.as_raw_fd(), addr, duration);
 
