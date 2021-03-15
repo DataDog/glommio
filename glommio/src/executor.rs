@@ -46,15 +46,9 @@ use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
 use crate::{
-    multitask,
-    parking,
-    sys,
+    multitask, parking, sys,
     task::{self, waker_fn::waker_fn},
-    GlommioError,
-    IoRequirements,
-    Latency,
-    Reactor,
-    Shares,
+    GlommioError, IoRequirements, Latency, Reactor, Shares,
 };
 use ahash::AHashMap;
 
@@ -854,6 +848,8 @@ impl LocalExecutor {
                 if let Poll::Ready(t) = future.as_mut().poll(cx) {
                     // can't be canceled, and join handle is None only upon
                     // cancellation or panic. So in case of panic this just propagates
+                    let cur_time = Instant::now();
+                    self.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
                     break t.unwrap();
                 }
 
@@ -1357,8 +1353,7 @@ mod test {
     use crate::{
         enclose,
         timer::{self, Timer},
-        Local,
-        SharesManager,
+        Local, SharesManager,
     };
     use core::mem::MaybeUninit;
     use futures::join;
@@ -1686,6 +1681,72 @@ mod test {
             ex_ru_finish - ex_ru_start >= Duration::from_millis(50),
             "expected user time on LE is much greater than 50 millisecond"
         );
+    }
+
+    #[test]
+    fn test_runtime_stats() {
+        let dur = Duration::from_secs(1);
+        let ex0 = LocalExecutorBuilder::new().make().unwrap();
+        ex0.run(async {
+            assert!(
+                Local::executor_stats().total_runtime() < Duration::from_nanos(10),
+                "expected runtime on LE0 is less than 10 ns"
+            );
+
+            let now = Instant::now();
+            while now.elapsed().as_millis() < 200 {}
+            Local::later().await;
+            assert!(
+                Local::executor_stats().total_runtime() >= Duration::from_millis(200),
+                format!(
+                    "expected runtime on LE0 {:#?} is greater than 200 ms",
+                    Local::executor_stats().total_runtime()
+                )
+            );
+
+            timer::sleep(dur).await;
+            assert!(
+                Local::executor_stats().total_runtime() < Duration::from_millis(220),
+                format!(
+                    "expected runtime on LE0 {:#?} is not much greater than 200 ms",
+                    Local::executor_stats().total_runtime()
+                )
+            );
+        });
+
+        let ex = LocalExecutorBuilder::new()
+            .pin_to_cpu(0)
+            .spin_before_park(Duration::from_millis(100))
+            .make()
+            .unwrap();
+        ex.run(async {
+            Local::local(async move {
+                assert!(
+                    Local::executor_stats().total_runtime() < Duration::from_nanos(10),
+                    "expected runtime on LE is less than 10 ns"
+                );
+
+                let now = Instant::now();
+                while now.elapsed().as_millis() < 200 {}
+                Local::later().await;
+                assert!(
+                    Local::executor_stats().total_runtime() >= Duration::from_millis(200),
+                    format!(
+                        "expected runtime on LE {:#?} is greater than 200 ms",
+                        Local::executor_stats().total_runtime()
+                    )
+                );
+                timer::sleep(dur).await;
+                assert!(
+                    Local::executor_stats().total_runtime() < Duration::from_millis(220),
+                    format!(
+                        "expected runtime on LE {:#?} is not much greater than 200 ms",
+                        Local::executor_stats().total_runtime()
+                    )
+                );
+            })
+            .await;
+        });
     }
 
     // Spin for 2ms and then yield. How many shares we have should control how many
