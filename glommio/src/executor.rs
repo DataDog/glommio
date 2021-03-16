@@ -66,7 +66,7 @@ type Result<T> = crate::Result<T, ()>;
 
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 /// An opaque handle indicating in which queue a group of tasks will execute.
 /// Tasks in the same group will execute in FIFO order but no guarantee is made
 /// about ordering on different task queues.
