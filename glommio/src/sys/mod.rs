@@ -377,6 +377,7 @@ pub(crate) enum SourceType {
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(TimeSpec64),
     Connect(SockAddr),
+    ConnectTimeout(SockAddr, TimeSpec64),
     Accept(SockAddrStorage),
     Invalid,
     #[cfg(feature = "bench")]
