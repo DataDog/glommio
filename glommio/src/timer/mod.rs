@@ -6,7 +6,10 @@
 //! glommio::timer is a module that provides timing related primitives.
 mod timer_impl;
 
+use std::{future::Future, time::Duration};
 pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
+
+type Result<T> = crate::Result<T, ()>;
 
 /// Sleep for some time.
 ///
@@ -22,4 +25,34 @@ pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
 /// ```
 pub async fn sleep(wait: std::time::Duration) {
     Timer::new(wait).await;
+}
+
+/// Executes a future with a specified timeout
+///
+/// Returns a `Result`, with `Ok` if the future ran to completion
+/// or a [`GlommioError::TimedOut`] error if the timeout was reached
+///
+/// ```
+/// # use glommio::{
+/// #    timer::{timeout, Timer},
+/// #    LocalExecutor,
+/// # };
+/// # use std::time::Duration;
+/// # let ex = LocalExecutor::default();
+/// # ex.run(async {
+/// timeout(Duration::from_millis(1), async move {
+///     // this future will wait for 100ms, but won't complete, as the timeout is 1ms
+///     Timer::new(Duration::from_millis(100)).await;
+///     Ok(())
+/// })
+/// .await;
+/// # });
+/// ```
+///
+/// [`GlommioError::TimedOut`]: crate::GlommioError::TimedOut
+pub async fn timeout<F, T>(dur: Duration, f: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    timer_impl::Timeout::new(f, dur).await
 }
