@@ -439,6 +439,22 @@ where
     }
 }
 
+fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
+    res.map(|x| x as usize) // iou standardized on u32, which is good for low level but for higher layers usize is
+        // better
+        .map_err(|x| {
+            // Convert CANCELED to TimedOut. This will be the case for linked sqes with a
+            // timeout, and if we wanted to be really strict we'd check. But if
+            // the operation is truly cancelled no one will check the result,
+            // and we have no other use case for cancel at the moment so keep it simple
+            if let Some(libc::ECANCELED) = x.raw_os_error() {
+                io::Error::from_raw_os_error(libc::ETIMEDOUT)
+            } else {
+                x
+            }
+        })
+}
+
 fn process_one_event<F>(
     cqe: Option<iou::CQE>,
     try_process: F,
@@ -459,7 +475,7 @@ where
 
         if try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
-            w.result = Some(result.map(|x| x as usize));
+            w.result = Some(transmute_error(result));
             if let Some(waiter) = w.waiter.take() {
                 wakers.push(waiter);
             }
