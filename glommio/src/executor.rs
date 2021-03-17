@@ -46,9 +46,15 @@ use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
 use crate::{
-    multitask, parking, sys,
+    multitask,
+    parking,
+    sys,
     task::{self, waker_fn::waker_fn},
-    GlommioError, IoRequirements, Latency, Reactor, Shares,
+    GlommioError,
+    IoRequirements,
+    Latency,
+    Reactor,
+    Shares,
 };
 use ahash::AHashMap;
 
@@ -71,6 +77,13 @@ pub struct TaskQueueHandle {
 impl Default for TaskQueueHandle {
     fn default() -> Self {
         TaskQueueHandle { index: 0 }
+    }
+}
+
+impl TaskQueueHandle {
+    /// Returns a numeric ID that uniquely identifies this Task queue
+    pub fn index(&self) -> usize {
+        self.index
     }
 }
 
@@ -1353,7 +1366,8 @@ mod test {
     use crate::{
         enclose,
         timer::{self, Timer},
-        Local, SharesManager,
+        Local,
+        SharesManager,
     };
     use core::mem::MaybeUninit;
     use futures::join;
