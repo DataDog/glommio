@@ -379,8 +379,16 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn rushed_send(&self, fd: RawFd, buf: DmaBuffer) -> io::Result<Source> {
+    pub(crate) fn rushed_send(
+        &self,
+        fd: RawFd,
+        buf: DmaBuffer,
+        timeout: Option<Duration>,
+    ) -> io::Result<Source> {
         let source = self.new_source(fd, SourceType::SockSend(buf));
+        if let Some(timeout) = timeout {
+            source.set_timeout(timeout);
+        }
         self.sys.send(&source, MsgFlags::empty());
         self.rush_dispatch(&source)?;
         Ok(source)
@@ -391,6 +399,7 @@ impl Reactor {
         fd: RawFd,
         buf: DmaBuffer,
         addr: nix::sys::socket::SockAddr,
+        timeout: Option<Duration>,
     ) -> io::Result<Source> {
         let iov = libc::iovec {
             iov_base: buf.as_ptr() as *mut libc::c_void,
@@ -409,6 +418,10 @@ impl Reactor {
         };
 
         let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr));
+        if let Some(timeout) = timeout {
+            source.set_timeout(timeout);
+        }
+
         self.sys.sendmsg(&source, MsgFlags::empty());
         self.rush_dispatch(&source)?;
         Ok(source)
@@ -419,6 +432,7 @@ impl Reactor {
         fd: RawFd,
         size: usize,
         flags: MsgFlags,
+        timeout: Option<Duration>,
     ) -> io::Result<Source> {
         let hdr = libc::msghdr {
             msg_name: std::ptr::null_mut(),
@@ -442,13 +456,24 @@ impl Reactor {
                 std::mem::MaybeUninit::<nix::sys::socket::sockaddr_storage>::uninit(),
             ),
         );
+        if let Some(timeout) = timeout {
+            source.set_timeout(timeout);
+        }
         self.sys.recvmsg(&source, size, flags);
         self.rush_dispatch(&source)?;
         Ok(source)
     }
 
-    pub(crate) fn rushed_recv(&self, fd: RawFd, size: usize) -> io::Result<Source> {
+    pub(crate) fn rushed_recv(
+        &self,
+        fd: RawFd,
+        size: usize,
+        timeout: Option<Duration>,
+    ) -> io::Result<Source> {
         let source = self.new_source(fd, SourceType::SockRecv(None));
+        if let Some(timeout) = timeout {
+            source.set_timeout(timeout);
+        }
         self.sys.recv(&source, size, MsgFlags::empty());
         self.rush_dispatch(&source)?;
         Ok(source)

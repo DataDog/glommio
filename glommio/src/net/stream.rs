@@ -12,13 +12,17 @@ use crate::{
 use futures_lite::ready;
 use nix::sys::socket::MsgFlags;
 use std::{
+    cell::Cell,
     convert::TryFrom,
     io,
     net::Shutdown,
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     rc::{Rc, Weak},
     task::{Context, Poll},
+    time::Duration,
 };
+
+type Result<T> = crate::Result<T, ()>;
 
 struct RecvBuffer {
     buf: DmaBuffer,
@@ -49,6 +53,9 @@ pub(crate) struct GlommioStream<S: AsRawFd + FromRawFd + From<socket2::Socket>> 
     pub(crate) source_tx: Option<Source>,
     pub(crate) source_rx: Option<Source>,
 
+    pub(crate) write_timeout: Cell<Option<Duration>>,
+    pub(crate) read_timeout: Cell<Option<Duration>>,
+
     // you only live once, you've got no time to block! if this is set to true try a direct
     // non-blocking syscall otherwise schedule for sending later over the ring
     //
@@ -73,6 +80,8 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> From<socket2::Socket> for G
             stream,
             source_tx: None,
             source_rx: None,
+            write_timeout: Cell::new(None),
+            read_timeout: Cell::new(None),
             tx_yolo: true,
             rx_yolo: true,
             rx_buf: None,
@@ -151,6 +160,34 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         self.reactor.upgrade().unwrap().alloc_dma_buffer(size)
     }
 
+    pub(crate) fn set_write_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        if let Some(dur) = dur.as_ref() {
+            if dur.as_nanos() == 0 {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
+            }
+        }
+        self.write_timeout.set(dur);
+        Ok(())
+    }
+
+    pub(crate) fn set_read_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        if let Some(dur) = dur.as_ref() {
+            if dur.as_nanos() == 0 {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
+            }
+        }
+        self.read_timeout.set(dur);
+        Ok(())
+    }
+
+    pub(crate) fn write_timeout(&self) -> Option<Duration> {
+        self.write_timeout.get()
+    }
+
+    pub(crate) fn read_timeout(&self) -> Option<Duration> {
+        self.read_timeout.get()
+    }
+
     pub(crate) fn yolo_rx(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
         if self.rx_yolo {
             super::yolo_recv(self.stream.as_raw_fd(), buf)
@@ -182,12 +219,11 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
     ) -> Poll<io::Result<usize>> {
         let source = match self.source_rx.take() {
             Some(source) => source,
-            None => poll_err!(
-                self.reactor
-                    .upgrade()
-                    .unwrap()
-                    .rushed_recv(self.stream.as_raw_fd(), size)
-            ),
+            None => poll_err!(self.reactor.upgrade().unwrap().rushed_recv(
+                self.stream.as_raw_fd(),
+                size,
+                self.read_timeout.get()
+            )),
         };
 
         if !source.has_result() {
@@ -209,12 +245,11 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
     ) -> Poll<io::Result<usize>> {
         let source = match self.source_tx.take() {
             Some(source) => source,
-            None => poll_err!(
-                self.reactor
-                    .upgrade()
-                    .unwrap()
-                    .rushed_send(self.stream.as_raw_fd(), buf)
-            ),
+            None => poll_err!(self.reactor.upgrade().unwrap().rushed_send(
+                self.stream.as_raw_fd(),
+                buf,
+                self.write_timeout.get()
+            )),
         };
 
         match source.take_result() {
