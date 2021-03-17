@@ -8,6 +8,7 @@ use std::{
     io,
     os::unix::io::RawFd,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 /// Result type alias that all Glommio public API functions can use.
@@ -160,6 +161,9 @@ pub enum GlommioError<T> {
     /// Reactor error variants. This includes errors specific to the operation
     /// of the io-uring instances or related.
     ReactorError(ReactorErrorKind),
+
+    /// Timeout variant used for reporting timed out operations
+    TimedOut(Duration),
 }
 
 impl<T> From<io::Error> for GlommioError<T> {
@@ -171,76 +175,49 @@ impl<T> From<io::Error> for GlommioError<T> {
 impl<T> fmt::Display for GlommioError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GlommioError::IoError(err) => {
-                write!(f, "IO error occurred: {}", err)
-            }
+            GlommioError::IoError(err) => write!(f, "IO error occurred: {}", err),
             GlommioError::EnhancedIoError {
                 source,
                 op,
                 path,
                 fd,
-            } => {
-                write!(
-                    f,
-                    "{}, op: {} path: {:?} with fd: {:?}",
-                    source, op, path, fd
-                )
-            }
-            GlommioError::ExecutorError(err) => {
-                write!(f, "Executor error: {}", err)
-            }
+            } => write!(
+                f,
+                "{}, op: {} path: {:?} with fd: {:?}",
+                source, op, path, fd
+            ),
+            GlommioError::ExecutorError(err) => write!(f, "Executor error: {}", err),
             GlommioError::Closed(rt) => match rt {
                 ResourceType::Semaphore {
                     requested,
                     available,
-                } => {
-                    write!(
-                        f,
-                        "Semaphore is closed (requested: {}, available: {})",
-                        requested, available
-                    )
-                }
-                ResourceType::RwLock => {
-                    write!(f, "RwLock is closed")
-                }
-                ResourceType::Channel(_) => {
-                    write!(f, "Channel is closed")
-                }
+                } => write!(
+                    f,
+                    "Semaphore is closed (requested: {}, available: {})",
+                    requested, available
+                ),
+                ResourceType::RwLock => write!(f, "RwLock is closed"),
+                ResourceType::Channel(_) => write!(f, "Channel is closed"),
                 // TODO: look at what this format string should be as per bug report..
-                ResourceType::File(msg) => {
-                    write!(f, "File is closed ({})", msg)
-                }
-                ResourceType::Gate => {
-                    write!(f, "Gate is closed")
-                }
+                ResourceType::File(msg) => write!(f, "File is closed ({})", msg),
+                ResourceType::Gate => write!(f, "Gate is closed"),
             },
             GlommioError::WouldBlock(rt) => match rt {
                 ResourceType::Semaphore {
                     requested,
                     available,
-                } => {
-                    write!(
-                        f,
-                        "Semaphore operation would block (requested: {}, available: {})",
-                        requested, available
-                    )
-                }
-                ResourceType::RwLock => {
-                    write!(f, "RwLock operation would block")
-                }
-                ResourceType::Channel(_) => {
-                    write!(f, "Channel operation would block")
-                }
-                ResourceType::File(msg) => {
-                    write!(f, "File operation would block ({})", msg)
-                }
-                ResourceType::Gate => {
-                    write!(f, "Gate operation would block")
-                }
+                } => write!(
+                    f,
+                    "Semaphore operation would block (requested: {}, available: {})",
+                    requested, available
+                ),
+                ResourceType::RwLock => write!(f, "RwLock operation would block"),
+                ResourceType::Channel(_) => write!(f, "Channel operation would block"),
+                ResourceType::File(msg) => write!(f, "File operation would block ({})", msg),
+                ResourceType::Gate => write!(f, "Gate operation would block"),
             },
-            GlommioError::ReactorError(err) => {
-                write!(f, "Reactor error: {}", err)
-            }
+            GlommioError::ReactorError(err) => write!(f, "Reactor error: {}", err),
+            GlommioError::TimedOut(dur) => write!(f, "Operation timed out after {:#?}", dur),
         }
     }
 }
@@ -387,19 +364,18 @@ impl<T> Debug for GlommioError<T> {
                 op,
                 path,
                 fd,
-            } => {
-                write!(
-                    f,
-                    "EnhancedIoError {{ source: {:?}, op: {:?}, path: {:?}, fd: {:?} }}",
-                    source, op, path, fd
-                )
-            }
+            } => write!(
+                f,
+                "EnhancedIoError {{ source: {:?}, op: {:?}, path: {:?}, fd: {:?} }}",
+                source, op, path, fd
+            ),
             GlommioError::ReactorError(kind) => {
                 let kind = match kind {
                     ReactorErrorKind::IncorrectSourceType => "IncorrectSourceType",
                 };
                 write!(f, "ReactorError {{ kind: '{}' }}", kind)
             }
+            GlommioError::TimedOut(dur) => write!(f, "TimedOut {{ dur {:?} }}", dur),
         }
     }
 }
@@ -433,6 +409,10 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::ReactorError(_) => {
                 io::Error::new(io::ErrorKind::InvalidData, "Incorrect source type!")
             }
+            GlommioError::TimedOut(dur) => io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("timed out after {:#?}", dur),
+            ),
         }
     }
 }

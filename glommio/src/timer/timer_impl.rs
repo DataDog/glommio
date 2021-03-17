@@ -3,7 +3,8 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{parking::Reactor, task::JoinHandle, Local, Task, TaskQueueHandle};
+use crate::{parking::Reactor, task::JoinHandle, GlommioError, Local, Task, TaskQueueHandle};
+use pin_project_lite::pin_project;
 use std::{
     cell::RefCell,
     future::Future,
@@ -721,11 +722,138 @@ impl TimerActionRepeat {
     }
 }
 
+pin_project! {
+    #[derive(Debug)]
+    pub(super) struct Timeout<F, T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        #[pin]
+        pub(super) future: F,
+        #[pin]
+        pub(super) timeout: Timer,
+ pub(super)        dur: Duration,
+    }
+}
+
+impl<F, T> Timeout<F, T>
+where
+    F: Future<Output = Result<T>>,
+{
+    pub(super) fn new(future: F, dur: Duration) -> Self {
+        Self {
+            dur,
+            future,
+            timeout: Timer::new(dur),
+        }
+    }
+}
+
+impl<F, T> Future for Timeout<F, T>
+where
+    F: Future<Output = Result<T>>,
+{
+    type Output = Result<T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this.future.poll(cx) {
+            Poll::Pending => {}
+            other => return other,
+        }
+
+        if this.timeout.poll(cx).is_ready() {
+            let err = Err(GlommioError::TimedOut(*this.dur));
+            Poll::Ready(err)
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::LocalExecutorBuilder;
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    #[test]
+    fn timeout_does_not_expire() {
+        test_executor!(async move {
+            let now = Instant::now();
+            let res = Timeout::new(
+                async move {
+                    Timer::new(Duration::from_millis(1)).await;
+                    Ok(5)
+                },
+                Duration::from_millis(10),
+            )
+            .await
+            .unwrap();
+            assert_eq!(res, 5);
+            assert!(now.elapsed().as_millis() >= 1);
+            assert!(now.elapsed().as_millis() < 10);
+        });
+    }
+
+    #[test]
+    fn timeout_expires() {
+        test_executor!(async move {
+            let now = Instant::now();
+            let dur = Duration::from_millis(10);
+            let err = Timeout::new(
+                async move {
+                    Timer::new(Duration::from_millis(100)).await;
+                    Ok(5)
+                },
+                dur,
+            )
+            .await
+            .unwrap_err();
+            assert!(now.elapsed().as_millis() >= 10);
+            assert!(now.elapsed().as_millis() < 100);
+            assert_eq!(format!("{}", err), "Operation timed out after 10ms");
+            match err {
+                GlommioError::TimedOut(d) => assert_eq!(d, dur),
+                _ => unreachable!(),
+            }
+        });
+    }
+
+    #[test]
+    fn timeout_expiration_cancels_future() {
+        test_executor!(async move {
+            struct Foo {
+                val: Rc<Cell<usize>>,
+            }
+
+            impl Drop for Foo {
+                fn drop(&mut self) {
+                    self.val.set(10);
+                }
+            }
+
+            let tracker = Rc::new(Cell::new(0));
+            let f = Foo {
+                val: tracker.clone(),
+            };
+            let dur = Duration::from_millis(10);
+            let _err = Timeout::new(
+                async move {
+                    Timer::new(Duration::from_millis(100)).await;
+                    f.val.set(2);
+                    Ok(5)
+                },
+                dur,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(tracker.get(), 10);
+        });
+    }
 
     #[test]
     fn basic_timer_works() {
