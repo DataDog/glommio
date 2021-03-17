@@ -310,6 +310,7 @@ pub mod task;
 mod uring_sys;
 
 #[cfg(feature = "bench")]
+#[doc(hidden)]
 pub mod nop;
 
 // unwraps a Result to Poll<T>: if error returns right away.
