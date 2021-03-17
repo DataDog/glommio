@@ -51,16 +51,7 @@ use futures_lite::*;
 
 use crate::{
     sys,
-    sys::{
-        DirectIO,
-        DmaBuffer,
-        IOBuffer,
-        PollableStatus,
-        SleepNotifier,
-        Source,
-        SourceType,
-        TimeSpec64,
-    },
+    sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, SleepNotifier, Source, SourceType},
     IoRequirements,
     Latency,
     Local,
@@ -375,7 +366,8 @@ impl Reactor {
     }
 
     pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockAddr, d: Duration) -> Source {
-        let source = self.new_source(raw, SourceType::ConnectTimeout(addr, TimeSpec64::from(d)));
+        let source = self.new_source(raw, SourceType::Connect(addr));
+        source.set_timeout(d);
         self.sys.connect(&source);
         source
     }

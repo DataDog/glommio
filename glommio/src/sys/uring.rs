@@ -767,6 +767,17 @@ impl InnerSource {
 }
 
 impl Source {
+    pub(crate) fn set_timeout(&self, d: Duration) -> Option<Duration> {
+        let mut t = self.inner.timeout.borrow_mut();
+        let old = *t;
+        *t = Some(TimeSpec64::from(d));
+        old.map(Duration::from)
+    }
+
+    fn timeout_ref(&self) -> Ref<'_, Option<TimeSpec64>> {
+        self.inner.timeout.borrow()
+    }
+
     pub(crate) fn latency_req(&self) -> Latency {
         self.inner.io_requirements.latency_req
     }
@@ -1256,9 +1267,7 @@ impl Reactor {
 
     pub(crate) fn connect(&self, source: &Source) {
         let op = match &*source.source_type() {
-            SourceType::Connect(addr) | SourceType::ConnectTimeout(addr, _) => {
-                UringOpDescriptor::Connect(addr as *const SockAddr)
-            }
+            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const SockAddr),
             x => panic!("Unexpected source type for connect: {:?}", x),
         };
         self.queue_standard_request(source, op);
@@ -1520,8 +1529,8 @@ fn queue_request_into_ring(
     let q = ring.borrow_mut().submission_queue();
     let id = add_source(source, Rc::clone(&q));
 
-    let flags = match &*source.source_type() {
-        SourceType::ConnectTimeout(_, _) => SubmissionFlags::IO_LINK,
+    let flags = match &*source.timeout_ref() {
+        Some(_) => SubmissionFlags::IO_LINK,
         _ => SubmissionFlags::empty(),
     };
 
@@ -1533,7 +1542,7 @@ fn queue_request_into_ring(
         user_data: to_user_data(id),
     });
 
-    if let SourceType::ConnectTimeout(_, ts) = &*source.source_type() {
+    if let Some(ref ts) = &*source.timeout_ref() {
         queue.submissions.push_back(UringDescriptor {
             args: UringOpDescriptor::LinkTimeout(&ts.raw as *const _),
             flags: SubmissionFlags::empty(),
