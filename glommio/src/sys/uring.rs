@@ -34,7 +34,6 @@ use crate::{
         DirectIO,
         IOBuffer,
         InnerSource,
-        LinkStatus,
         PollableStatus,
         Source,
         SourceType,
@@ -790,10 +789,6 @@ impl Source {
         self.inner.source_type.borrow_mut()
     }
 
-    pub(crate) fn update_source_type(&self, source_type: SourceType) -> SourceType {
-        self.inner.update_source_type(source_type)
-    }
-
     pub(crate) fn extract_source_type(&self) -> SourceType {
         self.inner.update_source_type(SourceType::Invalid)
     }
@@ -926,30 +921,21 @@ impl SleepableRing {
     }
 
     fn sleep(&mut self, link: &mut Source, eventfd_src: &Source) -> io::Result<usize> {
-        let is_freestanding = match &*link.source_type() {
-            SourceType::LinkRings(LinkStatus::Linked) => false, // nothing to do
-            SourceType::LinkRings(LinkStatus::Freestanding) => true,
-            _ => panic!("Unexpected source type when linking rings"),
-        };
+        if let Some(mut sqe) = self.ring.prepare_sqe() {
+            self.waiting_submission += 1;
 
-        if is_freestanding {
-            if let Some(mut sqe) = self.ring.prepare_sqe() {
-                self.waiting_submission += 1;
-                link.update_source_type(SourceType::LinkRings(LinkStatus::Linked));
-
-                let op = UringDescriptor {
-                    fd: link.raw(),
-                    flags: SubmissionFlags::empty(),
-                    user_data: to_user_data(add_source(link, self.submission_queue.clone())),
-                    args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
-                };
-                fill_sqe(&mut sqe, &op, DmaBuffer::new);
-            } else {
-                // Can't link rings because we ran out of CQEs. Just can't sleep.
-                // Submit what we have, once we're out of here we'll consume them
-                // and at some point will be able to sleep again.
-                return self.ring.submit_sqes().map(|x| x as usize);
-            }
+            let op = UringDescriptor {
+                fd: link.raw(),
+                flags: SubmissionFlags::empty(),
+                user_data: to_user_data(add_source(link, self.submission_queue.clone())),
+                args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
+            };
+            fill_sqe(&mut sqe, &op, DmaBuffer::new);
+        } else {
+            // Can't link rings because we ran out of CQEs. Just can't sleep.
+            // Submit what we have, once we're out of here we'll consume them
+            // and at some point will be able to sleep again.
+            return self.ring.submit_sqes().map(|x| x as usize);
         }
 
         let res = eventfd_src.take_result();
@@ -1002,13 +988,7 @@ impl UringCommon for SleepableRing {
         process_one_event(
             self.ring.peek_for_cqe(),
             |source| match &mut *source.source_type.borrow_mut() {
-                SourceType::LinkRings(status @ LinkStatus::Linked) => {
-                    *status = LinkStatus::Freestanding;
-                    Some(())
-                }
-                SourceType::LinkRings(LinkStatus::Freestanding) => {
-                    panic!("Impossible to have an event firing like this");
-                }
+                SourceType::LinkRings => Some(()),
                 SourceType::Timeout(_) => Some(()),
                 _ => None,
             },
@@ -1062,8 +1042,9 @@ pub(crate) struct Reactor {
     latency_ring: RefCell<SleepableRing>,
     poll_ring: RefCell<PollRing>,
 
-    link_rings_src: RefCell<Source>,
     timeout_src: Cell<Option<Source>>,
+
+    link_fd: RawFd,
 
     // This keeps the eventfd alive. Drop will close it when we're done
     notifier: Arc<sys::SleepNotifier>,
@@ -1158,11 +1139,6 @@ impl Reactor {
 
         let latency_ring = SleepableRing::new(128, "latency", allocator.clone())?;
         let link_fd = latency_ring.ring_fd();
-        let link_rings_src = Source::new(
-            IoRequirements::default(),
-            link_fd,
-            SourceType::LinkRings(LinkStatus::Freestanding),
-        );
 
         let eventfd_src = Source::new(
             IoRequirements::default(),
@@ -1175,8 +1151,8 @@ impl Reactor {
             main_ring: RefCell::new(main_ring),
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
-            link_rings_src: RefCell::new(link_rings_src),
             timeout_src: Cell::new(None),
+            link_fd,
             notifier,
             eventfd_src,
         })
@@ -1344,7 +1320,11 @@ impl Reactor {
         ring: &mut SleepableRing,
         eventfd_src: &Source,
     ) -> io::Result<()> {
-        let mut link_rings = self.link_rings_src.borrow_mut();
+        let mut link_rings = Source::new(
+            IoRequirements::default(),
+            self.link_fd,
+            SourceType::LinkRings,
+        );
         ring.sleep(&mut link_rings, eventfd_src)
             .or_else(Self::busy_ok)?;
         Ok(())
@@ -1467,6 +1447,9 @@ impl Reactor {
                     .expect("some error");
                 // woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
+                // may have new cancellations related to the link ring fd.
+                flush_cancellations!(into wakers; main_ring);
+                flush_rings!(main_ring)?;
                 consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
             }
         }
