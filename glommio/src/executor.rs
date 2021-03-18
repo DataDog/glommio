@@ -1699,7 +1699,7 @@ mod test {
 
     #[test]
     fn test_runtime_stats() {
-        let dur = Duration::from_secs(1);
+        let dur = Duration::from_secs(2);
         let ex0 = LocalExecutorBuilder::new().make().unwrap();
         ex0.run(async {
             assert!(
@@ -1713,21 +1713,22 @@ mod test {
             Local::later().await;
             assert!(
                 Local::executor_stats().total_runtime() >= Duration::from_millis(200),
-                    "expected runtime on LE0 {:#?} is greater than 200 ms",
-                    Local::executor_stats().total_runtime()
+                "expected runtime on LE0 {:#?} is greater than 200 ms",
+                Local::executor_stats().total_runtime()
             );
 
             timer::sleep(dur).await;
             assert!(
-                Local::executor_stats().total_runtime() < Duration::from_millis(220),
-                    "expected runtime on LE0 {:#?} is not much greater than 200 ms",
-                    Local::executor_stats().total_runtime()
+                Local::executor_stats().total_runtime() < Duration::from_millis(400),
+                "expected runtime on LE0 {:#?} is not greater than 400 ms",
+                Local::executor_stats().total_runtime()
             );
         });
 
         let ex = LocalExecutorBuilder::new()
             .pin_to_cpu(0)
-            .spin_before_park(Duration::from_millis(100))
+            // ensure entire sleep should spin
+            .spin_before_park(Duration::from_secs(5))
             .make()
             .unwrap();
         ex.run(async {
@@ -1743,14 +1744,14 @@ mod test {
                 Local::later().await;
                 assert!(
                     Local::executor_stats().total_runtime() >= Duration::from_millis(200),
-                        "expected runtime on LE {:#?} is greater than 200 ms",
-                        Local::executor_stats().total_runtime()
+                    "expected runtime on LE {:#?} is greater than 200 ms",
+                    Local::executor_stats().total_runtime()
                 );
                 timer::sleep(dur).await;
                 assert!(
-                    Local::executor_stats().total_runtime() < Duration::from_millis(220),
-                        "expected runtime on LE {:#?} is not much greater than 200 ms",
-                        Local::executor_stats().total_runtime()
+                    Local::executor_stats().total_runtime() < Duration::from_millis(400),
+                    "expected runtime on LE {:#?} is not greater than 400 ms",
+                    Local::executor_stats().total_runtime()
                 );
             })
             .await;
