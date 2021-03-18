@@ -41,12 +41,12 @@ fn main() {
             let tq2 = Local::create_task_queue(
                 Shares::default(),
                 Latency::Matters(Duration::from_millis(10)),
-                "tq1",
+                "tq2",
             );
             let shared_value = Rc::new(RefCell::new(0u64));
 
             let value = shared_value.clone();
-            let j2 = Local::local_into(
+            let j1 = Local::local_into(
                 async move {
                     let start = Instant::now();
                     let mut lap = start;
@@ -64,7 +64,7 @@ fn main() {
             .unwrap();
 
             let value = shared_value.clone();
-            let j1 = Local::local_into(
+            let j2 = Local::local_into(
                 async move {
                     let start = Instant::now();
                     let mut lap = start;
