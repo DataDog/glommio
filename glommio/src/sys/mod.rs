@@ -377,7 +377,6 @@ pub(crate) enum SourceType {
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(TimeSpec64),
     Connect(SockAddr),
-    ConnectTimeout(SockAddr, TimeSpec64),
     Accept(SockAddrStorage),
     Invalid,
     #[cfg(feature = "bench")]
@@ -397,6 +396,7 @@ impl TryFrom<SourceType> for libc::statx {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct TimeSpec64 {
     raw: uring_sys::__kernel_timespec,
 }
@@ -416,6 +416,12 @@ impl fmt::Debug for TimeSpec64 {
 
 impl From<&'_ TimeSpec64> for Duration {
     fn from(ts: &TimeSpec64) -> Self {
+        Duration::new(ts.raw.tv_sec as u64, ts.raw.tv_nsec as u32)
+    }
+}
+
+impl From<TimeSpec64> for Duration {
+    fn from(ts: TimeSpec64) -> Self {
         Duration::new(ts.raw.tv_sec as u64, ts.raw.tv_nsec as u32)
     }
 }
@@ -462,6 +468,8 @@ pub struct InnerSource {
 
     io_requirements: IoRequirements,
 
+    timeout: RefCell<Option<TimeSpec64>>,
+
     enqueued: Cell<Option<EnqueuedSource>>,
 }
 
@@ -496,6 +504,7 @@ impl Source {
                 source_type: RefCell::new(source_type),
                 io_requirements: ioreq,
                 enqueued: Cell::new(None),
+                timeout: RefCell::new(None),
             }),
         }
     }

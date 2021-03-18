@@ -276,6 +276,7 @@ pub struct io_uring_probe_op {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct __kernel_timespec {
     pub tv_sec: i64,
     pub tv_nsec: libc::c_longlong,

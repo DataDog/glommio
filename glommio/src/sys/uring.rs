@@ -439,6 +439,22 @@ where
     }
 }
 
+fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
+    res.map(|x| x as usize) // iou standardized on u32, which is good for low level but for higher layers usize is
+        // better
+        .map_err(|x| {
+            // Convert CANCELED to TimedOut. This will be the case for linked sqes with a
+            // timeout, and if we wanted to be really strict we'd check. But if
+            // the operation is truly cancelled no one will check the result,
+            // and we have no other use case for cancel at the moment so keep it simple
+            if let Some(libc::ECANCELED) = x.raw_os_error() {
+                io::Error::from_raw_os_error(libc::ETIMEDOUT)
+            } else {
+                x
+            }
+        })
+}
+
 fn process_one_event<F>(
     cqe: Option<iou::CQE>,
     try_process: F,
@@ -459,7 +475,7 @@ where
 
         if try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
-            w.result = Some(result.map(|x| x as usize));
+            w.result = Some(transmute_error(result));
             if let Some(waiter) = w.waiter.take() {
                 wakers.push(waiter);
             }
@@ -751,6 +767,17 @@ impl InnerSource {
 }
 
 impl Source {
+    pub(crate) fn set_timeout(&self, d: Duration) -> Option<Duration> {
+        let mut t = self.inner.timeout.borrow_mut();
+        let old = *t;
+        *t = Some(TimeSpec64::from(d));
+        old.map(Duration::from)
+    }
+
+    fn timeout_ref(&self) -> Ref<'_, Option<TimeSpec64>> {
+        self.inner.timeout.borrow()
+    }
+
     pub(crate) fn latency_req(&self) -> Latency {
         self.inner.io_requirements.latency_req
     }
@@ -1240,9 +1267,7 @@ impl Reactor {
 
     pub(crate) fn connect(&self, source: &Source) {
         let op = match &*source.source_type() {
-            SourceType::Connect(addr) | SourceType::ConnectTimeout(addr, _) => {
-                UringOpDescriptor::Connect(addr as *const SockAddr)
-            }
+            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const SockAddr),
             x => panic!("Unexpected source type for connect: {:?}", x),
         };
         self.queue_standard_request(source, op);
@@ -1504,8 +1529,8 @@ fn queue_request_into_ring(
     let q = ring.borrow_mut().submission_queue();
     let id = add_source(source, Rc::clone(&q));
 
-    let flags = match &*source.source_type() {
-        SourceType::ConnectTimeout(_, _) => SubmissionFlags::IO_LINK,
+    let flags = match &*source.timeout_ref() {
+        Some(_) => SubmissionFlags::IO_LINK,
         _ => SubmissionFlags::empty(),
     };
 
@@ -1517,7 +1542,7 @@ fn queue_request_into_ring(
         user_data: to_user_data(id),
     });
 
-    if let SourceType::ConnectTimeout(_, ts) = &*source.source_type() {
+    if let Some(ref ts) = &*source.timeout_ref() {
         queue.submissions.push_back(UringDescriptor {
             args: UringOpDescriptor::LinkTimeout(&ts.raw as *const _),
             flags: SubmissionFlags::empty(),

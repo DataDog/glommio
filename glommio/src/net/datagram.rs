@@ -15,14 +15,20 @@ use std::{
     io,
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     rc::{Rc, Weak},
+    time::Duration,
 };
 
 const DEFAULT_BUFFER_SIZE: usize = 8192;
+
+type Result<T> = crate::Result<T, ()>;
 
 #[derive(Debug)]
 pub struct GlommioDatagram<S: AsRawFd + FromRawFd + From<socket2::Socket>> {
     pub(crate) reactor: Weak<Reactor>,
     pub(crate) socket: S,
+
+    pub(crate) write_timeout: Cell<Option<Duration>>,
+    pub(crate) read_timeout: Cell<Option<Duration>>,
 
     // you only live once, you've got no time to block! if this is set to true try a direct
     // non-blocking syscall otherwise schedule for sending later over the ring
@@ -45,6 +51,8 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> From<socket2::Socket> for G
             socket,
             tx_yolo: Cell::new(true),
             rx_yolo: Cell::new(true),
+            write_timeout: Cell::new(None),
+            read_timeout: Cell::new(None),
             rx_buf_size: DEFAULT_BUFFER_SIZE,
         }
     }
@@ -103,11 +111,11 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         match self.yolo_rx(buf) {
             Some(x) => x,
             None => {
-                let source = self
-                    .reactor
-                    .upgrade()
-                    .unwrap()
-                    .rushed_recv(self.socket.as_raw_fd(), buf.len())?;
+                let source = self.reactor.upgrade().unwrap().rushed_recv(
+                    self.socket.as_raw_fd(),
+                    buf.len(),
+                    self.read_timeout.get(),
+                )?;
                 self.consume_receive_buffer(&source, buf).await
             }
         }
@@ -122,6 +130,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
             self.socket.as_raw_fd(),
             buf.len(),
             flags,
+            self.read_timeout.get(),
         )?;
         let sz = source.collect_rw().await?;
         match source.extract_source_type() {
@@ -135,6 +144,34 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
             }
             _ => unreachable!(),
         }
+    }
+
+    pub(crate) fn set_write_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        if let Some(dur) = dur.as_ref() {
+            if dur.as_nanos() == 0 {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
+            }
+        }
+        self.write_timeout.set(dur);
+        Ok(())
+    }
+
+    pub(crate) fn set_read_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        if let Some(dur) = dur.as_ref() {
+            if dur.as_nanos() == 0 {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
+            }
+        }
+        self.read_timeout.set(dur);
+        Ok(())
+    }
+
+    pub(crate) fn write_timeout(&self) -> Option<Duration> {
+        self.write_timeout.get()
+    }
+
+    pub(crate) fn read_timeout(&self) -> Option<Duration> {
+        self.read_timeout.get()
     }
 
     pub(crate) async fn recv_from(
@@ -158,6 +195,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
             self.socket.as_raw_fd(),
             dma,
             sockaddr,
+            self.write_timeout.get(),
         )?;
         let ret = source.collect_rw().await?;
         self.tx_yolo.set(true);
@@ -181,11 +219,11 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
             None => {
                 let mut dma = self.allocate_buffer(buf.len());
                 assert_eq!(dma.write_at(0, buf), buf.len());
-                let source = self
-                    .reactor
-                    .upgrade()
-                    .unwrap()
-                    .rushed_send(self.socket.as_raw_fd(), dma)?;
+                let source = self.reactor.upgrade().unwrap().rushed_send(
+                    self.socket.as_raw_fd(),
+                    dma,
+                    self.write_timeout.get(),
+                )?;
                 let ret = source.collect_rw().await?;
                 self.tx_yolo.set(true);
                 Ok(ret)

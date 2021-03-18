@@ -403,6 +403,60 @@ impl TcpStream {
         })
     }
 
+    /// Sets the read timeout to the timeout specified.
+    ///
+    /// If the value specified is [`None`], then read calls will block
+    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
+    /// passed to this method.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::TcpStream, LocalExecutor};
+    /// # use std::time::Duration;
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    /// stream
+    ///     .set_read_timeout(Some(Duration::from_secs(1)))
+    ///     .unwrap();
+    /// # })
+    /// ```
+    pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        self.stream.set_read_timeout(dur)
+    }
+
+    /// Sets the write timeout to the timeout specified.
+    ///
+    /// If the value specified is [`None`], then write calls will block
+    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
+    /// passed to this method.
+    ///
+    /// ```no_run
+    /// # use glommio::{net::TcpStream, LocalExecutor};
+    /// # use std::time::Duration;
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    /// stream
+    ///     .set_write_timeout(Some(Duration::from_secs(1)))
+    ///     .unwrap();
+    /// # })
+    /// ```
+    pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        self.stream.set_write_timeout(dur)
+    }
+
+    /// Returns the read timeout of this socket.
+    pub fn read_timeout(&self) -> Option<Duration> {
+        self.stream.read_timeout()
+    }
+
+    /// Returns the write timeout of this socket.
+    pub fn write_timeout(&self) -> Option<Duration> {
+        self.stream.write_timeout()
+    }
+
     /// Creates a TCP connection to the specified address with a timeout.
     ///
     /// It is an error to pass a zero `Duration` to this function.
@@ -663,7 +717,7 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     #[test]
@@ -1099,6 +1153,58 @@ mod tests {
                 Err(GlommioError::IoError(ref e)) if e.kind() == io::ErrorKind::TimedOut => {}
                 Err(e) => panic!("unexpected error {}", e),
             }
+        });
+    }
+
+    #[test]
+    fn tcp_read_timeout() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let ltask = Task::<Result<usize>>::local(async move {
+                let mut stream = listener.accept().await?;
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut buf = [0u8; 64];
+                let now = Instant::now();
+                match stream.read(&mut buf).await {
+                    Ok(_) => unreachable!(),
+                    Err(x) => {
+                        assert_eq!(x.kind(), io::ErrorKind::TimedOut);
+                    }
+                };
+                assert!(now.elapsed().as_secs() >= 1);
+                Ok(0)
+            });
+
+            let _s = TcpStream::connect(addr).await.unwrap();
+            ltask.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn tcp_invalid_timeout() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let ltask = Task::<Result<usize>>::local(async move {
+                let stream = listener.accept().await?;
+                stream
+                    .set_write_timeout(Some(Duration::from_nanos(0)))
+                    .unwrap_err();
+                assert_eq!(stream.write_timeout().is_none(), true);
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                assert_eq!(stream.write_timeout(), Some(Duration::from_secs(1)));
+                Ok(0)
+            });
+
+            let _s = TcpStream::connect(addr).await.unwrap();
+            ltask.await.unwrap();
         });
     }
 }
