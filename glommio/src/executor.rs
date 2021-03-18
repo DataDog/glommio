@@ -80,6 +80,13 @@ impl Default for TaskQueueHandle {
     }
 }
 
+impl TaskQueueHandle {
+    /// Returns a numeric ID that uniquely identifies this Task queue
+    pub fn index(&self) -> usize {
+        self.index
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct TaskQueue {
     pub(crate) ex: Rc<multitask::LocalExecutor>,
@@ -195,6 +202,8 @@ fn bind_to_cpu(cpu: usize) -> Result<()> {
 /// Allows information about the current state of this executor to be consumed
 /// by applications.
 pub struct ExecutorStats {
+    executor_runtime: Duration,
+    // total_runtime include poll_io time, exclude spin loop time
     total_runtime: Duration,
     scheduler_runs: u64,
     tasks_executed: u64,
@@ -203,6 +212,7 @@ pub struct ExecutorStats {
 impl ExecutorStats {
     fn new() -> Self {
         Self {
+            executor_runtime: Duration::from_nanos(0),
             total_runtime: Duration::from_nanos(0),
             scheduler_runs: 0,
             tasks_executed: 0,
@@ -215,6 +225,11 @@ impl ExecutorStats {
     /// CPU time you will see in the operating system will be a far cry from
     /// the CPU time it actually spent executing. Sleeping or Spinning are
     /// not accounted here
+    pub fn executor_runtime(&self) -> Duration {
+        self.executor_runtime
+    }
+
+    /// The total amount of runtime in this executor, plus poll io time
     pub fn total_runtime(&self) -> Duration {
         self.total_runtime
     }
@@ -790,7 +805,7 @@ impl LocalExecutor {
 
                 let mut tq = self.queues.borrow_mut();
                 tq.active_executing = None;
-                tq.stats.total_runtime += runtime;
+                tq.stats.executor_runtime += runtime;
                 tq.stats.tasks_executed += tasks_executed_this_loop;
 
                 tq.last_vruntime = match last_vruntime {
@@ -841,10 +856,13 @@ impl LocalExecutor {
             let future = self.spawn(async move { future.await }).detach();
             pin!(future);
 
+            let mut pre_time = Instant::now();
             loop {
                 if let Poll::Ready(t) = future.as_mut().poll(cx) {
                     // can't be canceled, and join handle is None only upon
                     // cancellation or panic. So in case of panic this just propagates
+                    let cur_time = Instant::now();
+                    self.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
                     break t.unwrap();
                 }
 
@@ -855,7 +873,11 @@ impl LocalExecutor {
                 // the opportunity to install the timer.
                 let duration = self.preempt_timer_duration();
                 self.parker.poll_io(duration);
-                if !self.run_task_queues() {
+                let run = self.run_task_queues();
+                let cur_time = Instant::now();
+                self.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
+                pre_time = cur_time;
+                if !run {
                     if let Poll::Ready(t) = future.as_mut().poll(cx) {
                         // It may be that we just became ready now that the task queue
                         // is exhausted. But if we sleep (park) we'll never know so we
@@ -863,13 +885,14 @@ impl LocalExecutor {
                         // future is probably the one setting up the task queues and etc.
                         break t.unwrap();
                     } else {
-                        let spin_start = Instant::now();
                         while !self.reactor.spin_poll_io().unwrap() {
-                            if spin_start.elapsed() > spin_before_park {
+                            if pre_time.elapsed() > spin_before_park {
                                 self.parker.park();
                                 break;
                             }
                         }
+                        // reset the timer for deduct spin loop time
+                        pre_time = Instant::now();
                     }
                 }
             }
@@ -1672,6 +1695,67 @@ mod test {
             ex_ru_finish - ex_ru_start >= Duration::from_millis(50),
             "expected user time on LE is much greater than 50 millisecond"
         );
+    }
+
+    #[test]
+    fn test_runtime_stats() {
+        let dur = Duration::from_secs(2);
+        let ex0 = LocalExecutorBuilder::new().make().unwrap();
+        ex0.run(async {
+            assert!(
+                Local::executor_stats().total_runtime() < Duration::from_nanos(10),
+                "expected runtime on LE {:#?} is less than 10 ns",
+                Local::executor_stats().total_runtime()
+            );
+
+            let now = Instant::now();
+            while now.elapsed().as_millis() < 200 {}
+            Local::later().await;
+            assert!(
+                Local::executor_stats().total_runtime() >= Duration::from_millis(200),
+                "expected runtime on LE0 {:#?} is greater than 200 ms",
+                Local::executor_stats().total_runtime()
+            );
+
+            timer::sleep(dur).await;
+            assert!(
+                Local::executor_stats().total_runtime() < Duration::from_millis(400),
+                "expected runtime on LE0 {:#?} is not greater than 400 ms",
+                Local::executor_stats().total_runtime()
+            );
+        });
+
+        let ex = LocalExecutorBuilder::new()
+            .pin_to_cpu(0)
+            // ensure entire sleep should spin
+            .spin_before_park(Duration::from_secs(5))
+            .make()
+            .unwrap();
+        ex.run(async {
+            Local::local(async move {
+                assert!(
+                    Local::executor_stats().total_runtime() < Duration::from_nanos(10),
+                    "expected runtime on LE {:#?} is less than 10 ns",
+                    Local::executor_stats().total_runtime()
+                );
+
+                let now = Instant::now();
+                while now.elapsed().as_millis() < 200 {}
+                Local::later().await;
+                assert!(
+                    Local::executor_stats().total_runtime() >= Duration::from_millis(200),
+                    "expected runtime on LE {:#?} is greater than 200 ms",
+                    Local::executor_stats().total_runtime()
+                );
+                timer::sleep(dur).await;
+                assert!(
+                    Local::executor_stats().total_runtime() < Duration::from_millis(400),
+                    "expected runtime on LE {:#?} is not greater than 400 ms",
+                    Local::executor_stats().total_runtime()
+                );
+            })
+            .await;
+        });
     }
 
     // Spin for 2ms and then yield. How many shares we have should control how many
