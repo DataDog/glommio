@@ -43,7 +43,7 @@ $ ulimit -l
 ```
 
 For more details check out our [docs
-page](https://docs.rs/glommio/0.2.0-alpha/glommio/) and an [introductory
+page](https://docs.rs/glommio/latest/glommio/) and an [introductory
 article](https://www.datadoghq.com/blog/engineering/introducing-glommio/)
 
 ## Status
