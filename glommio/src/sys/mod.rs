@@ -345,12 +345,6 @@ pub(crate) enum PollableStatus {
     NonPollable(DirectIO),
 }
 
-#[derive(Debug, Copy, Clone)]
-pub(crate) enum LinkStatus {
-    Freestanding,
-    Linked,
-}
-
 #[derive(Debug)]
 pub(crate) enum SourceType {
     Write(PollableStatus, IOBuffer),
@@ -373,7 +367,7 @@ pub(crate) enum SourceType {
     FdataSync,
     Fallocate,
     Close,
-    LinkRings(LinkStatus),
+    LinkRings,
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(TimeSpec64),
     Connect(SockAddr),

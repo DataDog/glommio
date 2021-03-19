@@ -5,7 +5,6 @@ use std::{
     ops::{Deref, DerefMut},
     os::unix::io::RawFd,
     ptr,
-    slice,
 };
 
 use super::registrar::{UringFd, UringReadBuf, UringWriteBuf};
@@ -606,13 +605,23 @@ bitflags::bitflags! {
 
 /// A sequence of [`SQE`]s from the [`SubmissionQueue`][crate::SubmissionQueue].
 pub struct SQEs<'ring> {
-    sqes: slice::IterMut<'ring, uring_sys::io_uring_sqe>,
+    sq: &'ring mut uring_sys::io_uring_sq,
+    first: u32,
+    count: u32,
+    consumed: u32,
 }
 
 impl<'ring> SQEs<'ring> {
-    pub(crate) fn new(slice: &'ring mut [uring_sys::io_uring_sqe]) -> SQEs<'ring> {
+    pub(crate) fn new(
+        sq: &'ring mut uring_sys::io_uring_sq,
+        first: u32,
+        count: u32,
+    ) -> SQEs<'ring> {
         SQEs {
-            sqes: slice.iter_mut(),
+            sq,
+            first,
+            count,
+            consumed: 0,
         }
     }
 
@@ -646,14 +655,23 @@ impl<'ring> SQEs<'ring> {
 
     /// Remaining [`SQE`]s that can be modified.
     pub fn remaining(&self) -> u32 {
-        self.sqes.len() as u32
+        (self.count - self.consumed) as u32
     }
 
     fn consume(&mut self) -> Option<SQE<'ring>> {
-        self.sqes.next().map(|sqe| {
-            unsafe { uring_sys::io_uring_prep_nop(sqe) }
-            SQE { sqe }
-        })
+        if self.consumed < self.count {
+            unsafe {
+                let sqe = self
+                    .sq
+                    .sqes
+                    .offset(((self.first + self.consumed) & *self.sq.kring_mask) as isize);
+                uring_sys::io_uring_prep_nop(sqe);
+                self.consumed += 1;
+                Some(SQE { sqe: &mut *sqe })
+            }
+        } else {
+            None
+        }
     }
 }
 
