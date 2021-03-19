@@ -559,6 +559,276 @@ impl Default for LocalExecutorBuilder {
     }
 }
 
+/// Specifies a policy by which [`LocalExecutorPoolBuilder`] distributes
+/// [`LocalExecutor`]s on the machine's CPUs / hardware topology.
+#[derive(Debug)]
+pub enum Placement {
+    /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
+    /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.
+    Unbound,
+    /* MaxSpread,
+     * MaxPack,
+     * Custom, */
+}
+
+/// A description of the CPUs location in the machine topology.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CPULocation {
+    /// Holds the `cpu` id.  This is the most granular and will distinguish
+    /// among [`hyper-threads`].
+    ///
+    /// [`hyper-threads`]: https://en.wikipedia.org/wiki/Hyper-threading
+    pub cpu: usize,
+    /// Holds the core id on which the `cpu` is located.
+    pub core: usize,
+    /// Holds the package or socket id on which the `cpu` is located.
+    pub package: usize,
+    /// Holds the NUMA node on which the `cpu` is located.
+    pub numa_node: usize,
+}
+
+/// A set of CPUs associated with a [`LocalExecutor`] when created via a
+/// [`LocalExecutorPoolBuilder`].
+#[derive(Clone, Debug)]
+pub struct CPUSet(Option<Vec<CPULocation>>);
+
+impl std::ops::Deref for CPUSet {
+    type Target = Option<Vec<CPULocation>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// A factory that allows creating a pool of [`LocalExecutor`]s, which can be
+/// used in order to configure the properties of the [`LocalExecutor`]s.
+/// Configuration methods apply their settings to all [`LocalExecutor`]s in the
+/// pool unless otherwise specified.
+///
+/// Methods can be chained on the builder in order to configure it.
+///
+/// The [`LocalExecutorPoolBuilder::on_all_shards`] method will take ownership
+/// of the builder and create a [`PoolThreadHandles`] struct which can be used
+/// to join the executor threads.
+// TODO: decide whether to avoid redundancy with with `LocalExecutorBuilder` by
+// using a shared inner type or a generic type mix-in with a type definition
+#[derive(Debug)]
+pub struct LocalExecutorPoolBuilder {
+    /// The number of [`LocalExecutor`]s the builder should attempt to create.
+    nr_shards: usize,
+    // TODO: `spin_before_park` will become operational when this builder can actually bind to a
+    // cpu
+    // /// Spin for duration before parking a reactor
+    // spin_before_park: Option<Duration>,
+    /// A name for the thread-to-be (if any), for identification in panic
+    /// messages; each executor in the pool will use this name followed by
+    /// a hyphen and numeric notifier id (e.g. `myname_0`)
+    name: String,
+    /// Amount of memory to reserve for storage I/O. This will be preallocated
+    /// and registered with io_uring. It is still possible to use more than
+    /// that but it will come from the standard allocator and performance
+    /// will suffer. Defaults to 10MB.
+    io_memory: usize,
+    /// How often to yield to other task queues
+    preempt_timer_duration: Duration,
+    /// Indicates a policy by which [`LocalExecutor`]s are bound to CPUs.
+    placement: Placement,
+}
+
+impl LocalExecutorPoolBuilder {
+    /// Generates the base configuration for spawning a pool of
+    /// [`LocalExecutor`]s, from which configuration methods can be chained.
+    /// The method's only argument sets the number of [`LocalExecutor`]s to
+    /// spawn.
+    pub fn new(nr_shards: usize) -> Self {
+        Self {
+            nr_shards,
+            // spin_before_park: None,
+            name: String::from("unnamed"),
+            io_memory: 10 << 20,
+            preempt_timer_duration: Duration::from_millis(100),
+            placement: Placement::Unbound,
+        }
+    }
+
+    // /// Please see documentation under
+    // /// [`LocalExecutorBuilder::spin_before_park`] for details.  The setting
+    // /// is applied to all executors in the pool.
+    // pub fn spin_before_park(mut self, spin: Duration) -> Self {
+    //     self.spin_before_park = Some(spin);
+    //     self
+    // }
+
+    /// Please see documentation under [`LocalExecutorBuilder::name`] for
+    /// details. The setting is applied to all executors in the pool.
+    pub fn name(mut self, name: &str) -> Self {
+        self.name = String::from(name);
+        self
+    }
+
+    /// Please see documentation under [`LocalExecutorBuilder::io_memory`] for
+    /// details.  The setting is applied to all executors in the pool.
+    pub fn io_memory(mut self, io_memory: usize) -> Self {
+        self.io_memory = io_memory;
+        self
+    }
+
+    /// Please see documentation under [`LocalExecutorBuilder::preempt_timer`]
+    /// for details.  The setting is applied to all executors in the pool.
+    pub fn preempt_timer(mut self, dur: Duration) -> Self {
+        self.preempt_timer_duration = dur;
+        self
+    }
+
+    /// This method sets the [`Placement`] policy by which [`LocalExecutor`]s
+    /// are bound to the machine's hardware topology (i.e. which CPUs to
+    /// use).  The default is [`Placement::Unbound`].
+    pub fn placement(mut self, p: Placement) -> Self {
+        self.placement = p;
+        self
+    }
+
+    /// A method that generates a [`CPUSet`] according to the provided
+    /// [`Placement`] policy; sequential calls may generate different sets
+    /// depending on the [`Placement`]
+    fn make_cpu_set(&self) -> CPUSet {
+        match self.placement {
+            Placement::Unbound => CPUSet(None),
+        }
+    }
+
+    /// Spawn a pool of [`LocalExecutor`]s in a new thread according to the
+    /// [`Placement`] policy, which is `Unbound` by default.
+    ///
+    /// This method is the pool equivalent of [`LocalExecutorBuilder::spawn`].
+    ///
+    /// It takes a closure `fut_gen` which will be executed on each new thread
+    /// to obtain the [`Future`] to be executed there.  The `fut_gen`
+    /// closure is passed two arguments: a `usize` and a [`CPUSet`].  The
+    /// `usize` provides a sequential id of the threads created by this
+    /// [`LocalExecutorPoolBuilder`] (i.e. numbered in the range `0..nr_shards`
+    /// where `nr_shards` is the number of threads created).  The `CPUSet`
+    /// provides a set of CPUs on which the thread may execute.  In the
+    /// `[Placement::Unbound]` case, this `CPUSet` is not restricted and
+    /// simply holds an `Option::None`.
+    ///
+    /// If the [`Future`] to be executed on each thread needs to customized, the
+    /// `fut_gen` closure may use its two arguments
+    ///
+    /// # Panics
+    ///
+    /// The newly spawned thread panics if creating the executor fails. If you
+    /// need more fine-grained error handling consider initializing those
+    /// entities manually.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use glommio::LocalExecutorPoolBuilder;
+    ///
+    /// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|_id, _cpu_set| async move {
+    ///     println!("hello");
+    /// });
+    ///
+    /// handles.join_all();
+    /// ```
+    #[must_use = "This spawns executors on multiple threads, so you may need to call \
+                  `PoolThreadHandles::join_all()` to keep the main thread alive"]
+    pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> PoolThreadHandles
+    where
+        G: FnOnce(usize, CPUSet) -> F + Clone + Send + 'static,
+        F: Future<Output = T> + 'static,
+    {
+        let mut handles = PoolThreadHandles::new();
+
+        for id in 0..self.nr_shards {
+            // TODO: determine the cpu set based on the `Placement` policy; do we allow
+            // `nr_shards` being greater than the number of cpus online?
+            let cpu_set = self.make_cpu_set();
+
+            let notifier = match sys::new_sleep_notifier() {
+                Ok(n) => n,
+                Err(e) => {
+                    handles.push((id, cpu_set.clone(), Err(e.into())));
+                    continue;
+                }
+            };
+
+            let name = format!("{}-{}", &self.name, notifier.id());
+
+            let handle = Builder::new()
+                .name(name)
+                .spawn({
+                    let io_memory = self.io_memory.clone();
+                    let preempt_timer_duration = self.preempt_timer_duration.clone();
+                    let fut_gen = fut_gen.clone();
+                    let cpu_set = cpu_set.clone();
+
+                    move || {
+                        let mut le =
+                            LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
+                        // if let Some(cpu) = self.binding {
+                        //     le.bind_to_cpu(cpu).unwrap();
+                        //     le.queues.borrow_mut().spin_before_park = self.spin_before_park;
+                        // }
+                        le.init().unwrap();
+                        le.run(async move {
+                            fut_gen(id, cpu_set).await;
+                        })
+                    }
+                })
+                .map_err(Into::into);
+
+            handles.push((id, cpu_set, handle));
+        }
+
+        handles
+    }
+}
+
+/// Holds a collection of [`JoinHandle`]s created by
+/// [`LocalExecutorPoolBuilder::on_all_shards`].
+#[derive(Debug)]
+pub struct PoolThreadHandles {
+    handles: Vec<(usize, CPUSet, Result<JoinHandle<()>>)>,
+}
+
+impl PoolThreadHandles {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, handle: (usize, CPUSet, Result<JoinHandle<()>>)) {
+        self.handles.push(handle)
+    }
+
+    /// Obtain a reference to the [`JoinHandle`]s created by
+    /// [`LocalExecutorPoolBuilder::on_all_shards`].
+    pub fn handles(&self) -> &Vec<(usize, CPUSet, Result<JoinHandle<()>>)> {
+        &self.handles
+    }
+
+    // TODO: this feels like we want to make a new error type here and return a
+    // `Result<(),Vec<(usize, CPUSet, Result<()>)>>` but wanted to get thoughts
+    /// Calls [`JoinHandle::join`] on all handles created by
+    /// [`LocalExecutorPoolBuilder::on_all_shards`]
+    pub fn join_all(self) -> Vec<(usize, CPUSet, Result<()>)> {
+        self.handles
+            .into_iter()
+            .map(|(id, set, hndl)| {
+                let hndl = match hndl {
+                    Ok(h) => h.join().map_err(|_| {
+                        io::Error::new(io::ErrorKind::Other, "thread panicked").into()
+                    }),
+                    Err(e) => Err(e),
+                };
+                (id, set, hndl)
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
 pub(crate) fn maybe_activate(tq: Rc<RefCell<TaskQueue>>) {
     LOCAL_EX.with(|local_ex| {
         let mut queues = local_ex.queues.borrow_mut();
@@ -1371,7 +1641,13 @@ mod test {
     };
     use core::mem::MaybeUninit;
     use futures::join;
-    use std::cell::Cell;
+    use std::{
+        cell::Cell,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
     #[test]
     fn create_and_destroy_executor() {
@@ -1950,5 +2226,35 @@ mod test {
     #[should_panic(expected = "Message!")]
     fn panic_is_not_list() {
         LocalExecutor::default().run(async { panic!("Message!") });
+    }
+
+    #[test]
+    fn executor_pool_builder() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let sum = Arc::new(AtomicUsize::new(0));
+
+        let handles = LocalExecutorPoolBuilder::new(4).on_all_shards({
+            let count = Arc::clone(&count);
+            let sum = Arc::clone(&sum);
+
+            |id, cpu_set| async move {
+                if cpu_set.is_none() {
+                    count.fetch_add(1, Ordering::Relaxed);
+                    sum.fetch_add(id, Ordering::Relaxed);
+                }
+            }
+        });
+
+        let mut handles_sum = 0;
+        assert_eq!(4, handles.handles().len());
+        handles.handles().iter().for_each(|(id, _, hndl)| {
+            assert!(hndl.is_ok());
+            handles_sum += id;
+        });
+        assert_eq!(6, handles_sum);
+
+        handles.join_all();
+        assert_eq!(4, count.load(Ordering::Relaxed));
+        assert_eq!(6, sum.load(Ordering::Relaxed));
     }
 }
