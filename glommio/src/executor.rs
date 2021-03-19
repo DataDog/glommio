@@ -190,7 +190,7 @@ macro_rules! to_io_error {
 
 fn bind_to_cpu(cpu: usize) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
-    to_io_error!(&cpuset.set(cpu as usize))?;
+    to_io_error!(&cpuset.set(cpu))?;
     let pid = nix::unistd::Pid::from_raw(0);
     to_io_error!(nix::sched::sched_setaffinity(pid, &cpuset)).map_err(Into::into)
 }
@@ -355,7 +355,7 @@ impl ExecutorQueues {
 ///
 /// Methods can be chained on it in order to configure it.
 ///
-/// The [`spawn`] method will take ownership of the builder and create an
+/// The [`spawn`] method will take ownership of the builder and create a
 /// `Result` to the [`LocalExecutor`] handle with the given configuration.
 ///
 /// The [`LocalExecutor::default`] free function uses a Builder with default
@@ -499,9 +499,9 @@ impl LocalExecutorBuilder {
     ///
     /// # Panics
     ///
-    /// This function panics if creating the thread or the executor fails. If
-    /// you need more fine-grained error handling consider initializing
-    /// those entities manually.
+    /// The newly spawned thread panics if creating the executor fails. If you
+    /// need more fine-grained error handling consider initializing those
+    /// entities manually.
     ///
     /// # Example
     ///
@@ -525,11 +525,11 @@ impl LocalExecutorBuilder {
     /// struct.LocalExecutorBuilder.html#method.make
     ///
     /// [`LocalExecutor::run`]:struct.LocalExecutor.html#method.run
-    #[must_use = "This spawns an executor on a thread, so you must acquire its handle and then \
-                  join() to keep it alive"]
+    #[must_use = "This spawns an executor on a thread, so you may need to call \
+                  `JoinHandle::join()` to keep the main thread alive"]
     pub fn spawn<G, F, T>(self, fut_gen: G) -> Result<JoinHandle<()>>
     where
-        G: FnOnce() -> F + std::marker::Send + 'static,
+        G: FnOnce() -> F + Send + 'static,
         F: Future<Output = T> + 'static,
     {
         let notifier = sys::new_sleep_notifier()?;
@@ -877,6 +877,8 @@ impl LocalExecutor {
         bind_to_cpu(cpu)
     }
 
+    // TODO: This does not seem to return the `Err` variant; does it need to be a
+    // `Result`?
     fn init(&mut self) -> Result<()> {
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
