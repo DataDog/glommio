@@ -250,7 +250,7 @@ impl MeshAdapter for Partial {
 }
 
 /// Alias for partial mesh builder
-pub type PartialMesh<T> = MeshBuilder<T, Full>;
+pub type PartialMesh<T> = MeshBuilder<T, Partial>;
 
 /// A builder for channel mesh
 pub struct MeshBuilder<T: Send, A: MeshAdapter> {
