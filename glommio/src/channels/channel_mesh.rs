@@ -58,10 +58,17 @@ impl<T: Send> Senders<T> {
     pub async fn send_to(&self, idx: usize, msg: T) -> Result<(), T> {
         match self.senders.get(idx) {
             Some(Some(consumer)) => consumer.send(msg).await,
-            _ => Err(GlommioError::IoError(Error::new(
-                ErrorKind::InvalidInput,
-                "Local message should not be sent via channel mesh",
-            ))),
+            _ => {
+                let msg = if idx < self.nr_consumers() {
+                    "Local message should not be sent via channel mesh".into()
+                } else {
+                    format!("Shard {} is invalid in the channel mesh", idx)
+                };
+                Err(GlommioError::IoError(Error::new(
+                    ErrorKind::InvalidInput,
+                    msg,
+                )))
+            }
         }
     }
 
