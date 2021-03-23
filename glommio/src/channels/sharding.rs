@@ -102,6 +102,32 @@ impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Sharded<T, H> {
         }
     }
 
+    /// Sends an individual message to a given shard.
+    ///
+    /// This functions returns [`GlommioError::Closed`] if this [`Sharded`] is
+    /// closed, or [`InvalidInput`] if the destination id is invalid.
+    ///
+    /// This function ignores the sharding function.
+    ///
+    /// [`GlommioError::Closed`]: crate::GlommioError::Closed
+    /// [`InvalidInput`]: std::io::ErrorKind::InvalidInput
+    pub async fn send_to(&mut self, dst_shard: usize, message: T) -> Result<(), T> {
+        self.shard.send_to(dst_shard, message).await
+    }
+
+    /// Sends an individual message to the correct shard.
+    ///
+    /// The correct shard is calculated using the sharding function in this
+    /// `Sharded` object.
+    ///
+    /// This functions returns [`GlommioError::Closed`] if this [`Sharded`] is
+    /// closed.
+    ///
+    /// [`GlommioError::Closed`]: crate::GlommioError::Closed
+    pub async fn send(&mut self, message: T) -> Result<(), T> {
+        self.shard.send(message).await
+    }
+
     /// Close this [`Sharded`] and wait for all existing background tasks to
     /// finish. No more consuming task will be spawned, but incoming
     /// messages from the streams consumed by existing back ground tasks
@@ -131,13 +157,22 @@ struct Shard<T: Send + Copy, H> {
 impl<T: Send + Copy + 'static, H: Handler<T> + 'static> Shard<T, H> {
     async fn handle<S: Stream<Item = T> + Unpin>(&self, mut messages: S) {
         while let Some(msg) = messages.next().await {
-            let dst_shard = (self.shard_fn)(&msg, self.nr_shards);
-            if dst_shard == self.shard_id {
-                self.handler.handle(msg, self.shard_id, self.shard_id).await;
-            } else {
-                self.senders.send_to(dst_shard, msg).await.unwrap();
-            }
+            self.send(msg).await.unwrap();
         }
+    }
+
+    async fn send_to(&self, dst_shard: usize, msg: T) -> Result<(), T> {
+        if dst_shard == self.shard_id {
+            self.handler.handle(msg, self.shard_id, self.shard_id).await;
+        } else {
+            self.senders.send_to(dst_shard, msg).await?;
+        }
+        Ok(())
+    }
+
+    async fn send(&self, msg: T) -> Result<(), T> {
+        let dst_shard = (self.shard_fn)(&msg, self.nr_shards);
+        self.send_to(dst_shard, msg).await
     }
 
     fn close(&self) {
@@ -157,6 +192,87 @@ mod tests {
         enclose,
         prelude::*,
     };
+
+    #[test]
+    fn test_send() {
+        type Msg = usize;
+
+        let nr_shards = 10;
+
+        fn shard_fn(msg: &Msg, nr_shards: usize) -> usize {
+            *msg % nr_shards
+        }
+
+        #[derive(Clone)]
+        struct RequestHandler {
+            nr_shards: usize,
+        };
+
+        impl Handler<Msg> for RequestHandler {
+            fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
+                assert_eq!(msg, cur_shard);
+                ready(()).boxed_local()
+            }
+        }
+
+        let mesh = MeshBuilder::full(nr_shards, 1024);
+
+        let shards = (0..nr_shards).map(|_| {
+            LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+                let handler = RequestHandler { nr_shards };
+                let mut sharded = Sharded::new(mesh, shard_fn, handler).await.unwrap();
+                for i in 0..nr_shards {
+                    sharded.send(i).await.unwrap();
+                }
+                sharded.close().await;
+            }))
+        });
+
+        for s in shards.collect::<Vec<_>>() {
+            s.unwrap().join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_send_to() {
+        type Msg = usize;
+
+        let nr_shards = 10;
+
+        fn shard_fn(_msg: &Msg, _nr_shards: usize) -> usize {
+            panic!("Should not be called")
+        }
+
+        #[derive(Clone)]
+        struct RequestHandler {
+            nr_shards: usize,
+        };
+
+        impl Handler<Msg> for RequestHandler {
+            fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
+                assert_eq!(msg, cur_shard);
+                ready(()).boxed_local()
+            }
+        }
+
+        let mesh = MeshBuilder::full(nr_shards, 1024);
+
+        let shards = (0..nr_shards).map(|_| {
+            LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+                let handler = RequestHandler { nr_shards };
+                let mut sharded = Sharded::new(mesh, shard_fn, handler).await.unwrap();
+                for i in 0..nr_shards {
+                    sharded.send_to(i, i).await.unwrap();
+                }
+                sharded.send_to(nr_shards + 1 , nr_shards + 1).await.unwrap_err();
+                sharded.close().await;
+            }))
+        });
+
+        for s in shards.collect::<Vec<_>>() {
+            s.unwrap().join().unwrap();
+        }
+    }
 
     #[test]
     fn test() {
