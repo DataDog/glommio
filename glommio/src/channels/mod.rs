@@ -159,6 +159,8 @@ pub mod local_channel;
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
 pub mod shared_channel;
 
+/// A mesh-like structure to connect a set of executors
+///
 /// A channel mesh consists of a group of participating executors (peers) and
 /// the channels between selected pairs of them. Two kinds of meshes are
 /// supported depending on the peer-pair selection criteria: full mesh and
