@@ -1,6 +1,6 @@
 # glommio
 
-[![CircleCI](https://circleci.com/gh/DataDog/glommio.svg?style=svg)](https://circleci.com/gh/DataDog/glommio)
+[![docs.rs](https://docs.rs/mio/badge.svg)](https://docs.rs/glommio/latest/glommio/) [![CircleCI](https://circleci.com/gh/DataDog/glommio.svg?style=svg)](https://circleci.com/gh/DataDog/glommio)
 
 ## Join our Zulip community!
 
