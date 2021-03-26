@@ -245,7 +245,7 @@
 //!    That, however, would be a welcome addition.
 //!
 //!  - A recent kernel is no impediment, as long as a fully functional I/O uring
-//!    is present. In fact, we require a kernel so recent that it doesn't event
+//!    is present. In fact, we require a kernel so recent that it doesn't even
 //!    exist: operations like `mkdir, ftruncate`, etc which are not present in
 //!    today's (5.8) `io_uring` are simply synchronous and we'll live with the
 //!    pain in the hopes that Linux will eventually add support for them.
