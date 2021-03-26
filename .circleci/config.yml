@@ -39,8 +39,10 @@ jobs:
       - run:
           name: Install nightly for rustfmt features
           command: |
+            FMT_NIGHTLY=nightly-$(curl -s https://rust-lang.github.io/rustup-components-history/x86_64-unknown-linux-gnu/rustfmt)
             rustup install nightly
-            rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
+            rustup default "$FMT_NIGHTLY"
+            rustup component add rustfmt
       - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
@@ -49,7 +51,7 @@ jobs:
             - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Check formatting
-          command: cargo +nightly fmt --all -- --check
+          command: cargo fmt --all -- --check
       - save_cache:
           paths:
             - /usr/local/cargo/registry
