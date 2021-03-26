@@ -44,9 +44,8 @@ jobs:
           rustup install nightly
           cargo +nightly doc --all
 
-    # temporarily disabled.
-    # - name: Validate links
-    #   run: cargo deadlinks --dir target/doc/glommio
+      - name: Validate links
+        run: cargo deadlinks --dir target/doc/glommio
 
   build:
     runs-on: ubuntu-latest
