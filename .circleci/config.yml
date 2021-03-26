@@ -5,7 +5,7 @@ version: 2
 jobs:
   cargobuild:
     docker:
-      - image: cimg/rust:1.49.0
+      - image: cimg/rust:1.50.0
     steps:
       - checkout
       - run:
@@ -30,7 +30,7 @@ jobs:
 
   cargofmt:
     docker:
-      - image: cimg/rust:1.49.0
+      - image: cimg/rust:1.50.0
     steps:
       - checkout
       - run:
@@ -60,7 +60,7 @@ jobs:
 
   cargodoc:
     docker:
-      - image: cimg/rust:1.49.0
+      - image: cimg/rust:1.50.0
     steps:
       - checkout
       - run:
@@ -92,7 +92,7 @@ jobs:
 
   cargoclippy:
     docker:
-      - image: cimg/rust:1.49.0
+      - image: cimg/rust:1.50.0
     steps:
       - checkout
       - run:
@@ -100,7 +100,7 @@ jobs:
           command: rustc --version; cargo --version; rustup --version
       - run:
           name: Install clippy
-          command: rustup component add clippy --toolchain 1.49.0-x86_64-unknown-linux-gnu
+          command: rustup component add clippy --toolchain 1.50.0-x86_64-unknown-linux-gnu
       - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
