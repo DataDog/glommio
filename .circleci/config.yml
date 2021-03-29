@@ -1,11 +1,11 @@
 # Glommio Circle-CI configuration file
 
-version: 2
+version: 5
 
 jobs:
   cargobuild:
     docker:
-      - image: circleci/rust:1.49.0
+      - image: circleci/rust:1.51.0
     steps:
       - checkout
       - run:
@@ -16,7 +16,7 @@ jobs:
           command: cargo generate-lockfile
       - restore_cache:
           keys:
-            - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+            - v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Build all targets
           command: cargo build --all --all-targets
@@ -26,11 +26,11 @@ jobs:
             - target/debug/.fingerprint
             - target/debug/build
             - target/debug/deps
-          key: v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          key: v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
 
   cargofmt:
     docker:
-      - image: circleci/rust:1.49.0
+      - image: circleci/rust:1.51.0
     steps:
       - checkout
       - run:
@@ -48,7 +48,7 @@ jobs:
           command: cargo generate-lockfile
       - restore_cache:
           keys:
-            - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+            - v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Check formatting
           command: cargo fmt --all -- --check
@@ -58,11 +58,11 @@ jobs:
             - target/debug/.fingerprint
             - target/debug/build
             - target/debug/deps
-          key: v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          key: v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
 
   cargodoc:
     docker:
-      - image: circleci/rust:1.49.0
+      - image: circleci/rust:1.51.0
     steps:
       - checkout
       - run:
@@ -76,7 +76,7 @@ jobs:
           command: cargo generate-lockfile
       - restore_cache:
           keys:
-            - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+            - v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Generate documentation
           command: cargo doc --all-features
@@ -90,11 +90,11 @@ jobs:
             - target/debug/.fingerprint
             - target/debug/build
             - target/debug/deps
-          key: v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          key: v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
 
   cargoclippy:
     docker:
-      - image: circleci/rust:1.49.0
+      - image: circleci/rust:1.51.0
     steps:
       - checkout
       - run:
@@ -102,13 +102,13 @@ jobs:
           command: rustc --version; cargo --version; rustup --version
       - run:
           name: Install clippy
-          command: rustup component add clippy --toolchain 1.49.0-x86_64-unknown-linux-gnu
+          command: rustup component add clippy --toolchain 1.51.0-x86_64-unknown-linux-gnu
       - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
       - restore_cache:
           keys:
-            - v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+            - v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Run linters
           command: cargo clippy -- -D warnings
@@ -118,7 +118,7 @@ jobs:
             - target/debug/.fingerprint
             - target/debug/build
             - target/debug/deps
-          key: v4-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          key: v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
 
 workflows:
   version: 2

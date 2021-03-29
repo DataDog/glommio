@@ -51,7 +51,7 @@ use futures_lite::*;
 
 use crate::{
     sys,
-    sys::{DirectIO, DmaBuffer, IOBuffer, PollableStatus, SleepNotifier, Source, SourceType},
+    sys::{DirectIo, DmaBuffer, IoBuffer, PollableStatus, SleepNotifier, Source, SourceType},
     IoRequirements,
     Latency,
     Local,
@@ -342,7 +342,7 @@ impl Reactor {
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
-        let source = self.new_source(raw, SourceType::Write(pollable, IOBuffer::Dma(buf)));
+        let source = self.new_source(raw, SourceType::Write(pollable, IoBuffer::Dma(buf)));
         self.sys.write_dma(&source, pos);
         source
     }
@@ -351,8 +351,8 @@ impl Reactor {
         let source = self.new_source(
             raw,
             SourceType::Write(
-                PollableStatus::NonPollable(DirectIO::Disabled),
-                IOBuffer::Buffered(buf),
+                PollableStatus::NonPollable(DirectIo::Disabled),
+                IoBuffer::Buffered(buf),
             ),
         );
         self.sys.write_buffered(&source, pos);
@@ -500,7 +500,7 @@ impl Reactor {
     pub(crate) fn read_buffered(&self, raw: RawFd, pos: u64, size: usize) -> Source {
         let source = self.new_source(
             raw,
-            SourceType::Read(PollableStatus::NonPollable(DirectIO::Disabled), None),
+            SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
         );
         self.sys.read_buffered(&source, pos, size);
         source

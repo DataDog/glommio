@@ -322,13 +322,13 @@ impl Drop for SleepNotifier {
 }
 
 #[derive(Debug)]
-pub(crate) enum IOBuffer {
+pub(crate) enum IoBuffer {
     Dma(DmaBuffer),
     Buffered(Vec<u8>),
 }
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum DirectIO {
+pub(crate) enum DirectIo {
     Enabled,
     Disabled,
 }
@@ -342,13 +342,13 @@ pub(crate) enum PollableStatus {
     // The pollable ring only supports Direct I/O, so always true.
     Pollable,
     // Non pollable can go either way
-    NonPollable(DirectIO),
+    NonPollable(DirectIo),
 }
 
 #[derive(Debug)]
 pub(crate) enum SourceType {
-    Write(PollableStatus, IOBuffer),
-    Read(PollableStatus, Option<IOBuffer>),
+    Write(PollableStatus, IoBuffer),
+    Read(PollableStatus, Option<IoBuffer>),
     SockSend(DmaBuffer),
     SockRecv(Option<DmaBuffer>),
     SockRecvMsg(

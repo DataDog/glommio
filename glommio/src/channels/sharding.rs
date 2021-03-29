@@ -206,7 +206,7 @@ mod tests {
         #[derive(Clone)]
         struct RequestHandler {
             nr_shards: usize,
-        };
+        }
 
         impl Handler<Msg> for RequestHandler {
             fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
@@ -246,7 +246,7 @@ mod tests {
         #[derive(Clone)]
         struct RequestHandler {
             nr_shards: usize,
-        };
+        }
 
         impl Handler<Msg> for RequestHandler {
             fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
@@ -287,7 +287,7 @@ mod tests {
         #[derive(Clone)]
         struct RequestHandler {
             nr_shards: usize,
-        };
+        }
 
         impl Handler<i32> for RequestHandler {
             fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
