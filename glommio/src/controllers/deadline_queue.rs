@@ -721,7 +721,7 @@ mod test {
                     let old = last_shares.replace(shares) as isize;
                     if elapsed > 500 && elapsed < 850 {
                         let diff = old - shares as isize;
-                        assert!(diff.abs() < 200, format!("Found diff: {}", diff));
+                        assert!(diff.abs() < 200, "Found diff: {}", diff);
                     }
                     if test.processed_units.replace(elapsed as usize) < 1000 {
                         Some(Duration::from_millis(50))

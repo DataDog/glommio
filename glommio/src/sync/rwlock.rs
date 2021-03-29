@@ -66,8 +66,8 @@ struct Waiter<'a, T> {
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum WaiterKind {
-    READER,
-    WRITER,
+    Reader,
+    Writer,
 }
 
 #[derive(Debug)]
@@ -259,7 +259,7 @@ impl<'a, T> Waiter<'a, T> {
             return;
         }
 
-        if kind == WaiterKind::WRITER {
+        if kind == WaiterKind::Writer {
             rw.queued_writers += 1;
         }
 
@@ -278,7 +278,7 @@ impl<'a, T> Future for Waiter<'a, T> {
         let pinned_node = unsafe { Pin::new_unchecked(&mut future_mut.node) };
 
         match pinned_node.kind {
-            WaiterKind::WRITER => {
+            WaiterKind::Writer => {
                 if rw.try_write()? {
                     Self::remove_from_waiting_queue(pinned_node, &mut rw);
                     Poll::Ready(Ok(()))
@@ -287,13 +287,13 @@ impl<'a, T> Future for Waiter<'a, T> {
                         pinned_node,
                         &mut rw,
                         cx.waker().clone(),
-                        WaiterKind::WRITER,
+                        WaiterKind::Writer,
                     );
                     Poll::Pending
                 }
             }
 
-            WaiterKind::READER => {
+            WaiterKind::Reader => {
                 if rw.try_read()? {
                     Self::remove_from_waiting_queue(pinned_node, &mut rw);
                     Poll::Ready(Ok(()))
@@ -302,7 +302,7 @@ impl<'a, T> Future for Waiter<'a, T> {
                         pinned_node,
                         &mut rw,
                         cx.waker().clone(),
-                        WaiterKind::READER,
+                        WaiterKind::Reader,
                     );
                     Poll::Pending
                 }
@@ -561,7 +561,7 @@ impl<T> RwLock<T> {
                 });
             }
 
-            Waiter::new(WaiterKind::READER, self)
+            Waiter::new(WaiterKind::Reader, self)
         };
 
         waiter.await.map(|_| RwLockReadGuard {
@@ -610,7 +610,7 @@ impl<T> RwLock<T> {
                 });
             }
 
-            Waiter::new(WaiterKind::WRITER, self)
+            Waiter::new(WaiterKind::Writer, self)
         };
         waiter.await?;
 
@@ -854,7 +854,7 @@ impl<T> RwLock<T> {
         while !cursor.is_null() {
             {
                 let node = unsafe { Pin::new_unchecked(cursor.get().unwrap()) };
-                if node.kind == WaiterKind::WRITER {
+                if node.kind == WaiterKind::Writer {
                     break;
                 }
 
@@ -887,7 +887,7 @@ impl<T> RwLock<T> {
                     panic!("Future was linked in waiting list without an a waker");
                 }
 
-                if node.kind == WaiterKind::WRITER {
+                if node.kind == WaiterKind::Writer {
                     rw.queued_writers -= 1;
                     only_readers = false;
                 }

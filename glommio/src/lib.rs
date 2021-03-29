@@ -301,12 +301,17 @@ use crate::parking::Reactor;
 use std::{fmt::Debug, time::Duration};
 
 mod free_list;
+
+#[allow(clippy::redundant_slicing)]
 #[allow(dead_code)]
+#[allow(clippy::upper_case_acronyms)]
 mod iou;
 mod parking;
 mod sys;
 pub mod task;
+
 #[allow(dead_code)]
+#[allow(clippy::upper_case_acronyms)]
 mod uring_sys;
 
 #[cfg(feature = "bench")]
