@@ -68,8 +68,8 @@ pub struct LocalReceiver<T> {
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 enum WaiterKind {
-    SENDER,
-    RECEIVER,
+    Sender,
+    Receiver,
 }
 
 #[derive(Debug)]
@@ -146,7 +146,7 @@ fn register_into_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut State<
 
     let kind = node.kind.borrow().expect("Unknown part of the channel");
     match kind {
-        WaiterKind::SENDER => {
+        WaiterKind::Sender => {
             state
                 .send_waiters
                 .as_mut()
@@ -154,7 +154,7 @@ fn register_into_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut State<
                 //it is safe to use unchecked call here because we convert from reference
                 .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
         }
-        WaiterKind::RECEIVER => {
+        WaiterKind::Receiver => {
             state
                 .recv_waiters
                 .as_mut()
@@ -172,14 +172,14 @@ fn remove_from_the_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut Stat
 
     let kind = node.kind.borrow().expect("Unknown part of the channel");
     let mut cursor = match kind {
-        WaiterKind::SENDER => unsafe {
+        WaiterKind::Sender => unsafe {
             state
                 .send_waiters
                 .as_mut()
                 .expect("There should be active sender instance for the channel")
                 .cursor_mut_from_ptr(node.get_unchecked_mut())
         },
-        WaiterKind::RECEIVER => unsafe {
+        WaiterKind::Receiver => unsafe {
             state
                 .recv_waiters
                 .as_mut()
@@ -205,11 +205,11 @@ impl<'a, T, F> Drop for Waiter<'a, T, F> {
 
             let mut state = self.channel.state.borrow_mut();
             let waiters = match kind {
-                WaiterKind::SENDER => state
+                WaiterKind::Sender => state
                     .send_waiters
                     .as_mut()
                     .expect("Waiting queue of senders can not be empty"),
-                WaiterKind::RECEIVER => state
+                WaiterKind::Receiver => state
                     .recv_waiters
                     .as_mut()
                     .expect("Waiting queue of receivers can not be empty"),
@@ -335,7 +335,7 @@ impl<T> State<T> {
         if !self.is_full() {
             PollResult::Ready(())
         } else {
-            PollResult::Pending(WaiterKind::SENDER)
+            PollResult::Pending(WaiterKind::Sender)
         }
     }
 
@@ -350,7 +350,7 @@ impl<T> State<T> {
             ))),
             None => {
                 if self.send_waiters.is_some() {
-                    PollResult::Pending(WaiterKind::RECEIVER)
+                    PollResult::Pending(WaiterKind::Receiver)
                 } else {
                     PollResult::Ready(None)
                 }

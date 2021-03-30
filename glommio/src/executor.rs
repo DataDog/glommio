@@ -477,10 +477,8 @@ impl LocalExecutorBuilder {
             le.bind_to_cpu(cpu)?;
             le.queues.borrow_mut().spin_before_park = self.spin_before_park;
         }
-        match le.init() {
-            Ok(_) => Ok(le),
-            Err(e) => Err(e),
-        }
+        le.init();
+        Ok(le)
     }
 
     /// Spawn a new [`LocalExecutor`] in a new thread with a given task.
@@ -544,7 +542,7 @@ impl LocalExecutorBuilder {
                     le.bind_to_cpu(cpu).unwrap();
                     le.queues.borrow_mut().spin_before_park = self.spin_before_park;
                 }
-                le.init().unwrap();
+                le.init();
                 le.run(async move {
                     fut_gen().await;
                 })
@@ -877,15 +875,12 @@ impl LocalExecutor {
         bind_to_cpu(cpu)
     }
 
-    // TODO: This does not seem to return the `Err` variant; does it need to be a
-    // `Result`?
-    fn init(&mut self) -> Result<()> {
+    fn init(&mut self) {
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
             0,
             TaskQueue::new(0, "default", Shares::Static(1000), io_requirements),
         );
-        Ok(())
     }
 
     fn new(

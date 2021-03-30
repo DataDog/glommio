@@ -5,7 +5,7 @@
 //
 use crate::{
     io::{dma_open_options::DmaOpenOptions, glommio_file::GlommioFile, read_result::ReadResult},
-    sys::{sysfs, DirectIO, DmaBuffer, PollableStatus},
+    sys::{sysfs, DirectIo, DmaBuffer, PollableStatus},
 };
 use nix::sys::statfs::*;
 use std::{
@@ -116,7 +116,7 @@ impl DmaFile {
                     let buf = statfs(path).unwrap();
                     let fstype = buf.filesystem_type();
                     if fstype == TMPFS_MAGIC {
-                        pollable = PollableStatus::NonPollable(DirectIO::Disabled);
+                        pollable = PollableStatus::NonPollable(DirectIo::Disabled);
                         GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
                     } else {
                         Err(os_err)
@@ -133,7 +133,7 @@ impl DmaFile {
         if file.dev_major == 0
             || sysfs::BlockDevice::is_md(file.dev_major as _, file.dev_minor as _)
         {
-            pollable = PollableStatus::NonPollable(DirectIO::Enabled);
+            pollable = PollableStatus::NonPollable(DirectIo::Enabled);
         }
 
         Ok(DmaFile {
