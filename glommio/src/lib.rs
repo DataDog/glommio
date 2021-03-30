@@ -433,8 +433,6 @@ pub use crate::{
     byte_slice_ext::{ByteSliceExt, ByteSliceMutExt},
     error::{GlommioError, QueueErrorKind, ResourceType, Result},
     executor::{
-        CPULocation,
-        CPUSet,
         ExecutorStats,
         LocalExecutor,
         LocalExecutorBuilder,
@@ -457,8 +455,6 @@ pub mod prelude {
         error::GlommioError,
         ByteSliceExt,
         ByteSliceMutExt,
-        CPULocation,
-        CPUSet,
         Latency,
         Local,
         LocalExecutor,

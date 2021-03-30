@@ -188,9 +188,11 @@ macro_rules! to_io_error {
     }};
 }
 
-fn bind_to_cpu(cpu: usize) -> Result<()> {
+fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
-    to_io_error!(&cpuset.set(cpu))?;
+    for cpu in cpus {
+        to_io_error!(&cpuset.set(cpu))?;
+    }
     let pid = nix::unistd::Pid::from_raw(0);
     to_io_error!(nix::sched::sched_setaffinity(pid, &cpuset)).map_err(Into::into)
 }
@@ -385,7 +387,7 @@ impl ExecutorQueues {
 /// [`spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
 pub struct LocalExecutorBuilder {
-    // The id of a CPU to bind the current (or yet to be created) thread
+    /// The id of a CPU to bind the current (or yet to be created) thread
     binding: Option<usize>,
     /// Spin for duration before parking a reactor
     spin_before_park: Option<Duration>,
@@ -414,7 +416,10 @@ impl LocalExecutorBuilder {
         }
     }
 
-    /// Sets the new executor's affinity to the provided CPU
+    /// Sets the new executor's affinity to the provided CPU.  The largest `cpu`
+    /// value [supported] by libc is 1023.
+    ///
+    /// [supported]: https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html#NOTES
     pub fn pin_to_cpu(mut self, cpu: usize) -> LocalExecutorBuilder {
         self.binding = Some(cpu);
         self
@@ -474,7 +479,7 @@ impl LocalExecutorBuilder {
         let notifier = sys::new_sleep_notifier()?;
         let mut le = LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
         if let Some(cpu) = self.binding {
-            le.bind_to_cpu(cpu)?;
+            le.bind_to_cpu_set(Some(cpu))?;
             le.queues.borrow_mut().spin_before_park = self.spin_before_park;
         }
         le.init();
@@ -539,7 +544,7 @@ impl LocalExecutorBuilder {
                 let mut le =
                     LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
                 if let Some(cpu) = self.binding {
-                    le.bind_to_cpu(cpu).unwrap();
+                    le.bind_to_cpu_set(Some(cpu)).unwrap();
                     le.queues.borrow_mut().spin_before_park = self.spin_before_park;
                 }
                 le.init();
@@ -570,10 +575,10 @@ pub enum Placement {
 }
 
 /// A description of the CPUs location in the machine topology.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct CPULocation {
-    /// Holds the `cpu` id.  This is the most granular and will distinguish
-    /// among [`hyper-threads`].
+#[derive(Debug, Clone)]
+struct CpuLocation {
+    /// Holds the cpu id.  This is the most granular field and will
+    /// distinguish among [`hyper-threads`].
     ///
     /// [`hyper-threads`]: https://en.wikipedia.org/wiki/Hyper-threading
     pub cpu: usize,
@@ -588,12 +593,31 @@ pub struct CPULocation {
 /// A set of CPUs associated with a [`LocalExecutor`] when created via a
 /// [`LocalExecutorPoolBuilder`].
 #[derive(Clone, Debug)]
-pub struct CPUSet(Option<Vec<CPULocation>>);
+struct CpuSet(Option<Vec<CpuLocation>>);
 
-impl std::ops::Deref for CPUSet {
-    type Target = Option<Vec<CPULocation>>;
+impl std::ops::Deref for CpuSet {
+    type Target = Option<Vec<CpuLocation>>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+struct CpuSetGenerator {
+    placement: Placement,
+}
+
+impl CpuSetGenerator {
+    fn new(placement: Placement) -> Self {
+        Self { placement }
+    }
+
+    /// A method that generates a [`CpuSet`] according to the provided
+    /// [`Placement`] policy. Sequential calls may generate different sets
+    /// depending on the [`Placement`].
+    fn next(&mut self) -> CpuSet {
+        match self.placement {
+            Placement::Unbound => CpuSet(None),
+        }
     }
 }
 
@@ -613,13 +637,11 @@ impl std::ops::Deref for CPUSet {
 pub struct LocalExecutorPoolBuilder {
     /// The number of [`LocalExecutor`]s the builder should attempt to create.
     nr_shards: usize,
-    // TODO: `spin_before_park` will become operational when this builder can actually bind to a
-    // cpu
-    // /// Spin for duration before parking a reactor
-    // spin_before_park: Option<Duration>,
+    /// Spin for duration before parking a reactor
+    spin_before_park: Option<Duration>,
     /// A name for the thread-to-be (if any), for identification in panic
-    /// messages; each executor in the pool will use this name followed by
-    /// a hyphen and numeric notifier id (e.g. `myname_0`)
+    /// messages. Each executor in the pool will use this name followed by
+    /// a hyphen and numeric id (e.g. `myname-1`).
     name: String,
     /// Amount of memory to reserve for storage I/O. This will be preallocated
     /// and registered with io_uring. It is still possible to use more than
@@ -640,7 +662,7 @@ impl LocalExecutorPoolBuilder {
     pub fn new(nr_shards: usize) -> Self {
         Self {
             nr_shards,
-            // spin_before_park: None,
+            spin_before_park: None,
             name: String::from("unnamed"),
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
@@ -648,16 +670,19 @@ impl LocalExecutorPoolBuilder {
         }
     }
 
-    // /// Please see documentation under
-    // /// [`LocalExecutorBuilder::spin_before_park`] for details.  The setting
-    // /// is applied to all executors in the pool.
-    // pub fn spin_before_park(mut self, spin: Duration) -> Self {
-    //     self.spin_before_park = Some(spin);
-    //     self
-    // }
+    /// Please see documentation under
+    /// [`LocalExecutorBuilder::spin_before_park`] for details.  The setting
+    /// is applied to all executors in the pool.
+    pub fn spin_before_park(mut self, spin: Duration) -> Self {
+        self.spin_before_park = Some(spin);
+        self
+    }
 
     /// Please see documentation under [`LocalExecutorBuilder::name`] for
-    /// details. The setting is applied to all executors in the pool.
+    /// details. The setting is applied to all executors in the pool. Note
+    /// that when a thread is spawned, the `name` is combined with a hyphen
+    /// and numeric id (e.g. `myname-1`) such that each thread has a unique
+    /// name.
     pub fn name(mut self, name: &str) -> Self {
         self.name = String::from(name);
         self
@@ -685,32 +710,17 @@ impl LocalExecutorPoolBuilder {
         self
     }
 
-    /// A method that generates a [`CPUSet`] according to the provided
-    /// [`Placement`] policy; sequential calls may generate different sets
-    /// depending on the [`Placement`]
-    fn make_cpu_set(&self) -> CPUSet {
-        match self.placement {
-            Placement::Unbound => CPUSet(None),
-        }
-    }
-
     /// Spawn a pool of [`LocalExecutor`]s in a new thread according to the
     /// [`Placement`] policy, which is `Unbound` by default.
     ///
     /// This method is the pool equivalent of [`LocalExecutorBuilder::spawn`].
     ///
-    /// It takes a closure `fut_gen` which will be executed on each new thread
-    /// to obtain the [`Future`] to be executed there.  The `fut_gen`
-    /// closure is passed two arguments: a `usize` and a [`CPUSet`].  The
-    /// `usize` provides a sequential id of the threads created by this
-    /// [`LocalExecutorPoolBuilder`] (i.e. numbered in the range `0..nr_shards`
-    /// where `nr_shards` is the number of threads created).  The `CPUSet`
-    /// provides a set of CPUs on which the thread may execute.  In the
-    /// `[Placement::Unbound]` case, this `CPUSet` is not restricted and
-    /// simply holds an `Option::None`.
-    ///
-    /// If the [`Future`] to be executed on each thread needs to customized, the
-    /// `fut_gen` closure may use its two arguments
+    /// The method takes a closure `fut_gen` which will be called on each new
+    /// thread to obtain the [`Future`] to be executed there.  The `fut_gen`
+    /// receives a `usize` as argument which provides a unique id of the
+    /// executors created by this [`LocalExecutorPoolBuilder`].
+    /// However, this id is not guaranteed to unique across different
+    /// invocations of [`LocalExecutorPoolBuilder`].
     ///
     /// # Panics
     ///
@@ -723,7 +733,7 @@ impl LocalExecutorPoolBuilder {
     /// ```
     /// use glommio::LocalExecutorPoolBuilder;
     ///
-    /// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|_id, _cpu_set| async move {
+    /// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|_id| async move {
     ///     println!("hello");
     /// });
     ///
@@ -733,50 +743,56 @@ impl LocalExecutorPoolBuilder {
                   `PoolThreadHandles::join_all()` to keep the main thread alive"]
     pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> PoolThreadHandles
     where
-        G: FnOnce(usize, CPUSet) -> F + Clone + Send + 'static,
+        G: FnOnce(usize) -> F + Clone + Send + 'static,
         F: Future<Output = T> + 'static,
     {
         let mut handles = PoolThreadHandles::new();
+        let mut cpu_set_gen = CpuSetGenerator::new(self.placement);
 
-        for id in 0..self.nr_shards {
+        for _ in 0..self.nr_shards {
             // TODO: determine the cpu set based on the `Placement` policy; do we allow
             // `nr_shards` being greater than the number of cpus online?
-            let cpu_set = self.make_cpu_set();
+            let cpu_set = cpu_set_gen.next();
 
             let notifier = match sys::new_sleep_notifier() {
                 Ok(n) => n,
                 Err(e) => {
-                    handles.push((id, cpu_set.clone(), Err(e.into())));
+                    // valid notifiers have ids greater than or equal to 1
+                    handles.push((None, Err(e.into())));
                     continue;
                 }
             };
 
-            let name = format!("{}-{}", &self.name, notifier.id());
+            let id = notifier.id();
+            let name = format!("{}-{}", &self.name, id);
 
             let handle = Builder::new()
                 .name(name)
                 .spawn({
-                    let io_memory = self.io_memory.clone();
-                    let preempt_timer_duration = self.preempt_timer_duration.clone();
+                    let io_memory = self.io_memory;
+                    let preempt_timer_duration = self.preempt_timer_duration;
+                    let spin_before_park = self.spin_before_park;
                     let fut_gen = fut_gen.clone();
-                    let cpu_set = cpu_set.clone();
 
                     move || {
                         let mut le =
                             LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
-                        // if let Some(cpu) = self.binding {
-                        //     le.bind_to_cpu(cpu).unwrap();
-                        //     le.queues.borrow_mut().spin_before_park = self.spin_before_park;
-                        // }
-                        le.init().unwrap();
+                        if let CpuSet(Some(set)) = cpu_set {
+                            let set = set.into_iter().map(|s| s.cpu);
+                            le.bind_to_cpu_set(set).unwrap();
+                            le.queues.borrow_mut().spin_before_park = spin_before_park;
+                        }
+                        le.init();
                         le.run(async move {
-                            fut_gen(id, cpu_set).await;
+                            // use of the `SleepNotifier` id here is temporary and may change in
+                            // the future
+                            fut_gen(id).await;
                         })
                     }
                 })
                 .map_err(Into::into);
 
-            handles.push((id, cpu_set, handle));
+            handles.push((Some(id), handle));
         }
 
         handles
@@ -787,7 +803,7 @@ impl LocalExecutorPoolBuilder {
 /// [`LocalExecutorPoolBuilder::on_all_shards`].
 #[derive(Debug)]
 pub struct PoolThreadHandles {
-    handles: Vec<(usize, CPUSet, Result<JoinHandle<()>>)>,
+    handles: Vec<(Option<usize>, Result<JoinHandle<()>>)>,
 }
 
 impl PoolThreadHandles {
@@ -797,31 +813,31 @@ impl PoolThreadHandles {
         }
     }
 
-    fn push(&mut self, handle: (usize, CPUSet, Result<JoinHandle<()>>)) {
+    fn push(&mut self, handle: (Option<usize>, Result<JoinHandle<()>>)) {
         self.handles.push(handle)
     }
 
     /// Obtain a reference to the [`JoinHandle`]s created by
     /// [`LocalExecutorPoolBuilder::on_all_shards`].
-    pub fn handles(&self) -> &Vec<(usize, CPUSet, Result<JoinHandle<()>>)> {
+    pub fn handles(&self) -> &Vec<(Option<usize>, Result<JoinHandle<()>>)> {
         &self.handles
     }
 
     // TODO: this feels like we want to make a new error type here and return a
-    // `Result<(),Vec<(usize, CPUSet, Result<()>)>>` but wanted to get thoughts
+    // `Result<(),Vec<(usize, Result<()>)>>` but wanted to get thoughts
     /// Calls [`JoinHandle::join`] on all handles created by
     /// [`LocalExecutorPoolBuilder::on_all_shards`]
-    pub fn join_all(self) -> Vec<(usize, CPUSet, Result<()>)> {
+    pub fn join_all(self) -> Vec<(Option<usize>, Result<()>)> {
         self.handles
             .into_iter()
-            .map(|(id, set, hndl)| {
+            .map(|(id, hndl)| {
                 let hndl = match hndl {
                     Ok(h) => h.join().map_err(|_| {
                         io::Error::new(io::ErrorKind::Other, "thread panicked").into()
                     }),
                     Err(e) => Err(e),
                 };
-                (id, set, hndl)
+                (id, hndl)
             })
             .collect::<Vec<_>>()
     }
@@ -871,8 +887,8 @@ impl LocalExecutor {
         self.reactor.clone()
     }
 
-    fn bind_to_cpu(&self, cpu: usize) -> Result<()> {
-        bind_to_cpu(cpu)
+    fn bind_to_cpu_set(&self, set: impl IntoIterator<Item = usize>) -> Result<()> {
+        bind_to_cpu_set(set)
     }
 
     fn init(&mut self) {
@@ -1672,6 +1688,16 @@ mod test {
     }
 
     #[test]
+    fn bind_to_cpu_set_range() {
+        // libc supports cpu ids up to 1023 and will use the intersection of values
+        // specified by the cpu mask and those present on the system
+        // https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html#NOTES
+        assert!(bind_to_cpu_set(vec![0, 1, 2, 3]).is_ok());
+        assert!(bind_to_cpu_set(0..1024).is_ok());
+        assert!(bind_to_cpu_set(0..1025).is_err());
+    }
+
+    #[test]
     fn create_and_bind() {
         if let Err(x) = LocalExecutorBuilder::new().pin_to_cpu(0).make() {
             panic!("got error {:?}", x);
@@ -2234,24 +2260,19 @@ mod test {
             let count = Arc::clone(&count);
             let sum = Arc::clone(&sum);
 
-            |id, cpu_set| async move {
-                if cpu_set.is_none() {
-                    count.fetch_add(1, Ordering::Relaxed);
-                    sum.fetch_add(id, Ordering::Relaxed);
-                }
+            |id| async move {
+                count.fetch_add(1, Ordering::Relaxed);
+                sum.fetch_add(id, Ordering::Relaxed);
             }
         });
 
-        let mut handles_sum = 0;
         assert_eq!(4, handles.handles().len());
-        handles.handles().iter().for_each(|(id, _, hndl)| {
+        handles.handles().iter().for_each(|(id, hndl)| {
             assert!(hndl.is_ok());
-            handles_sum += id;
+            id.unwrap();
         });
-        assert_eq!(6, handles_sum);
 
         handles.join_all();
         assert_eq!(4, count.load(Ordering::Relaxed));
-        assert_eq!(6, sum.load(Ordering::Relaxed));
     }
 }
