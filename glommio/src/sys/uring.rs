@@ -208,7 +208,7 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
         if probe.is_null() {
             panic!(
                 "Failed to register a probe. The most likely reason is that your kernel witnessed \
-                 Romulus killing Remus (too old!!)"
+                 Romulus killing Remus (too old!! kernel should be at least 5.8)"
             );
         }
 

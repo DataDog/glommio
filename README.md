@@ -58,6 +58,39 @@ Glommio is still considered an alpha release. The main reasons are:
 
 Want to help bring us to production status sooner? PRs are welcome!
 
+## Current limitations
+
+Due to our immediate needs which are a lot narrower, we make the following design assumptions:
+
+- NVMe. While other storage types may work, the general assumptions made in
+  here are based on the characteristics of NVMe storage. This allows us to
+  use io uring's poll ring for reads and writes which are interrupt free.
+  This also assumes that one is running either `XFS` or `Ext4` (an
+  assumption that Seastar also makes).
+  
+- A corollary to the above is that the CPUs are likely to be the
+  bottleneck, so this crate has a CPU scheduler but lacks an I/O scheduler.
+  That, however, would be a welcome addition.
+  
+- A recent(at least 5.8) kernel is no impediment, as long as a fully functional I/O uring
+  is present. In fact, we require a kernel so recent that it doesn't even
+  exist: operations like `mkdir, ftruncate`, etc which are not present in
+  today's (5.8) `io_uring` are simply synchronous and we'll live with the
+  pain in the hopes that Linux will eventually add support for them. 
+  
+## Missing features
+
+There are many. In particular:
+
+* Memory allocator: memory allocation is a big source of contention for
+  thread per core systems. A shard-aware allocator would be crucial for
+  achieving good performance in allocation-heavy workloads.
+  
+* As mentioned, an I/O Scheduler.
+  
+* Visibility: the crate exposes no metrics on its internals, and that should
+  change ASAP.
+  
 ## License
 
 Licensed under either of
