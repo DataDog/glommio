@@ -12,15 +12,14 @@ use core::{
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
+use crate::sys;
+
 use crate::task::{
     header::Header,
     state::*,
     utils::{abort, abort_on_panic, extend},
     Task,
 };
-use std::thread::ThreadId;
-
-thread_local!(static THREAD_ID : ThreadId = std::thread::current().id());
 
 /// The vtable for a task.
 pub(crate) struct TaskVTable {
@@ -103,7 +102,7 @@ where
     ///
     /// It is assumed that initially only the `Task` reference and the
     /// `JoinHandle` exist.
-    pub(crate) fn allocate(future: F, schedule: S) -> NonNull<()> {
+    pub(crate) fn allocate(future: F, schedule: S, executor_id: usize) -> NonNull<()> {
         // Compute the layout of the task for allocation. Abort if the computation
         // fails.
         let task_layout = abort_on_panic(Self::task_layout);
@@ -119,7 +118,7 @@ where
 
             // Write the header as the first field of the task.
             (raw.header as *mut Header).write(Header {
-                thread_id: Self::thread_id(),
+                notifier: sys::get_sleep_notifier_for(executor_id).unwrap(),
                 state: SCHEDULED | HANDLE | REFERENCE,
                 awaiter: None,
                 vtable: &TaskVTable {
@@ -142,10 +141,16 @@ where
         }
     }
 
-    fn thread_id() -> ThreadId {
-        THREAD_ID
-            .try_with(|id| *id)
-            .unwrap_or_else(|_e| std::thread::current().id())
+    unsafe fn my_id(&self) -> usize {
+        self.notifier().id()
+    }
+
+    unsafe fn notifier(&self) -> &sys::SleepNotifier {
+        &(*self.header).notifier
+    }
+
+    fn thread_id() -> Option<usize> {
+        crate::executor::executor_id()
     }
 
     /// Creates a `RawTask` from a raw task pointer.
@@ -208,7 +213,7 @@ where
         let raw = Self::from_ptr(ptr);
         assert_eq!(
             Self::thread_id(),
-            (*raw.header).thread_id,
+            Some(raw.my_id()),
             "Waker::wake is called outside of working thread. Waker instances can not be moved to \
              or work with multiple threads"
         );
@@ -245,7 +250,7 @@ where
 
         assert_eq!(
             Self::thread_id(),
-            (*raw.header).thread_id,
+            Some(raw.my_id()),
             "Waker::wake_by_ref is called outside of working thread. Waker instances can not be \
              moved to or work with multiple threads"
         );
@@ -295,7 +300,7 @@ where
 
         assert_eq!(
             Self::thread_id(),
-            (*raw.header).thread_id,
+            Some(raw.my_id()),
             "Waker::clone is called outside of working thread. Waker instances can not be moved \
              to or work with multiple threads"
         );
@@ -324,14 +329,6 @@ where
     /// that its future gets dropped by the executor.
     #[inline]
     unsafe fn drop_waker(ptr: *const ()) {
-        let header = ptr as *const Header;
-        assert_eq!(
-            Self::thread_id(),
-            (*header).thread_id,
-            "Waker::drop is called outside of working thread. Waker instances can not be moved to \
-             or work with multiple threads"
-        );
-
         <RawTask<F, R, S>>::drop_waker_reference(ptr)
     }
 

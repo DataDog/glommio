@@ -6,7 +6,9 @@
 use core::{fmt, task::Waker};
 
 use crate::task::{raw::TaskVTable, state::*, utils::abort_on_panic};
-use std::thread::ThreadId;
+
+use crate::sys::SleepNotifier;
+use std::sync::Arc;
 
 /// The header of a task.
 ///
@@ -14,7 +16,8 @@ use std::thread::ThreadId;
 pub(crate) struct Header {
     /// ID of the executor to which task belongs to or in another words by which
     /// task was spawned by
-    pub(crate) thread_id: ThreadId,
+    pub(crate) notifier: Arc<SleepNotifier>,
+
     /// Current state of the task.
     ///
     /// Contains flags representing the current state and the reference count.
@@ -88,7 +91,7 @@ impl fmt::Debug for Header {
         let state = self.state;
 
         f.debug_struct("Header")
-            .field("thread_id", &self.thread_id)
+            .field("thread_id", &self.notifier.id())
             .field("scheduled", &(state & SCHEDULED != 0))
             .field("running", &(state & RUNNING != 0))
             .field("completed", &(state & COMPLETED != 0))

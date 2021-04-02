@@ -66,6 +66,14 @@ type Result<T> = crate::Result<T, ()>;
 
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
+pub(crate) fn executor_id() -> Option<usize> {
+    if LOCAL_EX.is_set() {
+        Some(LOCAL_EX.with(|ex| ex.id))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 /// An opaque handle indicating in which queue a group of tasks will execute.
 /// Tasks in the same group will execute in FIFO order but no guarantee is made
@@ -717,8 +725,9 @@ impl LocalExecutor {
             .or_else(|| self.get_queue(&TaskQueueHandle { index: 0 }))
             .unwrap();
 
+        let id = self.id;
         let ex = tq.borrow().ex.clone();
-        Task(ex.spawn(tq, future))
+        Task(ex.spawn(id, tq, future))
     }
 
     fn spawn_into<T, F>(&self, future: F, handle: TaskQueueHandle) -> Result<Task<T>>
@@ -729,7 +738,9 @@ impl LocalExecutor {
             .get_queue(&handle)
             .ok_or_else(|| GlommioError::queue_not_found(handle.index))?;
         let ex = tq.borrow().ex.clone();
-        Ok(Task(ex.spawn(tq, future)))
+        let id = self.id;
+
+        Ok(Task(ex.spawn(id, tq, future)))
     }
 
     fn preempt_timer_duration(&self) -> Duration {
