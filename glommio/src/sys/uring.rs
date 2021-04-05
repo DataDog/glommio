@@ -1162,6 +1162,10 @@ impl Reactor {
         self.notifier.id()
     }
 
+    pub(crate) fn foreign_notifiers(&self) -> Option<core::task::Waker> {
+        self.notifier.get_foreign_notifier()
+    }
+
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         let mut poll_ring = self.poll_ring.borrow_mut();
         poll_ring.alloc_dma_buffer(size)

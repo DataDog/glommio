@@ -251,6 +251,12 @@ where
     unsafe fn wake_by_ref(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
 
+        if Self::thread_id() != Some(raw.my_id()) {
+            let notifier = raw.notifier();
+            notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+            return;
+        }
+
         assert_eq!(
             Self::thread_id(),
             Some(raw.my_id()),
@@ -294,16 +300,7 @@ where
     /// Clones a waker.
     unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
         let raw = Self::from_ptr(ptr);
-
-        assert_eq!(
-            Self::thread_id(),
-            Some(raw.my_id()),
-            "Waker::clone is called outside of working thread. Waker instances can not be moved \
-             to or work with multiple threads"
-        );
-
         Self::increment_references(&mut *(raw.header as *mut Header));
-
         RawWaker::new(ptr, &Self::RAW_WAKER_VTABLE)
     }
 
@@ -331,6 +328,18 @@ where
     #[inline]
     unsafe fn drop_waker_reference(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
+        // If we are dropping in a remote executor, just ignore it:
+        //  * When we cloned remotely, we have bumped the reference count
+        //  * But the remote wake will have transferred through the queue to the owner
+        //    executor
+        //  * The owner executor will then drop after wake.
+        //
+        //  We could decrement the reference count here, since that is atomic, but we
+        // can't run  the schedule / drop machinery.
+        if Self::thread_id() != Some(raw.my_id()) {
+            return;
+        }
+
         // Decrement the reference count.
         let refs = (*raw.header).references.fetch_sub(1, Ordering::Relaxed) - 1;
         let state = (*raw.header).state;
