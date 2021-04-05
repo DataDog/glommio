@@ -13,6 +13,7 @@ use core::{
 };
 
 use crate::task::{header::Header, state::*};
+use std::sync::atomic::Ordering;
 
 /// A handle that awaits the result of a task.
 ///
@@ -51,7 +52,7 @@ impl<R> JoinHandle<R> {
 
             // If the task is not scheduled nor running, we'll need to schedule it.
             let new = if state & (SCHEDULED | RUNNING) == 0 {
-                (state | SCHEDULED | CLOSED) + REFERENCE
+                state | SCHEDULED | CLOSED
             } else {
                 state | CLOSED
             };
@@ -60,6 +61,9 @@ impl<R> JoinHandle<R> {
             (*header).state = new;
 
             if state & (SCHEDULED | RUNNING) == 0 {
+                // If we schedule it, need to bump the reference count, since after run() we
+                // decrement it.
+                (*header).references.fetch_add(1, Ordering::Relaxed);
                 ((*header).vtable.schedule)(ptr);
             }
 
@@ -81,14 +85,15 @@ impl<R> Drop for JoinHandle<R> {
 
         unsafe {
             // Optimistically assume the `JoinHandle` is being dropped just after creating
-            // the task. This is a common case so if the handle is not used, the
-            // overhead of it is only one compare-exchange operation.
-            if (*header).state == SCHEDULED | HANDLE | REFERENCE {
-                (*header).state = SCHEDULED | REFERENCE;
+            // the task. This is a common case, as often users don't wait on the task
+            if (*header).state == SCHEDULED | HANDLE {
+                (*header).state = SCHEDULED;
                 return;
             }
 
             let state = (*header).state;
+            let refs = (*header).references.load(Ordering::Relaxed);
+
             // If the task has been completed but not yet closed, that means its output
             // must be dropped.
             if state & COMPLETED != 0 && state & CLOSED == 0 {
@@ -100,15 +105,15 @@ impl<R> Drop for JoinHandle<R> {
                 (*header).state &= !HANDLE;
 
                 // If this is the last reference to the task, we need to destroy it.
-                if state & !(REFERENCE - 1) == 0 {
+                if refs == 0 {
                     ((*header).vtable.destroy)(ptr)
                 }
             } else {
                 // If this is the last reference to the task and it's not closed, then
                 // close it and schedule one more time so that its future gets dropped by
                 // the executor.
-                let new = if state & (!(REFERENCE - 1) | CLOSED) == 0 {
-                    SCHEDULED | CLOSED | REFERENCE
+                let new = if (refs == 0) | (state & CLOSED == 0) {
+                    SCHEDULED | CLOSED
                 } else {
                     state & !HANDLE
                 };
@@ -116,8 +121,9 @@ impl<R> Drop for JoinHandle<R> {
                 (*header).state = new;
                 // If this is the last reference to the task, we need to either
                 // schedule dropping its future or destroy it.
-                if state & !(REFERENCE - 1) == 0 {
+                if refs == 0 {
                     if state & CLOSED == 0 {
+                        (*header).references.fetch_add(1, Ordering::Relaxed);
                         ((*header).vtable.schedule)(ptr);
                     } else {
                         ((*header).vtable.destroy)(ptr);

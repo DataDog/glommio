@@ -12,6 +12,8 @@ use core::{
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
+use std::sync::atomic::{AtomicU16, Ordering};
+
 use crate::sys;
 
 use crate::task::{
@@ -119,7 +121,8 @@ where
             // Write the header as the first field of the task.
             (raw.header as *mut Header).write(Header {
                 notifier: sys::get_sleep_notifier_for(executor_id).unwrap(),
-                state: SCHEDULED | HANDLE | REFERENCE,
+                state: SCHEDULED | HANDLE,
+                references: AtomicU16::new(1),
                 awaiter: None,
                 vtable: &TaskVTable {
                     schedule: Self::schedule,
@@ -266,19 +269,13 @@ where
         // that will run the task by "publishing" our current view of the
         // memory.
         if state & SCHEDULED == 0 {
-            // If the task is not running, we can schedule right away.
-            let new = if state & RUNNING == 0 {
-                (state | SCHEDULED) + REFERENCE
-            } else {
-                state | SCHEDULED
-            };
-
-            // Mark the task as scheduled.
-            (*(raw.header as *mut Header)).state = new;
+            (*(raw.header as *mut Header)).state |= SCHEDULED;
 
             if state & RUNNING == 0 {
+                let refs = (*raw.header).references.fetch_add(1, Ordering::Relaxed);
+
                 // If the reference count overflowed, abort.
-                if state > isize::max_value() as usize {
+                if refs > i16::max_value() as u16 {
                     abort();
                 }
 
@@ -312,11 +309,10 @@ where
 
     #[inline]
     fn increment_references(header: &mut Header) {
-        let state = header.state;
-        header.state += REFERENCE;
+        let refs = header.references.fetch_add(1, Ordering::Relaxed);
 
         // If the reference count overflowed, abort.
-        if state > isize::max_value() as usize {
+        if refs > i16::max_value() as u16 {
             abort();
         }
     }
@@ -336,16 +332,18 @@ where
     unsafe fn drop_waker_reference(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
         // Decrement the reference count.
-        let new = (*raw.header).state - REFERENCE;
-        (*(raw.header as *mut Header)).state = new;
+        let refs = (*raw.header).references.fetch_sub(1, Ordering::Relaxed) - 1;
+        let state = (*raw.header).state;
 
         // If this was the last reference to the task and the `JoinHandle` has been
         // dropped too, then we need to decide how to destroy the task.
-        if new & !(REFERENCE - 1) == 0 && new & HANDLE == 0 {
-            if new & (COMPLETED | CLOSED) == 0 {
+        if (refs == 0) && state & HANDLE == 0 {
+            if state & (COMPLETED | CLOSED) == 0 {
+                // Because we'll schedule it one last time, bump the reference count.
+                (*raw.header).references.fetch_add(1, Ordering::Relaxed);
                 // If the task was not completed nor closed, close it and schedule one more time
                 // so that its future gets dropped by the executor.
-                (*(raw.header as *mut Header)).state = SCHEDULED | CLOSED | REFERENCE;
+                (*(raw.header as *mut Header)).state = SCHEDULED | CLOSED;
                 Self::schedule(ptr);
             } else {
                 // Otherwise, destroy the task right away.
@@ -364,12 +362,12 @@ where
         let raw = Self::from_ptr(ptr);
 
         // Decrement the reference count.
-        let new = (*raw.header).state - REFERENCE;
-        (*(raw.header as *mut Header)).state = new;
+        let refs = (*raw.header).references.fetch_sub(1, Ordering::Relaxed) - 1;
+        let state = (*raw.header).state;
 
         // If this was the last reference to the task and the `JoinHandle` has been
         // dropped too, then destroy the task.
-        if new & !(REFERENCE - 1) == 0 && new & HANDLE == 0 {
+        if refs == 0 && state & HANDLE == 0 {
             Self::destroy(ptr);
         }
     }

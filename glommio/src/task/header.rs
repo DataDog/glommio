@@ -10,6 +10,8 @@ use crate::task::{raw::TaskVTable, state::*, utils::abort_on_panic};
 use crate::sys::SleepNotifier;
 use std::sync::Arc;
 
+use std::sync::atomic::{AtomicU16, Ordering};
+
 /// The header of a task.
 ///
 /// This header is stored right at the beginning of every heap-allocated task.
@@ -19,9 +21,10 @@ pub(crate) struct Header {
     pub(crate) notifier: Arc<SleepNotifier>,
 
     /// Current state of the task.
-    ///
-    /// Contains flags representing the current state and the reference count.
-    pub(crate) state: usize,
+    pub(crate) state: u8,
+
+    /// Current reference count of the task.
+    pub(crate) references: AtomicU16,
 
     /// The task that is blocked on the `JoinHandle`.
     ///
@@ -81,14 +84,13 @@ impl Header {
     pub(crate) fn register(&mut self, waker: &Waker) {
         // Put the waker into the awaiter field.
         abort_on_panic(|| self.awaiter = Some(waker.clone()));
-
-        self.state |= AWAITER;
     }
 }
 
 impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state;
+        let refcount = self.references.load(Ordering::Relaxed);
 
         f.debug_struct("Header")
             .field("thread_id", &self.notifier.id())
@@ -98,7 +100,7 @@ impl fmt::Debug for Header {
             .field("closed", &(state & CLOSED != 0))
             .field("awaiter", &(state & AWAITER != 0))
             .field("handle", &(state & HANDLE != 0))
-            .field("ref_count", &(state / REFERENCE))
+            .field("refcount", &refcount)
             .finish()
     }
 }
