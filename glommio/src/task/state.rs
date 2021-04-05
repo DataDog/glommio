@@ -48,4 +48,3 @@ pub(crate) const CLOSED: u8 = 1 << 3;
 /// while all other task references (`Task` and `Waker`s) are tracked by the
 /// reference count.
 pub(crate) const HANDLE: u8 = 1 << 4;
-pub(crate) const AWAITER: u8 = 1 << 5;

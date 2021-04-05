@@ -68,9 +68,7 @@ impl<R> JoinHandle<R> {
             }
 
             // Notify the awaiter that the task has been closed.
-            if state & AWAITER != 0 {
-                (*header).notify(None);
-            }
+            (*header).notify(None);
         }
     }
 }
@@ -174,9 +172,7 @@ impl<R> Future for JoinHandle<R> {
 
             // Notify the awaiter. Even though the awaiter is most likely the current
             // task, it could also be another task.
-            if state & AWAITER != 0 {
-                (*header).notify(Some(cx.waker()));
-            }
+            (*header).notify(Some(cx.waker()));
 
             // Take the output from the task.
             let output = ((*header).vtable.get_output)(ptr) as *mut R;

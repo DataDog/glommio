@@ -474,9 +474,7 @@ where
             (*(raw.header as *mut Header)).state &= !SCHEDULED;
 
             // Notify the awaiter that the future has been dropped.
-            if state & AWAITER != 0 {
-                (*(raw.header as *mut Header)).notify(None);
-            }
+            (*(raw.header as *mut Header)).notify(None);
 
             // Drop the task reference.
             Self::drop_task(ptr);
@@ -527,9 +525,7 @@ where
                 }
 
                 // Notify the awaiter that the task has been completed.
-                if state & AWAITER != 0 {
-                    (*(raw.header as *mut Header)).notify(None);
-                }
+                (*(raw.header as *mut Header)).notify(None);
 
                 // Drop the task reference.
                 Self::drop_task(ptr);
@@ -558,9 +554,7 @@ where
                 // Otherwise, we just drop the task reference.
                 if state & CLOSED != 0 {
                     // Notify the awaiter that the future has been dropped.
-                    if state & AWAITER != 0 {
-                        (*(raw.header as *mut Header)).notify(None);
-                    }
+                    (*(raw.header as *mut Header)).notify(None);
                     // Drop the task reference.
                     Self::drop_task(ptr);
                 } else if state & SCHEDULED != 0 {
@@ -604,9 +598,7 @@ where
                     RawTask::<F, R, S>::drop_future(ptr);
 
                     // Notify the awaiter that the future has been dropped.
-                    if (*raw.header).state & AWAITER != 0 {
-                        (*(raw.header as *mut Header)).notify(None);
-                    }
+                    (*(raw.header as *mut Header)).notify(None);
 
                     // Drop the task reference.
                     RawTask::<F, R, S>::drop_task(ptr);

@@ -63,9 +63,6 @@ impl Header {
         // Take the waker out.
         let waker = self.awaiter.take();
 
-        // Mark the state as not being notified anymore nor containing an awaiter.
-        self.state &= !AWAITER;
-
         if let Some(w) = waker {
             // We need a safeguard against panics because waking can panic.
             abort_on_panic(|| match current {
@@ -98,7 +95,6 @@ impl fmt::Debug for Header {
             .field("running", &(state & RUNNING != 0))
             .field("completed", &(state & COMPLETED != 0))
             .field("closed", &(state & CLOSED != 0))
-            .field("awaiter", &(state & AWAITER != 0))
             .field("handle", &(state & HANDLE != 0))
             .field("refcount", &refcount)
             .finish()
