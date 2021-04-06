@@ -63,7 +63,9 @@ impl<R> JoinHandle<R> {
             if state & (SCHEDULED | RUNNING) == 0 {
                 // If we schedule it, need to bump the reference count, since after run() we
                 // decrement it.
-                (*header).references.fetch_add(1, Ordering::Relaxed);
+                let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
+                assert_ne!(refs, i16::max_value());
+
                 ((*header).vtable.schedule)(ptr);
             }
 
@@ -121,7 +123,8 @@ impl<R> Drop for JoinHandle<R> {
                 // schedule dropping its future or destroy it.
                 if refs == 0 {
                     if state & CLOSED == 0 {
-                        (*header).references.fetch_add(1, Ordering::Relaxed);
+                        let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
+                        assert_ne!(refs, i16::max_value());
                         ((*header).vtable.schedule)(ptr);
                     } else {
                         ((*header).vtable.destroy)(ptr);

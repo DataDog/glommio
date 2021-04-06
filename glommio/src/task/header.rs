@@ -10,7 +10,7 @@ use crate::task::{raw::TaskVTable, state::*, utils::abort_on_panic};
 use crate::sys::SleepNotifier;
 use std::sync::Arc;
 
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicI16, Ordering};
 
 /// The header of a task.
 ///
@@ -24,7 +24,7 @@ pub(crate) struct Header {
     pub(crate) state: u8,
 
     /// Current reference count of the task.
-    pub(crate) references: AtomicU16,
+    pub(crate) references: AtomicI16,
 
     /// The task that is blocked on the `JoinHandle`.
     ///
