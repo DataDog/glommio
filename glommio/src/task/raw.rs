@@ -257,13 +257,6 @@ where
             return;
         }
 
-        assert_eq!(
-            Self::thread_id(),
-            Some(raw.my_id()),
-            "Waker::wake_by_ref is called outside of working thread. Waker instances can not be \
-             moved to or work with multiple threads"
-        );
-
         let state = (*raw.header).state;
 
         // If the task is completed or closed, it can't be woken up.
