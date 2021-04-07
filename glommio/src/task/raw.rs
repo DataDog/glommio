@@ -12,15 +12,16 @@ use core::{
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
+use std::sync::atomic::{AtomicI16, Ordering};
+
+use crate::sys;
+
 use crate::task::{
     header::Header,
     state::*,
     utils::{abort, abort_on_panic, extend},
     Task,
 };
-use std::thread::ThreadId;
-
-thread_local!(static THREAD_ID : ThreadId = std::thread::current().id());
 
 /// The vtable for a task.
 pub(crate) struct TaskVTable {
@@ -103,7 +104,7 @@ where
     ///
     /// It is assumed that initially only the `Task` reference and the
     /// `JoinHandle` exist.
-    pub(crate) fn allocate(future: F, schedule: S) -> NonNull<()> {
+    pub(crate) fn allocate(future: F, schedule: S, executor_id: usize) -> NonNull<()> {
         // Compute the layout of the task for allocation. Abort if the computation
         // fails.
         let task_layout = abort_on_panic(Self::task_layout);
@@ -119,8 +120,9 @@ where
 
             // Write the header as the first field of the task.
             (raw.header as *mut Header).write(Header {
-                thread_id: Self::thread_id(),
-                state: SCHEDULED | HANDLE | REFERENCE,
+                notifier: sys::get_sleep_notifier_for(executor_id).unwrap(),
+                state: SCHEDULED | HANDLE,
+                references: AtomicI16::new(1),
                 awaiter: None,
                 vtable: &TaskVTable {
                     schedule: Self::schedule,
@@ -142,10 +144,16 @@ where
         }
     }
 
-    fn thread_id() -> ThreadId {
-        THREAD_ID
-            .try_with(|id| *id)
-            .unwrap_or_else(|_e| std::thread::current().id())
+    unsafe fn my_id(&self) -> usize {
+        self.notifier().id()
+    }
+
+    unsafe fn notifier(&self) -> &sys::SleepNotifier {
+        &(*self.header).notifier
+    }
+
+    fn thread_id() -> Option<usize> {
+        crate::executor::executor_id()
     }
 
     /// Creates a `RawTask` from a raw task pointer.
@@ -196,36 +204,27 @@ where
 
     /// Wakes a waker.
     unsafe fn wake(ptr: *const ()) {
-        // This is just an optimization. If the schedule function has captured
-        // variables, then we'll do less reference counting if we wake the waker
-        // by reference and then drop it.
-        if mem::size_of::<S>() > 0 {
-            Self::wake_by_ref(ptr);
-            Self::drop_waker_reference(ptr);
+        let raw = Self::from_ptr(ptr);
+        if Self::thread_id() != Some(raw.my_id()) {
+            let notifier = raw.notifier();
+            notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+            Self::decrement_references(&mut *(raw.header as *mut Header));
             return;
         }
-
-        let raw = Self::from_ptr(ptr);
-        assert_eq!(
-            Self::thread_id(),
-            (*raw.header).thread_id,
-            "Waker::wake is called outside of working thread. Waker instances can not be moved to \
-             or work with multiple threads"
-        );
 
         let state = (*raw.header).state;
 
         // If the task is completed or closed, it can't be woken up.
         if state & (COMPLETED | CLOSED) != 0 {
             // Drop the waker.
-            Self::drop_waker_reference(ptr);
+            Self::drop_waker(ptr);
             return;
         }
 
         // If the task is already scheduled do nothing.
         if state & SCHEDULED != 0 {
             // Drop the waker.
-            Self::drop_waker_reference(ptr);
+            Self::drop_waker(ptr);
         } else {
             // Mark the task as scheduled.
             (*(raw.header as *mut Header)).state = state | SCHEDULED;
@@ -234,7 +233,7 @@ where
                 Self::schedule(ptr);
             } else {
                 // Drop the waker.
-                Self::drop_waker_reference(ptr);
+                Self::drop_waker(ptr);
             }
         }
     }
@@ -243,12 +242,11 @@ where
     unsafe fn wake_by_ref(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
 
-        assert_eq!(
-            Self::thread_id(),
-            (*raw.header).thread_id,
-            "Waker::wake_by_ref is called outside of working thread. Waker instances can not be \
-             moved to or work with multiple threads"
-        );
+        if Self::thread_id() != Some(raw.my_id()) {
+            let notifier = raw.notifier();
+            notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+            return;
+        }
 
         let state = (*raw.header).state;
 
@@ -261,22 +259,9 @@ where
         // that will run the task by "publishing" our current view of the
         // memory.
         if state & SCHEDULED == 0 {
-            // If the task is not running, we can schedule right away.
-            let new = if state & RUNNING == 0 {
-                (state | SCHEDULED) + REFERENCE
-            } else {
-                state | SCHEDULED
-            };
-
-            // Mark the task as scheduled.
-            (*(raw.header as *mut Header)).state = new;
+            (*(raw.header as *mut Header)).state |= SCHEDULED;
 
             if state & RUNNING == 0 {
-                // If the reference count overflowed, abort.
-                if state > isize::max_value() as usize {
-                    abort();
-                }
-
                 // Schedule the task. There is no need to call `Self::schedule(ptr)`
                 // because the schedule function cannot be destroyed while the waker is
                 // still alive.
@@ -292,28 +277,23 @@ where
     /// Clones a waker.
     unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
         let raw = Self::from_ptr(ptr);
-
-        assert_eq!(
-            Self::thread_id(),
-            (*raw.header).thread_id,
-            "Waker::clone is called outside of working thread. Waker instances can not be moved \
-             to or work with multiple threads"
-        );
-
         Self::increment_references(&mut *(raw.header as *mut Header));
-
         RawWaker::new(ptr, &Self::RAW_WAKER_VTABLE)
     }
 
     #[inline]
+    #[track_caller]
     fn increment_references(header: &mut Header) {
-        let state = header.state;
-        header.state += REFERENCE;
+        let refs = header.references.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(refs, i16::max_value());
+    }
 
-        // If the reference count overflowed, abort.
-        if state > isize::max_value() as usize {
-            abort();
-        }
+    #[inline]
+    #[track_caller]
+    fn decrement_references(header: &mut Header) -> i16 {
+        let refs = header.references.fetch_sub(1, Ordering::Relaxed);
+        assert_ne!(refs, 0);
+        refs - 1
     }
 
     /// Drops a waker.
@@ -324,31 +304,32 @@ where
     /// that its future gets dropped by the executor.
     #[inline]
     unsafe fn drop_waker(ptr: *const ()) {
-        let header = ptr as *const Header;
-        assert_eq!(
-            Self::thread_id(),
-            (*header).thread_id,
-            "Waker::drop is called outside of working thread. Waker instances can not be moved to \
-             or work with multiple threads"
-        );
-
-        <RawTask<F, R, S>>::drop_waker_reference(ptr)
-    }
-
-    #[inline]
-    unsafe fn drop_waker_reference(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
+        // If we are dropping in a remote executor, just ignore it:
+        //  * When we cloned remotely, we have bumped the reference count
+        //  * But the remote wake will have transferred through the queue to the owner
+        //    executor
+        //  * The owner executor will then drop after wake.
+        //
+        //  We could decrement the reference count here, since that is atomic, but we
+        // can't run  the schedule / drop machinery.
+        if Self::thread_id() != Some(raw.my_id()) {
+            return;
+        }
+
         // Decrement the reference count.
-        let new = (*raw.header).state - REFERENCE;
-        (*(raw.header as *mut Header)).state = new;
+        let refs = Self::decrement_references(&mut *(raw.header as *mut Header));
+        let state = (*raw.header).state;
 
         // If this was the last reference to the task and the `JoinHandle` has been
         // dropped too, then we need to decide how to destroy the task.
-        if new & !(REFERENCE - 1) == 0 && new & HANDLE == 0 {
-            if new & (COMPLETED | CLOSED) == 0 {
+        if (refs == 0) && state & HANDLE == 0 {
+            if state & (COMPLETED | CLOSED) == 0 {
+                // Because we'll schedule it one last time, bump the reference count.
+                Self::increment_references(&mut *(raw.header as *mut Header));
                 // If the task was not completed nor closed, close it and schedule one more time
                 // so that its future gets dropped by the executor.
-                (*(raw.header as *mut Header)).state = SCHEDULED | CLOSED | REFERENCE;
+                (*(raw.header as *mut Header)).state = SCHEDULED | CLOSED;
                 Self::schedule(ptr);
             } else {
                 // Otherwise, destroy the task right away.
@@ -367,12 +348,13 @@ where
         let raw = Self::from_ptr(ptr);
 
         // Decrement the reference count.
-        let new = (*raw.header).state - REFERENCE;
-        (*(raw.header as *mut Header)).state = new;
+        let refs = Self::decrement_references(&mut *(raw.header as *mut Header));
+
+        let state = (*raw.header).state;
 
         // If this was the last reference to the task and the `JoinHandle` has been
         // dropped too, then destroy the task.
-        if new & !(REFERENCE - 1) == 0 && new & HANDLE == 0 {
+        if refs == 0 && state & HANDLE == 0 {
             Self::destroy(ptr);
         }
     }
@@ -384,34 +366,13 @@ where
     unsafe fn schedule(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
 
-        struct Guard<'a, F, R, S>(&'a RawTask<F, R, S>)
-        where
-            F: Future<Output = R>,
-            S: Fn(Task);
-
-        impl<'a, F, R, S> Drop for Guard<'a, F, R, S>
-        where
-            F: Future<Output = R>,
-            S: Fn(Task),
-        {
-            fn drop(&mut self) {
-                let raw = self.0;
-                let ptr = raw.header as *const ();
-
-                unsafe {
-                    RawTask::<F, R, S>::drop_waker_reference(ptr);
-                }
-            }
-        }
-
         let guard;
         // Calling of schedule functions itself does not increment references,
         // if the schedule function has captured variables, increment references
         // so if task being dropped inside schedule function , function itself
         // will keep valid data till the end of execution.
         if mem::size_of::<S>() > 0 {
-            Self::increment_references(&mut *(raw.header as *mut Header));
-            guard = Some(Guard(&raw));
+            guard = Some(Waker::from_raw(Self::clone_waker(ptr)));
         } else {
             guard = None;
         }
@@ -479,9 +440,7 @@ where
             (*(raw.header as *mut Header)).state &= !SCHEDULED;
 
             // Notify the awaiter that the future has been dropped.
-            if state & AWAITER != 0 {
-                (*(raw.header as *mut Header)).notify(None);
-            }
+            (*(raw.header as *mut Header)).notify(None);
 
             // Drop the task reference.
             Self::drop_task(ptr);
@@ -532,9 +491,7 @@ where
                 }
 
                 // Notify the awaiter that the task has been completed.
-                if state & AWAITER != 0 {
-                    (*(raw.header as *mut Header)).notify(None);
-                }
+                (*(raw.header as *mut Header)).notify(None);
 
                 // Drop the task reference.
                 Self::drop_task(ptr);
@@ -563,9 +520,7 @@ where
                 // Otherwise, we just drop the task reference.
                 if state & CLOSED != 0 {
                     // Notify the awaiter that the future has been dropped.
-                    if state & AWAITER != 0 {
-                        (*(raw.header as *mut Header)).notify(None);
-                    }
+                    (*(raw.header as *mut Header)).notify(None);
                     // Drop the task reference.
                     Self::drop_task(ptr);
                 } else if state & SCHEDULED != 0 {
@@ -609,9 +564,7 @@ where
                     RawTask::<F, R, S>::drop_future(ptr);
 
                     // Notify the awaiter that the future has been dropped.
-                    if (*raw.header).state & AWAITER != 0 {
-                        (*(raw.header as *mut Header)).notify(None);
-                    }
+                    (*(raw.header as *mut Header)).notify(None);
 
                     // Drop the task reference.
                     RawTask::<F, R, S>::drop_task(ptr);

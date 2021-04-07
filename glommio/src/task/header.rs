@@ -6,7 +6,11 @@
 use core::{fmt, task::Waker};
 
 use crate::task::{raw::TaskVTable, state::*, utils::abort_on_panic};
-use std::thread::ThreadId;
+
+use crate::sys::SleepNotifier;
+use std::sync::Arc;
+
+use std::sync::atomic::{AtomicI16, Ordering};
 
 /// The header of a task.
 ///
@@ -14,11 +18,13 @@ use std::thread::ThreadId;
 pub(crate) struct Header {
     /// ID of the executor to which task belongs to or in another words by which
     /// task was spawned by
-    pub(crate) thread_id: ThreadId,
+    pub(crate) notifier: Arc<SleepNotifier>,
+
     /// Current state of the task.
-    ///
-    /// Contains flags representing the current state and the reference count.
-    pub(crate) state: usize,
+    pub(crate) state: u8,
+
+    /// Current reference count of the task.
+    pub(crate) references: AtomicI16,
 
     /// The task that is blocked on the `JoinHandle`.
     ///
@@ -57,9 +63,6 @@ impl Header {
         // Take the waker out.
         let waker = self.awaiter.take();
 
-        // Mark the state as not being notified anymore nor containing an awaiter.
-        self.state &= !AWAITER;
-
         if let Some(w) = waker {
             // We need a safeguard against panics because waking can panic.
             abort_on_panic(|| match current {
@@ -78,24 +81,22 @@ impl Header {
     pub(crate) fn register(&mut self, waker: &Waker) {
         // Put the waker into the awaiter field.
         abort_on_panic(|| self.awaiter = Some(waker.clone()));
-
-        self.state |= AWAITER;
     }
 }
 
 impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state;
+        let refcount = self.references.load(Ordering::Relaxed);
 
         f.debug_struct("Header")
-            .field("thread_id", &self.thread_id)
+            .field("thread_id", &self.notifier.id())
             .field("scheduled", &(state & SCHEDULED != 0))
             .field("running", &(state & RUNNING != 0))
             .field("completed", &(state & COMPLETED != 0))
             .field("closed", &(state & CLOSED != 0))
-            .field("awaiter", &(state & AWAITER != 0))
             .field("handle", &(state & HANDLE != 0))
-            .field("ref_count", &(state / REFERENCE))
+            .field("refcount", &refcount)
             .finish()
     }
 }

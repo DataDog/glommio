@@ -5,6 +5,8 @@
 //
 use crate::{iou::sqe::SockAddrStorage, uring_sys};
 use ahash::AHashMap;
+use lockfree::channel::mpsc;
+use log::debug;
 use nix::sys::socket::SockAddr;
 use std::{
     cell::{Cell, RefCell},
@@ -23,6 +25,7 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
+        Mutex,
         RwLock,
     },
     task::Waker,
@@ -250,6 +253,8 @@ pub(crate) struct SleepNotifier {
     id: usize,
     eventfd: std::fs::File,
     memory: Arc<AtomicUsize>,
+    foreign_wakes: Mutex<mpsc::Receiver<Waker>>,
+    waker_sender: mpsc::Sender<Waker>,
 }
 
 lazy_static! {
@@ -275,10 +280,14 @@ pub(crate) fn get_sleep_notifier_for(id: usize) -> Option<Arc<SleepNotifier>> {
 impl SleepNotifier {
     pub(crate) fn new(id: usize) -> io::Result<Arc<Self>> {
         let eventfd = unsafe { std::fs::File::from_raw_fd(create_eventfd()?) };
+        let (waker_sender, foreign_wakes) = mpsc::create();
+
         Ok(Arc::new(Self {
             eventfd,
             id,
             memory: Arc::new(AtomicUsize::new(0)),
+            waker_sender,
+            foreign_wakes: Mutex::new(foreign_wakes),
         }))
     }
 
@@ -294,6 +303,34 @@ impl SleepNotifier {
         match self.memory.load(Ordering::Acquire) {
             0 => None,
             x => Some(x as _),
+        }
+    }
+
+    pub(crate) fn queue_waker(&self, waker: Waker) {
+        // Sender only errors out if the destination disconnected. That
+        // most likely happened because the remote executor already died, in which
+        // case they were no longer interested in this notification. But log.
+        if self.waker_sender.send(waker).is_err() {
+            debug!(
+                "Executor {} cannot send the waker to its destination!",
+                self.id()
+            );
+        }
+
+        if let Some(fd) = self.must_notify() {
+            write_eventfd(fd);
+        }
+    }
+
+    pub(crate) fn get_foreign_notifier(&self) -> Option<Waker> {
+        let mut fw = self.foreign_wakes.try_lock().unwrap();
+
+        match fw.recv() {
+            Ok(x) => Some(x),
+            // possible errors:
+            //  - channel disconnected, so we won't ever have another notification
+            //  - no messages, so the iterator must stop.
+            Err(_) => None,
         }
     }
 

@@ -17,7 +17,11 @@ use crate::task::{header::Header, raw::RawTask, state::*, JoinHandle};
 ///
 /// [`Task`]: struct.Task.html
 /// [`JoinHandle`]: struct.JoinHandle.html
-pub(crate) fn spawn_local<F, R, S>(future: F, schedule: S) -> (Task, JoinHandle<R>)
+pub(crate) fn spawn_local<F, R, S>(
+    executor_id: usize,
+    future: F,
+    schedule: S,
+) -> (Task, JoinHandle<R>)
 where
     F: Future<Output = R>,
     S: Fn(Task),
@@ -25,9 +29,9 @@ where
     // Allocate large futures on the heap.
     let raw_task = if mem::size_of::<F>() >= 2048 {
         let future = alloc::boxed::Box::pin(future);
-        RawTask::<_, R, S>::allocate(future, schedule)
+        RawTask::<_, R, S>::allocate(future, schedule, executor_id)
     } else {
-        RawTask::<_, R, S>::allocate(future, schedule)
+        RawTask::<_, R, S>::allocate(future, schedule, executor_id)
     };
 
     let task = Task { raw_task };
@@ -125,13 +129,10 @@ impl Drop for Task {
             ((*header).vtable.drop_future)(ptr);
 
             // Mark the task as unscheduled.
-            let state = (*header).state;
             (*header).state &= !SCHEDULED;
 
             // Notify the awaiter that the future has been dropped.
-            if state & AWAITER != 0 {
-                (*header).notify(None);
-            }
+            (*header).notify(None);
 
             // Drop the task reference.
             ((*header).vtable.drop_task)(ptr);
