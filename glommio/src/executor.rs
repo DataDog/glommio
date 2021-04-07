@@ -2105,4 +2105,31 @@ mod test {
         ex1.join().unwrap();
         ex2.join().unwrap();
     }
+
+    // The other side won't be alive to get the notification and even worse, we hold
+    // a waker that we notify after the first executor is surely dead. We should
+    // still survive.
+    #[test]
+    fn cross_executor_wake_hold_waker() {
+        let w = Arc::new(Mutex::new(None));
+        let t = w.clone();
+
+        let fut = TestFuture { w };
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let _drop = futures_lite::future::poll_once(fut).await;
+            })
+            .unwrap();
+        ex1.join().unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let w = t.lock().unwrap().clone().unwrap();
+                w.wake_by_ref();
+            })
+            .unwrap();
+
+        ex2.join().unwrap();
+    }
 }
