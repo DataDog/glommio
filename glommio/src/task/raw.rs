@@ -204,36 +204,27 @@ where
 
     /// Wakes a waker.
     unsafe fn wake(ptr: *const ()) {
-        // This is just an optimization. If the schedule function has captured
-        // variables, then we'll do less reference counting if we wake the waker
-        // by reference and then drop it.
-        if mem::size_of::<S>() > 0 {
-            Self::wake_by_ref(ptr);
-            Self::drop_waker_reference(ptr);
+        let raw = Self::from_ptr(ptr);
+        if Self::thread_id() != Some(raw.my_id()) {
+            let notifier = raw.notifier();
+            notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+            Self::decrement_references(&mut *(raw.header as *mut Header));
             return;
         }
-
-        let raw = Self::from_ptr(ptr);
-        assert_eq!(
-            Self::thread_id(),
-            Some(raw.my_id()),
-            "Waker::wake is called outside of working thread. Waker instances can not be moved to \
-             or work with multiple threads"
-        );
 
         let state = (*raw.header).state;
 
         // If the task is completed or closed, it can't be woken up.
         if state & (COMPLETED | CLOSED) != 0 {
             // Drop the waker.
-            Self::drop_waker_reference(ptr);
+            Self::drop_waker(ptr);
             return;
         }
 
         // If the task is already scheduled do nothing.
         if state & SCHEDULED != 0 {
             // Drop the waker.
-            Self::drop_waker_reference(ptr);
+            Self::drop_waker(ptr);
         } else {
             // Mark the task as scheduled.
             (*(raw.header as *mut Header)).state = state | SCHEDULED;
@@ -242,7 +233,7 @@ where
                 Self::schedule(ptr);
             } else {
                 // Drop the waker.
-                Self::drop_waker_reference(ptr);
+                Self::drop_waker(ptr);
             }
         }
     }
@@ -271,8 +262,6 @@ where
             (*(raw.header as *mut Header)).state |= SCHEDULED;
 
             if state & RUNNING == 0 {
-                Self::increment_references(&mut *(raw.header as *mut Header));
-
                 // Schedule the task. There is no need to call `Self::schedule(ptr)`
                 // because the schedule function cannot be destroyed while the waker is
                 // still alive.
@@ -315,11 +304,6 @@ where
     /// that its future gets dropped by the executor.
     #[inline]
     unsafe fn drop_waker(ptr: *const ()) {
-        <RawTask<F, R, S>>::drop_waker_reference(ptr)
-    }
-
-    #[inline]
-    unsafe fn drop_waker_reference(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
         // If we are dropping in a remote executor, just ignore it:
         //  * When we cloned remotely, we have bumped the reference count
@@ -382,34 +366,13 @@ where
     unsafe fn schedule(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
 
-        struct Guard<'a, F, R, S>(&'a RawTask<F, R, S>)
-        where
-            F: Future<Output = R>,
-            S: Fn(Task);
-
-        impl<'a, F, R, S> Drop for Guard<'a, F, R, S>
-        where
-            F: Future<Output = R>,
-            S: Fn(Task),
-        {
-            fn drop(&mut self) {
-                let raw = self.0;
-                let ptr = raw.header as *const ();
-
-                unsafe {
-                    RawTask::<F, R, S>::drop_waker_reference(ptr);
-                }
-            }
-        }
-
         let guard;
         // Calling of schedule functions itself does not increment references,
         // if the schedule function has captured variables, increment references
         // so if task being dropped inside schedule function , function itself
         // will keep valid data till the end of execution.
         if mem::size_of::<S>() > 0 {
-            Self::increment_references(&mut *(raw.header as *mut Header));
-            guard = Some(Guard(&raw));
+            guard = Some(Waker::from_raw(Self::clone_waker(ptr)));
         } else {
             guard = None;
         }
