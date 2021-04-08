@@ -524,15 +524,17 @@ impl DmaStreamReader {
 
     /// Allows access to the buffer that holds the current position with no
     /// extra copy
-    ///
-    /// In order to use this API, one must guarantee that reading the specified
-    /// length may cross into a different buffer.  Users of this API are
+    //_ In order to use this API, one must guarantee that reading the specified
+    /// length may not cross into a different buffer.  Users of this API are
     /// expected to be aware of their buffer size (selectable in the
     /// [`DmaStreamReaderBuilder`]) and act accordingly.
     ///
     /// The buffer is also not released until the returned [`ReadResult`] goes
     /// out of scope. So if you plan to keep this alive for a long time this
     /// is probably the wrong API.
+    ///
+    /// If EOF is hit while reading with this method, the number of bytes in the
+    /// returned buffer will be less than number requested.
     ///
     /// Let's say you want to open a file and check if its header is sane: this
     /// is a good API for that.
