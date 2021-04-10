@@ -3,8 +3,8 @@ async-task,https://github.com/stjepang/async-task,MIT/Apache-2.0,Stjepan Glavina
 async-executor,https://github.com/stjepang/async-executor,MIT/Apache-2.0,Stjepan Glavina
 multitask,https://github.com/stjepang/multitask,MIT/Apache-2.0,Stjepan Glavina
 async-io,https://github.com/stjepang/async-io,MIT/Apache-2.0,Stjepan Glavina
-concurrent-queue,https://crates.io/crates/concurrent-queue,
-futures-lite,https://crates.io/crates/futures-lite, 
+concurrent-queue,https://crates.io/crates/concurrent-queue,MIT/Apache-2.0,
+futures-lite,https://crates.io/crates/futures-lite,MIT/Apache-2.0,
 libc,https://crates.io/crates/libc,MIT/Apache-2.0,The Rust Project Developers
 socket2,https://crates.io/crates/socket2,MIT/Apache-2.0,Alex Crichton
 nix,https://crates.io/crates/nix,MIT,The nix-rust Project Developers
@@ -17,7 +17,7 @@ bitmaps,https://crates.io/crates/bitmaps,MPL-2.0,Bodil Stokke
 rlimit,https://crates.io/crates/rlimit,MIT,Nugine
 lazy-static,https://crates.io/crates/lazy_static,MIT/Apache-2.0,Marvin Löbel
 scopeguard,https://crates.io/crates/scopeguard,MIT/Apache-2.0,bluss
-pin-project-lite:https://crates.io/crates/pin-project-lite,MIT/Apache-2.0,Taiki Endo
-log,https://crates.io/crates/log,MIT/Apache-2.0/The Rust Project Developers
-bounded-spsc-queue:https://github.com/polyfractal/bounded-spsc-queue.git,Apache-2.0,Zachary Tong
+pin-project-lite,https://crates.io/crates/pin-project-lite,MIT/Apache-2.0,Taiki Endo
+log,https://crates.io/crates/log,MIT/Apache-2.0,The Rust Project Developers
+bounded-spsc-queue,https://github.com/polyfractal/bounded-spsc-queue.git,Apache-2.0,Zachary Tong
 smallvec,https://crates.io/crates/smallvec,MIT/Apache-2.0,The Servo Project Developers
