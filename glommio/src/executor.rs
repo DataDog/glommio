@@ -716,11 +716,7 @@ impl LocalExecutorPoolBuilder {
     /// This method is the pool equivalent of [`LocalExecutorBuilder::spawn`].
     ///
     /// The method takes a closure `fut_gen` which will be called on each new
-    /// thread to obtain the [`Future`] to be executed there.  The `fut_gen`
-    /// receives a `usize` as argument which provides a unique id of the
-    /// executors created by this [`LocalExecutorPoolBuilder`].
-    /// However, this id is not guaranteed to unique across different
-    /// invocations of [`LocalExecutorPoolBuilder`].
+    /// thread to obtain the [`Future`] to be executed there.
     ///
     /// # Panics
     ///
@@ -731,10 +727,11 @@ impl LocalExecutorPoolBuilder {
     /// # Example
     ///
     /// ```
-    /// use glommio::LocalExecutorPoolBuilder;
+    /// use glommio::{Local, LocalExecutorPoolBuilder};
     ///
-    /// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|_id| async move {
-    ///     println!("hello");
+    /// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|| async move {
+    ///     let id = Local::id();
+    ///     println!("hello from executor {}", id);
     /// });
     ///
     /// handles.join_all();
@@ -743,7 +740,7 @@ impl LocalExecutorPoolBuilder {
                   `PoolThreadHandles::join_all()` to keep the main thread alive"]
     pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> PoolThreadHandles
     where
-        G: FnOnce(usize) -> F + Clone + Send + 'static,
+        G: FnOnce() -> F + Clone + Send + 'static,
         F: Future<Output = T> + 'static,
     {
         let mut handles = PoolThreadHandles::new();
@@ -758,14 +755,12 @@ impl LocalExecutorPoolBuilder {
                 Ok(n) => n,
                 Err(e) => {
                     // valid notifiers have ids greater than or equal to 1
-                    handles.push((None, Err(e.into())));
+                    handles.push(Err(e.into()));
                     continue;
                 }
             };
 
-            let id = notifier.id();
-            let name = format!("{}-{}", &self.name, id);
-
+            let name = format!("{}-{}", &self.name, notifier.id());
             let handle = Builder::new()
                 .name(name)
                 .spawn({
@@ -784,15 +779,13 @@ impl LocalExecutorPoolBuilder {
                         }
                         le.init();
                         le.run(async move {
-                            // use of the `SleepNotifier` id here is temporary and may change in
-                            // the future
-                            fut_gen(id).await;
+                            fut_gen().await;
                         })
                     }
                 })
                 .map_err(Into::into);
 
-            handles.push((Some(id), handle));
+            handles.push(handle);
         }
 
         handles
@@ -803,7 +796,7 @@ impl LocalExecutorPoolBuilder {
 /// [`LocalExecutorPoolBuilder::on_all_shards`].
 #[derive(Debug)]
 pub struct PoolThreadHandles {
-    handles: Vec<(Option<usize>, Result<JoinHandle<()>>)>,
+    handles: Vec<Result<JoinHandle<()>>>,
 }
 
 impl PoolThreadHandles {
@@ -813,31 +806,26 @@ impl PoolThreadHandles {
         }
     }
 
-    fn push(&mut self, handle: (Option<usize>, Result<JoinHandle<()>>)) {
+    fn push(&mut self, handle: Result<JoinHandle<()>>) {
         self.handles.push(handle)
     }
 
     /// Obtain a reference to the [`JoinHandle`]s created by
     /// [`LocalExecutorPoolBuilder::on_all_shards`].
-    pub fn handles(&self) -> &Vec<(Option<usize>, Result<JoinHandle<()>>)> {
+    pub fn handles(&self) -> &Vec<Result<JoinHandle<()>>> {
         &self.handles
     }
 
-    // TODO: this feels like we want to make a new error type here and return a
-    // `Result<(),Vec<(usize, Result<()>)>>` but wanted to get thoughts
     /// Calls [`JoinHandle::join`] on all handles created by
     /// [`LocalExecutorPoolBuilder::on_all_shards`]
-    pub fn join_all(self) -> Vec<(Option<usize>, Result<()>)> {
+    pub fn join_all(self) -> Vec<Result<()>> {
         self.handles
             .into_iter()
-            .map(|(id, hndl)| {
-                let hndl = match hndl {
-                    Ok(h) => h.join().map_err(|_| {
-                        io::Error::new(io::ErrorKind::Other, "thread panicked").into()
-                    }),
-                    Err(e) => Err(e),
-                };
-                (id, hndl)
+            .map(|hndl| match hndl {
+                Ok(h) => h
+                    .join()
+                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "thread panicked").into()),
+                Err(e) => Err(e),
             })
             .collect::<Vec<_>>()
     }
@@ -2254,22 +2242,16 @@ mod test {
     #[test]
     fn executor_pool_builder() {
         let count = Arc::new(AtomicUsize::new(0));
-        let sum = Arc::new(AtomicUsize::new(0));
-
         let handles = LocalExecutorPoolBuilder::new(4).on_all_shards({
             let count = Arc::clone(&count);
-            let sum = Arc::clone(&sum);
-
-            |id| async move {
+            || async move {
                 count.fetch_add(1, Ordering::Relaxed);
-                sum.fetch_add(id, Ordering::Relaxed);
             }
         });
 
         assert_eq!(4, handles.handles().len());
-        handles.handles().iter().for_each(|(id, hndl)| {
+        handles.handles().iter().for_each(|hndl| {
             assert!(hndl.is_ok());
-            id.unwrap();
         });
 
         handles.join_all();
