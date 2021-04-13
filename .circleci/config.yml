@@ -5,7 +5,7 @@ version: 5
 jobs:
   cargobuild:
     docker:
-      - image: circleci/rust:1.51.0
+      - image: cimg/rust:1.51.0
     steps:
       - checkout
       - run:
@@ -30,7 +30,7 @@ jobs:
 
   cargofmt:
     docker:
-      - image: circleci/rust:1.51.0
+      - image: cimg/rust:1.51.0
     steps:
       - checkout
       - run:
@@ -62,7 +62,7 @@ jobs:
 
   cargodoc:
     docker:
-      - image: circleci/rust:1.51.0
+      - image: cimg/rust:1.51.0
     steps:
       - checkout
       - run:
@@ -94,7 +94,7 @@ jobs:
 
   cargoclippy:
     docker:
-      - image: circleci/rust:1.51.0
+      - image: cimg/rust:1.51.0
     steps:
       - checkout
       - run:

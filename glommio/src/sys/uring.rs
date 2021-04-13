@@ -208,7 +208,7 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
         if probe.is_null() {
             panic!(
                 "Failed to register a probe. The most likely reason is that your kernel witnessed \
-                 Romulus killing Remus (too old!!)"
+                 Romulus killing Remus (too old!! kernel should be at least 5.8)"
             );
         }
 
@@ -1160,6 +1160,10 @@ impl Reactor {
 
     pub(crate) fn id(&self) -> usize {
         self.notifier.id()
+    }
+
+    pub(crate) fn foreign_notifiers(&self) -> Option<core::task::Waker> {
+        self.notifier.get_foreign_notifier()
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {

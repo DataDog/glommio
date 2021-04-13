@@ -11,7 +11,7 @@
 /// This flag can't be set when the task is completed. However, it can be set
 /// while the task is running, in which case it will be rescheduled as soon as
 /// polling finishes.
-pub(crate) const SCHEDULED: usize = 1 << 0;
+pub(crate) const SCHEDULED: u8 = 1 << 0;
 
 /// Set if the task is running.
 ///
@@ -20,7 +20,7 @@ pub(crate) const SCHEDULED: usize = 1 << 0;
 /// This flag can't be set when the task is completed. However, it can be in
 /// scheduled state while it is running, in which case it will be rescheduled as
 /// soon as polling finishes.
-pub(crate) const RUNNING: usize = 1 << 1;
+pub(crate) const RUNNING: u8 = 1 << 1;
 
 /// Set if the task has been completed.
 ///
@@ -29,7 +29,7 @@ pub(crate) const RUNNING: usize = 1 << 1;
 /// `JoinHandle` picks up the output by marking the task as closed.
 ///
 /// This flag can't be set when the task is scheduled or running.
-pub(crate) const COMPLETED: usize = 1 << 2;
+pub(crate) const COMPLETED: u8 = 1 << 2;
 
 /// Set if the task is closed.
 ///
@@ -40,29 +40,11 @@ pub(crate) const COMPLETED: usize = 1 << 2;
 /// `JoinHandle::cancel()`. 2. Its output gets awaited by the `JoinHandle`.
 /// 3. It panics while polling the future.
 /// 4. It is completed and the `JoinHandle` gets dropped.
-pub(crate) const CLOSED: usize = 1 << 3;
+pub(crate) const CLOSED: u8 = 1 << 3;
 
 /// Set if the `JoinHandle` still exists.
 ///
 /// The `JoinHandle` is a special case in that it is only tracked by this flag,
 /// while all other task references (`Task` and `Waker`s) are tracked by the
 /// reference count.
-pub(crate) const HANDLE: usize = 1 << 4;
-
-/// Set if the `JoinHandle` is awaiting the output.
-///
-/// This flag is set while there is a registered awaiter of type `Waker` inside
-/// the task. When the task gets closed or completed, we need to wake the
-/// awaiter. This flag can be used as a fast check that tells us if we need to
-/// wake anyone.
-pub(crate) const AWAITER: usize = 1 << 5;
-
-/// A single reference.
-///
-/// The lower bits in the state contain various flags representing the task
-/// state, while the upper bits contain the reference count. The value of
-/// `REFERENCE` represents a single reference in the total reference count.
-///
-/// Note that the reference counter only tracks the `Task` and `Waker`s. The
-/// `JoinHandle` is tracked separately by the `HANDLE` flag.
-pub(crate) const REFERENCE: usize = 1 << 6;
+pub(crate) const HANDLE: u8 = 1 << 4;

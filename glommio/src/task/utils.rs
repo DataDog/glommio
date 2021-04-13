@@ -8,6 +8,7 @@ use core::{alloc::Layout, mem};
 /// Aborts the process.
 ///
 /// To abort, this function simply panics while panicking.
+#[track_caller]
 pub(crate) fn abort() -> ! {
     struct Panic;
 
@@ -25,6 +26,7 @@ pub(crate) fn abort() -> ! {
 ///
 /// This is useful in unsafe code where we can't recover from panics.
 #[inline]
+#[track_caller]
 pub(crate) fn abort_on_panic<T>(f: impl FnOnce() -> T) -> T {
     struct Bomb;
 

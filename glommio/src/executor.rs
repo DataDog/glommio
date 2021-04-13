@@ -66,6 +66,14 @@ type Result<T> = crate::Result<T, ()>;
 
 scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
+pub(crate) fn executor_id() -> Option<usize> {
+    if LOCAL_EX.is_set() {
+        Some(LOCAL_EX.with(|ex| ex.id))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 /// An opaque handle indicating in which queue a group of tasks will execute.
 /// Tasks in the same group will execute in FIFO order but no guarantee is made
@@ -991,8 +999,9 @@ impl LocalExecutor {
             .or_else(|| self.get_queue(&TaskQueueHandle { index: 0 }))
             .unwrap();
 
+        let id = self.id;
         let ex = tq.borrow().ex.clone();
-        Task(ex.spawn(tq, future))
+        Task(ex.spawn(id, tq, future))
     }
 
     fn spawn_into<T, F>(&self, future: F, handle: TaskQueueHandle) -> Result<Task<T>>
@@ -1003,7 +1012,9 @@ impl LocalExecutor {
             .get_queue(&handle)
             .ok_or_else(|| GlommioError::queue_not_found(handle.index))?;
         let ex = tq.borrow().ex.clone();
-        Ok(Task(ex.spawn(tq, future)))
+        let id = self.id;
+
+        Ok(Task(ex.spawn(id, tq, future)))
     }
 
     fn preempt_timer_duration(&self) -> Duration {
@@ -1636,7 +1647,7 @@ mod test {
     use super::*;
     use crate::{
         enclose,
-        timer::{self, Timer},
+        timer::{self, sleep, Timer},
         Local,
         SharesManager,
     };
@@ -1647,7 +1658,9 @@ mod test {
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
+            Mutex,
         },
+        task::Waker,
     };
 
     #[test]
@@ -2237,6 +2250,175 @@ mod test {
     #[should_panic(expected = "Message!")]
     fn panic_is_not_list() {
         LocalExecutor::default().run(async { panic!("Message!") });
+    }
+
+    struct TestFuture {
+        w: Arc<Mutex<Option<Waker>>>,
+    }
+
+    impl Future for TestFuture {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let mut w = self.w.lock().unwrap();
+            match w.take() {
+                Some(_) => Poll::Ready(()),
+                None => {
+                    *w = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cross_executor_wake_by_ref() {
+        let w = Arc::new(Mutex::new(None));
+        let t = w.clone();
+
+        let fut = TestFuture { w };
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                fut.await;
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                loop {
+                    sleep(Duration::from_secs(1)).await;
+                    let w = t.lock().unwrap();
+                    if let Some(ref x) = *w {
+                        x.wake_by_ref();
+                        return;
+                    }
+                }
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    #[test]
+    fn cross_executor_wake_by_value() {
+        let w = Arc::new(Mutex::new(None));
+        let t = w.clone();
+
+        let fut = TestFuture { w };
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                fut.await;
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                loop {
+                    sleep(Duration::from_secs(1)).await;
+                    let w = t.lock().unwrap();
+                    if let Some(x) = w.clone() {
+                        x.wake();
+                        return;
+                    }
+                }
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    // Wakes up the waker in a remote executor
+    #[test]
+    fn cross_executor_wake_with_join_handle() {
+        let w = Arc::new(Mutex::new(None));
+        let t = w.clone();
+
+        let fut = TestFuture { w };
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let x = Local::local(fut).detach();
+                x.await;
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                loop {
+                    sleep(Duration::from_secs(1)).await;
+                    let w = t.lock().unwrap();
+                    if let Some(x) = w.clone() {
+                        x.wake();
+                        return;
+                    }
+                }
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    // The other side won't be alive to get the notification. We should still
+    // survive.
+    #[test]
+    fn cross_executor_wake_early_drop() {
+        let w = Arc::new(Mutex::new(None));
+        let t = w.clone();
+
+        let fut = TestFuture { w };
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let _drop = futures_lite::future::poll_once(fut).await;
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                loop {
+                    sleep(Duration::from_secs(1)).await;
+                    let w = t.lock().unwrap();
+                    if let Some(ref x) = *w {
+                        x.wake_by_ref();
+                        return;
+                    }
+                }
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
+
+    // The other side won't be alive to get the notification and even worse, we hold
+    // a waker that we notify after the first executor is surely dead. We should
+    // still survive.
+    #[test]
+    fn cross_executor_wake_hold_waker() {
+        let w = Arc::new(Mutex::new(None));
+        let t = w.clone();
+
+        let fut = TestFuture { w };
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let _drop = futures_lite::future::poll_once(fut).await;
+            })
+            .unwrap();
+        ex1.join().unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(|| async move {
+                let w = t.lock().unwrap().clone().unwrap();
+                w.wake_by_ref();
+            })
+            .unwrap();
+
+        ex2.join().unwrap();
     }
 
     #[test]
