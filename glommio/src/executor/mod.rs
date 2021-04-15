@@ -30,6 +30,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 mod multitask;
+mod placement;
 
 use std::{
     cell::RefCell,
@@ -579,56 +580,22 @@ pub enum Placement {
     /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
     /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.
     Unbound,
-    /* MaxSpread,
-     * MaxPack,
+    /// Iterates over `CpuLocation`s in the machine topology with a high degree
+    /// of separation from previous `CpuLocation`s returned by the iterator.
+    /// The order in which items are returned by `MaxSpread` is
+    /// non-deterministic.  If the number of CPUs requested is larger than the
+    /// number of CPUs online, this `Placement` will cycle through
+    /// `CpuLocation`. Each cycle is non-deterministic meaning that
+    /// the order may differ from prior cycles.
+    MaxSpread,
+    /// Iterates over `CpuLocation`s in the machine topology with a
+    /// low degree of separation from previous `CpuLocation`s returned by
+    /// the iterator.  If the number of CPUs requested is larger than the
+    /// number of CPUs online, `Placement::MaxPack` will cycle through
+    /// `CpuLocation`, where each cycle is non-deterministic.
+    MaxPack,
+    /* TODO:
      * Custom, */
-}
-
-/// A description of the CPUs location in the machine topology.
-#[derive(Debug, Clone)]
-struct CpuLocation {
-    /// Holds the cpu id.  This is the most granular field and will
-    /// distinguish among [`hyper-threads`].
-    ///
-    /// [`hyper-threads`]: https://en.wikipedia.org/wiki/Hyper-threading
-    pub cpu: usize,
-    /// Holds the core id on which the `cpu` is located.
-    pub core: usize,
-    /// Holds the package or socket id on which the `cpu` is located.
-    pub package: usize,
-    /// Holds the NUMA node on which the `cpu` is located.
-    pub numa_node: usize,
-}
-
-/// A set of CPUs associated with a [`LocalExecutor`] when created via a
-/// [`LocalExecutorPoolBuilder`].
-#[derive(Clone, Debug)]
-struct CpuSet(Option<Vec<CpuLocation>>);
-
-impl std::ops::Deref for CpuSet {
-    type Target = Option<Vec<CpuLocation>>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-struct CpuSetGenerator {
-    placement: Placement,
-}
-
-impl CpuSetGenerator {
-    fn new(placement: Placement) -> Self {
-        Self { placement }
-    }
-
-    /// A method that generates a [`CpuSet`] according to the provided
-    /// [`Placement`] policy. Sequential calls may generate different sets
-    /// depending on the [`Placement`].
-    fn next(&mut self) -> CpuSet {
-        match self.placement {
-            Placement::Unbound => CpuSet(None),
-        }
-    }
 }
 
 /// A factory to configure and create a pool of [`LocalExecutor`]s
@@ -643,8 +610,6 @@ impl CpuSetGenerator {
 /// The [`LocalExecutorPoolBuilder::on_all_shards`] method will take ownership
 /// of the builder and create a [`PoolThreadHandles`] struct which can be used
 /// to join the executor threads.
-// TODO: decide whether to avoid redundancy with with `LocalExecutorBuilder` by
-// using a shared inner type or a generic type mix-in with a type definition
 #[derive(Debug)]
 pub struct LocalExecutorPoolBuilder {
     /// The number of [`LocalExecutor`]s the builder should attempt to create.
@@ -748,15 +713,28 @@ impl LocalExecutorPoolBuilder {
     ///
     /// handles.join_all();
     /// ```
-    #[must_use = "This spawns executors on multiple threads, so you may need to call \
-                  `PoolThreadHandles::join_all()` to keep the main thread alive"]
+    #[must_use = "This spawns executors on multiple threads; threads may fail to spawn or you may \
+                  need to call `PoolThreadHandles::join_all()` to keep the main thread alive"]
     pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> PoolThreadHandles
     where
         G: FnOnce() -> F + Clone + Send + 'static,
         F: Future<Output = T> + 'static,
     {
         let mut handles = PoolThreadHandles::new();
-        let mut cpu_set_gen = CpuSetGenerator::new(self.placement);
+
+        let mut cpu_set_gen = match placement::CpuSetGenerator::new(self.placement) {
+            Ok(gen) => gen,
+            Err(e) => {
+                for _ in 0..self.nr_shards {
+                    handles.push(Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unable to iterate over machine topology: {}", e),
+                    )
+                    .into()));
+                }
+                return handles;
+            }
+        };
 
         for _ in 0..self.nr_shards {
             // TODO: determine the cpu set based on the `Placement` policy; do we allow
@@ -784,8 +762,8 @@ impl LocalExecutorPoolBuilder {
                     move || {
                         let mut le =
                             LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
-                        if let CpuSet(Some(set)) = cpu_set {
-                            let set = set.into_iter().map(|s| s.cpu);
+                        if let placement::CpuSet(Some(set)) = cpu_set {
+                            let set = set.into_iter().map(|l| l.cpu);
                             le.bind_to_cpu_set(set).unwrap();
                             le.queues.borrow_mut().spin_before_park = spin_before_park;
                         }
@@ -820,6 +798,16 @@ impl PoolThreadHandles {
 
     fn push(&mut self, handle: Result<JoinHandle<()>>) {
         self.handles.push(handle)
+    }
+
+    /// Returns the number of threads that were successfully spawned.
+    pub fn nr_spawn_ok(&self) -> usize {
+        self.handles.iter().filter(|r| r.is_ok()).count()
+    }
+
+    /// Returns the number of threads that failed to spawn.
+    pub fn nr_spawn_err(&self) -> usize {
+        self.handles.iter().filter(|r| r.is_err()).count()
     }
 
     /// Obtain a reference to the [`JoinHandle`]s created by
@@ -1980,6 +1968,7 @@ mod test {
     use futures::join;
     use std::{
         cell::Cell,
+        collections::HashMap,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -2752,21 +2741,81 @@ mod test {
 
     #[test]
     fn executor_pool_builder() {
+        let nr_cpus = 4;
+
         let count = Arc::new(AtomicUsize::new(0));
-        let handles = LocalExecutorPoolBuilder::new(4).on_all_shards({
+        let handles = LocalExecutorPoolBuilder::new(nr_cpus).on_all_shards({
             let count = Arc::clone(&count);
             || async move {
                 count.fetch_add(1, Ordering::Relaxed);
             }
         });
 
-        assert_eq!(4, handles.handles().len());
+        assert_eq!(0, handles.nr_spawn_err());
+        assert_eq!(nr_cpus, handles.nr_spawn_ok());
+
+        assert_eq!(nr_cpus, handles.handles().len());
         handles.handles().iter().for_each(|hndl| {
             assert!(hndl.is_ok());
         });
 
-        handles.join_all();
-        assert_eq!(4, count.load(Ordering::Relaxed));
+        handles
+            .join_all()
+            .into_iter()
+            .for_each(|r| assert!(r.is_ok()));
+        assert_eq!(nr_cpus, count.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn executor_pool_builder_placements() {
+        let nr_cpus = placement::get_machine_topology_unsorted().unwrap().len();
+        assert!(0 < nr_cpus);
+
+        for nn in 0..3 {
+            let nr_execs = nn * nr_cpus;
+            for pp in std::array::IntoIter::new([Placement::MaxPack, Placement::MaxSpread]) {
+                let ids = Arc::new(Mutex::new(HashMap::new()));
+                let cpus = Arc::new(Mutex::new(HashMap::new()));
+
+                let handles = LocalExecutorPoolBuilder::new(nr_execs)
+                    .placement(pp)
+                    .on_all_shards({
+                        let ids = Arc::clone(&ids);
+                        let cpus = Arc::clone(&cpus);
+                        || async move {
+                            ids.lock()
+                                .unwrap()
+                                .entry(Local::id())
+                                .and_modify(|e| *e += 1)
+                                .or_insert(1);
+
+                            let pid = nix::unistd::Pid::from_raw(0);
+                            let cpu = nix::sched::sched_getaffinity(pid).unwrap();
+                            cpus.lock()
+                                .unwrap()
+                                .entry(cpu)
+                                .and_modify(|e| *e += 1)
+                                .or_insert(1);
+                        }
+                    });
+
+                assert_eq!(0, handles.nr_spawn_err());
+                assert_eq!(nr_execs, handles.nr_spawn_ok());
+                handles
+                    .join_all()
+                    .into_iter()
+                    .for_each(|r| assert!(r.is_ok()));
+
+                assert_eq!(nr_execs, ids.lock().unwrap().len());
+                assert_eq!(std::cmp::min(nr_execs, nr_cpus), cpus.lock().unwrap().len());
+
+                ids.lock().unwrap().values().for_each(|v| assert_eq!(*v, 1));
+                cpus.lock()
+                    .unwrap()
+                    .values()
+                    .for_each(|v| assert_eq!(*v, nn));
+            }
+        }
     }
 
     #[test]
