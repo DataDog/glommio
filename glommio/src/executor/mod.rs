@@ -762,8 +762,9 @@ impl LocalExecutorPoolBuilder {
                     move || {
                         let mut le =
                             LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
-                        if let placement::CpuSet(Some(set)) = cpu_set {
-                            let set = set.into_iter().map(|l| l.cpu);
+
+                        if !cpu_set.is_empty() {
+                            let set = cpu_set.map(|l| l.cpu);
                             le.bind_to_cpu_set(set).unwrap();
                             le.queues.borrow_mut().spin_before_park = spin_before_park;
                         }

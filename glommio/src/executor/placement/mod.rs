@@ -76,7 +76,38 @@ pub struct CpuLocation {
 /// A set of CPUs associated with a [`LocalExecutor`] when created via a
 /// [`LocalExecutorPoolBuilder`].
 #[derive(Clone, Debug)]
-pub struct CpuSet(pub(super) Option<Vec<CpuLocation>>);
+pub enum CpuSet {
+    None,
+    Single(Option<CpuLocation>),
+    /* `Multi` variant to be used for `Placement::Custom`
+     * Multi(Vec<CpuLocation>), */
+}
+
+impl CpuSet {
+    pub fn is_empty(&self) -> bool {
+        0 == self.len()
+    }
+}
+
+impl ExactSizeIterator for CpuSet {}
+impl Iterator for CpuSet {
+    type Item = CpuLocation;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::None => None,
+            Self::Single(l) => l.take(),
+            // Self::Multi(v) => v.pop(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Single(None) | Self::None => (0, Some(0)),
+            Self::Single(Some(_)) => (1, Some(1)),
+            // Self::Multi(v) => (v.len(), Some(v.len())),
+        }
+    }
+}
 
 pub enum CpuSetGenerator {
     Unbound,
@@ -99,9 +130,9 @@ impl CpuSetGenerator {
     /// depending on the [`Placement`].
     pub fn next(&mut self) -> CpuSet {
         match self {
-            Self::Unbound => CpuSet(None),
-            Self::MaxSpread(it) => CpuSet(it.next().map(|l| vec![l])),
-            Self::MaxPack(it) => CpuSet(it.next().map(|l| vec![l])),
+            Self::Unbound => CpuSet::None,
+            Self::MaxSpread(it) => CpuSet::Single(it.next()),
+            Self::MaxPack(it) => CpuSet::Single(it.next()),
         }
     }
 }
