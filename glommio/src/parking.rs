@@ -26,7 +26,6 @@
 
 use crate::iou::sqe::SockAddrStorage;
 use ahash::AHashMap;
-use log::error;
 use nix::sys::socket::{MsgFlags, SockAddr};
 use std::{
     cell::{Cell, RefCell},
@@ -112,6 +111,17 @@ impl fmt::Debug for Reactor {
     }
 }
 
+/// Call `Waker::wake()` and log to `error` if panicked.
+macro_rules! wake {
+    ($waker:expr $(,)?) => {
+        use log::error;
+
+        if let Err(x) = panic::catch_unwind(|| $waker.wake()) {
+            error!("Panic while calling waker! {:?}", x);
+        }
+    };
+}
+
 struct Inner {}
 
 impl Inner {
@@ -188,7 +198,7 @@ impl Timers {
 
         let woke = ready.len();
         for (_, waker) in ready {
-            let _ = panic::catch_unwind(|| waker.wake());
+            wake!(waker);
         }
 
         (dur, woke)
@@ -215,16 +225,16 @@ impl SharedChannels {
     fn process_shared_channels(&mut self) -> usize {
         let mut woke = self.connection_wakers.len();
         for waker in self.connection_wakers.drain(..) {
-            let _ = panic::catch_unwind(|| waker.wake());
+            wake!(waker);
         }
 
         let current_wakers = mem::take(&mut self.wakers_map);
         for (id, mut pending) in current_wakers.into_iter() {
             let room = self.check_map.get(&id).unwrap()();
             let room = std::cmp::min(room, pending.len());
-            for w in pending.drain(0..room) {
+            for waker in pending.drain(0..room) {
                 woke += 1;
-                let _ = panic::catch_unwind(|| w.wake());
+                wake!(waker);
             }
             if !pending.is_empty() {
                 self.wakers_map.insert(id, pending);
@@ -602,9 +612,9 @@ impl Reactor {
     fn process_shared_channels(&self) -> usize {
         let mut channels = self.shared_channels.borrow_mut();
         let mut processed = channels.process_shared_channels();
-        while let Some(w) = self.sys.foreign_notifiers() {
+        while let Some(waker) = self.sys.foreign_notifiers() {
             processed += 1;
-            let _ = panic::catch_unwind(|| w.wake());
+            wake!(waker);
         }
         processed
     }

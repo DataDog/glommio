@@ -307,6 +307,7 @@ mod free_list;
 #[allow(dead_code)]
 #[allow(clippy::upper_case_acronyms)]
 mod iou;
+#[macro_use]
 mod parking;
 mod sys;
 pub mod task;

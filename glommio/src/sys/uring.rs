@@ -475,7 +475,7 @@ where
             w.result = Some(transmute_error(result));
             if let Some(waiter) = w.waiter.take() {
                 woke = true;
-                let _ = panic::catch_unwind(|| waiter.wake());
+                wake!(waiter);
             }
         }
         return Some(woke);
