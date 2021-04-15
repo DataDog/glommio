@@ -18,8 +18,10 @@ use std::{
     io,
     io::{Error, ErrorKind},
     os::unix::io::RawFd,
+    panic,
     ptr,
     rc::Rc,
+    sync::Arc,
     task::Waker,
     time::Duration,
 };
@@ -47,7 +49,6 @@ use nix::sys::{
     socket::{MsgFlags, SockAddr, SockFlag},
     stat::Mode as OpenMode,
 };
-use std::sync::Arc;
 
 use crate::uring_sys::IoRingOp;
 
@@ -454,32 +455,30 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
         })
 }
 
-fn process_one_event<F>(
-    cqe: Option<iou::CQE>,
-    try_process: F,
-    wakers: &mut Vec<Waker>,
-) -> Option<()>
+fn process_one_event<F>(cqe: Option<iou::CQE>, try_process: F) -> Option<bool>
 where
     F: FnOnce(&InnerSource) -> Option<()>,
 {
     if let Some(value) = cqe {
         // No user data is POLL_REMOVE or CANCEL, we won't process.
         if value.user_data() == 0 {
-            return Some(());
+            return Some(false);
         }
 
         let src = consume_source(from_user_data(value.user_data()));
 
         let result = value.result();
 
+        let mut woke = false;
         if try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
             w.result = Some(transmute_error(result));
             if let Some(waiter) = w.waiter.take() {
-                wakers.push(waiter);
+                woke = true;
+                let _ = panic::catch_unwind(|| waiter.wake());
             }
         }
-        return Some(());
+        return Some(woke);
     }
     None
 }
@@ -569,7 +568,9 @@ trait UringCommon {
     // and there was something to dispatch. Some(false) if there was nothing to
     // dispatch
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool>;
-    fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()>;
+    /// Return `None` if no event is completed, `Some(true)` for a task is woke
+    /// and `Some(false)` for not.
+    fn consume_one_event(&mut self) -> Option<bool>;
     fn name(&self) -> &'static str;
     fn registrar(&self) -> iou::Registrar<'_>;
 
@@ -610,13 +611,17 @@ trait UringCommon {
         self.consume_sqe_queue(&mut queue.submissions, true)
     }
 
-    fn consume_completion_queue(&mut self, wakers: &mut Vec<Waker>) -> usize {
-        let mut completed: usize = 0;
+    fn consume_completion_queue(&mut self, woke: &mut usize) -> usize {
+        let mut completed = 0;
         loop {
-            if self.consume_one_event(wakers).is_none() {
-                break;
+            match self.consume_one_event() {
+                None => break,
+                Some(false) => completed += 1,
+                Some(true) => {
+                    completed += 1;
+                    *woke += 1;
+                }
             }
-            completed += 1;
         }
         completed
     }
@@ -628,13 +633,13 @@ trait UringCommon {
     // Imagine that you have a write request to fd 3 and wants to cancel it.
     // But before the cancellation is run fd 3 gets closed and another file
     // is opened with the same fd.
-    fn flush_cancellations(&mut self, wakers: &mut Vec<Waker>) {
+    fn flush_cancellations(&mut self, woke: &mut usize) {
         let mut cnt = 0;
         loop {
             if self.consume_cancellation_queue().is_ok() {
                 break;
             }
-            self.consume_completion_queue(wakers);
+            self.consume_completion_queue(woke);
             cnt += 1;
             if cnt > 1_000_000 {
                 panic!(
@@ -643,7 +648,7 @@ trait UringCommon {
                 );
             }
         }
-        self.consume_completion_queue(wakers);
+        self.consume_completion_queue(woke);
     }
 }
 
@@ -712,8 +717,8 @@ impl UringCommon for PollRing {
         }
     }
 
-    fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
-        process_one_event(self.ring.peek_for_cqe(), |_| None, wakers).map(|x| {
+    fn consume_one_event(&mut self) -> Option<bool> {
+        process_one_event(self.ring.peek_for_cqe(), |_| None).map(|x| {
             self.completed += 1;
             x
         })
@@ -984,16 +989,14 @@ impl UringCommon for SleepableRing {
         Ok(x)
     }
 
-    fn consume_one_event(&mut self, wakers: &mut Vec<Waker>) -> Option<()> {
-        process_one_event(
-            self.ring.peek_for_cqe(),
-            |source| match &mut *source.source_type.borrow_mut() {
+    fn consume_one_event(&mut self) -> Option<bool> {
+        process_one_event(self.ring.peek_for_cqe(), |source| {
+            match &mut *source.source_type.borrow_mut() {
                 SourceType::LinkRings => Some(()),
                 SourceType::Timeout(_) => Some(()),
                 _ => None,
-            },
-            wakers,
-        )
+            }
+        })
     }
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
@@ -1062,10 +1065,10 @@ fn read_flags() -> PollFlags {
 }
 
 macro_rules! consume_rings {
-    (into $output:expr; $( $ring:expr ),+ ) => {{
+    (into $woke:expr; $( $ring:expr ),+ ) => {{
         let mut consumed = 0;
         $(
-            consumed += $ring.consume_completion_queue($output);
+            consumed += $ring.consume_completion_queue($woke);
         )*
         consumed
     }}
@@ -1334,22 +1337,22 @@ impl Reactor {
         Ok(())
     }
 
-    fn simple_poll(ring: &RefCell<dyn UringCommon>, wakers: &mut Vec<Waker>) -> io::Result<()> {
+    fn simple_poll(ring: &RefCell<dyn UringCommon>, woke: &mut usize) -> io::Result<()> {
         let mut ring = ring.borrow_mut();
         ring.consume_submission_queue().or_else(Self::busy_ok)?;
-        ring.consume_completion_queue(wakers);
+        ring.consume_completion_queue(woke);
         Ok(())
     }
 
     pub(crate) fn rush_dispatch(
         &self,
         latency: Option<Latency>,
-        wakers: &mut Vec<Waker>,
+        woke: &mut usize,
     ) -> io::Result<()> {
         match latency {
-            None => Self::simple_poll(&self.poll_ring, wakers),
-            Some(Latency::NotImportant) => Self::simple_poll(&self.main_ring, wakers),
-            Some(Latency::Matters(_)) => Self::simple_poll(&self.latency_ring, wakers),
+            None => Self::simple_poll(&self.poll_ring, woke),
+            Some(Latency::NotImportant) => Self::simple_poll(&self.main_ring, woke),
+            Some(Latency::Matters(_)) => Self::simple_poll(&self.latency_ring, woke),
         }
     }
 
@@ -1392,13 +1395,12 @@ impl Reactor {
     //   preempt timer is 10ms that would leave the next task queue just 7ms to run.
     pub(crate) fn wait<F>(
         &self,
-        wakers: &mut Vec<Waker>,
         preempt_timer: Option<Duration>,
         user_timer: Option<Duration>,
         process_remote_channels: F,
     ) -> io::Result<bool>
     where
-        F: Fn(&mut Vec<Waker>) -> usize,
+        F: Fn() -> usize,
     {
         let mut poll_ring = self.poll_ring.borrow_mut();
         let mut main_ring = self.main_ring.borrow_mut();
@@ -1419,16 +1421,18 @@ impl Reactor {
             }
         };
 
+        let mut woke = 0;
+
         // this will only dispatch if we run out of sqes. Which means until
         // flush_rings! nothing is really send to the kernel...
-        flush_cancellations!(into wakers; main_ring, lat_ring, poll_ring);
+        flush_cancellations!(into &mut woke; main_ring, lat_ring, poll_ring);
         // ... which happens right here. If you ever reorder this code just
         // be careful about this dependency.
         flush_rings!(main_ring, lat_ring, poll_ring)?;
-        consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
+        consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
-        should_sleep &= wakers.is_empty() & poll_ring.can_sleep();
+        should_sleep &= (woke == 0) & poll_ring.can_sleep();
 
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
@@ -1446,15 +1450,15 @@ impl Reactor {
             // details. This translates to sys_membarrier() /
             // MEMBARRIER_CMD_PRIVATE_EXPEDITED
             membarrier::heavy();
-            if process_remote_channels(wakers) == 0 {
+            if process_remote_channels() == 0 {
                 self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)
                     .expect("some error");
                 // woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
                 // may have new cancellations related to the link ring fd.
-                flush_cancellations!(into wakers; main_ring);
+                flush_cancellations!(into &mut 0; main_ring);
                 flush_rings!(main_ring)?;
-                consume_rings!(into wakers; lat_ring, poll_ring, main_ring);
+                consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
             }
         }
 
@@ -1577,15 +1581,13 @@ mod tests {
         reactor.queue_standard_request(&lethargic, op);
 
         let start = Instant::now();
-        let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None, None, |_| 0).unwrap();
+        reactor.wait(None, None, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(50 <= elapsed_ms && elapsed_ms < 100);
 
         drop(slow); // Cancel this one.
 
-        let mut wakers = Vec::new();
-        reactor.wait(&mut wakers, None, None, |_| 0).unwrap();
+        reactor.wait(None, None, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(300 <= elapsed_ms && elapsed_ms < 350);
     }
@@ -1671,14 +1673,12 @@ mod tests {
         // the first nop is unlinked, so we're only expecting one SQE
         ring.submit_one_event(&mut queue.submissions);
         assert_eq!(1, ring.submit_sqes().unwrap());
-        let mut wakers = Vec::new();
-        assert_eq!(1, ring.consume_completion_queue(&mut wakers));
+        assert_eq!(1, ring.consume_completion_queue(&mut 0));
 
         // the following nops are linked, so we expect two submissions and completions
         ring.submit_one_event(&mut queue.submissions);
         assert_eq!(2, ring.submit_sqes().unwrap());
-        let mut wakers = Vec::new();
-        assert_eq!(2, ring.consume_completion_queue(&mut wakers));
+        assert_eq!(2, ring.consume_completion_queue(&mut 0));
     }
 
     #[test]
