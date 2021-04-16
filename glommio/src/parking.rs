@@ -111,17 +111,6 @@ impl fmt::Debug for Reactor {
     }
 }
 
-/// Call `Waker::wake()` and log to `error` if panicked.
-macro_rules! wake {
-    ($waker:expr $(,)?) => {
-        use log::error;
-
-        if let Err(x) = panic::catch_unwind(|| $waker.wake()) {
-            error!("Panic while calling waker! {:?}", x);
-        }
-    };
-}
-
 struct Inner {}
 
 impl Inner {

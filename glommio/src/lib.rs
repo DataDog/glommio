@@ -301,13 +301,23 @@ extern crate scopeguard;
 use crate::parking::Reactor;
 use std::{fmt::Debug, time::Duration};
 
+/// Call `Waker::wake()` and log to `error` if panicked.
+macro_rules! wake {
+    ($waker:expr $(,)?) => {
+        use log::error;
+
+        if let Err(x) = panic::catch_unwind(|| $waker.wake()) {
+            error!("Panic while calling waker! {:?}", x);
+        }
+    };
+}
+
 mod free_list;
 
 #[allow(clippy::redundant_slicing)]
 #[allow(dead_code)]
 #[allow(clippy::upper_case_acronyms)]
 mod iou;
-#[macro_use]
 mod parking;
 mod sys;
 pub mod task;
