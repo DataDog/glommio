@@ -641,21 +641,21 @@ impl Reactor {
         Ok(woke > 0)
     }
 
-    fn process_external_events(&self) -> Option<Duration> {
-        let next_timer = self.process_timers().0;
-        self.process_shared_channels();
-        next_timer
+    fn process_external_events(&self) -> (Option<Duration>, usize) {
+        let (next_timer, mut woke) = self.process_timers();
+        woke += self.process_shared_channels();
+        (next_timer, woke)
     }
 
     /// Processes new events, blocking until the first event or the timeout.
     fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
         // Process ready timers.
-        let next_timer = self.process_external_events();
+        let (next_timer, woke) = self.process_external_events();
 
         // Block on I/O events.
         match self
             .sys
-            .wait(timeout, next_timer, || self.process_shared_channels())
+            .wait(timeout, next_timer, woke, || self.process_shared_channels())
         {
             // Don't wait for the next loop to process timers or shared channels
             Ok(true) => {

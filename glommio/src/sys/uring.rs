@@ -1397,6 +1397,7 @@ impl Reactor {
         &self,
         preempt_timer: Option<Duration>,
         user_timer: Option<Duration>,
+        mut woke: usize,
         process_remote_channels: F,
     ) -> io::Result<bool>
     where
@@ -1420,8 +1421,6 @@ impl Reactor {
                 false
             }
         };
-
-        let mut woke = 0;
 
         // this will only dispatch if we run out of sqes. Which means until
         // flush_rings! nothing is really send to the kernel...
@@ -1581,13 +1580,13 @@ mod tests {
         reactor.queue_standard_request(&lethargic, op);
 
         let start = Instant::now();
-        reactor.wait(None, None, || 0).unwrap();
+        reactor.wait(None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(50 <= elapsed_ms && elapsed_ms < 100);
 
         drop(slow); // Cancel this one.
 
-        reactor.wait(None, None, || 0).unwrap();
+        reactor.wait(None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!(300 <= elapsed_ms && elapsed_ms < 350);
     }
