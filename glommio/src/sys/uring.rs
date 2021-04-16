@@ -989,7 +989,6 @@ impl UringCommon for SleepableRing {
             self.ring.peek_for_cqe(),
             |source| match &mut *source.source_type.borrow_mut() {
                 SourceType::LinkRings => Some(()),
-                SourceType::Timeout(_) => Some(()),
                 _ => None,
             },
             wakers,
