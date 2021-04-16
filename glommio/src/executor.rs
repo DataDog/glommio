@@ -52,6 +52,7 @@ use crate::{
     task::{self, waker_fn::waker_fn},
     GlommioError,
     IoRequirements,
+    IoStats,
     Latency,
     Reactor,
     Shares,
@@ -1599,6 +1600,28 @@ impl<T> Task<T> {
     /// [`ExecutorStats`]: struct.ExecutorStats.html
     pub fn executor_stats() -> ExecutorStats {
         LOCAL_EX.with(|local_ex| local_ex.queues.borrow().stats)
+    }
+
+    /// Returns an [`IoStats`] struct with information about IO performed by
+    /// this executor's reactor
+    ///
+    /// # Examples:
+    ///
+    /// ```
+    /// use glommio::{Local, LocalExecutorBuilder};
+    ///
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         println!("Stats for executor: {:?}", Local::io_stats());
+    ///     })
+    ///     .unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`IoStats`]: crate::IoStats
+    pub fn io_stats() -> IoStats {
+        LOCAL_EX.with(|local_ex| local_ex.get_reactor().io_stats())
     }
 
     /// Cancels the task and waits for it to stop running.
