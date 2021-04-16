@@ -26,7 +26,6 @@
 
 use crate::iou::sqe::SockAddrStorage;
 use ahash::AHashMap;
-use log::error;
 use nix::sys::socket::{MsgFlags, SockAddr};
 use std::{
     cell::{Cell, RefCell},
@@ -165,7 +164,9 @@ impl Timers {
         self.timers.insert((when, id), waker);
     }
 
-    fn process_timers(&mut self, wakers: &mut Vec<Waker>) -> Option<Duration> {
+    /// Return the duration until next event and the number of
+    /// ready and woke timers.
+    fn process_timers(&mut self) -> (Option<Duration>, usize) {
         let now = Instant::now();
 
         // Split timers into ready and pending timers.
@@ -183,12 +184,13 @@ impl Timers {
             // Timers are about to fire right now.
             Some(Duration::from_secs(0))
         };
-        // Add wakers to the list.
+
+        let woke = ready.len();
         for (_, waker) in ready {
-            wakers.push(waker);
+            wake!(waker);
         }
 
-        dur
+        (dur, woke)
     }
 }
 
@@ -209,23 +211,25 @@ impl SharedChannels {
         }
     }
 
-    fn process_shared_channels(&mut self, wakers: &mut Vec<Waker>) -> usize {
-        let mut added = self.connection_wakers.len();
-        wakers.append(&mut self.connection_wakers);
+    fn process_shared_channels(&mut self) -> usize {
+        let mut woke = self.connection_wakers.len();
+        for waker in self.connection_wakers.drain(..) {
+            wake!(waker);
+        }
 
         let current_wakers = mem::take(&mut self.wakers_map);
         for (id, mut pending) in current_wakers.into_iter() {
             let room = self.check_map.get(&id).unwrap()();
             let room = std::cmp::min(room, pending.len());
-            for w in pending.drain(0..room) {
-                added += 1;
-                wakers.push(w);
+            for waker in pending.drain(0..room) {
+                woke += 1;
+                wake!(waker);
             }
             if !pending.is_empty() {
                 self.wakers_map.insert(id, pending);
             }
         }
-        added
+        woke
     }
 }
 
@@ -247,8 +251,6 @@ pub(crate) struct Reactor {
 
     /// I/O Requirements of the task currently executing.
     current_io_requirements: Cell<IoRequirements>,
-
-    wakers: RefCell<Vec<Waker>>,
 
     /// Whether there are events in the latency ring.
     ///
@@ -274,7 +276,6 @@ impl Reactor {
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
             current_io_requirements: Cell::new(IoRequirements::default()),
-            wakers: RefCell::new(Vec::with_capacity(256)),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
         }
@@ -592,30 +593,23 @@ impl Reactor {
     /// Processes ready timers and extends the list of wakers to wake.
     ///
     /// Returns the duration until the next timer before this method was called.
-    fn process_timers(&self, wakers: &mut Vec<Waker>) -> Option<Duration> {
+    fn process_timers(&self) -> (Option<Duration>, usize) {
         let mut timers = self.timers.borrow_mut();
-        timers.process_timers(wakers)
+        timers.process_timers()
     }
 
-    fn process_shared_channels(&self, wakers: &mut Vec<Waker>) -> usize {
+    fn process_shared_channels(&self) -> usize {
         let mut channels = self.shared_channels.borrow_mut();
-        let mut processed = channels.process_shared_channels(wakers);
-        while let Some(w) = self.sys.foreign_notifiers() {
+        let mut processed = channels.process_shared_channels();
+        while let Some(waker) = self.sys.foreign_notifiers() {
             processed += 1;
-            wakers.push(w)
+            wake!(waker);
         }
         processed
     }
 
     fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
-        let mut wakers = self.wakers.borrow_mut();
-        self.sys
-            .rush_dispatch(Some(source.latency_req()), &mut wakers)?;
-        // Wake up ready tasks.
-        for waker in wakers.drain(..) {
-            // Don't let a panicking waker blow everything up.
-            let _ = panic::catch_unwind(|| waker.wake());
-        }
+        self.sys.rush_dispatch(Some(source.latency_req()), &mut 0)?;
         Ok(())
     }
 
@@ -623,47 +617,38 @@ impl Reactor {
     ///
     /// This doesn't ever sleep, and does not touch the preempt timer.
     pub(crate) fn spin_poll_io(&self) -> io::Result<bool> {
-        let mut wakers = self.wakers.borrow_mut();
+        let mut woke = 0;
         // any duration, just so we land in the latency ring
         self.sys
-            .rush_dispatch(Some(Latency::Matters(Duration::from_secs(1))), &mut wakers)?;
+            .rush_dispatch(Some(Latency::Matters(Duration::from_secs(1))), &mut woke)?;
         self.sys
-            .rush_dispatch(Some(Latency::NotImportant), &mut wakers)?;
-        self.sys.rush_dispatch(None, &mut wakers)?;
-        self.process_timers(&mut wakers);
-        self.process_shared_channels(&mut wakers);
+            .rush_dispatch(Some(Latency::NotImportant), &mut woke)?;
+        self.sys.rush_dispatch(None, &mut woke)?;
+        woke += self.process_timers().1;
+        woke += self.process_shared_channels();
 
-        let woke = wakers.len();
-        for waker in wakers.drain(..) {
-            // Don't let a panicking waker blow everything up.
-            let _ = panic::catch_unwind(|| waker.wake());
-        }
         Ok(woke > 0)
     }
 
-    fn process_external_events(&self, wakers: &mut Vec<Waker>) -> Option<Duration> {
-        let next_timer = self.process_timers(wakers);
-        self.process_shared_channels(wakers);
-        next_timer
+    fn process_external_events(&self) -> (Option<Duration>, usize) {
+        let (next_timer, mut woke) = self.process_timers();
+        woke += self.process_shared_channels();
+        (next_timer, woke)
     }
 
     /// Processes new events, blocking until the first event or the timeout.
     fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
-        // FIXME: use shrink_to here to bring the capacity back to
-        // its normal level. It is not stable API yet and this is unlikely
-        // to be a problem in practice.
-        let mut wakers = self.wakers.borrow_mut();
-
         // Process ready timers.
-        let next_timer = self.process_external_events(&mut wakers);
+        let (next_timer, woke) = self.process_external_events();
 
         // Block on I/O events.
-        let res = match self.sys.wait(&mut wakers, timeout, next_timer, |wakers| {
-            self.process_shared_channels(wakers)
-        }) {
+        match self
+            .sys
+            .wait(timeout, next_timer, woke, || self.process_shared_channels())
+        {
             // Don't wait for the next loop to process timers or shared channels
             Ok(true) => {
-                self.process_external_events(&mut wakers);
+                self.process_external_events();
                 Ok(())
             }
 
@@ -674,17 +659,7 @@ impl Reactor {
 
             // An actual error occureed.
             Err(err) => Err(err),
-        };
-
-        // Wake up ready tasks.
-        for waker in wakers.drain(..) {
-            // Don't let a panicking waker blow everything up.
-            if let Err(x) = panic::catch_unwind(|| waker.wake()) {
-                error!("Panic while calling waker! {:?}", x);
-            }
         }
-
-        res
     }
 }
 
