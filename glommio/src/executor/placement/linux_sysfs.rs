@@ -85,7 +85,7 @@ fn get_core_id(
     }
 }
 
-/// Implements and [`Iterator`] over lists of unsigned values commonly
+/// Implements an [`Iterator`] over lists of unsigned values commonly
 /// encountered in `sysfs`.  A list with the format "0,1,4-6" would iterate over
 /// values 0,1,4,5,6.  The resulting [`Iterator::Item`] is an
 /// Option<Result<usize>>, where Some(Err(...)) is returned if unexpected
@@ -97,8 +97,9 @@ fn get_core_id(
 ///
 /// The input string has the following characteristics:
 /// * ASCII string terminated with a `\0` or `\n`
-/// * Ranges are separated by commas and whitespaces
-/// * Repeat range delimiters are allowed (e.g. `,,1,,4-6,,       ,,\0` is ok)
+/// * Ranges are separated by commas and whitespaces (see definition of
+///   whitespaces in `ListIterator::skip_delim`)
+/// * Repeat range delimiters are allowed (e.g. `,,1,,4-6,, \n\n  ,,\0` is ok)
 /// * If the range has a `used_size` then a `group_size` is required
 ///
 /// For additional details see:

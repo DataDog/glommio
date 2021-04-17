@@ -598,18 +598,33 @@ pub enum Placement {
      * Custom, */
 }
 
-/// A factory to configure and create a pool of [`LocalExecutor`]s
+/// The default is `Placement::Unbound`
+impl Default for Placement {
+    fn default() -> Self {
+        Self::Unbound
+    }
+}
+
+/// A factory to configure and create a pool of [`LocalExecutor`]s.
 ///
-/// The `LocalExecutorPoolBuilder` allows creating a pool of [`LocalExecutor`]s,
-/// which can be used in order to configure the properties of the
-/// [`LocalExecutor`]s. Configuration methods apply their settings to all
-/// [`LocalExecutor`]s in the pool unless otherwise specified.
+/// Configuration methods apply their settings to all [`LocalExecutor`]s in the
+/// pool unless otherwise specified.  Methods can be chained on the builder in
+/// order to configure it.  The [`Self::on_all_shards`] method will take
+/// ownership of the builder and create a [`PoolThreadHandles`] struct which can
+/// be used to join the executor threads.
 ///
-/// Methods can be chained on the builder in order to configure it.
+/// # Example
 ///
-/// The [`LocalExecutorPoolBuilder::on_all_shards`] method will take ownership
-/// of the builder and create a [`PoolThreadHandles`] struct which can be used
-/// to join the executor threads.
+/// ```
+/// use glommio::{Local, LocalExecutorPoolBuilder};
+///
+/// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|| async move {
+///     let id = Local::id();
+///     println!("hello from executor {}", id);
+/// });
+///
+/// handles.join_all();
+/// ```
 #[derive(Debug)]
 pub struct LocalExecutorPoolBuilder {
     /// The number of [`LocalExecutor`]s the builder should attempt to create.
@@ -700,19 +715,6 @@ impl LocalExecutorPoolBuilder {
     /// The newly spawned thread panics if creating the executor fails. If you
     /// need more fine-grained error handling consider initializing those
     /// entities manually.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use glommio::{Local, LocalExecutorPoolBuilder};
-    ///
-    /// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|| async move {
-    ///     let id = Local::id();
-    ///     println!("hello from executor {}", id);
-    /// });
-    ///
-    /// handles.join_all();
-    /// ```
     #[must_use = "This spawns executors on multiple threads; threads may fail to spawn or you may \
                   need to call `PoolThreadHandles::join_all()` to keep the main thread alive"]
     pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> PoolThreadHandles

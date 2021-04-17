@@ -9,7 +9,7 @@
 //! `Cpu`.  It further provides iterators over the CPUs that are currently
 //! online in the system.
 //!
-//! The implementation represents the topology as tree, which can be used to
+//! The implementation represents the topology as a tree, which can be used to
 //! select CPUs that have a low or high degree of separation from other
 //! previously selected CPUs.
 //!
@@ -22,14 +22,15 @@
 //! For `MaxPack`, `Node`s are selected based on the following decisions (see
 //! `Node::priority_pack`:
 //! 1) if a `Node` is partially saturated (i.e. currently being filled by the
-//! packing iterator such    that some CPUs have been selected and others have
-//! not), then it takes priority 2) if the `Node` is not partially saturated,
-//! then it is either equally saturated with the other    `Node`s at its `Level`
-//! or one `Node` has a greater saturation than the other:    a) if `Node`s are
-//! equally saturated, use the `Node` with the greater number of total slots
-//!    (i.e.  CPUs that are online)
-//!    b) if `Node`s are not equally saturated, use the node with lower
-//! saturation
+//!    packing iterator such that some CPUs have been selected and others have
+//!    not), then it takes priority
+//! 2) if the `Node` is not partially saturated, then it is either equally
+//!    saturated with the other `Node`s at its `Level` or one `Node` has a
+//!    greater saturation than the other:
+//!     a) if `Node`s are equally saturated, use the `Node` with the greater
+//!     number of total slots (i.e. greater number of CPUs that are online)
+//!     b) if `Node`s are not equally saturated, use the node with lower
+//!     saturation
 //!
 //! `Node:::select_cpu` is used to recursively proceed through levels in the
 //! tree until a `Cpu` is selected.  The `Nodes` which were traversed in
@@ -44,6 +45,7 @@
 //! https://www.kernel.org/doc/html/latest/vm/numa.html
 //! https://www.kernel.org/doc/html/latest/core-api/cpu_hotplug.html
 
+#[cfg(target_os = "linux")]
 mod linux_sysfs;
 mod pq_tree;
 
@@ -76,7 +78,7 @@ pub struct CpuLocation {
 /// A set of CPUs associated with a [`LocalExecutor`] when created via a
 /// [`LocalExecutorPoolBuilder`].
 #[derive(Clone, Debug)]
-pub enum CpuSet {
+pub(crate) enum CpuSet {
     None,
     Single(Option<CpuLocation>),
     /* `Multi` variant to be used for `Placement::Custom`
@@ -109,7 +111,7 @@ impl Iterator for CpuSet {
     }
 }
 
-pub enum CpuSetGenerator {
+pub(crate) enum CpuSetGenerator {
     Unbound,
     MaxSpread(MaxSpreader),
     MaxPack(MaxPacker),
@@ -151,7 +153,7 @@ type MaxSpreader = TopologyIter<Spread>;
 /// will cycle through [`CpuLocation`] non-deterministically.
 type MaxPacker = TopologyIter<Pack>;
 
-pub struct TopologyIter<T> {
+pub(crate) struct TopologyIter<T> {
     tree: Node<T>,
 }
 
@@ -194,7 +196,7 @@ where
                     2 => Level::NumaNode(cpu_loc.numa_node),
                     3 => Level::Core(cpu_loc.core),
                     4 => Level::Cpu(cpu_loc.cpu),
-                    _ => panic!("unexpected tree level: {}", depth),
+                    _ => unreachable!("unexpected tree level: {}", depth),
                 }
             }
         } else {
@@ -206,7 +208,7 @@ where
                     2 => Level::Package(cpu_loc.package),
                     3 => Level::Core(cpu_loc.core),
                     4 => Level::Cpu(cpu_loc.cpu),
-                    _ => panic!("unexpected tree level: {}", depth),
+                    _ => unreachable!("unexpected tree level: {}", depth),
                 }
             }
         };
