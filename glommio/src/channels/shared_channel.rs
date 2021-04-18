@@ -393,13 +393,25 @@ impl<T: Send + Sized> ConnectedReceiver<T> {
     }
 
     fn recv_one(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        self.do_recv_one(cx, false)
+    }
+
+    fn do_recv_one(&self, cx: &mut Context<'_>, disconnected: bool) -> Poll<Option<T>> {
         match self.state.buffer.try_pop() {
-            None if !self.state.buffer.producer_disconnected() => {
-                self.reactor
-                    .upgrade()
-                    .unwrap()
-                    .add_shared_channel_waker(self.id, cx.waker().clone());
-                Poll::Pending
+            None => {
+                if disconnected {
+                    Poll::Ready(None)
+                } else if self.state.buffer.producer_disconnected() {
+                    // Double check in case the producer sent the last message and
+                    // disconnected right after a `None` is returned from `try_pop`
+                    self.do_recv_one(cx, true)
+                } else {
+                    self.reactor
+                        .upgrade()
+                        .unwrap()
+                        .add_shared_channel_waker(self.id, cx.waker().clone());
+                    Poll::Pending
+                }
             }
             res => {
                 if let Some(fd) = self.notifier.must_notify() {
