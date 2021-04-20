@@ -64,6 +64,7 @@ use crate::{
     IoStats,
     Latency,
     Local,
+    TaskQueueHandle,
 };
 
 /// Waits for a notification.
@@ -293,6 +294,10 @@ impl Reactor {
 
     pub(crate) fn io_stats(&self) -> IoStats {
         self.sys.io_stats()
+    }
+
+    pub(crate) fn task_queue_io_stats(&self, handle: &TaskQueueHandle) -> Option<IoStats> {
+        self.sys.task_queue_io_stats(handle)
     }
 
     #[inline(always)]

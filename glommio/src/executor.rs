@@ -1624,6 +1624,37 @@ impl<T> Task<T> {
         LOCAL_EX.with(|local_ex| local_ex.get_reactor().io_stats())
     }
 
+    /// Returns an [`IoStats`] struct with information about IO performed from
+    /// the provided TaskQueue by this executor's reactor
+    ///
+    /// # Examples:
+    ///
+    /// ```
+    /// use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
+    ///
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         println!(
+    ///             "Stats for executor: {:?}",
+    ///             Local::task_queue_io_stats(new_tq)
+    ///         );
+    ///     })
+    ///     .unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`IoStats`]: crate::IoStats
+    pub fn task_queue_io_stats(handle: TaskQueueHandle) -> Result<IoStats> {
+        LOCAL_EX.with(
+            |local_ex| match local_ex.get_reactor().task_queue_io_stats(&handle) {
+                Some(x) => Ok(x),
+                None => Err(GlommioError::queue_not_found(handle.index)),
+            },
+        )
+    }
+
     /// Cancels the task and waits for it to stop running.
     ///
     /// Returns the task's output if it was completed just before it got

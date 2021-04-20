@@ -506,6 +506,8 @@ pub struct InnerSource {
     enqueued: Cell<Option<EnqueuedSource>>,
 
     stats_collection: Option<StatsCollectionFn>,
+
+    task_queue: Option<TaskQueueHandle>,
 }
 
 pub struct EnqueuedSource {
@@ -536,6 +538,7 @@ impl Source {
         raw: RawFd,
         source_type: SourceType,
         stats_collection_fn: Option<StatsCollectionFn>,
+        task_queue: Option<TaskQueueHandle>,
     ) -> Source {
         Source {
             inner: Rc::new(InnerSource {
@@ -546,6 +549,7 @@ impl Source {
                 enqueued: Cell::new(None),
                 timeout: RefCell::new(None),
                 stats_collection: stats_collection_fn,
+                task_queue,
             }),
         }
     }

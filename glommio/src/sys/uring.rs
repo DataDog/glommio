@@ -665,6 +665,7 @@ struct PollRing {
     completed: u64,
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
+    task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
 }
 
 impl PollRing {
@@ -682,6 +683,7 @@ impl PollRing {
             submission_queue: UringQueueState::with_capacity(size * 4),
             allocator,
             stats: RingIoStats::new(),
+            task_queue_stats: AHashMap::new(),
         })
     }
 
@@ -731,6 +733,16 @@ impl UringCommon for PollRing {
             |src, res| {
                 if let Some(stats_collection) = src.stats_collection {
                     stats_collection(&res, &mut self.stats);
+                    if let Some(handle) = src.task_queue {
+                        self.task_queue_stats
+                            .entry(handle)
+                            .and_modify(|stats| stats_collection(&res, stats))
+                            .or_insert_with(|| {
+                                let mut stats: RingIoStats = Default::default();
+                                stats_collection(&res, &mut stats);
+                                stats
+                            });
+                    }
                 }
                 res
             },
@@ -872,6 +884,7 @@ struct SleepableRing {
     name: &'static str,
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
+    task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
 }
 
 impl SleepableRing {
@@ -889,6 +902,7 @@ impl SleepableRing {
             name,
             allocator,
             stats: RingIoStats::new(),
+            task_queue_stats: AHashMap::new(),
         })
     }
 
@@ -901,6 +915,7 @@ impl SleepableRing {
             IoRequirements::default(),
             -1,
             SourceType::Timeout(TimeSpec64::from(d)),
+            None,
             None,
         );
         let new_id = add_source(&source, self.submission_queue.clone());
@@ -1019,6 +1034,16 @@ impl UringCommon for SleepableRing {
             |src, res| {
                 if let Some(stats_collection) = src.stats_collection {
                     stats_collection(&res, &mut self.stats);
+                    if let Some(handle) = src.task_queue {
+                        self.task_queue_stats
+                            .entry(handle)
+                            .and_modify(|stats| stats_collection(&res, stats))
+                            .or_insert_with(|| {
+                                let mut stats: RingIoStats = Default::default();
+                                stats_collection(&res, &mut stats);
+                                stats
+                            });
+                    }
                 }
                 res
             },
@@ -1173,6 +1198,7 @@ impl Reactor {
             IoRequirements::default(),
             notifier.eventfd_fd(),
             SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
+            None,
             None,
         );
         assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
@@ -1358,6 +1384,7 @@ impl Reactor {
             IoRequirements::default(),
             self.link_fd,
             SourceType::LinkRings,
+            None,
             None,
         );
         ring.sleep(&mut link_rings, eventfd_src)
@@ -1545,6 +1572,22 @@ impl Reactor {
             self.poll_ring.borrow().stats,
         )
     }
+
+    pub(crate) fn task_queue_io_stats(&self, h: &TaskQueueHandle) -> Option<IoStats> {
+        let main = self.main_ring.borrow().task_queue_stats.get(h).copied();
+        let lat = self.latency_ring.borrow().task_queue_stats.get(h).copied();
+        let poll = self.poll_ring.borrow().task_queue_stats.get(h).copied();
+
+        if let (None, None, None) = (main, lat, poll) {
+            None
+        } else {
+            Some(IoStats::new(
+                main.unwrap_or_default(),
+                lat.unwrap_or_default(),
+                poll.unwrap_or_default(),
+            ))
+        }
+    }
 }
 
 fn queue_request_into_ring(
@@ -1598,6 +1641,7 @@ mod tests {
                 IoRequirements::default(),
                 -1,
                 SourceType::Timeout(TimeSpec64::from(Duration::from_millis(millis))),
+                None,
                 None,
             );
             let op = match &*source.source_type() {
