@@ -361,7 +361,8 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{test_utils::*, ByteSliceMutExt, Local};
+    use crate::{test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
+    use futures::join;
 
     #[cfg(test)]
     pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
@@ -547,6 +548,12 @@ pub(crate) mod test {
         }
 
         new_file.close().await.expect("failed to close file");
+
+        let stats = Local::io_stats();
+        assert_eq!(stats.all_rings().files_opened(), 2);
+        assert_eq!(stats.all_rings().files_closed(), 2);
+        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
+        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
     });
 
     dma_file_test!(file_invalid_readonly_write, path, _k, {
@@ -573,6 +580,7 @@ pub(crate) mod test {
             .await
             .expect_err("pre allocating read-only files should fail");
         new_file.close().await.expect("failed to close file");
+        assert_eq!(Local::io_stats().all_rings().file_writes(), (0, 0));
     });
 
     dma_file_test!(file_empty_read, path, _k, {
@@ -584,6 +592,11 @@ pub(crate) mod test {
         let buf = new_file.read_at(0, 512).await.expect("failed to read");
         std::assert_eq!(buf.len(), 0);
         new_file.close().await.expect("failed to close file");
+
+        let stats = Local::io_stats();
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads(), (1, 0));
     });
 
     // Futures not polled. Should be in the submission queue
@@ -607,6 +620,12 @@ pub(crate) mod test {
         let _ = futures::poll!(&mut all);
         drop(all);
         file.close().await.unwrap();
+
+        let stats = Local::io_stats();
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads(), (0, 0));
+        assert_eq!(stats.all_rings().file_writes(), (0, 0));
     });
 
     // Futures polled. Should be a mixture of in the ring and in the in the
