@@ -124,7 +124,7 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
     /// closed.
     ///
     /// [`GlommioError::Closed`]: crate::GlommioError::Closed
-    pub async fn send(&mut self, message: T) -> Result<(), T> {
+    pub async fn send(&self, message: T) -> Result<(), T> {
         self.shard.send(message).await
     }
 
