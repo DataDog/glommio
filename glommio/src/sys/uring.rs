@@ -42,7 +42,10 @@ use crate::{
     },
     uring_sys,
     IoRequirements,
+    IoStats,
     Latency,
+    RingIoStats,
+    TaskQueueHandle,
 };
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use nix::sys::{
@@ -53,6 +56,7 @@ use nix::sys::{
 use crate::uring_sys::IoRingOp;
 
 use super::{EnqueuedSource, TimeSpec64};
+use ahash::AHashMap;
 
 const MSG_ZEROCOPY: i32 = 0x4000000;
 
@@ -455,9 +459,10 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
         })
 }
 
-fn process_one_event<F>(cqe: Option<iou::CQE>, try_process: F) -> Option<bool>
+fn process_one_event<F, R>(cqe: Option<iou::CQE>, try_process: F, post_process: R) -> Option<bool>
 where
     F: FnOnce(&InnerSource) -> Option<()>,
+    R: FnOnce(&InnerSource, io::Result<usize>) -> io::Result<usize>,
 {
     if let Some(value) = cqe {
         // No user data is POLL_REMOVE or CANCEL, we won't process.
@@ -472,7 +477,7 @@ where
         let mut woke = false;
         if try_process(&*src).is_none() {
             let mut w = src.wakers.borrow_mut();
-            w.result = Some(transmute_error(result));
+            w.result = Some(post_process(&*src, transmute_error(result)));
             if let Some(waiter) = w.waiter.take() {
                 woke = true;
                 wake!(waiter);
@@ -659,6 +664,8 @@ struct PollRing {
     submitted: u64,
     completed: u64,
     allocator: Rc<UringBufferAllocator>,
+    stats: RingIoStats,
+    task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
 }
 
 impl PollRing {
@@ -675,6 +682,8 @@ impl PollRing {
             ring,
             submission_queue: UringQueueState::with_capacity(size * 4),
             allocator,
+            stats: RingIoStats::new(),
+            task_queue_stats: AHashMap::new(),
         })
     }
 
@@ -718,7 +727,27 @@ impl UringCommon for PollRing {
     }
 
     fn consume_one_event(&mut self) -> Option<bool> {
-        process_one_event(self.ring.peek_for_cqe(), |_| None).map(|x| {
+        process_one_event(
+            self.ring.peek_for_cqe(),
+            |_| None,
+            |src, res| {
+                if let Some(stats_collection) = src.stats_collection {
+                    stats_collection(&res, &mut self.stats);
+                    if let Some(handle) = src.task_queue {
+                        self.task_queue_stats
+                            .entry(handle)
+                            .and_modify(|stats| stats_collection(&res, stats))
+                            .or_insert_with(|| {
+                                let mut stats: RingIoStats = Default::default();
+                                stats_collection(&res, &mut stats);
+                                stats
+                            });
+                    }
+                }
+                res
+            },
+        )
+        .map(|x| {
             self.completed += 1;
             x
         })
@@ -854,6 +883,8 @@ struct SleepableRing {
     waiting_submission: usize,
     name: &'static str,
     allocator: Rc<UringBufferAllocator>,
+    stats: RingIoStats,
+    task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
 }
 
 impl SleepableRing {
@@ -870,6 +901,8 @@ impl SleepableRing {
             waiting_submission: 0,
             name,
             allocator,
+            stats: RingIoStats::new(),
+            task_queue_stats: AHashMap::new(),
         })
     }
 
@@ -882,6 +915,8 @@ impl SleepableRing {
             IoRequirements::default(),
             -1,
             SourceType::Timeout(TimeSpec64::from(d)),
+            None,
+            None,
         );
         let new_id = add_source(&source, self.submission_queue.clone());
         let op = match &*source.source_type() {
@@ -990,12 +1025,29 @@ impl UringCommon for SleepableRing {
     }
 
     fn consume_one_event(&mut self) -> Option<bool> {
-        process_one_event(self.ring.peek_for_cqe(), |source| {
-            match &mut *source.source_type.borrow_mut() {
+        process_one_event(
+            self.ring.peek_for_cqe(),
+            |source| match &mut *source.source_type.borrow_mut() {
                 SourceType::LinkRings => Some(()),
                 _ => None,
-            }
-        })
+            },
+            |src, res| {
+                if let Some(stats_collection) = src.stats_collection {
+                    stats_collection(&res, &mut self.stats);
+                    if let Some(handle) = src.task_queue {
+                        self.task_queue_stats
+                            .entry(handle)
+                            .and_modify(|stats| stats_collection(&res, stats))
+                            .or_insert_with(|| {
+                                let mut stats: RingIoStats = Default::default();
+                                stats_collection(&res, &mut stats);
+                                stats
+                            });
+                    }
+                }
+                res
+            },
+        )
     }
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
@@ -1146,6 +1198,8 @@ impl Reactor {
             IoRequirements::default(),
             notifier.eventfd_fd(),
             SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
+            None,
+            None,
         );
         assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
 
@@ -1330,6 +1384,8 @@ impl Reactor {
             IoRequirements::default(),
             self.link_fd,
             SourceType::LinkRings,
+            None,
+            None,
         );
         ring.sleep(&mut link_rings, eventfd_src)
             .or_else(Self::busy_ok)?;
@@ -1508,6 +1564,30 @@ impl Reactor {
             PollableStatus::NonPollable(_) => queue_request_into_ring(&self.main_ring, source, op),
         }
     }
+
+    pub fn io_stats(&self) -> IoStats {
+        IoStats::new(
+            self.main_ring.borrow().stats,
+            self.latency_ring.borrow().stats,
+            self.poll_ring.borrow().stats,
+        )
+    }
+
+    pub(crate) fn task_queue_io_stats(&self, h: &TaskQueueHandle) -> Option<IoStats> {
+        let main = self.main_ring.borrow().task_queue_stats.get(h).copied();
+        let lat = self.latency_ring.borrow().task_queue_stats.get(h).copied();
+        let poll = self.poll_ring.borrow().task_queue_stats.get(h).copied();
+
+        if let (None, None, None) = (main, lat, poll) {
+            None
+        } else {
+            Some(IoStats::new(
+                main.unwrap_or_default(),
+                lat.unwrap_or_default(),
+                poll.unwrap_or_default(),
+            ))
+        }
+    }
 }
 
 fn queue_request_into_ring(
@@ -1561,6 +1641,8 @@ mod tests {
                 IoRequirements::default(),
                 -1,
                 SourceType::Timeout(TimeSpec64::from(Duration::from_millis(millis))),
+                None,
+                None,
             );
             let op = match &*source.source_type() {
                 SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),

@@ -52,6 +52,7 @@ use crate::{
     task::{self, waker_fn::waker_fn},
     GlommioError,
     IoRequirements,
+    IoStats,
     Latency,
     Reactor,
     Shares,
@@ -1599,6 +1600,59 @@ impl<T> Task<T> {
     /// [`ExecutorStats`]: struct.ExecutorStats.html
     pub fn executor_stats() -> ExecutorStats {
         LOCAL_EX.with(|local_ex| local_ex.queues.borrow().stats)
+    }
+
+    /// Returns an [`IoStats`] struct with information about IO performed by
+    /// this executor's reactor
+    ///
+    /// # Examples:
+    ///
+    /// ```
+    /// use glommio::{Local, LocalExecutorBuilder};
+    ///
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         println!("Stats for executor: {:?}", Local::io_stats());
+    ///     })
+    ///     .unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`IoStats`]: crate::IoStats
+    pub fn io_stats() -> IoStats {
+        LOCAL_EX.with(|local_ex| local_ex.get_reactor().io_stats())
+    }
+
+    /// Returns an [`IoStats`] struct with information about IO performed from
+    /// the provided TaskQueue by this executor's reactor
+    ///
+    /// # Examples:
+    ///
+    /// ```
+    /// use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
+    ///
+    /// let ex = LocalExecutorBuilder::new()
+    ///     .spawn(|| async move {
+    ///         let new_tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         println!(
+    ///             "Stats for executor: {:?}",
+    ///             Local::task_queue_io_stats(new_tq)
+    ///         );
+    ///     })
+    ///     .unwrap();
+    ///
+    /// ex.join().unwrap();
+    /// ```
+    ///
+    /// [`IoStats`]: crate::IoStats
+    pub fn task_queue_io_stats(handle: TaskQueueHandle) -> Result<IoStats> {
+        LOCAL_EX.with(
+            |local_ex| match local_ex.get_reactor().task_queue_io_stats(&handle) {
+                Some(x) => Ok(x),
+                None => Err(GlommioError::queue_not_found(handle.index)),
+            },
+        )
     }
 
     /// Cancels the task and waits for it to stop running.

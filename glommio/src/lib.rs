@@ -459,6 +459,7 @@ pub use crate::{
 };
 pub use enclose::enclose;
 pub use scopeguard::defer;
+use std::iter::Sum;
 
 /// Provides common imports that almost all Glommio applications will need
 pub mod prelude {
@@ -467,6 +468,7 @@ pub mod prelude {
         error::GlommioError,
         ByteSliceExt,
         ByteSliceMutExt,
+        IoStats,
         Latency,
         Local,
         LocalExecutor,
@@ -474,6 +476,7 @@ pub mod prelude {
         LocalExecutorPoolBuilder,
         Placement,
         PoolThreadHandles,
+        RingIoStats,
         Shares,
         TaskQueueHandle,
     };
@@ -530,6 +533,123 @@ impl IoRequirements {
             latency_req: latency,
             io_handle: handle,
         }
+    }
+}
+
+/// Stores information about IO performed in a specific ring
+#[derive(Default, Debug, Copy, Clone)]
+pub struct RingIoStats {
+    pub(crate) files_opened: u64,
+    pub(crate) files_closed: u64,
+    pub(crate) file_reads: u64,
+    pub(crate) file_bytes_read: u64,
+    pub(crate) file_buffered_reads: u64,
+    pub(crate) file_buffered_bytes_read: u64,
+    pub(crate) file_writes: u64,
+    pub(crate) file_bytes_written: u64,
+    pub(crate) file_buffered_writes: u64,
+    pub(crate) file_buffered_bytes_written: u64,
+}
+
+impl RingIoStats {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    /// The total amount of files opened in this executor so far.
+    ///
+    /// [`files_opened`] - [`files_closed`] gives the current open files count
+    ///
+    /// [`files_opened`]: RingIoStats::files_opened
+    /// [`files_closed`]: RingIoStats::files_closed
+    pub fn files_opened(&self) -> u64 {
+        self.files_opened
+    }
+
+    /// The total amount of files closed in this executor so far.
+    ///
+    /// [`files_opened`] - [`files_closed`] gives the current open files count
+    ///
+    /// [`files_opened`]: RingIoStats::files_opened
+    /// [`files_closed`]: RingIoStats::files_closed
+    pub fn files_closed(&self) -> u64 {
+        self.files_opened
+    }
+
+    /// File read IO stats
+    ///
+    /// Returns the number of individual read ops as well as bytes read
+    pub fn file_reads(&self) -> (u64, u64) {
+        (self.file_reads, self.file_bytes_read)
+    }
+
+    /// Buffered file read IO stats
+    ///
+    /// Returns the number of individual buffered read ops as well as bytes read
+    pub fn file_buffered_reads(&self) -> (u64, u64) {
+        (self.file_buffered_reads, self.file_buffered_bytes_read)
+    }
+
+    /// File write IO stats
+    ///
+    /// Returns the number of individual write ops as well as bytes written
+    pub fn file_writes(&self) -> (u64, u64) {
+        (self.file_writes, self.file_bytes_written)
+    }
+
+    /// Buffered file write IO stats
+    ///
+    /// Returns the number of individual buffered write ops as well as bytes
+    /// written
+    pub fn file_buffered_writes(&self) -> (u64, u64) {
+        (self.file_buffered_writes, self.file_buffered_bytes_written)
+    }
+}
+
+impl Sum<RingIoStats> for RingIoStats {
+    fn sum<I: Iterator<Item = RingIoStats>>(iter: I) -> Self {
+        iter.fold(RingIoStats::new(), |a, b| RingIoStats {
+            files_opened: a.files_opened + b.files_opened,
+            files_closed: a.files_closed + b.files_closed,
+            file_reads: a.file_reads + b.file_reads,
+            file_bytes_read: a.file_bytes_read + b.file_bytes_read,
+            file_buffered_reads: a.file_buffered_reads + b.file_buffered_reads,
+            file_buffered_bytes_read: a.file_buffered_bytes_read + b.file_buffered_bytes_read,
+            file_writes: a.file_writes + b.file_writes,
+            file_bytes_written: a.file_bytes_written + b.file_bytes_written,
+            file_buffered_writes: a.file_buffered_writes + b.file_buffered_writes,
+            file_buffered_bytes_written: a.file_buffered_bytes_written
+                + b.file_buffered_bytes_written,
+        })
+    }
+}
+
+/// Stores information about IO
+#[derive(Debug)]
+pub struct IoStats {
+    /// The IO stats of the main ring
+    pub main_ring: RingIoStats,
+    /// The IO stats of the latency ring
+    pub latency_ring: RingIoStats,
+    /// The IO stats of the poll ring
+    pub poll_ring: RingIoStats,
+}
+
+impl IoStats {
+    fn new(main_ring: RingIoStats, latency_ring: RingIoStats, poll_ring: RingIoStats) -> IoStats {
+        IoStats {
+            main_ring,
+            latency_ring,
+            poll_ring,
+        }
+    }
+
+    /// Combine stats from all rings
+    pub fn all_rings(&self) -> RingIoStats {
+        [self.main_ring, self.latency_ring, self.poll_ring]
+            .iter()
+            .copied()
+            .sum()
     }
 }
 

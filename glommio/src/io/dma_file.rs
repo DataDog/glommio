@@ -361,7 +361,9 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{test_utils::*, ByteSliceMutExt, Local};
+    use crate::{test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
+    use futures::join;
+    use std::time::Duration;
 
     #[cfg(test)]
     pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
@@ -547,6 +549,12 @@ pub(crate) mod test {
         }
 
         new_file.close().await.expect("failed to close file");
+
+        let stats = Local::io_stats();
+        assert_eq!(stats.all_rings().files_opened(), 2);
+        assert_eq!(stats.all_rings().files_closed(), 2);
+        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
+        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
     });
 
     dma_file_test!(file_invalid_readonly_write, path, _k, {
@@ -573,6 +581,7 @@ pub(crate) mod test {
             .await
             .expect_err("pre allocating read-only files should fail");
         new_file.close().await.expect("failed to close file");
+        assert_eq!(Local::io_stats().all_rings().file_writes(), (0, 0));
     });
 
     dma_file_test!(file_empty_read, path, _k, {
@@ -584,6 +593,11 @@ pub(crate) mod test {
         let buf = new_file.read_at(0, 512).await.expect("failed to read");
         std::assert_eq!(buf.len(), 0);
         new_file.close().await.expect("failed to close file");
+
+        let stats = Local::io_stats();
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads(), (1, 0));
     });
 
     // Futures not polled. Should be in the submission queue
@@ -607,6 +621,12 @@ pub(crate) mod test {
         let _ = futures::poll!(&mut all);
         drop(all);
         file.close().await.unwrap();
+
+        let stats = Local::io_stats();
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads(), (0, 0));
+        assert_eq!(stats.all_rings().file_writes(), (0, 0));
     });
 
     // Futures polled. Should be a mixture of in the ring and in the in the
@@ -653,5 +673,71 @@ pub(crate) mod test {
         wfile.close().await.unwrap();
         wfile_other.close().await.unwrap();
         rfile.close().await.unwrap();
+    });
+
+    async fn read_write(path: std::path::PathBuf) {
+        let new_file = DmaFile::create(path.clone())
+            .await
+            .expect("failed to create file");
+
+        let mut buf = new_file.alloc_dma_buffer(4096);
+        buf.memset(42);
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 4096);
+
+        new_file.close().await.expect("failed to close file");
+
+        let new_file = DmaFile::open(path).await.expect("failed to create file");
+        let read_buf = new_file.read_at(0, 500).await.expect("failed to read");
+        std::assert_eq!(read_buf.len(), 500);
+        for i in 0..read_buf.len() {
+            std::assert_eq!(read_buf[i], 42);
+        }
+
+        let read_buf = new_file
+            .read_at_aligned(0, 4096)
+            .await
+            .expect("failed to read");
+        std::assert_eq!(read_buf.len(), 4096);
+        for i in 0..read_buf.len() {
+            std::assert_eq!(read_buf[i], 42);
+        }
+
+        new_file.close().await.expect("failed to close file");
+    }
+
+    dma_file_test!(per_queue_stats, path, _k, {
+        let q1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "q1");
+        let q2 = Local::create_task_queue(
+            Shares::default(),
+            Latency::Matters(Duration::from_millis(1)),
+            "q2",
+        );
+        let task1 =
+            Local::local_into(read_write(path.join("q1")), q1).expect("failed to spawn task");
+        let task2 =
+            Local::local_into(read_write(path.join("q2")), q2).expect("failed to spawn task");
+
+        join!(task1, task2);
+
+        let stats = Local::io_stats();
+        assert_eq!(stats.all_rings().files_opened(), 4);
+        assert_eq!(stats.all_rings().files_closed(), 4);
+        assert_eq!(stats.all_rings().file_reads(), (4, 9216));
+        assert_eq!(stats.all_rings().file_writes(), (2, 8192));
+
+        let stats = Local::task_queue_io_stats(q1).expect("failed to retrieve task queue io stats");
+        assert_eq!(stats.all_rings().files_opened(), 2);
+        assert_eq!(stats.all_rings().files_closed(), 2);
+        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
+        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
+
+        let stats = Local::task_queue_io_stats(q2).expect("failed to retrieve task queue io stats");
+        assert_eq!(stats.all_rings().files_opened(), 2);
+        assert_eq!(stats.latency_ring.files_opened(), 2);
+        assert_eq!(stats.all_rings().files_closed(), 2);
+        assert_eq!(stats.latency_ring.files_closed(), 2);
+        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
+        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
     });
 }

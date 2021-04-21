@@ -50,10 +50,21 @@ use futures_lite::*;
 
 use crate::{
     sys,
-    sys::{DirectIo, DmaBuffer, IoBuffer, PollableStatus, SleepNotifier, Source, SourceType},
+    sys::{
+        DirectIo,
+        DmaBuffer,
+        IoBuffer,
+        PollableStatus,
+        SleepNotifier,
+        Source,
+        SourceType,
+        StatsCollectionFn,
+    },
     IoRequirements,
+    IoStats,
     Latency,
     Local,
+    TaskQueueHandle,
 };
 
 /// Waits for a notification.
@@ -281,6 +292,14 @@ impl Reactor {
         }
     }
 
+    pub(crate) fn io_stats(&self) -> IoStats {
+        self.sys.io_stats()
+    }
+
+    pub(crate) fn task_queue_io_stats(&self, handle: &TaskQueueHandle) -> Option<IoStats> {
+        self.sys.task_queue_io_stats(handle)
+    }
+
     #[inline(always)]
     pub(crate) fn need_preempt(&self) -> bool {
         unsafe { *self.preempt_ptr_head != (*self.preempt_ptr_tail).load(Ordering::Acquire) }
@@ -294,9 +313,20 @@ impl Reactor {
         sys::write_eventfd(remote);
     }
 
-    fn new_source(&self, raw: RawFd, stype: SourceType) -> Source {
+    fn new_source(
+        &self,
+        raw: RawFd,
+        stype: SourceType,
+        stats_collection_fn: Option<StatsCollectionFn>,
+    ) -> Source {
         let ioreq = self.current_io_requirements.get();
-        sys::Source::new(ioreq, raw, stype)
+        sys::Source::new(
+            ioreq,
+            raw,
+            stype,
+            stats_collection_fn,
+            Some(Local::current_task_queue()),
+        )
     }
 
     pub(crate) fn inform_io_requirements(&self, req: IoRequirements) {
@@ -343,7 +373,16 @@ impl Reactor {
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
-        let source = self.new_source(raw, SourceType::Write(pollable, IoBuffer::Dma(buf)));
+        let source = self.new_source(
+            raw,
+            SourceType::Write(pollable, IoBuffer::Dma(buf)),
+            Some(|result, stats| {
+                if let Ok(result) = result {
+                    stats.file_writes += 1;
+                    stats.file_bytes_written += *result as u64;
+                }
+            }),
+        );
         self.sys.write_dma(&source, pos);
         source
     }
@@ -355,19 +394,25 @@ impl Reactor {
                 PollableStatus::NonPollable(DirectIo::Disabled),
                 IoBuffer::Buffered(buf),
             ),
+            Some(|result, stats| {
+                if let Ok(result) = result {
+                    stats.file_buffered_writes += 1;
+                    stats.file_buffered_bytes_written += *result as u64;
+                }
+            }),
         );
         self.sys.write_buffered(&source, pos);
         source
     }
 
     pub(crate) fn connect(&self, raw: RawFd, addr: SockAddr) -> Source {
-        let source = self.new_source(raw, SourceType::Connect(addr));
+        let source = self.new_source(raw, SourceType::Connect(addr), None);
         self.sys.connect(&source);
         source
     }
 
     pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockAddr, d: Duration) -> Source {
-        let source = self.new_source(raw, SourceType::Connect(addr));
+        let source = self.new_source(raw, SourceType::Connect(addr), None);
         source.set_timeout(d);
         self.sys.connect(&source);
         source
@@ -375,7 +420,7 @@ impl Reactor {
 
     pub(crate) fn accept(&self, raw: RawFd) -> Source {
         let addr = SockAddrStorage::uninit();
-        let source = self.new_source(raw, SourceType::Accept(addr));
+        let source = self.new_source(raw, SourceType::Accept(addr), None);
         self.sys.accept(&source);
         source
     }
@@ -386,7 +431,7 @@ impl Reactor {
         buf: DmaBuffer,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let source = self.new_source(fd, SourceType::SockSend(buf));
+        let source = self.new_source(fd, SourceType::SockSend(buf), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -418,7 +463,7 @@ impl Reactor {
             msg_flags: 0,
         };
 
-        let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr));
+        let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -456,6 +501,7 @@ impl Reactor {
                 hdr,
                 std::mem::MaybeUninit::<nix::sys::socket::sockaddr_storage>::uninit(),
             ),
+            None,
         );
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
@@ -471,7 +517,7 @@ impl Reactor {
         size: usize,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let source = self.new_source(fd, SourceType::SockRecv(None));
+        let source = self.new_source(fd, SourceType::SockRecv(None), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -481,7 +527,7 @@ impl Reactor {
     }
 
     pub(crate) fn recv(&self, fd: RawFd, size: usize, flags: MsgFlags) -> Source {
-        let source = self.new_source(fd, SourceType::SockRecv(None));
+        let source = self.new_source(fd, SourceType::SockRecv(None), None);
         self.sys.recv(&source, size, flags);
         source
     }
@@ -493,7 +539,16 @@ impl Reactor {
         size: usize,
         pollable: PollableStatus,
     ) -> Source {
-        let source = self.new_source(raw, SourceType::Read(pollable, None));
+        let source = self.new_source(
+            raw,
+            SourceType::Read(pollable, None),
+            Some(|result, stats| {
+                if let Ok(result) = result {
+                    stats.file_reads += 1;
+                    stats.file_bytes_read += *result as u64;
+                }
+            }),
+        );
         self.sys.read_dma(&source, pos, size);
         source
     }
@@ -502,13 +557,19 @@ impl Reactor {
         let source = self.new_source(
             raw,
             SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
+            Some(|result, stats| {
+                if let Ok(result) = result {
+                    stats.file_buffered_reads += 1;
+                    stats.file_buffered_bytes_read += *result as u64;
+                }
+            }),
         );
         self.sys.read_buffered(&source, pos, size);
         source
     }
 
     pub(crate) fn fdatasync(&self, raw: RawFd) -> Source {
-        let source = self.new_source(raw, SourceType::FdataSync);
+        let source = self.new_source(raw, SourceType::FdataSync, None);
         self.sys.fdatasync(&source);
         source
     }
@@ -520,13 +581,21 @@ impl Reactor {
         size: u64,
         flags: libc::c_int,
     ) -> Source {
-        let source = self.new_source(raw, SourceType::Fallocate);
+        let source = self.new_source(raw, SourceType::Fallocate, None);
         self.sys.fallocate(&source, position, size, flags);
         source
     }
 
     pub(crate) fn close(&self, raw: RawFd) -> Source {
-        let source = self.new_source(raw, SourceType::Close);
+        let source = self.new_source(
+            raw,
+            SourceType::Close,
+            Some(|result, stats| {
+                if result.is_ok() {
+                    stats.files_closed += 1
+                }
+            }),
+        );
         self.sys.close(&source);
         source
     }
@@ -542,6 +611,7 @@ impl Reactor {
         let source = self.new_source(
             raw,
             SourceType::Statx(path, Box::new(RefCell::new(statx_buf))),
+            None,
         );
         self.sys.statx(&source);
         source
@@ -556,14 +626,22 @@ impl Reactor {
     ) -> Source {
         let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
 
-        let source = self.new_source(dir, SourceType::Open(path));
+        let source = self.new_source(
+            dir,
+            SourceType::Open(path),
+            Some(|result, stats| {
+                if result.is_ok() {
+                    stats.files_opened += 1
+                }
+            }),
+        );
         self.sys.open_at(&source, flags, mode);
         source
     }
 
     #[cfg(feature = "bench")]
     pub(crate) fn nop(&self) -> Source {
-        let source = self.new_source(-1, SourceType::Noop);
+        let source = self.new_source(-1, SourceType::Noop, None);
         self.sys.nop(&source);
         source
     }
