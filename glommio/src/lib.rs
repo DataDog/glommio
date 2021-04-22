@@ -444,6 +444,8 @@ pub use crate::{
     byte_slice_ext::{ByteSliceExt, ByteSliceMutExt},
     error::{GlommioError, QueueErrorKind, ResourceType, Result},
     executor::{
+        CpuLocation,
+        CpuSet,
         ExecutorStats,
         LocalExecutor,
         LocalExecutorBuilder,

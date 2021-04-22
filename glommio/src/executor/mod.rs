@@ -62,6 +62,8 @@ use crate::{
 };
 use ahash::AHashMap;
 
+pub use placement::{CpuLocation, CpuSet};
+
 /// Result type alias that removes the need to specify a type parameter
 /// that's only valid in the channel variants of the error. Otherwise it
 /// might be confused with the error (`E`) that a result usually has in
@@ -575,25 +577,102 @@ impl Default for LocalExecutorBuilder {
 
 /// Specifies a policy by which [`LocalExecutorPoolBuilder`] distributes
 /// [`LocalExecutor`]s on the machine's CPUs / hardware topology.
+///
+/// The default is `Placement::Unbound`.
+///
+/// ## Example
+///
+/// Some `Placement`s allow manually filtering available CPUs via a [`CpuSet`],
+/// such as `MaxSpreadOnCpus`.  The following would place shards on four CPUs
+/// (a.k.a.  hyper-threads) that are on numa node 0 and have an even numbered
+/// package ID according to their [`CpuLocation`]. The selection aims to achieve
+/// a high degree of separation between the CPUs in terms of machine topology.
+/// Each [`LocalExecutor`] would be bound to a single CPU.
+///
+/// Note that if four CPUs are not available, the call to
+/// [`LocalExecutorPoolBuilder::on_all_shards`] would return an `Err` when using
+/// `MaxSpreadOnCpus`.
+///
+/// ```
+/// use glommio::{CpuSet, LocalExecutorPoolBuilder, Placement};
+///
+/// let cpus = CpuSet::online()
+///     .expect("Err: please file an issue with glommio")
+///     .filter(|l| l.numa_node == 0)
+///     .filter(|l| l.package % 2 == 0);
+///
+/// let handles = LocalExecutorPoolBuilder::new(4)
+///     .placement(Placement::MaxSpreadOnCpus(cpus))
+///     .on_all_shards(|| async move {
+///         // ... important stuff ...
+///     })
+///     .unwrap();
+///
+/// handles.join_all();
+/// ```
 #[derive(Debug)]
 pub enum Placement {
     /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
     /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.
     Unbound,
+    /// The `SharedOnCpus` variant binds each [`LocalExecutor`] to the set of
+    /// CPUs specified by [`CpuSet`].  With an unfiltered CPU
+    /// set returned by [`CpuSet::online`], this is similar to using `Unbound`
+    /// with the distinction that bringing additional CPUs online will not
+    /// allow the executors to run on the newly available CPUs.
+    ///
+    /// The `Shared` variant allows the number of shards specified in
+    /// [`LocalExecutorPoolBuilder::new`] to be greater than the number of CPUs
+    /// as long as at least one CPU is included in `CpuSet`.
+    SharedOnCpus(CpuSet),
     /// Iterates over `CpuLocation`s in the machine topology with a high degree
     /// of separation from previous `CpuLocation`s returned by the iterator.
     /// The order in which items are returned by `MaxSpread` is
-    /// non-deterministic.  If the number of CPUs requested is larger than the
-    /// number of CPUs online, this `Placement` will cycle through
-    /// `CpuLocation`. Each cycle is non-deterministic meaning that
-    /// the order may differ from prior cycles.
+    /// non-deterministic.
+    ///
+    /// ### Optional Arguments
+    ///
+    /// The optional `CpuSet` can be used to restrict
+    /// the set from which CPUs will be selected.
+    ///
+    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is greater than the number of CPUs in the optional [`CpuSet`], then a
+    /// call to [`LocalExecutorPoolBuilder::on_all_shards`] will return a
+    /// `Result::Err`.  If the number of shards specified in
+    /// [`LocalExecutorPoolBuilder::new`] is less than the number of CPUs in
+    /// [`CpuSet`] then some of the CPUs specified in [`CpuSet`]
+    /// will not be used.
+    ///
+    /// The behavior of `MaxSpread(None)` is identical to using an unfiltered
+    /// CPU set obtained from [`CpuSet::online`].
+    // TODO: is it worth having an `Option` here or should this be constructed as
+    // `MaxSpread(CpuSet::online()?)`
     MaxSpread,
+    MaxSpreadOnCpus(CpuSet),
     /// Iterates over `CpuLocation`s in the machine topology with a
     /// low degree of separation from previous `CpuLocation`s returned by
     /// the iterator.  If the number of CPUs requested is larger than the
     /// number of CPUs online, `Placement::MaxPack` will cycle through
     /// `CpuLocation`, where each cycle is non-deterministic.
+    ///
+    /// ### Optional Arguments
+    ///
+    /// The optional `CpuSet` can be used to restrict the set from which CPUs
+    /// will be selected.
+    ///
+    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is greater than the number of CPUs in the optional [`CpuSet`], then a
+    /// call to [`LocalExecutorPoolBuilder::on_all_shards`] will return a
+    /// `Result::Err`.  If the number of shards specified in
+    /// [`LocalExecutorPoolBuilder::new`] is less than the number of CPUs in
+    /// [`CpuSet`] then some of the CPUs specified in [`CpuSet`]
+    /// will not be used.
+    ///
+    /// The behavior of `MaxPack(None)` is identical to using an unfiltered
+    /// CPU set obtained from [`CpuSet::online`].
+    // TODO: use `Option` here?
     MaxPack,
+    MaxPackOnCpus(CpuSet),
     /* TODO:
      * Custom, */
 }
@@ -741,12 +820,13 @@ impl LocalExecutorPoolBuilder {
         for _ in 0..self.nr_shards {
             // TODO: determine the cpu set based on the `Placement` policy; do we allow
             // `nr_shards` being greater than the number of cpus online?
+            // TODO: decide whether any local executors should be launched if a thread
+            // failed to start
             let cpu_set = cpu_set_gen.next();
 
             let notifier = match sys::new_sleep_notifier() {
                 Ok(n) => n,
                 Err(e) => {
-                    // valid notifiers have ids greater than or equal to 1
                     handles.push(Err(e.into()));
                     continue;
                 }
@@ -785,8 +865,9 @@ impl LocalExecutorPoolBuilder {
     }
 }
 
-/// Holds a collection of [`JoinHandle`]s created by
-/// [`LocalExecutorPoolBuilder::on_all_shards`].
+/// Holds a collection of [`JoinHandle`]s.
+///
+/// This struct is returned by [`LocalExecutorPoolBuilder::on_all_shards`].
 #[derive(Debug)]
 pub struct PoolThreadHandles {
     handles: Vec<Result<JoinHandle<()>>>,
@@ -2771,12 +2852,20 @@ mod test {
 
     #[test]
     fn executor_pool_builder_placements() {
-        let nr_cpus = placement::get_machine_topology_unsorted().unwrap().len();
+        let nr_cpus = CpuSet::online().unwrap().len();
         assert!(0 < nr_cpus);
 
         for nn in 0..3 {
             let nr_execs = nn * nr_cpus;
-            for pp in std::array::IntoIter::new([Placement::MaxPack, Placement::MaxSpread]) {
+            let placements = [
+                Placement::MaxPack,
+                Placement::MaxSpread,
+                Placement::MaxPackOnCpus(CpuSet::online().unwrap()),
+                Placement::MaxSpreadOnCpus(CpuSet::online().unwrap()),
+                Placement::MaxPackOnCpus(CpuSet::online().unwrap()),
+                Placement::MaxPackOnCpus(CpuSet::online().unwrap().filter(|l| l.cpu == 0)),
+            ];
+            for pp in std::array::IntoIter::new(placements) {
                 let ids = Arc::new(Mutex::new(HashMap::new()));
                 let cpus = Arc::new(Mutex::new(HashMap::new()));
 

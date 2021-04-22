@@ -59,7 +59,7 @@ use super::Placement;
 
 use std::{collections::HashSet, convert::TryInto, io};
 
-/// A description of the CPUs location in the machine topology.
+/// A description of the CPU's location in the machine topology.
 #[derive(Clone, Debug)]
 pub struct CpuLocation {
     /// Holds the CPU id.  This is the most granular field and will distinguish
@@ -75,44 +75,115 @@ pub struct CpuLocation {
     pub numa_node: usize,
 }
 
-/// A set of CPUs associated with a [`LocalExecutor`] when created via a
-/// [`LocalExecutorPoolBuilder`].
+/// Used to specify a set of permitted CPUs on which
+/// executors created by a
+/// [`LocalExecutorPoolBuilder`](super::LocalExecutorPoolBuilder) are run.
+///
+/// Specifically, certain [`Placement`] variants are constructed with an
+/// `Option<CpuSet>`.  Please see the documentation `Placement` variants to
+/// understand how `CpuSet` restrictions apply to that variant.  CPUs are
+/// identified via their [`CpuLocation`].
 #[derive(Clone, Debug)]
-pub(crate) enum CpuSet {
-    None,
-    Single(Option<CpuLocation>),
-    /* `Multi` variant to be used for `Placement::Custom`
-     * Multi(Vec<CpuLocation>), */
-}
+pub struct CpuSet(Vec<CpuLocation>);
 
 impl CpuSet {
+    /// Creates a `CpuSet` representing all online CPUs on this machine.  The
+    /// function will return an `Err` if the hardware topology could not be
+    /// obtained from this machine.
+    pub fn online() -> io::Result<Self> {
+        Ok(Self(linux_sysfs::get_machine_topology_unsorted()?))
+    }
+
+    /// This method can be used to restrict the CPUs held by `CpuSet`.  The
+    /// resulting `CpuSet` will only include `CpuLocation`s for which the
+    /// provided closure returns `true`. Note that each call to `filter`
+    /// will use as input the list of CPUs previously selected (i.e. the
+    /// list is *not* reset on each call). The method returns the number of
+    /// CPUs currently held by `CpuSet`.
+    pub fn filter<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(&CpuLocation) -> bool,
+    {
+        self.0 = self.0.into_iter().filter(f).collect();
+        self
+    }
+
+    /// Returns a reference to the [`CpuLocation`]s currently included in the
+    /// `CpuSet`.
+    pub fn as_vec(&self) -> &Vec<CpuLocation> {
+        &self.0
+    }
+
+    /// Checks whether the `CpuSet` is empty.
+    pub fn is_empty(&self) -> bool {
+        self.as_vec().is_empty()
+    }
+
+    /// Returns the number of CPUs included in the `CpuSet`.
+    pub fn len(&self) -> usize {
+        self.as_vec().len()
+    }
+
+    /// Consumes the `CpuSet` and returns the [`CpuLocation`]s.
+    fn take(self) -> Vec<CpuLocation> {
+        self.0
+    }
+}
+
+/// Iterates over a set of CPUs associated with a [`LocalExecutor`] when created
+/// via a [`LocalExecutorPoolBuilder`].
+#[derive(Clone, Debug)]
+pub(crate) enum CpuIter {
+    Empty,
+    Single(CpuLocation),
+    Multi(Vec<CpuLocation>),
+}
+
+impl CpuIter {
+    fn from_vec(v: Vec<CpuLocation>) -> Self {
+        Self::Multi(v)
+    }
+
+    fn from_option(cpu_loc: Option<CpuLocation>) -> Self {
+        match cpu_loc {
+            None => Self::Empty,
+            Some(cpu) => Self::Single(cpu),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         0 == self.len()
     }
 }
 
-impl ExactSizeIterator for CpuSet {}
-impl Iterator for CpuSet {
+impl ExactSizeIterator for CpuIter {}
+impl Iterator for CpuIter {
     type Item = CpuLocation;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::None => None,
-            Self::Single(l) => l.take(),
-            // Self::Multi(v) => v.pop(),
+            Self::Empty => None,
+            Self::Single(_) => match std::mem::replace(self, Self::Empty) {
+                Self::Single(cpu) => Some(cpu),
+                _ => unreachable!("expected CpuIter::Single"),
+            },
+            Self::Multi(v) => v.pop(),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
-            Self::Single(None) | Self::None => (0, Some(0)),
-            Self::Single(Some(_)) => (1, Some(1)),
-            // Self::Multi(v) => (v.len(), Some(v.len())),
+            Self::Empty => (0, Some(0)),
+            Self::Single(_) => (1, Some(1)),
+            Self::Multi(v) => (v.len(), Some(v.len())),
         }
     }
 }
 
+/// Generates CPU sets as iterators.  The sets generated depend on the specified
+/// [`Placement`].
 pub(crate) enum CpuSetGenerator {
     Unbound,
+    Shared(CpuSet),
     MaxSpread(MaxSpreader),
     MaxPack(MaxPacker),
 }
@@ -121,20 +192,30 @@ impl CpuSetGenerator {
     pub fn new(placement: Placement) -> io::Result<Self> {
         let this = match placement {
             Placement::Unbound => Self::Unbound,
-            Placement::MaxSpread => Self::MaxSpread(MaxSpreader::new()?),
-            Placement::MaxPack => Self::MaxPack(MaxPacker::new()?),
+            Placement::SharedOnCpus(cpus) => Self::Shared(cpus),
+            Placement::MaxSpread => {
+                let cpus = CpuSet::online()?;
+                Self::MaxSpread(MaxSpreader::from_cpu_set(cpus))
+            }
+            Placement::MaxSpreadOnCpus(cpus) => Self::MaxSpread(MaxSpreader::from_cpu_set(cpus)),
+            Placement::MaxPack => {
+                let cpus = CpuSet::online()?;
+                Self::MaxPack(MaxPacker::from_cpu_set(cpus))
+            }
+            Placement::MaxPackOnCpus(cpus) => Self::MaxPack(MaxPacker::from_cpu_set(cpus)),
         };
         Ok(this)
     }
 
-    /// A method that generates a [`CpuSet`] according to the provided
+    /// A method that generates a [`CpuIter`] according to the provided
     /// [`Placement`] policy. Sequential calls may generate different sets
     /// depending on the [`Placement`].
-    pub fn next(&mut self) -> CpuSet {
+    pub fn next(&mut self) -> CpuIter {
         match self {
-            Self::Unbound => CpuSet::None,
-            Self::MaxSpread(it) => CpuSet::Single(it.next()),
-            Self::MaxPack(it) => CpuSet::Single(it.next()),
+            Self::Unbound => CpuIter::Empty,
+            Self::Shared(cpus) => CpuIter::from_vec(cpus.as_vec().clone()),
+            Self::MaxSpread(it) => CpuIter::from_option(it.next()),
+            Self::MaxPack(it) => CpuIter::from_option(it.next()),
         }
     }
 }
@@ -142,15 +223,17 @@ impl CpuSetGenerator {
 /// An [`Iterator`] over [`CpuLocation`]s in the machine topology which have a
 /// high degree of separation from previous [`CpuLocation`]s returned by
 /// `MaxSpreader`.  The order in which items are returned by `MaxSpreader` is
-/// non-deterministic.  Iterating `MaxSpreader` will never return `Option::None`
+/// non-deterministic.  Unless the [`MaxSpreader::new`] is called with an empty
+/// `Vec` as arguments, iterating `MaxSpreader` will never return `Option::None`
 /// and will cycle through [`CpuLocation`], where each cycle itself is
 /// non-deterministic (i.e.  the order may differ from prior cycles).
 type MaxSpreader = TopologyIter<Spread>;
 
 /// An [`Iterator`] over [`CpuLocation`]s in the machine topology which have a
 /// low degree of separation from previous [`CpuLocation`]s returned by
-/// `MaxPacker`.  Iterating `MaxPacker` will never return `Option::None` and
-/// will cycle through [`CpuLocation`] non-deterministically.
+/// `MaxPacker`.  Unless the [`MaxPacker::new`] is called with an empty
+/// `Vec` as arguments, iterating `MaxPacker` will never return `Option::None`
+/// and will cycle through [`CpuLocation`] non-deterministically.
 type MaxPacker = TopologyIter<Pack>;
 
 pub(crate) struct TopologyIter<T> {
@@ -160,7 +243,7 @@ pub(crate) struct TopologyIter<T> {
 impl<T: Priority> Iterator for TopologyIter<T> {
     type Item = CpuLocation;
     fn next(&mut self) -> Option<Self::Item> {
-        Some(self.tree.select_cpu().try_into().unwrap())
+        self.tree.select_cpu().try_into().ok()
     }
 }
 
@@ -168,9 +251,8 @@ impl<T> TopologyIter<T>
 where
     T: Priority,
 {
-    pub fn new() -> io::Result<Self> {
-        let topology = linux_sysfs::get_machine_topology_unsorted()?;
-        Self::from_topology(topology)
+    fn from_cpu_set(cpus: CpuSet) -> Self {
+        Self::from_topology(cpus.take())
     }
 
     /// Construct a `TopologyIter` from a `Vec<CpuLocation>`.  The tree of
@@ -178,7 +260,7 @@ where
     /// `Node` ID to indicate that a `Node` is ready to be pushed onto its
     /// parent), so IDs at a particular level should be unique (e.g. a
     /// `Core` with ID 0 should not exist on `Package`s with IDs 0 and 1).
-    pub fn from_topology(mut topology: Vec<CpuLocation>) -> io::Result<Self> {
+    pub fn from_topology(mut topology: Vec<CpuLocation>) -> Self {
         // use the number of unique numa IDs and package IDs to determine whether numa
         // nodes reside outside / above or inside / below packages in the
         // machine topology
@@ -213,18 +295,12 @@ where
             }
         };
 
+        let mut node_root = Node::<T>::new(Level::SystemRoot);
         let mut iter = topology.into_iter();
-        match iter.next() {
-            mut next @ Some(_) => {
-                let mut node_root = Node::<T>::new(Level::SystemRoot);
-                Self::build_sub_tree(&mut node_root, &mut None, &mut next, &mut iter, &f_level, 1);
-                Ok(Self { tree: node_root })
-            }
-            None => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "no cpu in machine topology",
-            )),
+        if let mut next @ Some(_) = iter.next() {
+            Self::build_sub_tree(&mut node_root, &mut None, &mut next, &mut iter, &f_level, 1);
         }
+        Self { tree: node_root }
     }
 
     fn build_sub_tree<I, F>(
@@ -275,16 +351,27 @@ where
 }
 
 #[cfg(test)]
-pub use linux_sysfs::get_machine_topology_unsorted;
-
-#[cfg(test)]
 mod test {
     use super::{linux_sysfs::test_helpers::cpu_loc, *};
 
     #[test]
+    fn cpu_set() {
+        let set = CpuSet::online().unwrap();
+        let len = set.len();
+        assert!(len > 0);
+        let set = set.filter(|_| true);
+        assert_eq!(len, set.len());
+        let set = set.filter(|_| false);
+        assert_eq!(0, set.len());
+        assert!(set.is_empty());
+        let v: Vec<_> = set.take();
+        assert_eq!(0, v.len());
+    }
+
+    #[test]
     fn max_spreader_this_machine() {
         let n = 4096;
-        let mut max_spreader = MaxSpreader::new().unwrap();
+        let mut max_spreader = MaxSpreader::from_cpu_set(CpuSet::online().unwrap());
 
         assert_eq!(0, max_spreader.tree.nr_slots_selected());
         for _ in 0..n {
@@ -296,7 +383,7 @@ mod test {
     #[test]
     fn max_packer_this_machine() {
         let n = 4096;
-        let mut max_packer = MaxSpreader::new().unwrap();
+        let mut max_packer = MaxSpreader::from_cpu_set(CpuSet::online().unwrap());
 
         for _ in 0..n {
             let _cpu_location: CpuLocation = max_packer.next().unwrap();
@@ -304,17 +391,15 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "no cpu in machine topology")]
     fn max_spreader_with_topology_empty() {
         let topology = Vec::new();
-        MaxSpreader::from_topology(topology).unwrap();
+        assert!(MaxSpreader::from_topology(topology).next().is_none());
     }
 
     #[test]
-    #[should_panic(expected = "no cpu in machine topology")]
     fn max_packer_with_topology_empty() {
         let topology = Vec::new();
-        MaxPacker::from_topology(topology).unwrap();
+        assert!(MaxPacker::from_topology(topology).next().is_none());
     }
 
     #[test]
@@ -327,7 +412,7 @@ mod test {
             cpu_loc(0, 0, 0, 1),
         ];
 
-        let mut max_spreader = MaxSpreader::from_topology(topology).unwrap();
+        let mut max_spreader = MaxSpreader::from_topology(topology);
         assert_eq!(4, max_spreader.tree.nr_slots());
         assert_eq!(0, max_spreader.tree.nr_slots_selected());
 
@@ -365,7 +450,7 @@ mod test {
             cpu_loc(0, 0, 0, 1),
         ];
 
-        let mut max_spreader = MaxSpreader::from_topology(topology).unwrap();
+        let mut max_spreader = MaxSpreader::from_topology(topology);
         assert_eq!(4, max_spreader.tree.nr_slots());
 
         for _ in 0..2 {
@@ -430,7 +515,7 @@ mod test {
             numa += 1;
         }
 
-        let mut max_spreader = MaxSpreader::from_topology(topology).unwrap();
+        let mut max_spreader = MaxSpreader::from_topology(topology);
 
         let mut selected_prev = 0;
         let mut selected = 1;
@@ -463,7 +548,7 @@ mod test {
 
         super::linux_sysfs::test_helpers::check_topolgy(topology.clone());
 
-        let mut max_packer = MaxPacker::from_topology(topology).unwrap();
+        let mut max_packer = MaxPacker::from_topology(topology);
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
         assert_eq!(1, counts[..4].iter().sum());
@@ -520,7 +605,7 @@ mod test {
 
         super::linux_sysfs::test_helpers::check_topolgy(topology.clone());
 
-        let mut max_packer = MaxPacker::from_topology(topology).unwrap();
+        let mut max_packer = MaxPacker::from_topology(topology);
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
         assert_eq!(1, counts[4..].iter().sum());
