@@ -34,6 +34,7 @@ use std::{
     collections::{hash_map::Entry, BinaryHeap},
     future::Future,
     io,
+    marker::PhantomData,
     pin::Pin,
     rc::Rc,
     sync::Arc,
@@ -991,7 +992,7 @@ impl LocalExecutor {
         me.yielded = true;
     }
 
-    fn spawn<T>(&self, future: impl Future<Output = T>) -> Task<T> {
+    fn spawn<T>(&self, future: impl Future<Output = T>) -> multitask::Task<T> {
         let tq = self
             .queues
             .borrow()
@@ -1002,10 +1003,10 @@ impl LocalExecutor {
 
         let id = self.id;
         let ex = tq.borrow().ex.clone();
-        Task(ex.spawn(id, tq, future))
+        ex.spawn(id, tq, future)
     }
 
-    fn spawn_into<T, F>(&self, future: F, handle: TaskQueueHandle) -> Result<Task<T>>
+    fn spawn_into<T, F>(&self, future: F, handle: TaskQueueHandle) -> Result<multitask::Task<T>>
     where
         F: Future<Output = T>,
     {
@@ -1015,7 +1016,7 @@ impl LocalExecutor {
         let ex = tq.borrow().ex.clone();
         let id = self.id;
 
-        Ok(Task(ex.spawn(id, tq, future)))
+        Ok(ex.spawn(id, tq, future))
     }
 
     fn preempt_timer_duration(&self) -> Duration {
@@ -1208,7 +1209,13 @@ impl Default for LocalExecutor {
     }
 }
 
-/// A spawned future.
+/// A spawned future that can be detached
+///
+/// Because these tasks can be detached, the futures they execute must be
+/// `'static`. Usually the pattern to make sure something is static is to use
+/// `Rc<RefCell<T>>` or `Rc<Cell<T>>` and clone it, but that has a cost. If that
+/// cost is deemed unacceptable, and you are able to have a well-defined
+/// lifetime, you can use a [`ScopedTask`]
 ///
 /// Tasks are also futures themselves and yield the output of the spawned
 /// future.
@@ -1236,6 +1243,7 @@ impl Default for LocalExecutor {
 ///     assert_eq!(task.await, 3);
 /// });
 /// ```
+/// [`ScopedTask`]: crate::ScopedTask
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
 pub struct Task<T>(multitask::Task<T>);
@@ -1263,7 +1271,7 @@ impl<T> Task<T> {
     where
         T: 'static,
     {
-        LOCAL_EX.with(|local_ex| local_ex.spawn(future))
+        LOCAL_EX.with(|local_ex| Self(local_ex.spawn(future)))
     }
 
     /// Unconditionally yields the current task, moving it back to the end of
@@ -1386,7 +1394,7 @@ impl<T> Task<T> {
     where
         T: 'static,
     {
-        LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle))
+        LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle).map(Self))
     }
 
     /// Returns the id of the current executor
@@ -1689,6 +1697,206 @@ impl<T> Task<T> {
 }
 
 impl<T> Future for Task<T> {
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx)
+    }
+}
+
+/// A spawned future that cannot be detached, and has a predictable lifetime.
+///
+/// Because their lifetimes are bounded, you don't need to make sure that data
+/// you pass to the `ScopedTask` is `'static`, which can be cheaper (no need to
+/// reference count). If you, however, would like to `.detach` this task and
+/// have it run in the background, consider using [`Task`] instead.
+///
+/// Tasks are also futures themselves and yield the output of the spawned
+/// future.
+///
+/// When a task is dropped, its gets canceled and won't be polled again. To
+/// cancel a task a bit more gracefully and wait until it stops running, use the
+/// [`cancel()`][`ScopedTask::cancel()`] method.
+///
+/// Tasks that panic get immediately canceled. Awaiting a canceled task also
+/// causes a panic.
+///
+/// # Examples
+///
+/// ```
+/// use glommio::{LocalExecutor, ScopedTask};
+///
+/// let ex = LocalExecutor::default();
+///
+/// ex.run(async {
+///     let a = 2;
+///     let task = ScopedTask::local(async {
+///         println!("Hello from a task!");
+///         1 + a // this is a reference, and it works just fine
+///     });
+///
+///     assert_eq!(task.await, 3);
+/// });
+/// ```
+/// The usual borrow checker rules apply. A [`ScopedTask`] can acquire a mutable
+/// reference to a variable just fine:
+///
+/// ```
+/// # use glommio::{LocalExecutor, ScopedTask};
+/// #
+/// # let ex = LocalExecutor::default();
+/// # ex.run(async {
+/// let mut a = 2;
+/// let task = ScopedTask::local(async {
+///     a = 3;
+/// });
+/// task.await;
+/// assert_eq!(a, 3);
+/// # });
+/// ```
+///
+/// But until the task completes, the reference is mutably held so we can no
+/// longer immutably reference it:
+///
+/// ```compile_fail
+/// # use glommio::{LocalExecutor, ScopedTask};
+/// #
+/// # let ex = LocalExecutor::default();
+/// # ex.run(async {
+/// let mut a = 2;
+/// let task = ScopedTask::local(async {
+///     a = 3;
+/// });
+/// assert_eq!(a, 3); // task hasn't completed yet!
+/// task.await;
+/// # });
+/// ```
+///
+/// You can still use [`Cell`] and [`RefCell`] normally to work around this.
+/// Just keep in mind that there is no guarantee of ordering for execution of
+/// tasks, and if the task has not yet finished the value may or may not have
+/// changed (as with any interior mutability)
+///
+/// ```
+/// # use glommio::{LocalExecutor, ScopedTask};
+/// # use std::cell::Cell;
+/// #
+/// # let ex = LocalExecutor::default();
+/// # ex.run(async {
+/// let a = Cell::new(2);
+/// let task = ScopedTask::local(async {
+///     a.set(3);
+/// });
+///
+/// assert!(a.get() == 3 || a.get() == 2); // impossible to know if it will be 2 or 3
+/// task.await;
+/// assert_eq!(a.get(), 3); // The task finished now.
+/// //
+/// # });
+/// ```
+///
+/// [`Task`]: crate::Task
+/// [`Cell`]: std::cell::Cell
+/// [`RefCell`]: std::cell::RefCell
+#[must_use = "scoped tasks get canceled when dropped, use a standard Task and `.detach()` to run \
+              them in the background"]
+#[derive(Debug)]
+pub struct ScopedTask<'a, T>(multitask::Task<T>, PhantomData<&'a T>);
+
+impl<'a, T> ScopedTask<'a, T> {
+    /// Spawns a task onto the current single-threaded executor.
+    ///
+    /// If called from a [`LocalExecutor`], the task is spawned on it.
+    ///
+    /// Otherwise, this method panics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{LocalExecutor, ScopedTask};
+    ///
+    /// let local_ex = LocalExecutor::default();
+    ///
+    /// local_ex.run(async {
+    ///     let non_static = 2;
+    ///     let task = ScopedTask::local(async { 1 + non_static });
+    ///     assert_eq!(task.await, 3);
+    /// });
+    /// ```
+    pub fn local(future: impl Future<Output = T> + 'a) -> Self {
+        LOCAL_EX.with(|local_ex| Self(local_ex.spawn(future), PhantomData))
+    }
+
+    /// Spawns a task onto the current single-threaded executor, in a particular
+    /// task queue
+    ///
+    /// If called from a [`LocalExecutor`], the task is spawned on it.
+    ///
+    /// Otherwise, this method panics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{Local, LocalExecutor, ScopedTask, Shares};
+    ///
+    /// let local_ex = LocalExecutor::default();
+    /// local_ex.run(async {
+    ///     let handle = Local::create_task_queue(
+    ///         Shares::default(),
+    ///         glommio::Latency::NotImportant,
+    ///         "test_queue",
+    ///     );
+    ///     let non_static = 2;
+    ///     let task = ScopedTask::<usize>::local_into(async { 1 + non_static }, handle)
+    ///         .expect("failed to spawn task");
+    ///     assert_eq!(task.await, 3);
+    /// })
+    /// ```
+    pub fn local_into(
+        future: impl Future<Output = T> + 'a,
+        handle: TaskQueueHandle,
+    ) -> Result<Self> {
+        LOCAL_EX.with(|local_ex| {
+            local_ex
+                .spawn_into(future, handle)
+                .map(|x| Self(x, PhantomData))
+        })
+    }
+
+    /// Cancels the task and waits for it to stop running.
+    ///
+    /// Returns the task's output if it was completed just before it got
+    /// canceled, or [`None`] if it didn't complete.
+    ///
+    /// While it's possible to simply drop the [`ScopedTask`] to cancel it, this
+    /// is a cleaner way of canceling because it also waits for the task to
+    /// stop running.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use futures_lite::future;
+    /// use glommio::{LocalExecutor, ScopedTask};
+    ///
+    /// let ex = LocalExecutor::default();
+    ///
+    /// ex.run(async {
+    ///     let task = ScopedTask::local(async {
+    ///         loop {
+    ///             println!("Even though I'm in an infinite loop, you can still cancel me!");
+    ///             future::yield_now().await;
+    ///         }
+    ///     });
+    ///
+    ///     task.cancel().await;
+    /// });
+    /// ```
+    pub async fn cancel(self) -> Option<T> {
+        self.0.cancel().await
+    }
+}
+
+impl<'a, T> Future for ScopedTask<'a, T> {
     type Output = T;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -2492,5 +2700,27 @@ mod test {
 
         handles.join_all();
         assert_eq!(4, count.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn scoped_task() {
+        LocalExecutor::default().run(async {
+            let mut a = 1;
+            ScopedTask::local(async {
+                a = 2;
+            })
+            .await;
+            Local::later().await;
+            assert_eq!(a, 2);
+
+            let mut a = 1;
+            let do_later = ScopedTask::local(async {
+                a = 2;
+            });
+
+            Local::later().await;
+            do_later.await;
+            assert_eq!(a, 2);
+        });
     }
 }

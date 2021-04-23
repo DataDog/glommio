@@ -451,6 +451,7 @@ pub use crate::{
         LocalExecutorPoolBuilder,
         Placement,
         PoolThreadHandles,
+        ScopedTask,
         Task,
         TaskQueueHandle,
         TaskQueueStats,
