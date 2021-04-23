@@ -17,7 +17,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     io,
     net::{self, Shutdown, SocketAddr, ToSocketAddrs},
-    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
     pin::Pin,
     rc::{Rc, Weak},
     task::{Context, Poll},
@@ -290,6 +290,14 @@ pub struct AcceptedTcpStream {
 }
 
 impl AcceptedTcpStream {
+    /// Returns the socket address of the remote peer
+    pub fn peer_addr(&self) -> Result<SocketAddr> {
+        let socket = unsafe { Socket::from_raw_fd(self.fd) };
+        let sock_addr = socket.peer_addr()?;
+        socket.into_raw_fd();
+        Ok(sock_addr.as_std().unwrap())
+    }
+
     /// Binds this `AcceptedTcpStream` to the current executor
     ///
     /// This returns a [`TcpStream`] that can then be used normally
@@ -1205,6 +1213,25 @@ mod tests {
 
             let _s = TcpStream::connect(addr).await.unwrap();
             ltask.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn accepted_tcp_stream_peer_addr() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let peer_addr = Task::local(async move {
+                let accepted = listener.shared_accept().await.unwrap();
+                let peer_addr = accepted.peer_addr().unwrap();
+                let stream = accepted.bind_to_executor();
+                assert_eq!(peer_addr, stream.peer_addr().unwrap());
+                peer_addr
+            });
+
+            let s = TcpStream::connect(addr).await.unwrap();
+            assert_eq!(s.local_addr().unwrap(), peer_addr.await);
         });
     }
 }
