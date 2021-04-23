@@ -681,7 +681,7 @@ mod test {
                 Local::local(async move {
                     let _g = g;
                     sleep(Duration::from_secs(1)).await;
-                }).detach();
+                }).await
             }});
 
             // Wait for all permits to try and acquire, then unleash the gates.
