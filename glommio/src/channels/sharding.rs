@@ -80,6 +80,11 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
         })
     }
 
+    /// Returns the total number of shards
+    pub fn nr_shards(&self) -> usize {
+        self.shard.nr_shards
+    }
+
     /// Returns the shard_id associated with ourselves
     pub fn shard_id(&self) -> usize {
         self.shard.shard_id
