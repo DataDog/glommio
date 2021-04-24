@@ -41,23 +41,24 @@
 //! not currently considered in selecting CPUs.
 //!
 //! Some helpful references:
-//! https://www.kernel.org/doc/html/latest/admin-guide/cputopology.html
-//! https://www.kernel.org/doc/html/latest/vm/numa.html
-//! https://www.kernel.org/doc/html/latest/core-api/cpu_hotplug.html
+//! <https://www.kernel.org/doc/html/latest/admin-guide/cputopology.html>
+//! <https://www.kernel.org/doc/html/latest/vm/numa.html>
+//! <https://www.kernel.org/doc/html/latest/core-api/cpu_hotplug.html>
 
 #[cfg(target_os = "linux")]
 mod linux_sysfs;
 mod pq_tree;
 
+use super::Placement;
+use crate::{error::BuilderErrorKind, GlommioError};
 use pq_tree::{
     marker::{Pack, Priority, Spread},
     Level,
     Node,
 };
+use std::{collections::HashSet, convert::TryInto};
 
-use super::Placement;
-
-use std::{collections::HashSet, convert::TryInto, io};
+type Result<T> = crate::Result<T, ()>;
 
 /// A description of the CPU's location in the machine topology.
 #[derive(Clone, Debug)]
@@ -79,18 +80,17 @@ pub struct CpuLocation {
 /// executors created by a
 /// [`LocalExecutorPoolBuilder`](super::LocalExecutorPoolBuilder) are run.
 ///
-/// Specifically, certain [`Placement`] variants are constructed with an
-/// `Option<CpuSet>`.  Please see the documentation `Placement` variants to
-/// understand how `CpuSet` restrictions apply to that variant.  CPUs are
+/// Please see the documentation for [`Placement`] variants to
+/// understand how `CpuSet` restrictions apply to each variant.  CPUs are
 /// identified via their [`CpuLocation`].
 #[derive(Clone, Debug)]
 pub struct CpuSet(Vec<CpuLocation>);
 
 impl CpuSet {
-    /// Creates a `CpuSet` representing all online CPUs on this machine.  The
-    /// function will return an `Err` if the hardware topology could not be
-    /// obtained from this machine.
-    pub fn online() -> io::Result<Self> {
+    /// Creates a `CpuSet` representing all CPUs that are online.
+    /// The function will return an `Err` if the hardware topology could not
+    /// be obtained from this machine.
+    pub fn online() -> Result<Self> {
         Ok(Self(linux_sysfs::get_machine_topology_unsorted()?))
     }
 
@@ -98,8 +98,18 @@ impl CpuSet {
     /// resulting `CpuSet` will only include `CpuLocation`s for which the
     /// provided closure returns `true`. Note that each call to `filter`
     /// will use as input the list of CPUs previously selected (i.e. the
-    /// list is *not* reset on each call). The method returns the number of
-    /// CPUs currently held by `CpuSet`.
+    /// list is *not* reset on each call).
+    ///
+    /// ```
+    /// use glommio::CpuSet;
+    ///
+    /// // get CPUs on numa node 0
+    /// let cpus = CpuSet::online()
+    ///     .expect("Err: please file an issue with glommio")
+    ///     .filter(|l| l.numa_node == 0);
+    ///
+    /// println!("The filtered CPUs are: {:#?}", cpus);
+    /// ```
     pub fn filter<F>(mut self, f: F) -> Self
     where
         F: FnMut(&CpuLocation) -> bool,
@@ -189,22 +199,47 @@ pub(crate) enum CpuSetGenerator {
 }
 
 impl CpuSetGenerator {
-    pub fn new(placement: Placement) -> io::Result<Self> {
+    pub fn new(placement: Placement, nr_shards: usize) -> Result<Self> {
         let this = match placement {
             Placement::Unbound => Self::Unbound,
-            Placement::SharedOnCpus(cpus) => Self::Shared(cpus),
+            Placement::SharedOnCpus(cpus) => {
+                Self::check_nr_cpus(1, &cpus)?;
+                Self::Shared(cpus)
+            }
             Placement::MaxSpread => {
                 let cpus = CpuSet::online()?;
+                Self::check_nr_cpus(nr_shards, &cpus)?;
                 Self::MaxSpread(MaxSpreader::from_cpu_set(cpus))
             }
-            Placement::MaxSpreadOnCpus(cpus) => Self::MaxSpread(MaxSpreader::from_cpu_set(cpus)),
+            Placement::MaxSpreadOnCpus(cpus) => {
+                Self::check_nr_cpus(nr_shards, &cpus)?;
+                Self::MaxSpread(MaxSpreader::from_cpu_set(cpus))
+            }
             Placement::MaxPack => {
                 let cpus = CpuSet::online()?;
+                Self::check_nr_cpus(nr_shards, &cpus)?;
                 Self::MaxPack(MaxPacker::from_cpu_set(cpus))
             }
-            Placement::MaxPackOnCpus(cpus) => Self::MaxPack(MaxPacker::from_cpu_set(cpus)),
+            Placement::MaxPackOnCpus(cpus) => {
+                Self::check_nr_cpus(nr_shards, &cpus)?;
+                Self::MaxPack(MaxPacker::from_cpu_set(cpus))
+            }
         };
         Ok(this)
+    }
+
+    fn check_nr_cpus(required: usize, cpu_set: &CpuSet) -> Result<()> {
+        let available = cpu_set.len();
+        if required <= available {
+            Ok(())
+        } else {
+            Err(GlommioError::BuilderError(
+                BuilderErrorKind::InsufficientCpus {
+                    required,
+                    available,
+                },
+            ))
+        }
     }
 
     /// A method that generates a [`CpuIter`] according to the provided

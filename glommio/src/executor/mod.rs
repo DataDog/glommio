@@ -613,65 +613,75 @@ impl Default for LocalExecutorBuilder {
 #[derive(Debug)]
 pub enum Placement {
     /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
-    /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.
+    /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.  This is the
+    /// default placement.
     Unbound,
     /// The `SharedOnCpus` variant binds each [`LocalExecutor`] to the set of
     /// CPUs specified by [`CpuSet`].  With an unfiltered CPU
     /// set returned by [`CpuSet::online`], this is similar to using `Unbound`
     /// with the distinction that bringing additional CPUs online will not
-    /// allow the executors to run on the newly available CPUs.
-    ///
-    /// The `Shared` variant allows the number of shards specified in
+    /// allow the executors to run on the newly available CPUs.  The
+    /// `SharedOnCpus` variant allows the number of shards specified in
     /// [`LocalExecutorPoolBuilder::new`] to be greater than the number of CPUs
     /// as long as at least one CPU is included in `CpuSet`.
+    ///
+    /// #### Errors
+    ///
+    /// If the provided [`CpuSet`] contains no CPUs, a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
     SharedOnCpus(CpuSet),
-    /// Iterates over `CpuLocation`s in the machine topology with a high degree
-    /// of separation from previous `CpuLocation`s returned by the iterator.
-    /// The order in which items are returned by `MaxSpread` is
-    /// non-deterministic.
+    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
+    /// that the set of all CPUs selected has a high degree of sepration.
+    /// The selection proceeds from all CPUs that are online in a
+    /// non-deterministic manner.  See [`Placement::MaxSpreadOnCpus`] for a
+    /// way to restrict the set of CPUs available.
     ///
-    /// ### Optional Arguments
-    ///
-    /// The optional `CpuSet` can be used to restrict
-    /// the set from which CPUs will be selected.
+    /// #### Errors
     ///
     /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs in the optional [`CpuSet`], then a
-    /// call to [`LocalExecutorPoolBuilder::on_all_shards`] will return a
-    /// `Result::Err`.  If the number of shards specified in
-    /// [`LocalExecutorPoolBuilder::new`] is less than the number of CPUs in
-    /// [`CpuSet`] then some of the CPUs specified in [`CpuSet`]
-    /// will not be used.
-    ///
-    /// The behavior of `MaxSpread(None)` is identical to using an unfiltered
-    /// CPU set obtained from [`CpuSet::online`].
-    // TODO: is it worth having an `Option` here or should this be constructed as
-    // `MaxSpread(CpuSet::online()?)`
+    /// is greater than the number of CPUs available, then a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
     MaxSpread,
-    MaxSpreadOnCpus(CpuSet),
-    /// Iterates over `CpuLocation`s in the machine topology with a
-    /// low degree of separation from previous `CpuLocation`s returned by
-    /// the iterator.  If the number of CPUs requested is larger than the
-    /// number of CPUs online, `Placement::MaxPack` will cycle through
-    /// `CpuLocation`, where each cycle is non-deterministic.
+    /// Like [`Placement::MaxSpread`] but allows manually restricting the CPUs
+    /// on which [`LocalExecutor`]s can be placed via a [`CpuSet`].  If the
+    /// number of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is less than the number of CPUs in the provided `CpuSet` then some
+    /// CPUs will not be used.
     ///
-    /// ### Optional Arguments
-    ///
-    /// The optional `CpuSet` can be used to restrict the set from which CPUs
-    /// will be selected.
+    /// #### Errors
     ///
     /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs in the optional [`CpuSet`], then a
-    /// call to [`LocalExecutorPoolBuilder::on_all_shards`] will return a
-    /// `Result::Err`.  If the number of shards specified in
-    /// [`LocalExecutorPoolBuilder::new`] is less than the number of CPUs in
-    /// [`CpuSet`] then some of the CPUs specified in [`CpuSet`]
-    /// will not be used.
+    /// is greater than the number of CPUs available, then a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
+    MaxSpreadOnCpus(CpuSet),
+    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
+    /// that the set of all CPUs selected has a low degree of sepration.
+    /// The selection proceeds from all CPUs that are online in a
+    /// non-deterministic manner.  See [`Placement::MaxPackOnCpus`] for a
+    /// way to restrict the set of CPUs available.
     ///
-    /// The behavior of `MaxPack(None)` is identical to using an unfiltered
-    /// CPU set obtained from [`CpuSet::online`].
-    // TODO: use `Option` here?
+    /// #### Errors
+    ///
+    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is greater than the number of CPUs available, then a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
     MaxPack,
+    /// Like [`Placement::MaxPack`] but allows manually restricting the CPUs on
+    /// which [`LocalExecutor`]s can be placed via a [`CpuSet`].  If the number
+    /// of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is less than the number of CPUs in the provided `CpuSet` then some
+    /// CPUs will not be used.
+    ///
+    /// #### Errors
+    ///
+    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is greater than the number of CPUs available, then a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
     MaxPackOnCpus(CpuSet),
     /* TODO:
      * Custom, */
@@ -803,7 +813,8 @@ impl LocalExecutorPoolBuilder {
     {
         let mut handles = PoolThreadHandles::new();
 
-        let mut cpu_set_gen = match placement::CpuSetGenerator::new(self.placement) {
+        let mut cpu_set_gen = match placement::CpuSetGenerator::new(self.placement, self.nr_shards)
+        {
             Ok(gen) => gen,
             Err(e) => {
                 for _ in 0..self.nr_shards {

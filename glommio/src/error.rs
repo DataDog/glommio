@@ -97,6 +97,31 @@ impl fmt::Display for ExecutorErrorKind {
     }
 }
 
+/// Error types that can be created when building executors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuilderErrorKind {
+    InsufficientCpus {
+        /// the number of CPUs required for success
+        required: usize,
+
+        /// the number of CPUs available
+        available: usize,
+    },
+}
+
+impl fmt::Display for BuilderErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InsufficientCpus {
+                available,
+                required,
+            } => {
+                write!(f, "Found {} of {} required CPUs", available, required)
+            }
+        }
+    }
+}
+
 /// Composite error type to encompass all error types glommio produces.
 ///
 /// Single error type that will be produced by any public Glommio API
@@ -136,16 +161,19 @@ pub enum GlommioError<T> {
         /// The operation that was being attempted.
         op: &'static str,
 
-        /// The path of the file, if relavent.
+        /// The path of the file, if relevant.
         path: Option<PathBuf>,
 
-        /// The numeric file descriptor of the relavent resource.
+        /// The numeric file descriptor of the relevant resource.
         fd: Option<RawFd>,
     },
 
     /// Executor error variant(s) for signaling certain error conditions
     /// inside of the executor.
     ExecutorError(ExecutorErrorKind),
+
+    /// Error variant(s) produced when building executors.
+    BuilderError(BuilderErrorKind),
 
     /// The resource in question is closed. Generic because the channel
     /// variant needs to return the actual item sent into the channel.
@@ -187,6 +215,7 @@ impl<T> fmt::Display for GlommioError<T> {
                 source, op, path, fd
             ),
             GlommioError::ExecutorError(err) => write!(f, "Executor error: {}", err),
+            GlommioError::BuilderError(err) => write!(f, "Builder error: {}", err),
             GlommioError::Closed(rt) => match rt {
                 ResourceType::Semaphore {
                     requested,
@@ -359,6 +388,15 @@ impl<T> Debug for GlommioError<T> {
                     f.write_fmt(format_args!("Invalid Executor ID {{ id: {} }}", x))
                 }
             },
+            GlommioError::BuilderError(kind) => match kind {
+                BuilderErrorKind::InsufficientCpus {
+                    required,
+                    available,
+                } => f.write_fmt(format_args!(
+                    "InsufficientCpus {{ required: {}, available: {} }}",
+                    required, available
+                )),
+            },
             GlommioError::EnhancedIoError {
                 source,
                 op,
@@ -403,6 +441,9 @@ impl<T> From<GlommioError<T>> for io::Error {
                 io::ErrorKind::InvalidInput,
                 format!("invalid executor id {}", id),
             ),
+            GlommioError::BuilderError(kind @ BuilderErrorKind::InsufficientCpus { .. }) => {
+                io::Error::new(io::ErrorKind::Other, format!("Builder error: {}", kind))
+            }
             GlommioError::EnhancedIoError { source, .. } => {
                 io::Error::new(source.kind(), display_err)
             }
