@@ -98,15 +98,22 @@ impl fmt::Display for ExecutorErrorKind {
 }
 
 /// Error types that can be created when building executors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum BuilderErrorKind {
+    /// Error type for using a [`Placement`](crate::Placement) that requires
+    /// more CPUs than available.
     InsufficientCpus {
-        /// the number of CPUs required for success
+        /// The number of CPUs required for success.
         required: usize,
 
-        /// the number of CPUs available
+        /// The number of CPUs available.
         available: usize,
     },
+    /// Error type returned by
+    /// [`PoolThreadHandles::join_all`](crate::PoolThreadHandles::join_all)
+    /// for threads that panicked.  Same as
+    /// [`JoinHandle`](std::thread::JoinHandle).
+    ThreadPanic(Box<dyn std::any::Any + Send>),
 }
 
 impl fmt::Display for BuilderErrorKind {
@@ -115,9 +122,8 @@ impl fmt::Display for BuilderErrorKind {
             Self::InsufficientCpus {
                 available,
                 required,
-            } => {
-                write!(f, "Found {} of {} required CPUs", available, required)
-            }
+            } => write!(f, "Found {} of {} required CPUs", available, required),
+            Self::ThreadPanic(_) => write!(f, "Thread panicked"),
         }
     }
 }
@@ -215,7 +221,7 @@ impl<T> fmt::Display for GlommioError<T> {
                 source, op, path, fd
             ),
             GlommioError::ExecutorError(err) => write!(f, "Executor error: {}", err),
-            GlommioError::BuilderError(err) => write!(f, "Builder error: {}", err),
+            GlommioError::BuilderError(err) => write!(f, "Executror builder error: {}", err),
             GlommioError::Closed(rt) => match rt {
                 ResourceType::Semaphore {
                     requested,
@@ -396,6 +402,7 @@ impl<T> Debug for GlommioError<T> {
                     "InsufficientCpus {{ required: {}, available: {} }}",
                     required, available
                 )),
+                BuilderErrorKind::ThreadPanic(_) => write!(f, "Thread panicked {{ .. }}"),
             },
             GlommioError::EnhancedIoError {
                 source,
@@ -441,9 +448,11 @@ impl<T> From<GlommioError<T>> for io::Error {
                 io::ErrorKind::InvalidInput,
                 format!("invalid executor id {}", id),
             ),
-            GlommioError::BuilderError(kind @ BuilderErrorKind::InsufficientCpus { .. }) => {
-                io::Error::new(io::ErrorKind::Other, format!("Builder error: {}", kind))
-            }
+            GlommioError::BuilderError(BuilderErrorKind::InsufficientCpus { .. })
+            | GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(_)) => io::Error::new(
+                io::ErrorKind::Other,
+                format!("Executor builder error: {}", display_err),
+            ),
             GlommioError::EnhancedIoError { source, .. } => {
                 io::Error::new(source.kind(), display_err)
             }

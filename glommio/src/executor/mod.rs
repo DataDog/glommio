@@ -40,7 +40,7 @@ use std::{
     marker::PhantomData,
     pin::Pin,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Condvar, Mutex},
     task::{Context, Poll},
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -50,6 +50,7 @@ use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
 use crate::{
+    error::BuilderErrorKind,
     parking,
     sys,
     task::{self, waker_fn::waker_fn},
@@ -707,10 +708,12 @@ impl Default for Placement {
 /// ```
 /// use glommio::{Local, LocalExecutorPoolBuilder};
 ///
-/// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|| async move {
-///     let id = Local::id();
-///     println!("hello from executor {}", id);
-/// });
+/// let handles = LocalExecutorPoolBuilder::new(4)
+///     .on_all_shards(|| async move {
+///         let id = Local::id();
+///         println!("hello from executor {}", id);
+///     })
+///     .unwrap();
 ///
 /// handles.join_all();
 /// ```
@@ -806,53 +809,44 @@ impl LocalExecutorPoolBuilder {
     /// entities manually.
     #[must_use = "This spawns executors on multiple threads; threads may fail to spawn or you may \
                   need to call `PoolThreadHandles::join_all()` to keep the main thread alive"]
-    pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> PoolThreadHandles
+    pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> Result<PoolThreadHandles>
     where
         G: FnOnce() -> F + Clone + Send + 'static,
         F: Future<Output = T> + 'static,
     {
         let mut handles = PoolThreadHandles::new();
+        let mut cpu_set_gen = placement::CpuSetGenerator::new(self.placement, self.nr_shards)?;
 
-        let mut cpu_set_gen = match placement::CpuSetGenerator::new(self.placement, self.nr_shards)
-        {
-            Ok(gen) => gen,
-            Err(e) => {
-                for _ in 0..self.nr_shards {
-                    handles.push(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("unable to iterate over machine topology: {}", e),
-                    )
-                    .into()));
-                }
-                return handles;
-            }
-        };
-
+        let cv = Arc::new((Mutex::new(Ok(self.nr_shards)), Condvar::new()));
         for _ in 0..self.nr_shards {
-            // TODO: determine the cpu set based on the `Placement` policy; do we allow
-            // `nr_shards` being greater than the number of cpus online?
-            // TODO: decide whether any local executors should be launched if a thread
-            // failed to start
             let cpu_set = cpu_set_gen.next();
-
-            let notifier = match sys::new_sleep_notifier() {
-                Ok(n) => n,
-                Err(e) => {
-                    handles.push(Err(e.into()));
-                    continue;
-                }
-            };
-
+            let notifier = sys::new_sleep_notifier()?;
             let name = format!("{}-{}", &self.name, notifier.id());
-            let handle = Builder::new()
-                .name(name)
-                .spawn({
-                    let io_memory = self.io_memory;
-                    let preempt_timer_duration = self.preempt_timer_duration;
-                    let spin_before_park = self.spin_before_park;
-                    let fut_gen = fut_gen.clone();
+            let handle = Builder::new().name(name).spawn({
+                let io_memory = self.io_memory;
+                let preempt_timer_duration = self.preempt_timer_duration;
+                let spin_before_park = self.spin_before_park;
+                let fut_gen = fut_gen.clone();
+                let cv = Arc::clone(&cv);
 
-                    move || {
+                move || {
+                    let is_ok = {
+                        let mut lck = cv.0.lock().expect("unreachable: poisoned mutex");
+                        if let Ok(ref mut n) = *lck {
+                            *n -= 1;
+                            if *n == 0 {
+                                cv.1.notify_all();
+                            }
+                        };
+
+                        lck =
+                            cv.1.wait_while(lck, |r| r.map(|n| n > 0).unwrap_or(false))
+                                .expect("unreachable: poisoned mutex");
+
+                        *lck == Ok(0)
+                    };
+
+                    if is_ok {
                         let mut le =
                             LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
 
@@ -866,13 +860,19 @@ impl LocalExecutorPoolBuilder {
                             fut_gen().await;
                         })
                     }
-                })
-                .map_err(Into::into);
+                }
+            });
 
-            handles.push(handle);
+            match handle {
+                Ok(h) => handles.push(h),
+                Err(e) => {
+                    *cv.0.lock().expect("unreachable: poisoned mutex") = Err(());
+                    cv.1.notify_all();
+                    return Err(e.into());
+                }
+            }
         }
-
-        handles
+        Ok(handles)
     }
 }
 
@@ -881,7 +881,7 @@ impl LocalExecutorPoolBuilder {
 /// This struct is returned by [`LocalExecutorPoolBuilder::on_all_shards`].
 #[derive(Debug)]
 pub struct PoolThreadHandles {
-    handles: Vec<Result<JoinHandle<()>>>,
+    handles: Vec<JoinHandle<()>>,
 }
 
 impl PoolThreadHandles {
@@ -891,23 +891,13 @@ impl PoolThreadHandles {
         }
     }
 
-    fn push(&mut self, handle: Result<JoinHandle<()>>) {
+    fn push(&mut self, handle: JoinHandle<()>) {
         self.handles.push(handle)
-    }
-
-    /// Returns the number of threads that were successfully spawned.
-    pub fn nr_spawn_ok(&self) -> usize {
-        self.handles.iter().filter(|r| r.is_ok()).count()
-    }
-
-    /// Returns the number of threads that failed to spawn.
-    pub fn nr_spawn_err(&self) -> usize {
-        self.handles.iter().filter(|r| r.is_err()).count()
     }
 
     /// Obtain a reference to the [`JoinHandle`]s created by
     /// [`LocalExecutorPoolBuilder::on_all_shards`].
-    pub fn handles(&self) -> &Vec<Result<JoinHandle<()>>> {
+    pub fn handles(&self) -> &Vec<JoinHandle<()>> {
         &self.handles
     }
 
@@ -916,11 +906,9 @@ impl PoolThreadHandles {
     pub fn join_all(self) -> Vec<Result<()>> {
         self.handles
             .into_iter()
-            .map(|hndl| match hndl {
-                Ok(h) => h
-                    .join()
-                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "thread panicked").into()),
-                Err(e) => Err(e),
+            .map(|h| {
+                h.join()
+                    .map_err(|e| GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(e)))
             })
             .collect::<Vec<_>>()
     }
@@ -2839,20 +2827,19 @@ mod test {
         let nr_cpus = 4;
 
         let count = Arc::new(AtomicUsize::new(0));
-        let handles = LocalExecutorPoolBuilder::new(nr_cpus).on_all_shards({
-            let count = Arc::clone(&count);
-            || async move {
-                count.fetch_add(1, Ordering::Relaxed);
-            }
-        });
+        let handles = LocalExecutorPoolBuilder::new(nr_cpus)
+            .on_all_shards({
+                let count = Arc::clone(&count);
+                || async move {
+                    count.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+            .unwrap();
 
-        assert_eq!(0, handles.nr_spawn_err());
-        assert_eq!(nr_cpus, handles.nr_spawn_ok());
-
-        assert_eq!(nr_cpus, handles.handles().len());
-        handles.handles().iter().for_each(|hndl| {
-            assert!(hndl.is_ok());
-        });
+        assert_eq!(
+            nr_cpus,
+            handles.handles().iter().map(|h| h.thread().id()).count()
+        );
 
         handles
             .join_all()
@@ -2863,22 +2850,27 @@ mod test {
 
     #[test]
     fn executor_pool_builder_placements() {
-        let nr_cpus = CpuSet::online().unwrap().len();
-        assert!(0 < nr_cpus);
+        let cpu_set = CpuSet::online().unwrap();
+        assert!(0 < cpu_set.len());
 
-        for nn in 0..3 {
-            let nr_execs = nn * nr_cpus;
+        for nn in 0..2 {
+            let nr_execs = nn * cpu_set.len();
             let placements = [
-                Placement::MaxPack,
+                Placement::Unbound,
+                Placement::SharedOnCpus(cpu_set.clone()),
                 Placement::MaxSpread,
-                Placement::MaxPackOnCpus(CpuSet::online().unwrap()),
-                Placement::MaxSpreadOnCpus(CpuSet::online().unwrap()),
-                Placement::MaxPackOnCpus(CpuSet::online().unwrap()),
-                Placement::MaxPackOnCpus(CpuSet::online().unwrap().filter(|l| l.cpu == 0)),
+                Placement::MaxSpreadOnCpus(cpu_set.clone()),
+                Placement::MaxPack,
+                Placement::MaxPackOnCpus(cpu_set.clone()),
             ];
+
             for pp in std::array::IntoIter::new(placements) {
                 let ids = Arc::new(Mutex::new(HashMap::new()));
                 let cpus = Arc::new(Mutex::new(HashMap::new()));
+                let cpu_hard_bind = match pp {
+                    Placement::Unbound | Placement::SharedOnCpus(_) => false,
+                    _ => true,
+                };
 
                 let handles = LocalExecutorPoolBuilder::new(nr_execs)
                     .placement(pp)
@@ -2900,23 +2892,76 @@ mod test {
                                 .and_modify(|e| *e += 1)
                                 .or_insert(1);
                         }
-                    });
+                    })
+                    .unwrap();
 
-                assert_eq!(0, handles.nr_spawn_err());
-                assert_eq!(nr_execs, handles.nr_spawn_ok());
+                assert_eq!(nr_execs, handles.handles().len());
                 handles
                     .join_all()
                     .into_iter()
                     .for_each(|r| assert!(r.is_ok()));
 
                 assert_eq!(nr_execs, ids.lock().unwrap().len());
-                assert_eq!(std::cmp::min(nr_execs, nr_cpus), cpus.lock().unwrap().len());
-
                 ids.lock().unwrap().values().for_each(|v| assert_eq!(*v, 1));
-                cpus.lock()
+
+                if cpu_hard_bind {
+                    assert_eq!(nr_execs, cpus.lock().unwrap().len());
+                    cpus.lock()
+                        .unwrap()
+                        .values()
+                        .for_each(|v| assert_eq!(*v, nn));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn executor_pool_builder_shards_limit() {
+        let cpu_set = CpuSet::online().unwrap();
+        assert!(0 < cpu_set.len());
+
+        // test: confirm that we can always get shards up to the # of cpus
+        {
+            let placements = [
+                (false, Placement::Unbound),
+                (false, Placement::SharedOnCpus(cpu_set.clone())),
+                (true, Placement::MaxSpread),
+                (true, Placement::MaxSpreadOnCpus(cpu_set.clone())),
+                (true, Placement::MaxPack),
+                (true, Placement::MaxPackOnCpus(cpu_set.clone())),
+            ];
+
+            for (_shard_limited, p) in std::array::IntoIter::new(placements) {
+                LocalExecutorPoolBuilder::new(cpu_set.len())
+                    .placement(p)
+                    .on_all_shards(|| async move {})
                     .unwrap()
-                    .values()
-                    .for_each(|v| assert_eq!(*v, nn));
+                    .join_all();
+            }
+        }
+
+        // test: confirm that some placements fail when shards are # of cpus + 1
+        {
+            let placements = [
+                (false, Placement::Unbound),
+                (false, Placement::SharedOnCpus(cpu_set.clone())),
+                (true, Placement::MaxSpread),
+                (true, Placement::MaxSpreadOnCpus(cpu_set.clone())),
+                (true, Placement::MaxPack),
+                (true, Placement::MaxPackOnCpus(cpu_set.clone())),
+            ];
+
+            for (shard_limited, p) in std::array::IntoIter::new(placements) {
+                match LocalExecutorPoolBuilder::new(1 + cpu_set.len())
+                    .placement(p)
+                    .on_all_shards(|| async move {})
+                {
+                    Ok(handles) => {
+                        handles.join_all();
+                        assert!(!shard_limited);
+                    }
+                    Err(_) => assert!(shard_limited),
+                }
             }
         }
     }
@@ -2945,5 +2990,17 @@ mod test {
             do_later.await;
             assert_eq!(a, 2);
         });
+    }
+
+    #[test]
+    fn executor_pool_builder_thread_panic() {
+        let nr_execs = 8;
+        let res = LocalExecutorPoolBuilder::new(nr_execs)
+            .on_all_shards(|| async move { panic!("join handle will be Err") })
+            .unwrap()
+            .join_all();
+
+        assert_eq!(nr_execs, res.len());
+        assert!(res.into_iter().all(|r| r.is_err()));
     }
 }
