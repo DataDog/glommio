@@ -1,6 +1,6 @@
 [package]
 name = "glommio"
-version = "0.3.1"
+version = "0.4.0"
 authors = [ "Glauber Costa <glauber@datadoghq.com>",
             "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
             "DataDog"]
