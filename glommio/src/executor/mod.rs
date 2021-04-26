@@ -735,7 +735,7 @@ pub struct LocalExecutorPoolBuilder {
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
     /// Indicates a policy by which [`LocalExecutor`]s are bound to CPUs.
-    placement: Placement,
+    placement: Option<Placement>,
 }
 
 impl LocalExecutorPoolBuilder {
@@ -750,7 +750,7 @@ impl LocalExecutorPoolBuilder {
             name: String::from("unnamed"),
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
-            placement: Placement::Unbound,
+            placement: Some(Placement::Unbound),
         }
     }
 
@@ -790,7 +790,7 @@ impl LocalExecutorPoolBuilder {
     /// are bound to the machine's hardware topology (i.e. which CPUs to
     /// use).  The default is [`Placement::Unbound`].
     pub fn placement(mut self, p: Placement) -> Self {
-        self.placement = p;
+        self.placement = Some(p);
         self
     }
 
@@ -809,70 +809,102 @@ impl LocalExecutorPoolBuilder {
     /// entities manually.
     #[must_use = "This spawns executors on multiple threads; threads may fail to spawn or you may \
                   need to call `PoolThreadHandles::join_all()` to keep the main thread alive"]
-    pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> Result<PoolThreadHandles>
+    pub fn on_all_shards<G, F, T>(mut self, fut_gen: G) -> Result<PoolThreadHandles<T>>
     where
         G: FnOnce() -> F + Clone + Send + 'static,
         F: Future<Output = T> + 'static,
+        T: Send + 'static,
     {
         let mut handles = PoolThreadHandles::new();
-        let mut cpu_set_gen = placement::CpuSetGenerator::new(self.placement, self.nr_shards)?;
+        let placement = self.placement.take().expect("placement missing");
+        let mut cpu_set_gen = placement::CpuSetGenerator::new(placement, self.nr_shards)?;
 
+        // The `Result` stored inside the mutex has the following meaning:
+        // Ok(n > 0)   =>  `n` threads still need to be spawned
+        // Ok(n == 0)  =>  All threads were successfully spawned
+        // Err(())     =>  A thread failed to spawn; return `Err` from pool builder
         let cv = Arc::new((Mutex::new(Ok(self.nr_shards)), Condvar::new()));
         for _ in 0..self.nr_shards {
-            let cpu_set = cpu_set_gen.next();
-            let notifier = sys::new_sleep_notifier()?;
-            let name = format!("{}-{}", &self.name, notifier.id());
-            let handle = Builder::new().name(name).spawn({
-                let io_memory = self.io_memory;
-                let preempt_timer_duration = self.preempt_timer_duration;
-                let spin_before_park = self.spin_before_park;
-                let fut_gen = fut_gen.clone();
-                let cv = Arc::clone(&cv);
-
-                move || {
-                    let is_ok = {
-                        let mut lck = cv.0.lock().expect("unreachable: poisoned mutex");
-                        if let Ok(ref mut n) = *lck {
-                            *n -= 1;
-                            if *n == 0 {
-                                cv.1.notify_all();
-                            }
-                        };
-
-                        lck =
-                            cv.1.wait_while(lck, |r| r.map(|n| n > 0).unwrap_or(false))
-                                .expect("unreachable: poisoned mutex");
-
-                        *lck == Ok(0)
-                    };
-
-                    if is_ok {
-                        let mut le =
-                            LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
-
-                        if !cpu_set.is_empty() {
-                            let set = cpu_set.map(|l| l.cpu);
-                            le.bind_to_cpu_set(set).unwrap();
-                            le.queues.borrow_mut().spin_before_park = spin_before_park;
-                        }
-                        le.init();
-                        le.run(async move {
-                            fut_gen().await;
-                        })
-                    }
-                }
-            });
-
-            match handle {
-                Ok(h) => handles.push(h),
-                Err(e) => {
-                    *cv.0.lock().expect("unreachable: poisoned mutex") = Err(());
-                    cv.1.notify_all();
-                    return Err(e.into());
-                }
-            }
+            let handle = self.spawn_thread(&mut cpu_set_gen, &cv, fut_gen.clone())?;
+            handles.push(handle);
         }
         Ok(handles)
+    }
+
+    fn spawn_thread<G, F, T>(
+        &self,
+        cpu_set_gen: &mut placement::CpuSetGenerator,
+        cv: &Arc<(Mutex<std::result::Result<usize, ()>>, Condvar)>,
+        fut_gen: G,
+    ) -> Result<JoinHandle<Result<T>>>
+    where
+        G: FnOnce() -> F + Clone + Send + 'static,
+        F: Future<Output = T> + 'static,
+        T: Send + 'static,
+    {
+        let cpu_set = cpu_set_gen.next();
+        let notifier = sys::new_sleep_notifier()?;
+        let name = format!("{}-{}", &self.name, notifier.id());
+        let handle = Builder::new().name(name).spawn({
+            let io_memory = self.io_memory;
+            let preempt_timer_duration = self.preempt_timer_duration;
+            let spin_before_park = self.spin_before_park;
+            let cv = Arc::clone(&cv);
+
+            move || {
+                // only allow the thread to create the `LocalExecutor` if all other threads that
+                // are supposed to be created by the pool builder were successfully spawned
+                let all_ok = {
+                    // update the counter and notify other threads if this is the last thread that
+                    // needed to be spawned
+                    let mut lck = cv.0.lock().expect("unreachable: poisoned mutex");
+                    if let Ok(ref mut n) = *lck {
+                        *n -= 1;
+                        if *n == 0 {
+                            cv.1.notify_all();
+                        }
+                    };
+
+                    // if other threads still need to be spawned, we wait for them here before
+                    // moving on to creat the `LocalExecutor`, if another thread failed to spawn,
+                    // we also move on, but the Result stored in `cv` will be an `Err`
+                    lck =
+                        cv.1.wait_while(lck, |r| r.map(|n| n > 0).unwrap_or(false))
+                            .expect("unreachable: poisoned mutex");
+
+                    // confirm if another thread failed to spawn
+                    *lck == Ok(0)
+                };
+
+                if all_ok {
+                    let mut le = LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
+
+                    if !cpu_set.is_empty() {
+                        let set = cpu_set.map(|l| l.cpu);
+                        le.bind_to_cpu_set(set).unwrap();
+                        le.queues.borrow_mut().spin_before_park = spin_before_park;
+                    }
+                    le.init();
+                    le.run(async move { Ok(fut_gen().await) })
+                } else {
+                    // this `Err` isn't visible to the user; the pool builder directly returns an
+                    // `Err` from the `std::thread::Builder`
+                    Err(io::Error::new(io::ErrorKind::Other, "spawn aborted").into())
+                }
+            }
+        });
+
+        match handle {
+            Ok(h) => Ok(h),
+            Err(e) => {
+                // The `std::thread::Builder` was unable to spawn the thread and retuned an
+                // `Err`, so we notify other threads to let them know they
+                // should not proceed with constructing their `LocalExecutor`s
+                *cv.0.lock().expect("unreachable: poisoned mutex") = Err(());
+                cv.1.notify_all();
+                Err(e.into())
+            }
+        }
     }
 }
 
@@ -880,35 +912,40 @@ impl LocalExecutorPoolBuilder {
 ///
 /// This struct is returned by [`LocalExecutorPoolBuilder::on_all_shards`].
 #[derive(Debug)]
-pub struct PoolThreadHandles {
-    handles: Vec<JoinHandle<()>>,
+pub struct PoolThreadHandles<T> {
+    handles: Vec<JoinHandle<Result<T>>>,
 }
 
-impl PoolThreadHandles {
+impl<T> PoolThreadHandles<T> {
     fn new() -> Self {
         Self {
             handles: Vec::new(),
         }
     }
 
-    fn push(&mut self, handle: JoinHandle<()>) {
+    fn push(&mut self, handle: JoinHandle<Result<T>>) {
         self.handles.push(handle)
     }
 
-    /// Obtain a reference to the [`JoinHandle`]s created by
-    /// [`LocalExecutorPoolBuilder::on_all_shards`].
-    pub fn handles(&self) -> &Vec<JoinHandle<()>> {
+    /// Obtain a reference to the `JoinHandle`s.
+    pub fn handles(&self) -> &Vec<JoinHandle<Result<T>>> {
         &self.handles
     }
 
-    /// Calls [`JoinHandle::join`] on all handles created by
-    /// [`LocalExecutorPoolBuilder::on_all_shards`]
-    pub fn join_all(self) -> Vec<Result<()>> {
+    /// Calls [`JoinHandle::join`] on all handles.
+    pub fn join_all(self) -> Vec<Result<T>> {
         self.handles
             .into_iter()
             .map(|h| {
-                h.join()
-                    .map_err(|e| GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(e)))
+                match h.join() {
+                    Ok(ok @ Ok(_)) => ok,
+                    // this variant is unreachable since `Err` is only returned from a thread if
+                    // another thread failed to spawn; `LocalExecutorPoolBuilder::on_all_shards`
+                    // returns an immediate `Err` if any thread fails to spawn, so
+                    // `PoolThreadHandles` would never be created
+                    Ok(err @ Err(_)) => err,
+                    Err(e) => Err(GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(e))),
+                }
             })
             .collect::<Vec<_>>()
     }
@@ -2830,9 +2867,7 @@ mod test {
         let handles = LocalExecutorPoolBuilder::new(nr_cpus)
             .on_all_shards({
                 let count = Arc::clone(&count);
-                || async move {
-                    count.fetch_add(1, Ordering::Relaxed);
-                }
+                || async move { count.fetch_add(1, Ordering::Relaxed) }
             })
             .unwrap();
 
@@ -2841,10 +2876,16 @@ mod test {
             handles.handles().iter().map(|h| h.thread().id()).count()
         );
 
-        handles
+        let mut fut_output = handles
             .join_all()
             .into_iter()
-            .for_each(|r| assert!(r.is_ok()));
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+
+        fut_output.sort();
+
+        assert_eq!(fut_output, (0..nr_cpus).into_iter().collect::<Vec<_>>());
+
         assert_eq!(nr_cpus, count.load(Ordering::Relaxed));
     }
 
@@ -3002,5 +3043,21 @@ mod test {
 
         assert_eq!(nr_execs, res.len());
         assert!(res.into_iter().all(|r| r.is_err()));
+    }
+
+    #[test]
+    fn executor_pool_builder_return_values() {
+        let nr_execs = 8;
+        let x = Arc::new(AtomicUsize::new(0));
+        let mut values = LocalExecutorPoolBuilder::new(nr_execs)
+            .on_all_shards(|| async move { x.fetch_add(1, Ordering::Relaxed) })
+            .unwrap()
+            .join_all()
+            .into_iter()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+
+        values.sort();
+        assert_eq!(values, (0..nr_execs).into_iter().collect::<Vec<_>>());
     }
 }
