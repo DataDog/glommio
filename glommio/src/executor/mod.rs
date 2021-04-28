@@ -30,7 +30,11 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 mod multitask;
+mod latch;
 mod placement;
+
+use latch::{Latch, LatchState};
+pub use placement::{CpuLocation, CpuSet};
 
 use std::{
     cell::RefCell,
@@ -40,7 +44,7 @@ use std::{
     marker::PhantomData,
     pin::Pin,
     rc::Rc,
-    sync::{Arc, Condvar, Mutex},
+    sync::Arc,
     task::{Context, Poll},
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -62,8 +66,6 @@ use crate::{
     Shares,
 };
 use ahash::AHashMap;
-
-pub use placement::{CpuLocation, CpuSet};
 
 /// Result type alias that removes the need to specify a type parameter
 /// that's only valid in the channel variants of the error. Otherwise it
@@ -818,23 +820,26 @@ impl LocalExecutorPoolBuilder {
         let mut handles = PoolThreadHandles::new();
         let placement = self.placement.take().expect("placement missing");
         let mut cpu_set_gen = placement::CpuSetGenerator::new(placement, self.nr_shards)?;
+        let latch = Latch::new(self.nr_shards);
 
-        // The `Result` stored inside the mutex has the following meaning:
-        // Ok(n > 0)   =>  `n` threads still need to be spawned
-        // Ok(n == 0)  =>  All threads were successfully spawned
-        // Err(())     =>  A thread failed to spawn; return `Err` from pool builder
-        let cv = Arc::new((Mutex::new(Ok(self.nr_shards)), Condvar::new()));
         for _ in 0..self.nr_shards {
-            let handle = self.spawn_thread(&mut cpu_set_gen, &cv, fut_gen.clone())?;
-            handles.push(handle);
+            match self.spawn_thread(&mut cpu_set_gen, &latch, fut_gen.clone()) {
+                Ok(handle) => handles.push(handle),
+                Err(err) => {
+                    handles.join_all();
+                    return Err(err);
+                }
+            }
         }
+
         Ok(handles)
     }
 
+    /// Spawns a thread
     fn spawn_thread<G, F, T>(
         &self,
         cpu_set_gen: &mut placement::CpuSetGenerator,
-        cv: &Arc<(Mutex<std::result::Result<usize, ()>>, Condvar)>,
+        latch: &Latch,
         fut_gen: G,
     ) -> Result<JoinHandle<Result<T>>>
     where
@@ -849,34 +854,12 @@ impl LocalExecutorPoolBuilder {
             let io_memory = self.io_memory;
             let preempt_timer_duration = self.preempt_timer_duration;
             let spin_before_park = self.spin_before_park;
-            let cv = Arc::clone(&cv);
+            let latch = Latch::clone(&latch);
 
             move || {
                 // only allow the thread to create the `LocalExecutor` if all other threads that
                 // are supposed to be created by the pool builder were successfully spawned
-                let all_ok = {
-                    // update the counter and notify other threads if this is the last thread that
-                    // needed to be spawned
-                    let mut lck = cv.0.lock().expect("unreachable: poisoned mutex");
-                    if let Ok(ref mut n) = *lck {
-                        *n -= 1;
-                        if *n == 0 {
-                            cv.1.notify_all();
-                        }
-                    };
-
-                    // if other threads still need to be spawned, we wait for them here before
-                    // moving on to creat the `LocalExecutor`, if another thread failed to spawn,
-                    // we also move on, but the Result stored in `cv` will be an `Err`
-                    lck =
-                        cv.1.wait_while(lck, |r| r.map(|n| n > 0).unwrap_or(false))
-                            .expect("unreachable: poisoned mutex");
-
-                    // confirm if another thread failed to spawn
-                    *lck == Ok(0)
-                };
-
-                if all_ok {
+                if latch.arrive_and_wait() == LatchState::Ready {
                     let mut le = LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
 
                     if !cpu_set.is_empty() {
@@ -889,7 +872,7 @@ impl LocalExecutorPoolBuilder {
                 } else {
                     // this `Err` isn't visible to the user; the pool builder directly returns an
                     // `Err` from the `std::thread::Builder`
-                    Err(io::Error::new(io::ErrorKind::Other, "spawn aborted").into())
+                    Err(io::Error::new(io::ErrorKind::Other, "spawn failed").into())
                 }
             }
         });
@@ -900,8 +883,8 @@ impl LocalExecutorPoolBuilder {
                 // The `std::thread::Builder` was unable to spawn the thread and retuned an
                 // `Err`, so we notify other threads to let them know they
                 // should not proceed with constructing their `LocalExecutor`s
-                *cv.0.lock().expect("unreachable: poisoned mutex") = Err(());
-                cv.1.notify_all();
+                latch.cancel().expect("unreachable: latch was ready");
+
                 Err(e.into())
             }
         }
@@ -3059,5 +3042,44 @@ mod test {
 
         values.sort();
         assert_eq!(values, (0..nr_execs).into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn executor_pool_builder_spawn_cancel() {
+        let nr_shards = 8;
+        let mut builder = LocalExecutorPoolBuilder::new(nr_shards);
+        let nr_exectuted = Arc::new(AtomicUsize::new(0));
+
+        let fut_gen = {
+            let nr_exectuted = Arc::clone(&nr_exectuted);
+            || async move {
+                nr_exectuted.fetch_add(1, Ordering::Relaxed);
+                unreachable!("should not execute")
+            }
+        };
+
+        let mut handles = PoolThreadHandles::new();
+        let placement = builder.placement.take().expect("placement missing");
+        let mut cpu_set_gen =
+            placement::CpuSetGenerator::new(placement, builder.nr_shards).unwrap();
+        let latch = Latch::new(builder.nr_shards);
+
+        let ii_cxl = 2;
+        for ii in 0..builder.nr_shards {
+            if ii == nr_shards - ii_cxl {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                assert!(ii_cxl <= latch.cancel().unwrap());
+            }
+            match builder.spawn_thread(&mut cpu_set_gen, &latch, fut_gen.clone()) {
+                Ok(handle) => handles.push(handle),
+                Err(_) => break,
+            }
+        }
+
+        assert_eq!(0, nr_exectuted.load(Ordering::Relaxed));
+        assert_eq!(nr_shards, handles.handles.len());
+        handles.join_all().into_iter().for_each(|s| {
+            assert!(format!("{}", s.unwrap_err()).contains("spawn failed"));
+        });
     }
 }
