@@ -362,8 +362,7 @@ impl ExecutorQueues {
     }
 }
 
-/// [`LocalExecutor`] factory, which can be used in order to configure the
-/// properties of a new [`LocalExecutor`].
+/// A factory that can be used to configure and create a [`LocalExecutor`].
 ///
 /// Methods can be chained on it in order to configure it.
 ///
@@ -631,10 +630,12 @@ impl CpuSetGenerator {
     }
 }
 
-/// A factory that allows creating a pool of [`LocalExecutor`]s, which can be
-/// used in order to configure the properties of the [`LocalExecutor`]s.
-/// Configuration methods apply their settings to all [`LocalExecutor`]s in the
-/// pool unless otherwise specified.
+/// A factory to configure and create a pool of [`LocalExecutor`]s
+///
+/// The `LocalExecutorPoolBuilder` allows creating a pool of [`LocalExecutor`]s,
+/// which can be used in order to configure the properties of the
+/// [`LocalExecutor`]s. Configuration methods apply their settings to all
+/// [`LocalExecutor`]s in the pool unless otherwise specified.
 ///
 /// Methods can be chained on the builder in order to configure it.
 ///
