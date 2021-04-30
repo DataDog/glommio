@@ -1805,6 +1805,7 @@ impl<T> Future for Task<T> {
 #[deprecated = "This API was deemed unsound. Stay tuned while we figure this one out"]
 pub struct ScopedTask<'a, T>(multitask::Task<T>, PhantomData<&'a T>);
 
+#[allow(deprecated)]
 impl<'a, T> ScopedTask<'a, T> {
     /// Spawns a task onto the current single-threaded executor.
     ///
@@ -1854,6 +1855,7 @@ impl<'a, T> ScopedTask<'a, T> {
     ///     assert_eq!(task.await, 3);
     /// })
     /// ```
+    #[allow(deprecated)]
     pub fn local_into(
         future: impl Future<Output = T> + 'a,
         handle: TaskQueueHandle,
@@ -1893,14 +1895,17 @@ impl<'a, T> ScopedTask<'a, T> {
     ///     task.cancel().await;
     /// });
     /// ```
+    #[allow(deprecated)]
     pub async fn cancel(self) -> Option<T> {
         self.0.cancel().await
     }
 }
 
+#[allow(deprecated)]
 impl<'a, T> Future for ScopedTask<'a, T> {
     type Output = T;
 
+    #[allow(deprecated)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.0).poll(cx)
     }
@@ -2706,6 +2711,7 @@ mod test {
 
     #[test]
     fn scoped_task() {
+        #[allow(deprecated)]
         LocalExecutor::default().run(async {
             let mut a = 1;
             ScopedTask::local(async {

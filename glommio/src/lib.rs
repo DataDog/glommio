@@ -441,6 +441,7 @@ mod shares;
 pub mod sync;
 pub mod timer;
 
+#[allow(deprecated)]
 pub use crate::{
     byte_slice_ext::{ByteSliceExt, ByteSliceMutExt},
     error::{GlommioError, QueueErrorKind, ResourceType, Result},
