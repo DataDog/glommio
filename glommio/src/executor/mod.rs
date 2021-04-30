@@ -29,6 +29,8 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod multitask;
+
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BinaryHeap},
@@ -47,7 +49,6 @@ use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
 use crate::{
-    multitask,
     parking,
     sys,
     task::{self, waker_fn::waker_fn},
