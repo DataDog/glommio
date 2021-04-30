@@ -435,7 +435,6 @@ pub mod controllers;
 mod error;
 mod executor;
 pub mod io;
-mod multitask;
 pub mod net;
 mod shares;
 pub mod sync;
