@@ -1802,6 +1802,7 @@ impl<T> Future for Task<T> {
 #[must_use = "scoped tasks get canceled when dropped, use a standard Task and `.detach()` to run \
               them in the background"]
 #[derive(Debug)]
+#[deprecated = "This API was deemed unsound. Stay tuned while we figure this one out"]
 pub struct ScopedTask<'a, T>(multitask::Task<T>, PhantomData<&'a T>);
 
 impl<'a, T> ScopedTask<'a, T> {
