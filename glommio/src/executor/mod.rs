@@ -1217,7 +1217,8 @@ impl Default for LocalExecutor {
 /// `'static`. Usually the pattern to make sure something is static is to use
 /// `Rc<RefCell<T>>` or `Rc<Cell<T>>` and clone it, but that has a cost. If that
 /// cost is deemed unacceptable, and you are able to have a well-defined
-/// lifetime, you can use a [`ScopedTask`]
+/// lifetime, and understand its safety considerations, you can use a
+/// [`ScopedTask`]
 ///
 /// Tasks are also futures themselves and yield the output of the spawned
 /// future.
@@ -1723,6 +1724,21 @@ impl<T> Future for Task<T> {
 /// Tasks that panic get immediately canceled. Awaiting a canceled task also
 /// causes a panic.
 ///
+/// # Safety
+///
+/// `ScopedTask` is safe to use so long as it is guaranteed to be either awaited
+/// or dropped. Rust does not guarantee that destructors will be called, and if
+/// they are not, `ScopedTask`s can be kept alive after the scope is terminated.
+///
+/// Typically, the only situations in which `drop` is not executed are:
+///
+/// * If you manually choose not to, with [`std::mem::forget`] or
+///   [`ManuallyDrop`].
+/// * If cyclic reference counts prevents the task from being destroyed.
+///
+/// If you believe any of the above situations are present (the first one is,
+/// of course, considerably easier to spot), avoid using the `ScopedTask`.
+///
 /// # Examples
 ///
 /// ```
@@ -1732,10 +1748,12 @@ impl<T> Future for Task<T> {
 ///
 /// ex.run(async {
 ///     let a = 2;
-///     let task = ScopedTask::local(async {
-///         println!("Hello from a task!");
-///         1 + a // this is a reference, and it works just fine
-///     });
+///     let task = unsafe {
+///         ScopedTask::local(async {
+///             println!("Hello from a task!");
+///             1 + a // this is a reference, and it works just fine
+///         })
+///     };
 ///
 ///     assert_eq!(task.await, 3);
 /// });
@@ -1749,9 +1767,11 @@ impl<T> Future for Task<T> {
 /// # let ex = LocalExecutor::default();
 /// # ex.run(async {
 /// let mut a = 2;
-/// let task = ScopedTask::local(async {
-///     a = 3;
-/// });
+/// let task = unsafe {
+///     ScopedTask::local(async {
+///         a = 3;
+///     })
+/// };
 /// task.await;
 /// assert_eq!(a, 3);
 /// # });
@@ -1766,9 +1786,11 @@ impl<T> Future for Task<T> {
 /// # let ex = LocalExecutor::default();
 /// # ex.run(async {
 /// let mut a = 2;
-/// let task = ScopedTask::local(async {
-///     a = 3;
-/// });
+/// let task = unsafe {
+///     ScopedTask::local(async {
+///         a = 3;
+///     })
+/// };
 /// assert_eq!(a, 3); // task hasn't completed yet!
 /// task.await;
 /// # });
@@ -1786,9 +1808,11 @@ impl<T> Future for Task<T> {
 /// # let ex = LocalExecutor::default();
 /// # ex.run(async {
 /// let a = Cell::new(2);
-/// let task = ScopedTask::local(async {
-///     a.set(3);
-/// });
+/// let task = unsafe {
+///     ScopedTask::local(async {
+///         a.set(3);
+///     })
+/// };
 ///
 /// assert!(a.get() == 3 || a.get() == 2); // impossible to know if it will be 2 or 3
 /// task.await;
@@ -1797,9 +1821,32 @@ impl<T> Future for Task<T> {
 /// # });
 /// ```
 ///
+/// The following code, however, will access invalid memory as drop is never
+/// executed
+///
+/// ```no_run
+/// # use glommio::{LocalExecutor, ScopedTask};
+/// # use std::cell::Cell;
+/// #
+/// # let ex = LocalExecutor::default();
+/// # ex.run(async {
+/// {
+///     let a = &mut "mayhem";
+///     let task = unsafe {
+///         ScopedTask::local(async {
+///             *a = "doom";
+///         })
+///     };
+///     std::mem::forget(task);
+/// }
+/// # });
+/// ```
+
 /// [`Task`]: crate::Task
 /// [`Cell`]: std::cell::Cell
 /// [`RefCell`]: std::cell::RefCell
+/// [`std::mem::forget`]: std::mem::forget
+/// [`ManuallyDrop`]: std::mem::ManuallyDrop
 #[must_use = "scoped tasks get canceled when dropped, use a standard Task and `.detach()` to run \
               them in the background"]
 #[derive(Debug)]
@@ -1812,6 +1859,11 @@ impl<'a, T> ScopedTask<'a, T> {
     ///
     /// Otherwise, this method panics.
     ///
+    /// # Safety
+    ///
+    /// `ScopedTask` depends on `drop` running or `.await` being called for
+    /// safety. See the struct [`ScopedTask`] for details.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1821,11 +1873,11 @@ impl<'a, T> ScopedTask<'a, T> {
     ///
     /// local_ex.run(async {
     ///     let non_static = 2;
-    ///     let task = ScopedTask::local(async { 1 + non_static });
+    ///     let task = unsafe { ScopedTask::local(async { 1 + non_static }) };
     ///     assert_eq!(task.await, 3);
     /// });
     /// ```
-    pub fn local(future: impl Future<Output = T> + 'a) -> Self {
+    pub unsafe fn local(future: impl Future<Output = T> + 'a) -> Self {
         LOCAL_EX.with(|local_ex| Self(local_ex.spawn(future), PhantomData))
     }
 
@@ -1835,6 +1887,11 @@ impl<'a, T> ScopedTask<'a, T> {
     /// If called from a [`LocalExecutor`], the task is spawned on it.
     ///
     /// Otherwise, this method panics.
+    ///
+    /// # Safety
+    ///
+    /// `ScopedTask` depends on `drop` running or `.await` being called for
+    /// safety. See the struct [`ScopedTask`] for details.
     ///
     /// # Examples
     ///
@@ -1849,12 +1906,14 @@ impl<'a, T> ScopedTask<'a, T> {
     ///         "test_queue",
     ///     );
     ///     let non_static = 2;
-    ///     let task = ScopedTask::<usize>::local_into(async { 1 + non_static }, handle)
-    ///         .expect("failed to spawn task");
+    ///     let task = unsafe {
+    ///         ScopedTask::<usize>::local_into(async { 1 + non_static }, handle)
+    ///             .expect("failed to spawn task")
+    ///     };
     ///     assert_eq!(task.await, 3);
     /// })
     /// ```
-    pub fn local_into(
+    pub unsafe fn local_into(
         future: impl Future<Output = T> + 'a,
         handle: TaskQueueHandle,
     ) -> Result<Self> {
@@ -1883,12 +1942,14 @@ impl<'a, T> ScopedTask<'a, T> {
     /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async {
-    ///     let task = ScopedTask::local(async {
-    ///         loop {
-    ///             println!("Even though I'm in an infinite loop, you can still cancel me!");
-    ///             future::yield_now().await;
-    ///         }
-    ///     });
+    ///     let task = unsafe {
+    ///         ScopedTask::local(async {
+    ///             loop {
+    ///                 println!("Even though I'm in an infinite loop, you can still cancel me!");
+    ///                 future::yield_now().await;
+    ///             }
+    ///         })
+    ///     };
     ///
     ///     task.cancel().await;
     /// });
@@ -2708,17 +2769,21 @@ mod test {
     fn scoped_task() {
         LocalExecutor::default().run(async {
             let mut a = 1;
-            ScopedTask::local(async {
-                a = 2;
-            })
-            .await;
+            unsafe {
+                ScopedTask::local(async {
+                    a = 2;
+                })
+                .await;
+            }
             Local::later().await;
             assert_eq!(a, 2);
 
             let mut a = 1;
-            let do_later = ScopedTask::local(async {
-                a = 2;
-            });
+            let do_later = unsafe {
+                ScopedTask::local(async {
+                    a = 2;
+                })
+            };
 
             Local::later().await;
             do_later.await;
