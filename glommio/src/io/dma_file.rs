@@ -741,23 +741,32 @@ pub(crate) mod test {
         rfile.close().await.unwrap();
     });
 
-    async fn read_write(path: std::path::PathBuf) {
-        let new_file = DmaFile::create(path.clone())
+    async fn write_dma_file(path: PathBuf, bytes: usize) -> DmaFile {
+        let new_file = DmaOpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .open(path)
             .await
             .expect("failed to create file");
 
-        let mut buf = new_file.alloc_dma_buffer(4096);
-        buf.memset(42);
+        let mut buf = new_file.alloc_dma_buffer(bytes);
+        for x in 0..bytes {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
-        assert_eq!(res, 4096);
+        assert_eq!(res, bytes);
+        new_file.fdatasync().await.expect("failed to sync disk");
+        new_file
+    }
 
-        new_file.close().await.expect("failed to close file");
-
-        let new_file = DmaFile::open(path).await.expect("failed to create file");
+    async fn read_write(path: std::path::PathBuf) {
+        let new_file = write_dma_file(path, 4096).await;
         let read_buf = new_file.read_at(0, 500).await.expect("failed to read");
         std::assert_eq!(read_buf.len(), 500);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf[i], 42);
+            std::assert_eq!(read_buf[i], i as u8);
         }
 
         let read_buf = new_file
@@ -766,7 +775,7 @@ pub(crate) mod test {
             .expect("failed to read");
         std::assert_eq!(read_buf.len(), 4096);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf[i], 42);
+            std::assert_eq!(read_buf[i], i as u8);
         }
 
         new_file.close().await.expect("failed to close file");
@@ -787,23 +796,23 @@ pub(crate) mod test {
         join!(task1, task2);
 
         let stats = Local::io_stats();
-        assert_eq!(stats.all_rings().files_opened(), 4);
-        assert_eq!(stats.all_rings().files_closed(), 4);
-        assert_eq!(stats.all_rings().file_reads(), (4, 9216));
-        assert_eq!(stats.all_rings().file_writes(), (2, 8192));
+        assert_eq!(stats.all_rings().files_opened(), 2);
+        assert_eq!(stats.all_rings().files_closed(), 2);
+        assert_eq!(stats.all_rings().file_reads().0, 4);
+        assert_eq!(stats.all_rings().file_writes().0, 2);
 
         let stats = Local::task_queue_io_stats(q1).expect("failed to retrieve task queue io stats");
-        assert_eq!(stats.all_rings().files_opened(), 2);
-        assert_eq!(stats.all_rings().files_closed(), 2);
-        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
-        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads().0, 2);
+        assert_eq!(stats.all_rings().file_writes().0, 1);
 
         let stats = Local::task_queue_io_stats(q2).expect("failed to retrieve task queue io stats");
-        assert_eq!(stats.all_rings().files_opened(), 2);
-        assert_eq!(stats.latency_ring.files_opened(), 2);
-        assert_eq!(stats.all_rings().files_closed(), 2);
-        assert_eq!(stats.latency_ring.files_closed(), 2);
-        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
-        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.latency_ring.files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.latency_ring.files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads().0, 2);
+        assert_eq!(stats.all_rings().file_writes().0, 1);
     });
 }
