@@ -346,7 +346,8 @@ impl DmaFile {
         self.file.path()
     }
 
-    pub(crate) async fn close_rc(self: Rc<DmaFile>) -> Result<()> {
+    /// Convenience method that closes a DmaFile wrapped inside an Rc
+    pub async fn close_rc(self: Rc<DmaFile>) -> Result<()> {
         match Rc::try_unwrap(self) {
             Err(file) => Err(io::Error::new(
                 io::ErrorKind::Other,
