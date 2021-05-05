@@ -4,7 +4,14 @@ use crate::{
 };
 use core::task::{Context, Poll};
 use futures_lite::Stream;
-use std::{collections::VecDeque, os::unix::io::AsRawFd, pin::Pin, rc::Rc};
+use itertools::{Itertools, MultiPeek};
+use std::{
+    cmp::{max, min},
+    collections::VecDeque,
+    os::unix::io::AsRawFd,
+    pin::Pin,
+    rc::Rc,
+};
 
 #[derive(Debug)]
 pub(crate) struct OrderedBulkIo<U> {
@@ -96,5 +103,197 @@ impl Stream for ReadManyResult {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.inner.size_hint()
+    }
+}
+
+pub(crate) struct CoalescedReads<S: Iterator<Item = (u64, usize)>> {
+    iter: MultiPeek<S>,
+    next_merged: Option<(usize, (u64, usize))>,
+    max_merged_buffer_size: usize,
+    max_read_amp: Option<usize>,
+}
+
+impl<S: Iterator<Item = (u64, usize)>> CoalescedReads<S> {
+    pub(crate) fn new(
+        iter: S,
+        max_merged_buffer_size: usize,
+        max_read_amp: Option<usize>,
+    ) -> CoalescedReads<S> {
+        CoalescedReads {
+            iter: iter.multipeek(),
+            next_merged: None,
+            max_merged_buffer_size,
+            max_read_amp,
+        }
+    }
+}
+
+impl<S: Iterator<Item = (u64, usize)>> Iterator for CoalescedReads<S> {
+    // CoalescedReads returns the original (offset, size) and the (offset, size) it
+    // was merged in
+    type Item = ((u64, usize), (u64, usize));
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(next) = self.next_merged {
+            if next.0 == 1 {
+                self.next_merged = None;
+            } else {
+                self.next_merged = Some((next.0 - 1, next.1));
+            }
+            return Some((self.iter.next().unwrap(), next.1));
+        }
+
+        let mut current: Option<(u64, usize)> = None;
+        let mut taken = 0;
+        while let Some(x) = self.iter.peek() {
+            match current {
+                None => {
+                    current = Some((x.0, x.1));
+                    taken = 1;
+                    continue;
+                }
+                Some(cur) => {
+                    if let Some(gap) = self.max_read_amp {
+                        // if the read gap is > to the max configured, don't merge
+                        if u64::saturating_sub(cur.0, x.0) > gap as u64 {
+                            break;
+                        }
+                        if u64::saturating_sub(x.0, cur.0 + cur.1 as u64) > gap as u64 {
+                            break;
+                        }
+                    }
+                    let merged: (u64, u64) =
+                        (min(cur.0, x.0), max(cur.0 + cur.1 as u64, x.0 + x.1 as u64));
+                    if merged.1 - merged.0 > self.max_merged_buffer_size as u64 {
+                        // if the merged buffer is too large, don't merge
+                        break;
+                    }
+                    taken += 1;
+                    current = Some((merged.0, (merged.1 - merged.0) as usize));
+                }
+            }
+        }
+
+        if taken > 0 {
+            self.next_merged = Some((taken, current.unwrap()));
+            self.next()
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monotonic_iovec_merging() {
+        let reads: Vec<(u64, usize)> =
+            vec![(0, 64), (0, 256), (32, 4064), (4095, 10), (8192, 4096)];
+        let merged: Vec<((u64, usize), (u64, usize))> =
+            CoalescedReads::new(reads.iter().copied(), 4096, None).collect();
+
+        assert_eq!(
+            merged,
+            [
+                ((0, 64), (0, 4096)),
+                ((0, 256), (0, 4096)),
+                ((32, 4064), (0, 4096)),
+                ((4095, 10), (4095, 10)),
+                ((8192, 4096), (8192, 4096))
+            ]
+        );
+    }
+
+    #[test]
+    fn large_input_passthrough() {
+        let reads: Vec<(u64, usize)> =
+            vec![(0, 64), (0, 256), (32, 4064), (4095, 10), (8192, 4096)];
+        let merged: Vec<((u64, usize), (u64, usize))> =
+            CoalescedReads::new(reads.iter().copied(), 500, None).collect();
+
+        assert_eq!(
+            merged,
+            [
+                ((0, 64), (0, 256)),
+                ((0, 256), (0, 256)),
+                ((32, 4064), (32, 4064)),
+                ((4095, 10), (4095, 10)),
+                ((8192, 4096), (8192, 4096))
+            ]
+        );
+
+        let merged: Vec<((u64, usize), (u64, usize))> =
+            CoalescedReads::new(reads.iter().copied(), 0, None).collect();
+
+        assert_eq!(
+            merged,
+            [
+                ((0, 64), (0, 64)),
+                ((0, 256), (0, 256)),
+                ((32, 4064), (32, 4064)),
+                ((4095, 10), (4095, 10)),
+                ((8192, 4096), (8192, 4096))
+            ]
+        );
+    }
+
+    #[test]
+    fn nonmonotonic_iovec_merging() {
+        let reads: Vec<(u64, usize)> = vec![(64, 256), (32, 4064), (4095, 10), (8192, 4096)];
+        let merged: Vec<((u64, usize), (u64, usize))> =
+            CoalescedReads::new(reads.iter().copied(), 4096, None).collect();
+
+        assert_eq!(
+            merged,
+            [
+                ((64, 256), (32, 4073)),
+                ((32, 4064), (32, 4073)),
+                ((4095, 10), (32, 4073)),
+                ((8192, 4096), (8192, 4096))
+            ]
+        );
+    }
+
+    #[test]
+    fn read_amplification_limit() {
+        let reads: Vec<(u64, usize)> = vec![
+            (128, 128),
+            (128, 1),
+            (160, 96),
+            (96, 160),
+            (64, 192),
+            (0, 256),
+        ];
+        let merged: Vec<((u64, usize), (u64, usize))> =
+            CoalescedReads::new(reads.iter().copied(), 4096, Some(0)).collect();
+
+        assert_eq!(
+            merged,
+            [
+                ((128, 128), (128, 128)),
+                ((128, 1), (128, 128)),
+                ((160, 96), (128, 128)),
+                ((96, 160), (96, 160)),
+                ((64, 192), (64, 192)),
+                ((0, 256), (0, 256)),
+            ]
+        );
+
+        let merged: Vec<((u64, usize), (u64, usize))> =
+            CoalescedReads::new(reads.iter().copied(), 4096, Some(32)).collect();
+
+        assert_eq!(
+            merged,
+            [
+                ((128, 128), (64, 192)),
+                ((128, 1), (64, 192)),
+                ((160, 96), (64, 192)),
+                ((96, 160), (64, 192)),
+                ((64, 192), (64, 192)),
+                ((0, 256), (0, 256)),
+            ]
+        );
     }
 }
