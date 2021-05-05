@@ -41,6 +41,7 @@ itertools = "0.10.0"
 futures = "0.3.5"
 fastrand = "1.4.0"
 tokio = { version = "0.3.5", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time"] }
+rand = "0.8.0"
 
 [build-dependencies]
 cc = "1.0.47"

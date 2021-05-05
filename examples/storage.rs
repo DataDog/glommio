@@ -143,20 +143,36 @@ async fn stream_scan_alt_api<S: Into<String>>(
 }
 
 enum Reader {
-    Direct(DmaFile),
+    Direct(Rc<DmaFile>),
     Buffered(BufferedFile),
 }
 
 impl Reader {
-    async fn read(&self, pos: u64, io_size: u64, expected: &[u8]) {
+    async fn read(&self, pos: u64, io_size: u64, _expected: &[u8]) {
         match &self {
             Reader::Direct(file) => {
-                let res = file.read_at_aligned(pos, io_size as _).await.unwrap();
-                assert_eq!(*expected, *res);
+                file.read_at_aligned(pos, io_size as _).await.unwrap();
             }
             Reader::Buffered(file) => {
-                let res = file.read_at(pos, io_size as _).await.unwrap();
-                assert_eq!(*expected, *res);
+                file.read_at(pos, io_size as _).await.unwrap();
+            }
+        }
+    }
+
+    async fn read_many<S: Iterator<Item = (u64, usize)>>(
+        &self,
+        iovs: S,
+        _expected: &[u8],
+        max_buffer_size: usize,
+    ) {
+        match &self {
+            Reader::Direct(file) => {
+                file.read_many(iovs, max_buffer_size, None)
+                    .for_each(|_| {})
+                    .await;
+            }
+            Reader::Buffered(_) => {
+                panic!("bulk io is not available for buffered files")
             }
         }
     }
@@ -164,7 +180,7 @@ impl Reader {
     async fn close(self) {
         match self {
             Reader::Direct(file) => {
-                file.close().await.unwrap();
+                file.close_rc().await.unwrap();
             }
             Reader::Buffered(file) => {
                 file.close().await.unwrap();
@@ -218,6 +234,61 @@ async fn random_read<S: Into<String>>(
         &name,
         bytes,
         dur,
+        (iops.get() as f64 / dur.as_secs_f64()) as usize
+    );
+}
+
+async fn random_many_read<S: Into<String>>(
+    file: Reader,
+    name: S,
+    random: u64,
+    parallelism: usize,
+    io_size: u64,
+    max_buffer_size: usize,
+) {
+    let end = (random / io_size) - 1;
+    let name = name.into();
+    let mut expected = Vec::with_capacity(io_size as _);
+    expected.resize(io_size as _, 1);
+
+    let file = Rc::new(file);
+    let iops = Rc::new(Cell::new(0));
+
+    let time = Instant::now();
+    let mut tasks = Vec::new();
+    for _ in 0..parallelism {
+        tasks.push(
+            Local::local(enclose! { (file, iops, expected) async move {
+                while time.elapsed() < Duration::from_secs(20) {
+                    file.read_many((0..parallelism).map(|_| {
+                        let pos = fastrand::u64(0..end);
+                        ((pos * io_size) as u64, io_size as usize)
+                    }), &expected, max_buffer_size).await;
+                    iops.set(iops.get() + parallelism);
+                }
+            }})
+            .detach(),
+        );
+    }
+
+    let finished = stream::iter(tasks).then(|f| f).count().await;
+
+    match Rc::try_unwrap(file) {
+        Err(_) => unreachable!(),
+        Ok(file) => file.close().await,
+    };
+
+    assert_eq!(finished, parallelism as _);
+    let bytes = converter::convert(random as _);
+    let max_merged = converter::convert(max_buffer_size as _);
+    let dur = time.elapsed();
+    println!(
+        "{}: Random Bulk Read (uniform) size span of {}, for {:#?} (max merged size of {}), {} \
+         IOPS",
+        &name,
+        bytes,
+        dur,
+        max_merged,
         (iops.get() as f64 / dur.as_secs_f64()) as usize
     );
 }
@@ -325,14 +396,34 @@ fn main() {
             let file = BufferedFile::open(&buf_filename).await.unwrap();
             random_read(Reader::Buffered(file), "Buffered I/O", random, 50, 4096).await;
 
-            let file = DmaFile::open(&dio_filename).await.unwrap();
+            let file = Rc::new(DmaFile::open(&dio_filename).await.unwrap());
             random_read(Reader::Direct(file), "Direct I/O", random, 50, 4096).await;
+
+            let file = Rc::new(DmaFile::open(&dio_filename).await.unwrap());
+            random_many_read(Reader::Direct(file), "Direct I/O", random, 50, 4096, 0).await;
+
+            let file = Rc::new(DmaFile::open(&dio_filename).await.unwrap());
+            random_many_read(Reader::Direct(file), "Direct I/O", random, 50, 4096, 131072).await;
 
             let file = BufferedFile::open(&buf_filename).await.unwrap();
             random_read(Reader::Buffered(file), "Buffered I/O", file_size, 50, 4096).await;
 
-            let file = DmaFile::open(&dio_filename).await.unwrap();
+            let file = Rc::new(DmaFile::open(&dio_filename).await.unwrap());
             random_read(Reader::Direct(file), "Direct I/O", file_size, 50, 4096).await;
+
+            let file = Rc::new(DmaFile::open(&dio_filename).await.unwrap());
+            random_many_read(Reader::Direct(file), "Direct I/O", file_size, 50, 4096, 0).await;
+
+            let file = Rc::new(DmaFile::open(&dio_filename).await.unwrap());
+            random_many_read(
+                Reader::Direct(file),
+                "Direct I/O",
+                file_size,
+                50,
+                4096,
+                131072,
+            )
+            .await;
         })
         .unwrap();
 

@@ -427,9 +427,12 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
+    use crate::{enclose, test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
     use futures::join;
-    use std::time::Duration;
+    use futures_lite::StreamExt;
+    use itertools::Itertools;
+    use rand::{seq::SliceRandom, thread_rng};
+    use std::{cell::RefCell, path::PathBuf, time::Duration};
 
     #[cfg(test)]
     pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
@@ -814,5 +817,95 @@ pub(crate) mod test {
         assert_eq!(stats.latency_ring.files_closed(), 1);
         assert_eq!(stats.all_rings().file_reads().0, 2);
         assert_eq!(stats.all_rings().file_writes().0, 1);
+    });
+
+    dma_file_test!(file_many_reads, path, _k, {
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+
+        let total_reads = Rc::new(RefCell::new(0));
+        let last_read = Rc::new(RefCell::new(-1));
+
+        let mut iovs = (0..512).map(|x| (x * 8, 8)).collect_vec();
+        iovs.shuffle(&mut thread_rng());
+        new_file
+            .read_many(iovs.into_iter(), 4096, None)
+            .enumerate()
+            .for_each(enclose! {(total_reads, last_read) |x| {
+                *total_reads.borrow_mut() += 1;
+                let res = x.1.unwrap();
+                assert_eq!(res.1.len(), 8);
+                assert_eq!(*last_read.borrow() + 1, x.0 as i64);
+                for i in 0..res.1.len() {
+                    assert_eq!(res.1[i], (res.0 + i as u64) as u8);
+                }
+                *last_read.borrow_mut() = x.0 as i64;
+            }})
+            .await;
+        assert_eq!(*total_reads.borrow(), 512);
+        assert_eq!(
+            Local::io_stats().all_rings().file_reads().0,
+            4096 / new_file.o_direct_alignment
+        );
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_many_reads_unaligned, path, _k, {
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+
+        let total_reads = Rc::new(RefCell::new(0));
+        let last_read = Rc::new(RefCell::new(-1));
+
+        let mut iovs = (0..511).map(|x| (x * 8 + 1, 7)).collect_vec();
+        iovs.shuffle(&mut thread_rng());
+        new_file
+            .read_many(iovs.into_iter(), 4096, None)
+            .enumerate()
+            .for_each(enclose! {(total_reads, last_read) |x| {
+                *total_reads.borrow_mut() += 1;
+                let res = x.1.unwrap();
+                assert_eq!(res.1.len(), 7);
+                assert_eq!(*last_read.borrow() + 1, x.0 as i64);
+                for i in 0..res.1.len() {
+                    assert_eq!(res.1[i], (res.0 + i as u64) as u8);
+                }
+                *last_read.borrow_mut() = x.0 as i64;
+            }})
+            .await;
+        assert_eq!(*total_reads.borrow(), 511);
+        assert_eq!(
+            Local::io_stats().all_rings().file_reads().0,
+            4096 / new_file.o_direct_alignment
+        );
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_many_reads_no_coalescing, path, _k, {
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+
+        let total_reads = Rc::new(RefCell::new(0));
+        let last_read = Rc::new(RefCell::new(-1));
+
+        new_file
+            .read_many((0..511).map(|x| (x * 8 + 1, 7)), 0, Some(0))
+            .enumerate()
+            .for_each(enclose! {(total_reads, last_read) |x| {
+                *total_reads.borrow_mut() += 1;
+                let res = x.1.unwrap();
+                assert_eq!(res.1.len(), 7);
+                assert_eq!(res.0, (x.0 * 8 + 1) as u64);
+                assert_eq!(*last_read.borrow() + 1, x.0 as i64);
+                for i in 0..res.1.len() {
+                    assert_eq!(res.1[i], (res.0 + i as u64) as u8);
+                }
+                *last_read.borrow_mut() = x.0 as i64;
+            }})
+            .await;
+
+        assert_eq!(*total_reads.borrow(), 511);
+        assert_eq!(
+            Local::io_stats().all_rings().file_reads().0,
+            4096 / new_file.o_direct_alignment
+        );
+        new_file.close_rc().await.expect("failed to close file");
     });
 }
