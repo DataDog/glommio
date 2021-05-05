@@ -105,6 +105,7 @@ macro_rules! enhanced_try {
 
 mod buffered_file;
 mod buffered_file_stream;
+mod bulk_io;
 mod directory;
 mod dma_file;
 mod dma_file_stream;

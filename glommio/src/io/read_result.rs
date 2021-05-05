@@ -6,7 +6,7 @@ use crate::sys::DmaBuffer;
 use core::num::NonZeroUsize;
 use std::rc::Rc;
 
-#[derive(Clone, Debug)]
+#[derive(Default, Clone, Debug)]
 /// ReadResult encapsulates a buffer, returned by read operations like
 /// [`get_buffer_aligned`](super::DmaStreamReader::get_buffer_aligned) and
 /// [`read_at`](super::DmaFile::read_at)

@@ -4,7 +4,12 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::{
-    io::{dma_open_options::DmaOpenOptions, glommio_file::GlommioFile, read_result::ReadResult},
+    io::{
+        bulk_io::{OrderedBulkIo, ReadManyArgs, ReadManyResult},
+        dma_open_options::DmaOpenOptions,
+        glommio_file::GlommioFile,
+        read_result::ReadResult,
+    },
     sys::{sysfs, DirectIo, DmaBuffer, PollableStatus},
 };
 use nix::sys::statfs::*;
@@ -269,6 +274,56 @@ impl DmaFile {
         buffer.trim_front(b);
         buffer.trim_to_size(std::cmp::min(read_size, size));
         Ok(ReadResult::from_whole_buffer(buffer))
+    }
+
+    /// Submit many reads and process the results in a stream-like fashion.
+    ///
+    /// This API will optimistically coalesce and deduplicate IO requests such
+    /// that two overlapping or adjacent reads will result in a single IO
+    /// request. This is transparent for the consumer, you will still
+    /// receive individual ReadResults corresponding to what you asked for.
+    ///
+    /// The input is an iterator of (u64, usize) where u64 is a file
+    /// offset and usize, the number of bytes to read.
+    ///
+    /// It is not necessary to respect the O_DIRECT alignment of the file, and
+    /// this API will internally convert the positions and sizes to match.
+    pub fn read_many<S: Iterator<Item = (u64, usize)>>(
+        self: &Rc<DmaFile>,
+        iovs: S,
+    ) -> ReadManyResult {
+        let mut last: Option<(u64, usize)> = None;
+        let it = iovs
+            .map(|iov| {
+                let eff_pos = self.align_down(iov.0);
+                let b = (iov.0 - eff_pos) as usize;
+                let eff_size = self.align_up((iov.1 + b) as u64) as usize;
+                (iov, (eff_pos, eff_size))
+            })
+            .map(|iov| {
+                let args = ReadManyArgs {
+                    user_read: iov.0,
+                    system_read: iov.1,
+                };
+
+                if let Some(l) = &last {
+                    if l.0 == iov.1.0 && l.1 == iov.1.1 {
+                        return (None, args);
+                    }
+                }
+                let source = self.file.reactor.upgrade().unwrap().read_dma(
+                    self.as_raw_fd(),
+                    iov.1.0,
+                    iov.1.1,
+                    self.pollable,
+                );
+                last = Some((iov.1.0, iov.1.1));
+                (Some(source), args)
+            });
+        ReadManyResult {
+            inner: OrderedBulkIo::new(self.clone(), it),
+            current_result: Default::default(),
+        }
     }
 
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush
