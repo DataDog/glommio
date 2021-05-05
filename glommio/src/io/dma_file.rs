@@ -5,7 +5,7 @@
 //
 use crate::{
     io::{
-        bulk_io::{OrderedBulkIo, ReadManyArgs, ReadManyResult},
+        bulk_io::{CoalescedReads, OrderedBulkIo, ReadManyArgs, ReadManyResult},
         dma_open_options::DmaOpenOptions,
         glommio_file::GlommioFile,
         read_result::ReadResult,
@@ -35,10 +35,10 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 ///
 /// All access uses Direct I/O, and all operations including open and close are
 /// asynchronous (with some exceptions noted). Reads from and writes to this
-/// struct must come and go through the `DmaBuffer` type, which will buffer them
-/// in memory; on calling `write_at` and `read_at`, the buffers will be passed
-/// to the OS to asynchronously write directly to the file on disk, bypassing
-/// page caches.
+/// struct must come and go through the [`DmaBuffer`] type, which will buffer
+/// them in memory; on calling [`DmaFile::write_at`] and [`DmaFile::read_at`],
+/// the buffers will be passed to the OS to asynchronously write directly to the
+/// file on disk, bypassing page caches.
 ///
 /// See the module-level [documentation](index.html) for more details and
 /// examples.
@@ -252,11 +252,12 @@ impl DmaFile {
 
     /// Reads into buffer in buf from a specific position in the file.
     ///
-    /// It is not necessary to respect the O_DIRECT alignment of the file, and
+    /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match,
     /// at a cost.
     ///
-    /// If you can guarantee proper alignment, prefer read_at_aligned instead
+    /// If you can guarantee proper alignment, prefer [`Self::read_at_aligned`]
+    /// instead
     pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
         let eff_pos = self.align_down(pos);
         let b = (pos - eff_pos) as usize;
@@ -276,29 +277,38 @@ impl DmaFile {
         Ok(ReadResult::from_whole_buffer(buffer))
     }
 
-    /// Submit many reads and process the results in a stream-like fashion.
+    /// Submit many reads and process the results in a stream-like fashion via a
+    /// [`ReadManyResult`].
     ///
     /// This API will optimistically coalesce and deduplicate IO requests such
     /// that two overlapping or adjacent reads will result in a single IO
     /// request. This is transparent for the consumer, you will still
     /// receive individual ReadResults corresponding to what you asked for.
     ///
-    /// The input is an iterator of (u64, usize) where u64 is a file
-    /// offset and usize, the number of bytes to read.
+    /// The first argument is an iterator of [`IoVec`]. The last two
+    /// arguments control how aggressive the IO coalescing should be:
+    /// * `max_merged_buffer_size` controls how large a merged IO request can
+    ///   be. A value of 0 disables merging completely.
+    /// * `max_read_amp` is optional and defines the maximum read amplification
+    ///   you are comfortable with. If two read requests are separated by a
+    ///   distance less than this value, they will be merged. A value `None`
+    ///   disables all read amplification limitation.
     ///
     /// It is not necessary to respect the O_DIRECT alignment of the file, and
     /// this API will internally convert the positions and sizes to match.
     pub fn read_many<S: Iterator<Item = (u64, usize)>>(
         self: &Rc<DmaFile>,
         iovs: S,
+        max_merged_buffer_size: usize,
+        max_read_amp: Option<usize>,
     ) -> ReadManyResult {
         let mut last: Option<(u64, usize)> = None;
-        let it = iovs
+        let it = CoalescedReads::new(iovs, max_merged_buffer_size, max_read_amp)
             .map(|iov| {
-                let eff_pos = self.align_down(iov.0);
-                let b = (iov.0 - eff_pos) as usize;
-                let eff_size = self.align_up((iov.1 + b) as u64) as usize;
-                (iov, (eff_pos, eff_size))
+                let eff_pos = self.align_down(iov.1.0);
+                let b = (iov.1.0 - eff_pos) as usize;
+                let eff_size = self.align_up((iov.1.1 + b) as u64) as usize;
+                (iov.0, (eff_pos, eff_size))
             })
             .map(|iov| {
                 let args = ReadManyArgs {

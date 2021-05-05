@@ -147,6 +147,7 @@ pub use self::{
         StreamWriter,
         StreamWriterBuilder,
     },
+    bulk_io::ReadManyResult,
     directory::Directory,
     dma_file::DmaFile,
     dma_file_stream::{
