@@ -4,7 +4,12 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::{
-    io::{dma_open_options::DmaOpenOptions, glommio_file::GlommioFile, read_result::ReadResult},
+    io::{
+        bulk_io::{CoalescedReads, IoVec, OrderedBulkIo, ReadManyArgs, ReadManyResult},
+        dma_open_options::DmaOpenOptions,
+        glommio_file::GlommioFile,
+        read_result::ReadResult,
+    },
     sys::{sysfs, DirectIo, DmaBuffer, PollableStatus},
 };
 use nix::sys::statfs::*;
@@ -30,10 +35,10 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 ///
 /// All access uses Direct I/O, and all operations including open and close are
 /// asynchronous (with some exceptions noted). Reads from and writes to this
-/// struct must come and go through the `DmaBuffer` type, which will buffer them
-/// in memory; on calling `write_at` and `read_at`, the buffers will be passed
-/// to the OS to asynchronously write directly to the file on disk, bypassing
-/// page caches.
+/// struct must come and go through the [`DmaBuffer`] type, which will buffer
+/// them in memory; on calling [`DmaFile::write_at`] and [`DmaFile::read_at`],
+/// the buffers will be passed to the OS to asynchronously write directly to the
+/// file on disk, bypassing page caches.
 ///
 /// See the module-level [documentation](index.html) for more details and
 /// examples.
@@ -247,11 +252,12 @@ impl DmaFile {
 
     /// Reads into buffer in buf from a specific position in the file.
     ///
-    /// It is not necessary to respect the O_DIRECT alignment of the file, and
+    /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match,
     /// at a cost.
     ///
-    /// If you can guarantee proper alignment, prefer read_at_aligned instead
+    /// If you can guarantee proper alignment, prefer [`Self::read_at_aligned`]
+    /// instead
     pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
         let eff_pos = self.align_down(pos);
         let b = (pos - eff_pos) as usize;
@@ -269,6 +275,65 @@ impl DmaFile {
         buffer.trim_front(b);
         buffer.trim_to_size(std::cmp::min(read_size, size));
         Ok(ReadResult::from_whole_buffer(buffer))
+    }
+
+    /// Submit many reads and process the results in a stream-like fashion via a
+    /// [`ReadManyResult`].
+    ///
+    /// This API will optimistically coalesce and deduplicate IO requests such
+    /// that two overlapping or adjacent reads will result in a single IO
+    /// request. This is transparent for the consumer, you will still
+    /// receive individual ReadResults corresponding to what you asked for.
+    ///
+    /// The first argument is an iterator of [`IoVec`]. The last two
+    /// arguments control how aggressive the IO coalescing should be:
+    /// * `max_merged_buffer_size` controls how large a merged IO request can
+    ///   be. A value of 0 disables merging completely.
+    /// * `max_read_amp` is optional and defines the maximum read amplification
+    ///   you are comfortable with. If two read requests are separated by a
+    ///   distance less than this value, they will be merged. A value `None`
+    ///   disables all read amplification limitation.
+    ///
+    /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
+    /// this API will internally convert the positions and sizes to match.
+    pub fn read_many<V: IoVec, S: Iterator<Item = V>>(
+        self: &Rc<DmaFile>,
+        iovs: S,
+        max_merged_buffer_size: usize,
+        max_read_amp: Option<usize>,
+    ) -> ReadManyResult<V> {
+        let mut last: Option<(u64, usize)> = None;
+        let it = CoalescedReads::new(iovs, max_merged_buffer_size, max_read_amp)
+            .map(|iov| {
+                let eff_pos = self.align_down(iov.1.0);
+                let b = (iov.1.0 - eff_pos) as usize;
+                let eff_size = self.align_up((iov.1.1 + b) as u64) as usize;
+                (iov.0, (eff_pos, eff_size))
+            })
+            .map(|iov| {
+                let args = ReadManyArgs {
+                    user_read: iov.0,
+                    system_read: iov.1,
+                };
+
+                if let Some(l) = &last {
+                    if l.0 == iov.1.0 && l.1 == iov.1.1 {
+                        return (None, args);
+                    }
+                }
+                let source = self.file.reactor.upgrade().unwrap().read_dma(
+                    self.as_raw_fd(),
+                    iov.1.0,
+                    iov.1.1,
+                    self.pollable,
+                );
+                last = Some((iov.1.0, iov.1.1));
+                (Some(source), args)
+            });
+        ReadManyResult {
+            inner: OrderedBulkIo::new(self.clone(), it),
+            current_result: Default::default(),
+        }
     }
 
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush
@@ -346,7 +411,8 @@ impl DmaFile {
         self.file.path()
     }
 
-    pub(crate) async fn close_rc(self: Rc<DmaFile>) -> Result<()> {
+    /// Convenience method that closes a DmaFile wrapped inside an Rc
+    pub async fn close_rc(self: Rc<DmaFile>) -> Result<()> {
         match Rc::try_unwrap(self) {
             Err(file) => Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -361,9 +427,12 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
+    use crate::{enclose, test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
     use futures::join;
-    use std::time::Duration;
+    use futures_lite::StreamExt;
+    use itertools::Itertools;
+    use rand::{seq::SliceRandom, thread_rng};
+    use std::{cell::RefCell, path::PathBuf, time::Duration};
 
     #[cfg(test)]
     pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
@@ -675,23 +744,32 @@ pub(crate) mod test {
         rfile.close().await.unwrap();
     });
 
-    async fn read_write(path: std::path::PathBuf) {
-        let new_file = DmaFile::create(path.clone())
+    async fn write_dma_file(path: PathBuf, bytes: usize) -> DmaFile {
+        let new_file = DmaOpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .open(path)
             .await
             .expect("failed to create file");
 
-        let mut buf = new_file.alloc_dma_buffer(4096);
-        buf.memset(42);
+        let mut buf = new_file.alloc_dma_buffer(bytes);
+        for x in 0..bytes {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
-        assert_eq!(res, 4096);
+        assert_eq!(res, bytes);
+        new_file.fdatasync().await.expect("failed to sync disk");
+        new_file
+    }
 
-        new_file.close().await.expect("failed to close file");
-
-        let new_file = DmaFile::open(path).await.expect("failed to create file");
+    async fn read_write(path: std::path::PathBuf) {
+        let new_file = write_dma_file(path, 4096).await;
         let read_buf = new_file.read_at(0, 500).await.expect("failed to read");
         std::assert_eq!(read_buf.len(), 500);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf[i], 42);
+            std::assert_eq!(read_buf[i], i as u8);
         }
 
         let read_buf = new_file
@@ -700,7 +778,7 @@ pub(crate) mod test {
             .expect("failed to read");
         std::assert_eq!(read_buf.len(), 4096);
         for i in 0..read_buf.len() {
-            std::assert_eq!(read_buf[i], 42);
+            std::assert_eq!(read_buf[i], i as u8);
         }
 
         new_file.close().await.expect("failed to close file");
@@ -721,23 +799,116 @@ pub(crate) mod test {
         join!(task1, task2);
 
         let stats = Local::io_stats();
-        assert_eq!(stats.all_rings().files_opened(), 4);
-        assert_eq!(stats.all_rings().files_closed(), 4);
-        assert_eq!(stats.all_rings().file_reads(), (4, 9216));
-        assert_eq!(stats.all_rings().file_writes(), (2, 8192));
+        assert_eq!(stats.all_rings().files_opened(), 2);
+        assert_eq!(stats.all_rings().files_closed(), 2);
+        assert_eq!(stats.all_rings().file_reads().0, 4);
+        assert_eq!(stats.all_rings().file_writes().0, 2);
 
         let stats = Local::task_queue_io_stats(q1).expect("failed to retrieve task queue io stats");
-        assert_eq!(stats.all_rings().files_opened(), 2);
-        assert_eq!(stats.all_rings().files_closed(), 2);
-        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
-        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads().0, 2);
+        assert_eq!(stats.all_rings().file_writes().0, 1);
 
         let stats = Local::task_queue_io_stats(q2).expect("failed to retrieve task queue io stats");
-        assert_eq!(stats.all_rings().files_opened(), 2);
-        assert_eq!(stats.latency_ring.files_opened(), 2);
-        assert_eq!(stats.all_rings().files_closed(), 2);
-        assert_eq!(stats.latency_ring.files_closed(), 2);
-        assert_eq!(stats.all_rings().file_reads(), (2, 4608));
-        assert_eq!(stats.all_rings().file_writes(), (1, 4096));
+        assert_eq!(stats.all_rings().files_opened(), 1);
+        assert_eq!(stats.latency_ring.files_opened(), 1);
+        assert_eq!(stats.all_rings().files_closed(), 1);
+        assert_eq!(stats.latency_ring.files_closed(), 1);
+        assert_eq!(stats.all_rings().file_reads().0, 2);
+        assert_eq!(stats.all_rings().file_writes().0, 1);
+    });
+
+    dma_file_test!(file_many_reads, path, _k, {
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+
+        let total_reads = Rc::new(RefCell::new(0));
+        let last_read = Rc::new(RefCell::new(-1));
+
+        let mut iovs = (0..512).map(|x| (x * 8, 8)).collect_vec();
+        iovs.shuffle(&mut thread_rng());
+        new_file
+            .read_many(iovs.into_iter(), 4096, None)
+            .enumerate()
+            .for_each(enclose! {(total_reads, last_read) |x| {
+                *total_reads.borrow_mut() += 1;
+                let res = x.1.unwrap();
+                assert_eq!(res.0.size(), 8);
+                assert_eq!(res.1.len(), 8);
+                assert_eq!(*last_read.borrow() + 1, x.0 as i64);
+                for i in 0..res.1.len() {
+                    assert_eq!(res.1[i], (res.0.pos() + i as u64) as u8);
+                }
+                *last_read.borrow_mut() = x.0 as i64;
+            }})
+            .await;
+        assert_eq!(*total_reads.borrow(), 512);
+        assert_eq!(
+            Local::io_stats().all_rings().file_reads().0,
+            4096 / new_file.o_direct_alignment
+        );
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_many_reads_unaligned, path, _k, {
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+
+        let total_reads = Rc::new(RefCell::new(0));
+        let last_read = Rc::new(RefCell::new(-1));
+
+        let mut iovs = (0..511).map(|x| (x * 8 + 1, 7)).collect_vec();
+        iovs.shuffle(&mut thread_rng());
+        new_file
+            .read_many(iovs.into_iter(), 4096, None)
+            .enumerate()
+            .for_each(enclose! {(total_reads, last_read) |x| {
+                *total_reads.borrow_mut() += 1;
+                let res = x.1.unwrap();
+                assert_eq!(res.0.size(), 7);
+                assert_eq!(res.1.len(), 7);
+                assert_eq!(*last_read.borrow() + 1, x.0 as i64);
+                for i in 0..res.1.len() {
+                    assert_eq!(res.1[i], (res.0.pos() + i as u64) as u8);
+                }
+                *last_read.borrow_mut() = x.0 as i64;
+            }})
+            .await;
+        assert_eq!(*total_reads.borrow(), 511);
+        assert_eq!(
+            Local::io_stats().all_rings().file_reads().0,
+            4096 / new_file.o_direct_alignment
+        );
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_many_reads_no_coalescing, path, _k, {
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+
+        let total_reads = Rc::new(RefCell::new(0));
+        let last_read = Rc::new(RefCell::new(-1));
+
+        new_file
+            .read_many((0..511).map(|x| (x * 8 + 1, 7)), 0, Some(0))
+            .enumerate()
+            .for_each(enclose! {(total_reads, last_read) |x| {
+                *total_reads.borrow_mut() += 1;
+                let res = x.1.unwrap();
+                assert_eq!(res.0.size(), 7);
+                assert_eq!(res.1.len(), 7);
+                assert_eq!(res.0.pos(), (x.0 * 8 + 1) as u64);
+                assert_eq!(*last_read.borrow() + 1, x.0 as i64);
+                for i in 0..res.1.len() {
+                    assert_eq!(res.1[i], (res.0.pos() + i as u64) as u8);
+                }
+                *last_read.borrow_mut() = x.0 as i64;
+            }})
+            .await;
+
+        assert_eq!(*total_reads.borrow(), 511);
+        assert_eq!(
+            Local::io_stats().all_rings().file_reads().0,
+            4096 / new_file.o_direct_alignment
+        );
+        new_file.close_rc().await.expect("failed to close file");
     });
 }

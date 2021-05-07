@@ -100,18 +100,12 @@ macro_rules! enhanced_try {
             }
         }
     }};
-    ($expr:expr, $op:expr, $obj:expr) => {{
-        enhanced_try!(
-            $expr,
-            $op,
-            $obj.path.as_ref().and_then(|x| Some(x.as_path())),
-            Some($obj.as_raw_fd())
-        )
-    }};
+    ($expr:expr, $op:expr, $obj:expr) => {{ enhanced_try!($expr, $op, $obj.path(), Some($obj.as_raw_fd())) }};
 }
 
 mod buffered_file;
 mod buffered_file_stream;
+mod bulk_io;
 mod directory;
 mod dma_file;
 mod dma_file_stream;
@@ -153,6 +147,7 @@ pub use self::{
         StreamWriter,
         StreamWriterBuilder,
     },
+    bulk_io::{IoVec, ReadManyResult},
     directory::Directory,
     dma_file::DmaFile,
     dma_file_stream::{
