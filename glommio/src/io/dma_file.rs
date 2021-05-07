@@ -5,7 +5,7 @@
 //
 use crate::{
     io::{
-        bulk_io::{CoalescedReads, OrderedBulkIo, ReadManyArgs, ReadManyResult},
+        bulk_io::{CoalescedReads, IoVec, OrderedBulkIo, ReadManyArgs, ReadManyResult},
         dma_open_options::DmaOpenOptions,
         glommio_file::GlommioFile,
         read_result::ReadResult,
@@ -294,14 +294,14 @@ impl DmaFile {
     ///   distance less than this value, they will be merged. A value `None`
     ///   disables all read amplification limitation.
     ///
-    /// It is not necessary to respect the O_DIRECT alignment of the file, and
+    /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match.
-    pub fn read_many<S: Iterator<Item = (u64, usize)>>(
+    pub fn read_many<V: IoVec, S: Iterator<Item = V>>(
         self: &Rc<DmaFile>,
         iovs: S,
         max_merged_buffer_size: usize,
         max_read_amp: Option<usize>,
-    ) -> ReadManyResult {
+    ) -> ReadManyResult<V> {
         let mut last: Option<(u64, usize)> = None;
         let it = CoalescedReads::new(iovs, max_merged_buffer_size, max_read_amp)
             .map(|iov| {
@@ -833,10 +833,11 @@ pub(crate) mod test {
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
                 let res = x.1.unwrap();
+                assert_eq!(res.0.size(), 8);
                 assert_eq!(res.1.len(), 8);
                 assert_eq!(*last_read.borrow() + 1, x.0 as i64);
                 for i in 0..res.1.len() {
-                    assert_eq!(res.1[i], (res.0 + i as u64) as u8);
+                    assert_eq!(res.1[i], (res.0.pos() + i as u64) as u8);
                 }
                 *last_read.borrow_mut() = x.0 as i64;
             }})
@@ -863,10 +864,11 @@ pub(crate) mod test {
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
                 let res = x.1.unwrap();
+                assert_eq!(res.0.size(), 7);
                 assert_eq!(res.1.len(), 7);
                 assert_eq!(*last_read.borrow() + 1, x.0 as i64);
                 for i in 0..res.1.len() {
-                    assert_eq!(res.1[i], (res.0 + i as u64) as u8);
+                    assert_eq!(res.1[i], (res.0.pos() + i as u64) as u8);
                 }
                 *last_read.borrow_mut() = x.0 as i64;
             }})
@@ -891,11 +893,12 @@ pub(crate) mod test {
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
                 let res = x.1.unwrap();
+                assert_eq!(res.0.size(), 7);
                 assert_eq!(res.1.len(), 7);
-                assert_eq!(res.0, (x.0 * 8 + 1) as u64);
+                assert_eq!(res.0.pos(), (x.0 * 8 + 1) as u64);
                 assert_eq!(*last_read.borrow() + 1, x.0 as i64);
                 for i in 0..res.1.len() {
-                    assert_eq!(res.1[i], (res.0 + i as u64) as u8);
+                    assert_eq!(res.1[i], (res.0.pos() + i as u64) as u8);
                 }
                 *last_read.borrow_mut() = x.0 as i64;
             }})

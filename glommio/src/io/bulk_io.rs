@@ -3,7 +3,7 @@ use crate::{
     sys::Source,
 };
 use core::task::{Context, Poll};
-use futures_lite::Stream;
+use futures_lite::{ready, Stream, StreamExt};
 use itertools::{Itertools, MultiPeek};
 use std::{
     cmp::{max, min},
@@ -57,43 +57,57 @@ impl<U: Copy + Unpin> Stream for OrderedBulkIo<U> {
     }
 }
 
+/// An interface to an IO vector.
+pub trait IoVec: Copy + Unpin {
+    /// The read position (the offset) in the file
+    fn pos(&self) -> u64;
+    /// The number of bytes to read at [`Self::pos`]
+    fn size(&self) -> usize;
+}
+
+impl IoVec for (u64, usize) {
+    fn pos(&self) -> u64 {
+        self.0
+    }
+
+    fn size(&self) -> usize {
+        self.1
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct ReadManyArgs {
-    pub(crate) user_read: (u64, usize),
+pub(crate) struct ReadManyArgs<V: IoVec> {
+    pub(crate) user_read: V,
     pub(crate) system_read: (u64, usize),
 }
 
+/// A stream of ReadResult produced asynchronously.
+///
+/// See [`DmaFile::read_many`] for more information
 #[derive(Debug)]
-pub struct ReadManyResult {
-    pub(crate) inner: OrderedBulkIo<ReadManyArgs>,
+pub struct ReadManyResult<V: IoVec> {
+    pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>>,
     pub(crate) current_result: ReadResult,
 }
 
-impl Stream for ReadManyResult {
-    type Item = super::Result<(u64, ReadResult)>;
+impl<V: IoVec> Stream for ReadManyResult<V> {
+    type Item = super::Result<(V, ReadResult)>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let next = match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(next) => next,
-            Poll::Pending => return Poll::Pending,
-        };
-
-        match next {
+        match ready!(self.inner.poll_next(cx)) {
             None => Poll::Ready(None),
             Some((source, args)) => {
                 if let Some(mut source) = source {
-                    let read_size =
-                        enhanced_try!(source.take_result().unwrap(), "Reading", self.inner.file)?;
-                    let mut buffer = source.extract_dma_buffer();
-                    buffer.trim_to_size(std::cmp::min(read_size, args.system_read.1));
-                    self.current_result = ReadResult::from_whole_buffer(buffer);
+                    enhanced_try!(source.take_result().unwrap(), "Reading", self.inner.file)?;
+                    self.current_result =
+                        ReadResult::from_whole_buffer(source.extract_dma_buffer());
                 }
                 Poll::Ready(Some(Ok((
-                    args.user_read.0,
+                    args.user_read,
                     ReadResult::slice(
                         &self.current_result,
-                        (args.user_read.0 - args.system_read.0) as usize,
-                        args.user_read.1,
+                        (args.user_read.pos() - args.system_read.pos()) as usize,
+                        args.user_read.size(),
                     )
                     .unwrap_or_default(),
                 ))))
@@ -106,19 +120,19 @@ impl Stream for ReadManyResult {
     }
 }
 
-pub(crate) struct CoalescedReads<S: Iterator<Item = (u64, usize)>> {
+pub(crate) struct CoalescedReads<V: IoVec, S: Iterator<Item = V>> {
     iter: MultiPeek<S>,
     next_merged: Option<(usize, (u64, usize))>,
     max_merged_buffer_size: usize,
     max_read_amp: Option<usize>,
 }
 
-impl<S: Iterator<Item = (u64, usize)>> CoalescedReads<S> {
+impl<V: IoVec, S: Iterator<Item = V>> CoalescedReads<V, S> {
     pub(crate) fn new(
         iter: S,
         max_merged_buffer_size: usize,
         max_read_amp: Option<usize>,
-    ) -> CoalescedReads<S> {
+    ) -> CoalescedReads<V, S> {
         CoalescedReads {
             iter: iter.multipeek(),
             next_merged: None,
@@ -128,10 +142,10 @@ impl<S: Iterator<Item = (u64, usize)>> CoalescedReads<S> {
     }
 }
 
-impl<S: Iterator<Item = (u64, usize)>> Iterator for CoalescedReads<S> {
+impl<V: IoVec, S: Iterator<Item = V>> Iterator for CoalescedReads<V, S> {
     // CoalescedReads returns the original (offset, size) and the (offset, size) it
     // was merged in
-    type Item = ((u64, usize), (u64, usize));
+    type Item = (V, (u64, usize));
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(next) = self.next_merged {
@@ -148,22 +162,25 @@ impl<S: Iterator<Item = (u64, usize)>> Iterator for CoalescedReads<S> {
         while let Some(x) = self.iter.peek() {
             match current {
                 None => {
-                    current = Some((x.0, x.1));
+                    current = Some((x.pos(), x.size()));
                     taken = 1;
                     continue;
                 }
                 Some(cur) => {
                     if let Some(gap) = self.max_read_amp {
                         // if the read gap is > to the max configured, don't merge
-                        if u64::saturating_sub(cur.0, x.0) > gap as u64 {
+                        if u64::saturating_sub(cur.pos(), x.pos()) > gap as u64 {
                             break;
                         }
-                        if u64::saturating_sub(x.0, cur.0 + cur.1 as u64) > gap as u64 {
+                        if u64::saturating_sub(x.pos(), cur.pos() + cur.size() as u64) > gap as u64
+                        {
                             break;
                         }
                     }
-                    let merged: (u64, u64) =
-                        (min(cur.0, x.0), max(cur.0 + cur.1 as u64, x.0 + x.1 as u64));
+                    let merged: (u64, u64) = (
+                        min(cur.pos(), x.pos()),
+                        max(cur.pos() + cur.size() as u64, x.pos() + x.size() as u64),
+                    );
                     if merged.1 - merged.0 > self.max_merged_buffer_size as u64 {
                         // if the merged buffer is too large, don't merge
                         break;
