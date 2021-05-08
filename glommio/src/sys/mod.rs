@@ -32,6 +32,8 @@ use std::{
     time::Duration,
 };
 
+pub(crate) mod hardware_topology;
+
 macro_rules! syscall {
     ($fn:ident $args:tt) => {{
         let res = unsafe { libc::$fn $args };

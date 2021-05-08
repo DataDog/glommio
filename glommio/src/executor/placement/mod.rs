@@ -37,7 +37,7 @@
 //! reaching the `Cpu` are reflected in the `Path` returned by
 //! `Node::select_cpu`.
 //!
-//! Note that the numa distance or amount of memory available on each `Node` is
+//! Note that the NUMA distance or amount of memory available on each `Node` is
 //! not currently considered in selecting CPUs.
 //!
 //! Some helpful references:
@@ -45,12 +45,10 @@
 //! <https://www.kernel.org/doc/html/latest/vm/numa.html>
 //! <https://www.kernel.org/doc/html/latest/core-api/cpu_hotplug.html>
 
-#[cfg(target_os = "linux")]
-mod linux_sysfs;
 mod pq_tree;
 
-use super::Placement;
-use crate::{error::BuilderErrorKind, GlommioError};
+use crate::{error::BuilderErrorKind, sys::hardware_topology, CpuLocation, GlommioError};
+
 use pq_tree::{
     marker::{Pack, Priority, Spread},
     Level,
@@ -60,20 +58,106 @@ use std::{collections::HashSet, convert::TryInto};
 
 type Result<T> = crate::Result<T, ()>;
 
-/// A description of the CPU's location in the machine topology.
-#[derive(Clone, Debug)]
-pub struct CpuLocation {
-    /// Holds the CPU id.  This is the most granular field and will distinguish
-    /// among [`hyper-threads`].
+#[cfg(doc)]
+use super::{LocalExecutor, LocalExecutorPoolBuilder};
+
+/// Specifies a policy by which [`LocalExecutorPoolBuilder`] selects CPUs.
+///
+/// `Placement` is use to bind [`LocalExecutor`]s to a set of CPUs via
+/// preconfigured policies designed to address a variety of use cases.  The
+/// default is `Unbound`.
+///
+/// ## Example
+///
+/// Some `Placement`s allow manually filtering available CPUs via a [`CpuSet`],
+/// such as `MaxSpread`.  The following would place shards on four CPUs
+/// (a.k.a.  hyper-threads) that are on NUMA node 0 and have an even numbered
+/// package ID according to their [`CpuLocation`]. The selection aims to achieve
+/// a high degree of separation between the CPUs in terms of machine topology.
+/// Each [`LocalExecutor`] would be bound to a single CPU.
+///
+/// Note that if four CPUs are not available, the call to
+/// [`LocalExecutorPoolBuilder::on_all_shards`] would return an `Err` when using
+/// `MaxSpread`.
+///
+/// ```
+/// use glommio::{CpuSet, LocalExecutorPoolBuilder, Placement};
+///
+/// let cpus = CpuSet::online()
+///     .expect("Err: please file an issue with glommio")
+///     .filter(|l| l.numa_node == 0)
+///     .filter(|l| l.package % 2 == 0);
+///
+/// let handles = LocalExecutorPoolBuilder::new(4)
+///     .placement(Placement::MaxSpread(Some(cpus)))
+///     .on_all_shards(|| async move {
+///         // ... important stuff ...
+///     })
+///     .unwrap();
+///
+/// handles.join_all();
+/// ```
+#[derive(Debug)]
+pub enum Placement {
+    /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
+    /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.  This is the
+    /// default placement.
     ///
-    /// [`hyper-threads`]: https://en.wikipedia.org/wiki/Hyper-threading
-    pub cpu: usize,
-    /// Holds the core id on which the `cpu` is located.
-    pub core: usize,
-    /// Holds the package or socket id on which the `cpu` is located.
-    pub package: usize,
-    /// Holds the NUMA node on which the `cpu` is located.
-    pub numa_node: usize,
+    /// [`LocalExecutor`]: super::LocalExecutor
+    /// [`LocalExecutorPoolBuilder`]: super::LocalExecutorPoolBuilder
+    Unbound,
+    /// The `Fenced` variant binds each [`LocalExecutor`] to the set of
+    /// CPUs specified by [`CpuSet`].  With an unfiltered CPU
+    /// set returned by [`CpuSet::online`], this is similar to using `Unbound`
+    /// with the distinction that bringing additional CPUs online will not
+    /// allow the executors to run on the newly available CPUs.  The
+    /// `Fenced` variant allows the number of shards specified in
+    /// [`LocalExecutorPoolBuilder::new`] to be greater than the number of CPUs
+    /// as long as at least one CPU is included in `CpuSet`.
+    ///
+    /// #### Errors
+    ///
+    /// If the provided [`CpuSet`] contains no CPUs, a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
+    Fenced(CpuSet),
+    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
+    /// that the set of all CPUs selected has a high degree of sepration.
+    /// The selection proceeds from all CPUs that are online in a
+    /// non-deterministic manner.  The `Option<CpuSet>` parameter may be used to
+    /// restrict the [`CpuSet`] from which CPUs are selected; specifying `None`
+    /// is equivalent to using `Some(CpuSet::online()?)`.
+    ///
+    /// #### Errors
+    ///
+    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is greater than the number of CPUs available, then a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
+    MaxSpread(Option<CpuSet>),
+    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
+    /// that the set of all CPUs selected has a low degree of sepration.
+    /// The selection proceeds from all CPUs that are online in a
+    /// non-deterministic manner.  The `Option<CpuSet>` parameter may be used to
+    /// restrict the [`CpuSet`] from which CPUs are selected; specifying `None`
+    /// is equivalent to using `Some(CpuSet::online()?)`.
+    ///
+    /// #### Errors
+    ///
+    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
+    /// is greater than the number of CPUs available, then a call to
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
+    /// Err`.
+    MaxPack(Option<CpuSet>),
+    /* TODO:
+     * Custom, */
+}
+
+/// The default is `Placement::Unbound`
+impl Default for Placement {
+    fn default() -> Self {
+        Self::Unbound
+    }
 }
 
 /// Used to specify a set of permitted CPUs on which
@@ -91,19 +175,19 @@ impl CpuSet {
     /// The function will return an `Err` if the hardware topology could not
     /// be obtained from this machine.
     pub fn online() -> Result<Self> {
-        Ok(Self(linux_sysfs::get_machine_topology_unsorted()?))
+        Ok(Self(hardware_topology::get_machine_topology_unsorted()?))
     }
 
     /// This method can be used to restrict the CPUs held by `CpuSet`.  The
-    /// resulting `CpuSet` will only include `CpuLocation`s for which the
+    /// resulting `CpuSet` will only include [`CpuLocation`]s for which the
     /// provided closure returns `true`. Note that each call to `filter`
-    /// will use as input the list of CPUs previously selected (i.e. the
-    /// list is *not* reset on each call).
+    /// will use as input the set of CPUs previously selected (i.e. the set is
+    /// *not* reset on each call).
     ///
     /// ```
     /// use glommio::CpuSet;
     ///
-    /// // get CPUs on numa node 0
+    /// // get CPUs on NUMA node 0
     /// let cpus = CpuSet::online()
     ///     .expect("Err: please file an issue with glommio")
     ///     .filter(|l| l.numa_node == 0);
@@ -193,7 +277,7 @@ impl Iterator for CpuIter {
 /// [`Placement`].
 pub(crate) enum CpuSetGenerator {
     Unbound,
-    Shared(CpuSet),
+    Fenced(CpuSet),
     MaxSpread(MaxSpreader),
     MaxPack(MaxPacker),
 }
@@ -202,25 +286,23 @@ impl CpuSetGenerator {
     pub fn new(placement: Placement, nr_shards: usize) -> Result<Self> {
         let this = match placement {
             Placement::Unbound => Self::Unbound,
-            Placement::SharedOnCpus(cpus) => {
+            Placement::Fenced(cpus) => {
                 Self::check_nr_cpus(1, &cpus)?;
-                Self::Shared(cpus)
+                Self::Fenced(cpus)
             }
-            Placement::MaxSpread => {
-                let cpus = CpuSet::online()?;
+            Placement::MaxSpread(cpus) => {
+                let cpus = match cpus {
+                    Some(cpus) => cpus,
+                    None => CpuSet::online()?,
+                };
                 Self::check_nr_cpus(nr_shards, &cpus)?;
                 Self::MaxSpread(MaxSpreader::from_cpu_set(cpus))
             }
-            Placement::MaxSpreadOnCpus(cpus) => {
-                Self::check_nr_cpus(nr_shards, &cpus)?;
-                Self::MaxSpread(MaxSpreader::from_cpu_set(cpus))
-            }
-            Placement::MaxPack => {
-                let cpus = CpuSet::online()?;
-                Self::check_nr_cpus(nr_shards, &cpus)?;
-                Self::MaxPack(MaxPacker::from_cpu_set(cpus))
-            }
-            Placement::MaxPackOnCpus(cpus) => {
+            Placement::MaxPack(cpus) => {
+                let cpus = match cpus {
+                    Some(cpus) => cpus,
+                    None => CpuSet::online()?,
+                };
                 Self::check_nr_cpus(nr_shards, &cpus)?;
                 Self::MaxPack(MaxPacker::from_cpu_set(cpus))
             }
@@ -248,7 +330,7 @@ impl CpuSetGenerator {
     pub fn next(&mut self) -> CpuIter {
         match self {
             Self::Unbound => CpuIter::Empty,
-            Self::Shared(cpus) => CpuIter::from_vec(cpus.as_vec().clone()),
+            Self::Fenced(cpus) => CpuIter::from_vec(cpus.as_vec().clone()),
             Self::MaxSpread(it) => CpuIter::from_option(it.next()),
             Self::MaxPack(it) => CpuIter::from_option(it.next()),
         }
@@ -387,7 +469,8 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{linux_sysfs::test_helpers::cpu_loc, *};
+    use super::*;
+    use crate::sys::hardware_topology::test_helpers::cpu_loc;
 
     #[test]
     fn cpu_set() {
@@ -581,7 +664,7 @@ mod test {
             cpu_loc(0, 0, 0, 1),
         ];
 
-        super::linux_sysfs::test_helpers::check_topolgy(topology.clone());
+        super::hardware_topology::test_helpers::check_topolgy(topology.clone());
 
         let mut max_packer = MaxPacker::from_topology(topology);
         let cpu_location = max_packer.next().unwrap();
@@ -638,7 +721,7 @@ mod test {
             cpu_loc(3, 1, 3, 0),
         ];
 
-        super::linux_sysfs::test_helpers::check_topolgy(topology.clone());
+        super::hardware_topology::test_helpers::check_topolgy(topology.clone());
 
         let mut max_packer = MaxPacker::from_topology(topology);
         let cpu_location = max_packer.next().unwrap();

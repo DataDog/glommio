@@ -444,7 +444,6 @@ pub use crate::{
     byte_slice_ext::{ByteSliceExt, ByteSliceMutExt},
     error::{GlommioError, QueueErrorKind, ResourceType, Result},
     executor::{
-        CpuLocation,
         CpuSet,
         ExecutorStats,
         LocalExecutor,
@@ -458,6 +457,7 @@ pub use crate::{
         TaskQueueStats,
     },
     shares::{Shares, SharesManager},
+    sys::hardware_topology::CpuLocation,
 };
 pub use enclose::enclose;
 pub use scopeguard::defer;

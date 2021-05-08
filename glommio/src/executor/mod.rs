@@ -29,12 +29,12 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
-mod multitask;
 mod latch;
+mod multitask;
 mod placement;
 
 use latch::{Latch, LatchState};
-pub use placement::{CpuLocation, CpuSet};
+pub use placement::{CpuSet, Placement};
 
 use std::{
     cell::RefCell,
@@ -578,125 +578,6 @@ impl Default for LocalExecutorBuilder {
     }
 }
 
-/// Specifies a policy by which [`LocalExecutorPoolBuilder`] distributes
-/// [`LocalExecutor`]s on the machine's CPUs / hardware topology.
-///
-/// The default is `Placement::Unbound`.
-///
-/// ## Example
-///
-/// Some `Placement`s allow manually filtering available CPUs via a [`CpuSet`],
-/// such as `MaxSpreadOnCpus`.  The following would place shards on four CPUs
-/// (a.k.a.  hyper-threads) that are on numa node 0 and have an even numbered
-/// package ID according to their [`CpuLocation`]. The selection aims to achieve
-/// a high degree of separation between the CPUs in terms of machine topology.
-/// Each [`LocalExecutor`] would be bound to a single CPU.
-///
-/// Note that if four CPUs are not available, the call to
-/// [`LocalExecutorPoolBuilder::on_all_shards`] would return an `Err` when using
-/// `MaxSpreadOnCpus`.
-///
-/// ```
-/// use glommio::{CpuSet, LocalExecutorPoolBuilder, Placement};
-///
-/// let cpus = CpuSet::online()
-///     .expect("Err: please file an issue with glommio")
-///     .filter(|l| l.numa_node == 0)
-///     .filter(|l| l.package % 2 == 0);
-///
-/// let handles = LocalExecutorPoolBuilder::new(4)
-///     .placement(Placement::MaxSpreadOnCpus(cpus))
-///     .on_all_shards(|| async move {
-///         // ... important stuff ...
-///     })
-///     .unwrap();
-///
-/// handles.join_all();
-/// ```
-#[derive(Debug)]
-pub enum Placement {
-    /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
-    /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.  This is the
-    /// default placement.
-    Unbound,
-    /// The `SharedOnCpus` variant binds each [`LocalExecutor`] to the set of
-    /// CPUs specified by [`CpuSet`].  With an unfiltered CPU
-    /// set returned by [`CpuSet::online`], this is similar to using `Unbound`
-    /// with the distinction that bringing additional CPUs online will not
-    /// allow the executors to run on the newly available CPUs.  The
-    /// `SharedOnCpus` variant allows the number of shards specified in
-    /// [`LocalExecutorPoolBuilder::new`] to be greater than the number of CPUs
-    /// as long as at least one CPU is included in `CpuSet`.
-    ///
-    /// #### Errors
-    ///
-    /// If the provided [`CpuSet`] contains no CPUs, a call to
-    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
-    /// Err`.
-    SharedOnCpus(CpuSet),
-    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
-    /// that the set of all CPUs selected has a high degree of sepration.
-    /// The selection proceeds from all CPUs that are online in a
-    /// non-deterministic manner.  See [`Placement::MaxSpreadOnCpus`] for a
-    /// way to restrict the set of CPUs available.
-    ///
-    /// #### Errors
-    ///
-    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs available, then a call to
-    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
-    /// Err`.
-    MaxSpread,
-    /// Like [`Placement::MaxSpread`] but allows manually restricting the CPUs
-    /// on which [`LocalExecutor`]s can be placed via a [`CpuSet`].  If the
-    /// number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is less than the number of CPUs in the provided `CpuSet` then some
-    /// CPUs will not be used.
-    ///
-    /// #### Errors
-    ///
-    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs available, then a call to
-    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
-    /// Err`.
-    MaxSpreadOnCpus(CpuSet),
-    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
-    /// that the set of all CPUs selected has a low degree of sepration.
-    /// The selection proceeds from all CPUs that are online in a
-    /// non-deterministic manner.  See [`Placement::MaxPackOnCpus`] for a
-    /// way to restrict the set of CPUs available.
-    ///
-    /// #### Errors
-    ///
-    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs available, then a call to
-    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
-    /// Err`.
-    MaxPack,
-    /// Like [`Placement::MaxPack`] but allows manually restricting the CPUs on
-    /// which [`LocalExecutor`]s can be placed via a [`CpuSet`].  If the number
-    /// of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is less than the number of CPUs in the provided `CpuSet` then some
-    /// CPUs will not be used.
-    ///
-    /// #### Errors
-    ///
-    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs available, then a call to
-    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
-    /// Err`.
-    MaxPackOnCpus(CpuSet),
-    /* TODO:
-     * Custom, */
-}
-
-/// The default is `Placement::Unbound`
-impl Default for Placement {
-    fn default() -> Self {
-        Self::Unbound
-    }
-}
-
 /// A factory to configure and create a pool of [`LocalExecutor`]s.
 ///
 /// Configuration methods apply their settings to all [`LocalExecutor`]s in the
@@ -737,7 +618,7 @@ pub struct LocalExecutorPoolBuilder {
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
     /// Indicates a policy by which [`LocalExecutor`]s are bound to CPUs.
-    placement: Option<Placement>,
+    placement: Placement,
 }
 
 impl LocalExecutorPoolBuilder {
@@ -752,7 +633,7 @@ impl LocalExecutorPoolBuilder {
             name: String::from("unnamed"),
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
-            placement: Some(Placement::Unbound),
+            placement: Placement::Unbound,
         }
     }
 
@@ -792,7 +673,7 @@ impl LocalExecutorPoolBuilder {
     /// are bound to the machine's hardware topology (i.e. which CPUs to
     /// use).  The default is [`Placement::Unbound`].
     pub fn placement(mut self, p: Placement) -> Self {
-        self.placement = Some(p);
+        self.placement = p;
         self
     }
 
@@ -818,7 +699,7 @@ impl LocalExecutorPoolBuilder {
         T: Send + 'static,
     {
         let mut handles = PoolThreadHandles::new();
-        let placement = self.placement.take().expect("placement missing");
+        let placement = std::mem::take(&mut self.placement);
         let mut cpu_set_gen = placement::CpuSetGenerator::new(placement, self.nr_shards)?;
         let latch = Latch::new(self.nr_shards);
 
@@ -847,6 +728,8 @@ impl LocalExecutorPoolBuilder {
         F: Future<Output = T> + 'static,
         T: Send + 'static,
     {
+        // NOTE: `self.placement` was `std::mem::take`en in `Self::on_all_shards`; you
+        // should no longer rely on its value at this point
         let cpu_set = cpu_set_gen.next();
         let notifier = sys::new_sleep_notifier()?;
         let name = format!("{}-{}", &self.name, notifier.id());
@@ -2881,18 +2764,18 @@ mod test {
             let nr_execs = nn * cpu_set.len();
             let placements = [
                 Placement::Unbound,
-                Placement::SharedOnCpus(cpu_set.clone()),
-                Placement::MaxSpread,
-                Placement::MaxSpreadOnCpus(cpu_set.clone()),
-                Placement::MaxPack,
-                Placement::MaxPackOnCpus(cpu_set.clone()),
+                Placement::Fenced(cpu_set.clone()),
+                Placement::MaxSpread(None),
+                Placement::MaxSpread(Some(cpu_set.clone())),
+                Placement::MaxPack(None),
+                Placement::MaxPack(Some(cpu_set.clone())),
             ];
 
             for pp in std::array::IntoIter::new(placements) {
                 let ids = Arc::new(Mutex::new(HashMap::new()));
                 let cpus = Arc::new(Mutex::new(HashMap::new()));
                 let cpu_hard_bind = match pp {
-                    Placement::Unbound | Placement::SharedOnCpus(_) => false,
+                    Placement::Unbound | Placement::Fenced(_) => false,
                     _ => true,
                 };
 
@@ -2948,11 +2831,11 @@ mod test {
         {
             let placements = [
                 (false, Placement::Unbound),
-                (false, Placement::SharedOnCpus(cpu_set.clone())),
-                (true, Placement::MaxSpread),
-                (true, Placement::MaxSpreadOnCpus(cpu_set.clone())),
-                (true, Placement::MaxPack),
-                (true, Placement::MaxPackOnCpus(cpu_set.clone())),
+                (false, Placement::Fenced(cpu_set.clone())),
+                (true, Placement::MaxSpread(None)),
+                (true, Placement::MaxSpread(Some(cpu_set.clone()))),
+                (true, Placement::MaxPack(None)),
+                (true, Placement::MaxPack(Some(cpu_set.clone()))),
             ];
 
             for (_shard_limited, p) in std::array::IntoIter::new(placements) {
@@ -2968,11 +2851,11 @@ mod test {
         {
             let placements = [
                 (false, Placement::Unbound),
-                (false, Placement::SharedOnCpus(cpu_set.clone())),
-                (true, Placement::MaxSpread),
-                (true, Placement::MaxSpreadOnCpus(cpu_set.clone())),
-                (true, Placement::MaxPack),
-                (true, Placement::MaxPackOnCpus(cpu_set.clone())),
+                (false, Placement::Fenced(cpu_set.clone())),
+                (true, Placement::MaxSpread(None)),
+                (true, Placement::MaxSpread(Some(cpu_set.clone()))),
+                (true, Placement::MaxPack(None)),
+                (true, Placement::MaxPack(Some(cpu_set.clone()))),
             ];
 
             for (shard_limited, p) in std::array::IntoIter::new(placements) {
@@ -3059,7 +2942,7 @@ mod test {
         };
 
         let mut handles = PoolThreadHandles::new();
-        let placement = builder.placement.take().expect("placement missing");
+        let placement = std::mem::take(&mut builder.placement);
         let mut cpu_set_gen =
             placement::CpuSetGenerator::new(placement, builder.nr_shards).unwrap();
         let latch = Latch::new(builder.nr_shards);
