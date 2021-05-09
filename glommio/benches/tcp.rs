@@ -127,7 +127,7 @@ fn main() {
                 let wr = stream.write(&byte).await.unwrap();
                 total += wr as f64;
             }
-            total = total / 1_000_000_000.0;
+            total /= 1_000_000_000.0;
 
             println!(
                 "Bandwidth of sending through a single socket: {:.2} Gbps/s",

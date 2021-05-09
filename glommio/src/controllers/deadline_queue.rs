@@ -612,14 +612,14 @@ mod test {
         test_executor!(async move {
             let queue = Rc::new(DeadlineQueue::new("example", Duration::from_millis(1)));
             let tq = Local::local(enclose! { (queue) async move {
-                let test = DeadlineSourceTest::new(Duration::from_secs(2 as u64), 1);
+                let test = DeadlineSourceTest::new(Duration::from_secs(2_u64), 1);
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
             }})
             .detach();
 
             Timer::new(Duration::from_millis(1)).await;
-            let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 1);
+            let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1);
             match queue.push_work(test).await {
                 Err(x) => assert_eq!(x.kind(), io::ErrorKind::InvalidInput),
                 Ok(_) => panic!("should have failed"),
@@ -635,7 +635,7 @@ mod test {
                 "example",
                 Duration::from_millis(1),
             ));
-            let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 0);
+            let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 0);
             let res = queue.push_work(test).await.unwrap();
             assert_eq!(res, 0);
         });
@@ -648,7 +648,7 @@ mod test {
                 "example",
                 Duration::from_millis(1),
             ));
-            let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 0);
+            let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 0);
             let drop_happens = test.drop_guarantee.clone();
             let res = queue.push_work(test).await.unwrap();
             assert_eq!(res, 0);
@@ -663,7 +663,7 @@ mod test {
                 "example",
                 Duration::from_millis(1),
             ));
-            let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 1000);
+            let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
             let tq = Local::local(enclose! { (queue, test) async move {
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
@@ -685,7 +685,7 @@ mod test {
                 "example",
                 Duration::from_millis(1),
             ));
-            let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 1000);
+            let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
             let tq = Local::local(enclose! { (queue, test) async move {
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
@@ -705,7 +705,7 @@ mod test {
                 "example",
                 Duration::from_millis(10),
             ));
-            let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 1000);
+            let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
             let tq = Local::local(enclose! { (queue, test) async move {
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
@@ -740,7 +740,7 @@ mod test {
         test_executor!(async move {
             let queue = Rc::new(DeadlineQueue::new("example", Duration::from_millis(1)));
             let tq = Local::local(enclose! { (queue) async move {
-                let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 1);
+                let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1);
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
             }})
@@ -749,7 +749,7 @@ mod test {
             Timer::new(Duration::from_millis(2)).await;
             let shares_first = queue.queue.shares();
             let tq2 = Local::local(enclose! { (queue) async move {
-                let test = DeadlineSourceTest::new(Duration::from_secs(1 as u64), 1000);
+                let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
             }})

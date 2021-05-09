@@ -457,7 +457,7 @@ pub(crate) mod test {
         };
 
         vec.push(make_tmp_test_directory(test_name));
-        return vec;
+        vec
     }
 
     macro_rules! dma_file_test {
@@ -681,7 +681,7 @@ pub(crate) mod test {
         for _ in 0..200 {
             let mut buf = file.alloc_dma_buffer(size);
             let bytes = buf.as_bytes_mut();
-            bytes[0] = 'x' as u8;
+            bytes[0] = b'x';
 
             let f = file.write_at(buf, 0);
             futs.push(f);
@@ -715,7 +715,7 @@ pub(crate) mod test {
 
                     let mut buf = file.alloc_dma_buffer(size);
                     let bytes = buf.as_bytes_mut();
-                    bytes[0] = 'x' as u8;
+                    bytes[0] = b'x';
                     file.write_at(buf, 0).await.unwrap();
                     file.close().await.unwrap();
                 })

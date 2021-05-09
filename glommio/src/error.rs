@@ -588,8 +588,7 @@ mod test {
             None,
             Some(32),
         );
-        Err(enhanced)?;
-        Ok(())
+        Err(enhanced.into())
     }
 
     #[test]

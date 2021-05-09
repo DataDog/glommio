@@ -33,7 +33,7 @@ fn main() {
         let second = Local::local(|_left: Rc<RefCell<bool>>, right: Rc<RefCell<bool>>| -> _ {
             async move {
                 loop {
-                    if *(right.borrow()) == false {
+                    if !(*(right.borrow())) {
                         println!("right");
                         *(right.borrow_mut()) = true
                     }

@@ -1660,13 +1660,13 @@ mod tests {
         let start = Instant::now();
         reactor.wait(None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
-        assert!(50 <= elapsed_ms && elapsed_ms < 100);
+        assert!((50..100).contains(&elapsed_ms));
 
         drop(slow); // Cancel this one.
 
         reactor.wait(None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
-        assert!(300 <= elapsed_ms && elapsed_ms < 350);
+        assert!((300..350).contains(&elapsed_ms));
     }
 
     #[test]
@@ -1699,14 +1699,12 @@ mod tests {
         let x = al.new_buffer(4096).unwrap();
         let y = al.new_buffer(4096).unwrap();
 
-        match x.uring_buffer_id() {
-            Some(x) => assert_eq!(x, 1234),
-            None => panic!("Expected uring buffer"),
+        if y.uring_buffer_id().is_some() {
+            panic!("Expected non-uring buffer")
         }
 
-        match y.uring_buffer_id() {
-            Some(_) => panic!("Expected non-uring buffer"),
-            None => {}
+        if y.uring_buffer_id().is_some() {
+            unreachable!("Expected non-uring buffer")
         }
         drop(x);
         drop(y);
@@ -1715,14 +1713,13 @@ mod tests {
         let x = al.new_buffer(4096).unwrap();
         match x.uring_buffer_id() {
             Some(x) => assert_eq!(x, 1234),
-            None => panic!("Expected uring buffer"),
+            None => unreachable!("Expected uring buffer"),
         }
         drop(x);
         // Allocation for an object that is too big fails
         let x = al.new_buffer(40960).unwrap();
-        match x.uring_buffer_id() {
-            Some(_) => panic!("Expected non-uring buffer"),
-            None => {}
+        if x.uring_buffer_id().is_some() {
+            unreachable!("Expected non-uring buffer")
         }
     }
 

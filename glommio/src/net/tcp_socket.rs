@@ -770,7 +770,7 @@ mod tests {
                 Task::local(enclose! { (coord) async move {
                     coord.set(1);
                     let stream = listener.accept().await?;
-                    Ok(stream.peer_addr()?)
+                    stream.peer_addr()
                 }});
 
             while coord.get() != 1 {

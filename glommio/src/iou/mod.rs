@@ -364,31 +364,22 @@ mod tests {
     fn test_resultify() {
         let side_effect = |i, effect: &mut _| -> i32 {
             *effect += 1;
-            return i;
+            i
         };
 
         let mut calls = 0;
         let ret = resultify(side_effect(0, &mut calls));
-        assert!(match ret {
-            Ok(0) => true,
-            _ => false,
-        });
+        matches!(ret, Ok(0));
         assert_eq!(calls, 1);
 
         calls = 0;
         let ret = resultify(side_effect(1, &mut calls));
-        assert!(match ret {
-            Ok(1) => true,
-            _ => false,
-        });
+        matches!(ret, Ok(1));
         assert_eq!(calls, 1);
 
         calls = 0;
         let ret = resultify(side_effect(-1, &mut calls));
-        assert!(match ret {
-            Err(e) if e.raw_os_error() == Some(1) => true,
-            _ => false,
-        });
+        matches!(ret, Err(e) if e.raw_os_error() == Some(1));
         assert_eq!(calls, 1);
     }
 }

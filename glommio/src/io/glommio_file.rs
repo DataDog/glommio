@@ -259,7 +259,7 @@ pub(crate) mod test {
             let path = dir.path.clone();
 
             let file = path.join("file");
-            let gf = GlommioFile::open_at(-1, &file, libc::O_CREAT, 0644)
+            let gf = GlommioFile::open_at(-1, &file, libc::O_CREAT, 644)
                 .await
                 .unwrap();
             let gf_fd = gf.path.as_ref().cloned().unwrap();
@@ -275,7 +275,7 @@ pub(crate) mod test {
                 files
             };
 
-            assert!(file_list().iter().find(|&x| *x == gf_fd).is_some()); // sanity check that file is open
+            assert!(file_list().iter().any(|x| *x == gf_fd)); // sanity check that file is open
             let _ = { gf }; // moves scope and drops
             sleep(Duration::from_millis(10)).await; // forces the reactor to run, which will drop the file
             assert!(file_list().iter().find(|&x| *x == gf_fd).is_none()); // file is gone
