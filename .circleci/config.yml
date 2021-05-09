@@ -124,6 +124,35 @@ jobs:
             - target/debug/deps
           key: v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
 
+  test:
+    machine:
+      image: ubuntu-2004:202104-01
+    steps:
+      - checkout
+      - rust/install
+      - run:
+          name: Version information
+          command: cat /proc/version; rustc --version; cargo --version; rustup --version
+      - run:
+          name: Calculate dependencies
+          command: cargo generate-lockfile
+      - run:
+          name: Set limits
+          command: ulimit -Sl 512; ulimit -Hl 512
+      - restore_cache:
+          keys:
+            - v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+      - run:
+          name: Test all targets
+          command: cargo test --all-features
+      - save_cache:
+          paths:
+            - /usr/local/cargo/registry
+            - target/debug/.fingerprint
+            - target/debug/build
+            - target/debug/deps
+          key: v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+
 workflows:
   unit_tests:
     jobs:
