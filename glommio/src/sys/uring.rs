@@ -847,10 +847,7 @@ impl Source {
 
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
         let mut w = self.inner.wakers.borrow_mut();
-        match w.result.take() {
-            None => None,
-            Some(x) => Some(x.map(|x| x as usize)),
-        }
+        w.result.take().map(|x| x.map(|x| x as usize))
     }
 
     pub(crate) fn has_result(&self) -> bool {

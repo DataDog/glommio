@@ -61,8 +61,6 @@
 //! [`Waker`]: https://doc.rust-lang.org/std/task/struct.Waker.html
 
 #![warn(missing_docs, missing_debug_implementations)]
-#![doc(test(attr(deny(rust_2018_idioms, warnings))))]
-#![doc(test(attr(allow(unused_extern_crates, unused_variables))))]
 
 pub(crate) mod header;
 pub(crate) mod join_handle;
