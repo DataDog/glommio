@@ -2008,8 +2008,12 @@ mod test {
     fn create_fail_to_bind() {
         // If you have a system with 4 billion CPUs let me know and I will
         // update this test.
-        if let Ok(_) = LocalExecutorBuilder::new().pin_to_cpu(usize::MAX).make() {
-            panic!("Should have failed");
+        if LocalExecutorBuilder::new()
+            .pin_to_cpu(usize::MAX)
+            .make()
+            .is_ok()
+        {
+            unreachable!("Should have failed");
         }
     }
 
@@ -2043,13 +2047,13 @@ mod test {
         local_ex.run(async {
             let task = Task::local_into(
                 async move {
-                    panic!("Should not have executed this");
+                    unreachable!("Should not have executed this");
                 },
                 TaskQueueHandle { index: 1 },
             );
 
-            if let Ok(_) = task {
-                panic!("Should have failed");
+            if task.is_ok() {
+                unreachable!("Should have failed");
             }
         });
     }
@@ -2128,7 +2132,7 @@ mod test {
                         async move {
                             // In case we are executed first, yield to the the other task
                             loop {
-                                if *(nolat_started.borrow()) == false {
+                                if !(*(nolat_started.borrow())) {
                                     Local::later().await;
                                 } else {
                                     break;
@@ -2216,7 +2220,7 @@ mod test {
                         async move {
                             // In case we are executed first, yield to the the other task
                             loop {
-                                if *(first_started.borrow()) == false {
+                                if !(*(first_started.borrow())) {
                                     Local::later().await;
                                 } else {
                                     break;

@@ -325,7 +325,7 @@ fn main() {
 
     let file_size = matches
         .value_of("file_size")
-        .and_then(|s| Some(s.parse::<u64>().unwrap() << 30))
+        .map(|s| s.parse::<u64>().unwrap() << 30)
         .unwrap_or(total_memory * 2);
 
     let random = total_memory / 10;

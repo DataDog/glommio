@@ -100,7 +100,7 @@ impl DeadlineSource for IntWriter {
     }
 
     fn action(self: Rc<Self>) -> Pin<Box<dyn Future<Output = Duration> + 'static>> {
-        Box::pin(self.clone().write_int())
+        Box::pin(self.write_int())
     }
 
     fn total_units(&self) -> u64 {

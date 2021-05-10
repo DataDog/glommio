@@ -403,15 +403,15 @@ mod tests {
 
         for i in 0..10 {
             p.try_push(i);
-            assert!(p.capacity() == 10);
-            assert!(p.size() == i + 1);
+            assert_eq!(p.capacity(), 10);
+            assert_eq!(p.size(), i + 1);
         }
 
         match p.try_push(10) {
             Some(v) => {
-                assert!(v == 10);
+                assert_eq!(v, 10);
             }
-            None => assert!(false, "Queue should not have accepted another write!"),
+            None => unreachable!("Queue should not have accepted another write!"),
         }
     }
 
@@ -419,21 +419,19 @@ mod tests {
     fn test_try_poll() {
         let (p, c) = super::make(10);
 
-        match c.try_pop() {
-            Some(_) => assert!(false, "Queue was empty but a value was read!"),
-            None => {}
+        if c.try_pop().is_some() {
+            unreachable!("Queue was empty but a value was read!")
         }
 
         p.try_push(123);
 
         match c.try_pop() {
-            Some(v) => assert!(v == 123),
-            None => assert!(false, "Queue was not empty but poll() returned nothing!"),
+            Some(v) => assert_eq!(v, 123),
+            None => unreachable!("Queue was not empty but poll() returned nothing!"),
         }
 
-        match c.try_pop() {
-            Some(_) => assert!(false, "Queue was empty but a value was read!"),
-            None => {}
+        if c.try_pop().is_some() {
+            unreachable!("Queue was empty but a value was read!")
         }
     }
 
@@ -444,7 +442,7 @@ mod tests {
         thread::spawn(move || {
             for i in 0..100000 {
                 loop {
-                    if let None = p.try_push(i) {
+                    if p.try_push(i).is_none() {
                         break;
                     }
                 }

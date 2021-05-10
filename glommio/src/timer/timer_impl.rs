@@ -1107,9 +1107,9 @@ mod test {
                 async move {
                     *(ex.borrow_mut()) += 1;
                     if (*ex.borrow()) == 10 {
-                        return None;
+                        None
                     } else {
-                        return Some(Duration::from_millis(5));
+                        Some(Duration::from_millis(5))
                     }
                 }
             });

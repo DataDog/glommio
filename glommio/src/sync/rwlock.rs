@@ -936,6 +936,7 @@ mod test {
             let lock = RwLock::new(());
             drop(lock.read().await.unwrap());
             drop(lock.write().await.unwrap());
+            #[allow(clippy::eval_order_dependence)]
             drop((lock.read().await.unwrap(), lock.read().await.unwrap()));
             drop(lock.read().await.unwrap());
         });
@@ -1211,11 +1212,8 @@ mod test {
             let write_result = lock.try_write();
             match write_result {
                 Err(GlommioError::WouldBlock(ResourceType::RwLock)) => (),
-                Ok(_) => assert!(
-                    false,
-                    "try_write should not succeed while read_guard is in scope"
-                ),
-                Err(_) => assert!(false, "unexpected error"),
+                Ok(_) => unreachable!("try_write should not succeed while read_guard is in scope"),
+                Err(_) => unreachable!("unexpected error"),
             }
 
             drop(read_guard);
@@ -1231,11 +1229,8 @@ mod test {
             let write_result = lock.try_read();
             match write_result {
                 Err(GlommioError::WouldBlock(ResourceType::RwLock)) => (),
-                Ok(_) => assert!(
-                    false,
-                    "try_read should not succeed while read_guard is in scope"
-                ),
-                Err(_) => assert!(false, "unexpected error"),
+                Ok(_) => unreachable!("try_read should not succeed while read_guard is in scope"),
+                Err(_) => unreachable!("unexpected error"),
             }
 
             drop(read_guard);

@@ -27,7 +27,7 @@ fn main() {
                 if read == 0 {
                     break;
                 }
-                receiver.send(&mut buf).await.unwrap();
+                receiver.send(&buf).await.unwrap();
             }
 
             loop {
@@ -36,7 +36,7 @@ fn main() {
                 if read == 0 {
                     break;
                 }
-                receiver.send_to(&mut buf, client_addr).await.unwrap();
+                receiver.send_to(&buf, client_addr).await.unwrap();
             }
         })
         .unwrap();

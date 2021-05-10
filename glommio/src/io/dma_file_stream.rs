@@ -1364,8 +1364,7 @@ mod test {
             .with_buffer_size(1 << 10)
             .build();
 
-        let mut buf = Vec::with_capacity(file_size);
-        buf.resize(file_size, 0);
+        let mut buf = vec![0; file_size];
         reader.read_exact(&mut buf).await.unwrap();
         check_contents!(buf, 0);
         reader.close().await.unwrap();

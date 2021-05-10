@@ -23,7 +23,7 @@ fn main() {
     #[derive(Clone)]
     struct RequestHandler {
         nr_shards: usize,
-    };
+    }
 
     impl Handler<i32> for RequestHandler {
         fn handle(&self, _msg: Msg, _src_shard: usize, _cur_shard: usize) -> HandlerResult {

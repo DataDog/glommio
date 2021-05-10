@@ -96,10 +96,8 @@ impl<T: Send> Senders<T> {
 
     /// Close the senders
     pub fn close(&self) {
-        for sender in self.senders.iter() {
-            if let Some(sender) = sender {
-                sender.close();
-            }
+        for sender in self.senders.iter().flatten() {
+            sender.close();
         }
     }
 }

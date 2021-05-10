@@ -702,6 +702,7 @@ mod test {
                             .expect("failed to create file");
                         if $size > 0 {
                             let mut buf = Vec::new();
+                            #[allow(clippy::reversed_empty_ranges)]
                             for v in 0..$size {
                                 buf.push(v as u8);
                             }

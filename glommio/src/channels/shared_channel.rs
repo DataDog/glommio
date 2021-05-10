@@ -181,8 +181,8 @@ impl<T: 'static + Send + Sized> SharedSender<T> {
         let peer = Connector::new(state.buffer.clone(), reactor.clone());
         let notifier = peer.await;
         ConnectedSender {
-            state,
             id,
+            state,
             reactor,
             notifier,
         }
@@ -338,8 +338,8 @@ impl<T: 'static + Send + Sized> SharedReceiver<T> {
         let peer = Connector::new(state.buffer.clone(), reactor.clone());
         let notifier = peer.await;
         ConnectedReceiver {
-            state,
             id,
+            state,
             reactor,
             notifier,
         }
