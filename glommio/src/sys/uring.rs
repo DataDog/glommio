@@ -295,15 +295,15 @@ where
                 let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
                 sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
 
-                let src = peek_source(from_user_data(op.user_data));
-                let mut srcb = src.borrow_mut();
-                if let SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) =
-                    &mut srcb.source_type
-                {
-                    *slot = Some(IoBuffer::Dma(buf));
-                } else {
-                    unreachable!("Expected Read source type");
-                };
+                peek_source_mut(from_user_data(op.user_data), |mut x| {
+                    if let SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) =
+                        &mut x.source_type
+                    {
+                        *slot = Some(IoBuffer::Dma(buf));
+                    } else {
+                        unreachable!("Expected Read source type");
+                    };
+                });
             }
             UringOpDescriptor::Open(path, flags, mode) => {
                 let path = CStr::from_ptr(path as _);
@@ -351,27 +351,26 @@ where
             }
             UringOpDescriptor::ReadFixed(pos, len) => {
                 let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
-                let src = peek_source(from_user_data(op.user_data));
-                let mut srcb = src.borrow_mut();
-
-                match &mut srcb.source_type {
-                    SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
-                        sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-                        *slot = Some(IoBuffer::Dma(buf));
-                    }
-                    SourceType::Read(_, slot) => {
-                        match buf.uring_buffer_id() {
-                            None => {
-                                sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-                            }
-                            Some(idx) => {
-                                sqe.prep_read_fixed(op.fd, buf.as_bytes_mut(), pos, idx);
-                            }
-                        };
-                        *slot = Some(IoBuffer::Dma(buf));
-                    }
-                    _ => unreachable!(),
-                };
+                peek_source_mut(from_user_data(op.user_data), |mut src| {
+                    match &mut src.source_type {
+                        SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
+                            sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
+                            *slot = Some(IoBuffer::Dma(buf));
+                        }
+                        SourceType::Read(_, slot) => {
+                            match buf.uring_buffer_id() {
+                                None => {
+                                    sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
+                                }
+                                Some(idx) => {
+                                    sqe.prep_read_fixed(op.fd, buf.as_bytes_mut(), pos, idx);
+                                }
+                            };
+                            *slot = Some(IoBuffer::Dma(buf));
+                        }
+                        _ => unreachable!(),
+                    };
+                });
             }
 
             UringOpDescriptor::WriteFixed(ptr, len, pos, buf_index) => {
@@ -404,41 +403,42 @@ where
                     MsgFlags::from_bits_unchecked(flags),
                 );
 
-                let src = peek_source(from_user_data(op.user_data));
-                let mut srcb = src.borrow_mut();
-                match &mut srcb.source_type {
-                    SourceType::SockRecv(slot) => {
-                        *slot = Some(buf);
-                    }
-                    _ => unreachable!(),
-                };
+                peek_source_mut(from_user_data(op.user_data), |mut src| {
+                    match &mut src.source_type {
+                        SourceType::SockRecv(slot) => {
+                            *slot = Some(buf);
+                        }
+                        _ => unreachable!(),
+                    };
+                });
             }
 
             UringOpDescriptor::SockRecvMsg(len, flags) => {
                 let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
-                let src = peek_source(from_user_data(op.user_data));
-                let mut srcb = src.borrow_mut();
-                match &mut srcb.source_type {
-                    SourceType::SockRecvMsg(slot, iov, hdr, msg_name) => {
-                        iov.iov_base = buf.as_mut_ptr() as *mut libc::c_void;
-                        iov.iov_len = len;
+                peek_source_mut(from_user_data(op.user_data), |mut src| {
+                    match &mut src.source_type {
+                        SourceType::SockRecvMsg(slot, iov, hdr, msg_name) => {
+                            iov.iov_base = buf.as_mut_ptr() as *mut libc::c_void;
+                            iov.iov_len = len;
 
-                        let msg_namelen = std::mem::size_of::<nix::sys::socket::sockaddr_storage>()
-                            as libc::socklen_t;
-                        hdr.msg_name = msg_name.as_mut_ptr() as *mut libc::c_void;
-                        hdr.msg_namelen = msg_namelen;
-                        hdr.msg_iov = iov as *mut libc::iovec;
-                        hdr.msg_iovlen = 1;
+                            let msg_namelen =
+                                std::mem::size_of::<nix::sys::socket::sockaddr_storage>()
+                                    as libc::socklen_t;
+                            hdr.msg_name = msg_name.as_mut_ptr() as *mut libc::c_void;
+                            hdr.msg_namelen = msg_namelen;
+                            hdr.msg_iov = iov as *mut libc::iovec;
+                            hdr.msg_iovlen = 1;
 
-                        sqe.prep_recvmsg(
-                            op.fd,
-                            hdr as *mut libc::msghdr,
-                            MsgFlags::from_bits_unchecked(flags),
-                        );
-                        *slot = Some(buf);
-                    }
-                    _ => unreachable!(),
-                };
+                            sqe.prep_recvmsg(
+                                op.fd,
+                                hdr as *mut libc::msghdr,
+                                MsgFlags::from_bits_unchecked(flags),
+                            );
+                            *slot = Some(buf);
+                        }
+                        _ => unreachable!(),
+                    };
+                });
             }
             UringOpDescriptor::Nop => sqe.prep_nop(),
         }
@@ -516,9 +516,8 @@ fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
     })
 }
 
-// TODO: the clone here seems unnecessary
-fn peek_source(id: SourceId) -> Rc<RefCell<InnerSource>> {
-    SOURCE_MAP.with(|x| Rc::clone(&x.borrow()[id]))
+fn peek_source_mut<Fn: for<'a> FnOnce(RefMut<'a, InnerSource>) -> ()>(id: SourceId, f: Fn) {
+    SOURCE_MAP.with(|x| f(x.borrow()[id].borrow_mut()));
 }
 
 fn consume_source(id: SourceId) -> Rc<RefCell<InnerSource>> {
