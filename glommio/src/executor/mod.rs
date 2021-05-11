@@ -29,7 +29,12 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod latch;
 mod multitask;
+mod placement;
+
+use latch::{Latch, LatchState};
+pub use placement::{CpuSet, Placement};
 
 use std::{
     cell::RefCell,
@@ -49,6 +54,7 @@ use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
 use crate::{
+    error::BuilderErrorKind,
     parking,
     sys,
     task::{self, waker_fn::waker_fn},
@@ -572,79 +578,28 @@ impl Default for LocalExecutorBuilder {
     }
 }
 
-/// Specifies a policy by which [`LocalExecutorPoolBuilder`] distributes
-/// [`LocalExecutor`]s on the machine's CPUs / hardware topology.
-#[derive(Debug)]
-pub enum Placement {
-    /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
-    /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.
-    Unbound,
-    /* MaxSpread,
-     * MaxPack,
-     * Custom, */
-}
-
-/// A description of the CPUs location in the machine topology.
-#[derive(Debug, Clone)]
-struct CpuLocation {
-    /// Holds the cpu id.  This is the most granular field and will
-    /// distinguish among [`hyper-threads`].
-    ///
-    /// [`hyper-threads`]: https://en.wikipedia.org/wiki/Hyper-threading
-    pub cpu: usize,
-    /// Holds the core id on which the `cpu` is located.
-    pub core: usize,
-    /// Holds the package or socket id on which the `cpu` is located.
-    pub package: usize,
-    /// Holds the NUMA node on which the `cpu` is located.
-    pub numa_node: usize,
-}
-
-/// A set of CPUs associated with a [`LocalExecutor`] when created via a
-/// [`LocalExecutorPoolBuilder`].
-#[derive(Clone, Debug)]
-struct CpuSet(Option<Vec<CpuLocation>>);
-
-impl std::ops::Deref for CpuSet {
-    type Target = Option<Vec<CpuLocation>>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-struct CpuSetGenerator {
-    placement: Placement,
-}
-
-impl CpuSetGenerator {
-    fn new(placement: Placement) -> Self {
-        Self { placement }
-    }
-
-    /// A method that generates a [`CpuSet`] according to the provided
-    /// [`Placement`] policy. Sequential calls may generate different sets
-    /// depending on the [`Placement`].
-    fn next(&mut self) -> CpuSet {
-        match self.placement {
-            Placement::Unbound => CpuSet(None),
-        }
-    }
-}
-
-/// A factory to configure and create a pool of [`LocalExecutor`]s
+/// A factory to configure and create a pool of [`LocalExecutor`]s.
 ///
-/// The `LocalExecutorPoolBuilder` allows creating a pool of [`LocalExecutor`]s,
-/// which can be used in order to configure the properties of the
-/// [`LocalExecutor`]s. Configuration methods apply their settings to all
-/// [`LocalExecutor`]s in the pool unless otherwise specified.
+/// Configuration methods apply their settings to all [`LocalExecutor`]s in the
+/// pool unless otherwise specified.  Methods can be chained on the builder in
+/// order to configure it.  The [`Self::on_all_shards`] method will take
+/// ownership of the builder and create a [`PoolThreadHandles`] struct which can
+/// be used to join the executor threads.
 ///
-/// Methods can be chained on the builder in order to configure it.
+/// # Example
 ///
-/// The [`LocalExecutorPoolBuilder::on_all_shards`] method will take ownership
-/// of the builder and create a [`PoolThreadHandles`] struct which can be used
-/// to join the executor threads.
-// TODO: decide whether to avoid redundancy with with `LocalExecutorBuilder` by
-// using a shared inner type or a generic type mix-in with a type definition
+/// ```
+/// use glommio::{Local, LocalExecutorPoolBuilder};
+///
+/// let handles = LocalExecutorPoolBuilder::new(4)
+///     .on_all_shards(|| async move {
+///         let id = Local::id();
+///         println!("hello from executor {}", id);
+///     })
+///     .unwrap();
+///
+/// handles.join_all();
+/// ```
 #[derive(Debug)]
 pub struct LocalExecutorPoolBuilder {
     /// The number of [`LocalExecutor`]s the builder should attempt to create.
@@ -735,109 +690,128 @@ impl LocalExecutorPoolBuilder {
     /// The newly spawned thread panics if creating the executor fails. If you
     /// need more fine-grained error handling consider initializing those
     /// entities manually.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use glommio::{Local, LocalExecutorPoolBuilder};
-    ///
-    /// let handles = LocalExecutorPoolBuilder::new(4).on_all_shards(|| async move {
-    ///     let id = Local::id();
-    ///     println!("hello from executor {}", id);
-    /// });
-    ///
-    /// handles.join_all();
-    /// ```
-    #[must_use = "This spawns executors on multiple threads, so you may need to call \
-                  `PoolThreadHandles::join_all()` to keep the main thread alive"]
-    pub fn on_all_shards<G, F, T>(self, fut_gen: G) -> PoolThreadHandles
+    #[must_use = "This spawns executors on multiple threads; threads may fail to spawn or you may \
+                  need to call `PoolThreadHandles::join_all()` to keep the main thread alive"]
+    pub fn on_all_shards<G, F, T>(mut self, fut_gen: G) -> Result<PoolThreadHandles<T>>
     where
         G: FnOnce() -> F + Clone + Send + 'static,
         F: Future<Output = T> + 'static,
+        T: Send + 'static,
     {
         let mut handles = PoolThreadHandles::new();
-        let mut cpu_set_gen = CpuSetGenerator::new(self.placement);
+        let placement = std::mem::take(&mut self.placement);
+        let mut cpu_set_gen = placement::CpuSetGenerator::new(placement, self.nr_shards)?;
+        let latch = Latch::new(self.nr_shards);
 
         for _ in 0..self.nr_shards {
-            // TODO: determine the cpu set based on the `Placement` policy; do we allow
-            // `nr_shards` being greater than the number of cpus online?
-            let cpu_set = cpu_set_gen.next();
-
-            let notifier = match sys::new_sleep_notifier() {
-                Ok(n) => n,
-                Err(e) => {
-                    // valid notifiers have ids greater than or equal to 1
-                    handles.push(Err(e.into()));
-                    continue;
+            match self.spawn_thread(&mut cpu_set_gen, &latch, fut_gen.clone()) {
+                Ok(handle) => handles.push(handle),
+                Err(err) => {
+                    handles.join_all();
+                    return Err(err);
                 }
-            };
-
-            let name = format!("{}-{}", &self.name, notifier.id());
-            let handle = Builder::new()
-                .name(name)
-                .spawn({
-                    let io_memory = self.io_memory;
-                    let preempt_timer_duration = self.preempt_timer_duration;
-                    let spin_before_park = self.spin_before_park;
-                    let fut_gen = fut_gen.clone();
-
-                    move || {
-                        let mut le =
-                            LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
-                        if let CpuSet(Some(set)) = cpu_set {
-                            let set = set.into_iter().map(|s| s.cpu);
-                            le.bind_to_cpu_set(set).unwrap();
-                            le.queues.borrow_mut().spin_before_park = spin_before_park;
-                        }
-                        le.init();
-                        le.run(async move {
-                            fut_gen().await;
-                        })
-                    }
-                })
-                .map_err(Into::into);
-
-            handles.push(handle);
+            }
         }
 
-        handles
+        Ok(handles)
+    }
+
+    /// Spawns a thread
+    fn spawn_thread<G, F, T>(
+        &self,
+        cpu_set_gen: &mut placement::CpuSetGenerator,
+        latch: &Latch,
+        fut_gen: G,
+    ) -> Result<JoinHandle<Result<T>>>
+    where
+        G: FnOnce() -> F + Clone + Send + 'static,
+        F: Future<Output = T> + 'static,
+        T: Send + 'static,
+    {
+        // NOTE: `self.placement` was `std::mem::take`en in `Self::on_all_shards`; you
+        // should no longer rely on its value at this point
+        let cpu_set = cpu_set_gen.next();
+        let notifier = sys::new_sleep_notifier()?;
+        let name = format!("{}-{}", &self.name, notifier.id());
+        let handle = Builder::new().name(name).spawn({
+            let io_memory = self.io_memory;
+            let preempt_timer_duration = self.preempt_timer_duration;
+            let spin_before_park = self.spin_before_park;
+            let latch = Latch::clone(&latch);
+
+            move || {
+                // only allow the thread to create the `LocalExecutor` if all other threads that
+                // are supposed to be created by the pool builder were successfully spawned
+                if latch.arrive_and_wait() == LatchState::Ready {
+                    let mut le = LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
+
+                    if !cpu_set.is_empty() {
+                        let set = cpu_set.map(|l| l.cpu);
+                        le.bind_to_cpu_set(set).unwrap();
+                        le.queues.borrow_mut().spin_before_park = spin_before_park;
+                    }
+                    le.init();
+                    le.run(async move { Ok(fut_gen().await) })
+                } else {
+                    // this `Err` isn't visible to the user; the pool builder directly returns an
+                    // `Err` from the `std::thread::Builder`
+                    Err(io::Error::new(io::ErrorKind::Other, "spawn failed").into())
+                }
+            }
+        });
+
+        match handle {
+            Ok(h) => Ok(h),
+            Err(e) => {
+                // The `std::thread::Builder` was unable to spawn the thread and retuned an
+                // `Err`, so we notify other threads to let them know they
+                // should not proceed with constructing their `LocalExecutor`s
+                latch.cancel().expect("unreachable: latch was ready");
+
+                Err(e.into())
+            }
+        }
     }
 }
 
-/// Holds a collection of [`JoinHandle`]s created by
-/// [`LocalExecutorPoolBuilder::on_all_shards`].
+/// Holds a collection of [`JoinHandle`]s.
+///
+/// This struct is returned by [`LocalExecutorPoolBuilder::on_all_shards`].
 #[derive(Debug)]
-pub struct PoolThreadHandles {
-    handles: Vec<Result<JoinHandle<()>>>,
+pub struct PoolThreadHandles<T> {
+    handles: Vec<JoinHandle<Result<T>>>,
 }
 
-impl PoolThreadHandles {
+impl<T> PoolThreadHandles<T> {
     fn new() -> Self {
         Self {
             handles: Vec::new(),
         }
     }
 
-    fn push(&mut self, handle: Result<JoinHandle<()>>) {
+    fn push(&mut self, handle: JoinHandle<Result<T>>) {
         self.handles.push(handle)
     }
 
-    /// Obtain a reference to the [`JoinHandle`]s created by
-    /// [`LocalExecutorPoolBuilder::on_all_shards`].
-    pub fn handles(&self) -> &Vec<Result<JoinHandle<()>>> {
+    /// Obtain a reference to the `JoinHandle`s.
+    pub fn handles(&self) -> &Vec<JoinHandle<Result<T>>> {
         &self.handles
     }
 
-    /// Calls [`JoinHandle::join`] on all handles created by
-    /// [`LocalExecutorPoolBuilder::on_all_shards`]
-    pub fn join_all(self) -> Vec<Result<()>> {
+    /// Calls [`JoinHandle::join`] on all handles.
+    pub fn join_all(self) -> Vec<Result<T>> {
         self.handles
             .into_iter()
-            .map(|hndl| match hndl {
-                Ok(h) => h
-                    .join()
-                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "thread panicked").into()),
-                Err(e) => Err(e),
+            .map(|h| {
+                match h.join() {
+                    Ok(ok @ Ok(_)) => ok,
+                    // this variant is unreachable since `Err` is only returned from a thread if
+                    // another thread failed to spawn; `LocalExecutorPoolBuilder::on_all_shards`
+                    // returns an immediate `Err` if any thread fails to spawn, so
+                    // `PoolThreadHandles` would never be created
+                    Ok(err @ Err(_)) => err,
+                    Err(e) => Err(GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(e))),
+                }
             })
             .collect::<Vec<_>>()
     }
@@ -1980,6 +1954,7 @@ mod test {
     use futures::join;
     use std::{
         cell::Cell,
+        collections::HashMap,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -2752,21 +2727,146 @@ mod test {
 
     #[test]
     fn executor_pool_builder() {
+        let nr_cpus = 4;
+
         let count = Arc::new(AtomicUsize::new(0));
-        let handles = LocalExecutorPoolBuilder::new(4).on_all_shards({
-            let count = Arc::clone(&count);
-            || async move {
-                count.fetch_add(1, Ordering::Relaxed);
+        let handles = LocalExecutorPoolBuilder::new(nr_cpus)
+            .on_all_shards({
+                let count = Arc::clone(&count);
+                || async move { count.fetch_add(1, Ordering::Relaxed) }
+            })
+            .unwrap();
+
+        let _: std::thread::ThreadId = handles.handles[0].thread().id();
+
+        assert_eq!(nr_cpus, handles.handles().iter().count());
+
+        let mut fut_output = handles
+            .join_all()
+            .into_iter()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+
+        fut_output.sort_unstable();
+
+        assert_eq!(fut_output, (0..nr_cpus).into_iter().collect::<Vec<_>>());
+
+        assert_eq!(nr_cpus, count.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn executor_pool_builder_placements() {
+        let cpu_set = CpuSet::online().unwrap();
+        assert!(!cpu_set.is_empty());
+
+        for nn in 0..2 {
+            let nr_execs = nn * cpu_set.len();
+            let placements = [
+                Placement::Unbound,
+                Placement::Fenced(cpu_set.clone()),
+                Placement::MaxSpread(None),
+                Placement::MaxSpread(Some(cpu_set.clone())),
+                Placement::MaxPack(None),
+                Placement::MaxPack(Some(cpu_set.clone())),
+            ];
+
+            for pp in std::array::IntoIter::new(placements) {
+                let ids = Arc::new(Mutex::new(HashMap::new()));
+                let cpus = Arc::new(Mutex::new(HashMap::new()));
+                let cpu_hard_bind = !matches!(pp, Placement::Unbound | Placement::Fenced(_));
+
+                let handles = LocalExecutorPoolBuilder::new(nr_execs)
+                    .placement(pp)
+                    .on_all_shards({
+                        let ids = Arc::clone(&ids);
+                        let cpus = Arc::clone(&cpus);
+                        || async move {
+                            ids.lock()
+                                .unwrap()
+                                .entry(Local::id())
+                                .and_modify(|e| *e += 1)
+                                .or_insert(1);
+
+                            let pid = nix::unistd::Pid::from_raw(0);
+                            let cpu = nix::sched::sched_getaffinity(pid).unwrap();
+                            cpus.lock()
+                                .unwrap()
+                                .entry(cpu)
+                                .and_modify(|e| *e += 1)
+                                .or_insert(1);
+                        }
+                    })
+                    .unwrap();
+
+                assert_eq!(nr_execs, handles.handles().len());
+                handles
+                    .join_all()
+                    .into_iter()
+                    .for_each(|r| assert!(r.is_ok()));
+
+                assert_eq!(nr_execs, ids.lock().unwrap().len());
+                ids.lock().unwrap().values().for_each(|v| assert_eq!(*v, 1));
+
+                if cpu_hard_bind {
+                    assert_eq!(nr_execs, cpus.lock().unwrap().len());
+                    cpus.lock()
+                        .unwrap()
+                        .values()
+                        .for_each(|v| assert_eq!(*v, nn));
+                }
             }
-        });
+        }
+    }
 
-        assert_eq!(4, handles.handles().len());
-        handles.handles().iter().for_each(|hndl| {
-            assert!(hndl.is_ok());
-        });
+    #[test]
+    fn executor_pool_builder_shards_limit() {
+        let cpu_set = CpuSet::online().unwrap();
+        assert!(!cpu_set.is_empty());
 
-        handles.join_all();
-        assert_eq!(4, count.load(Ordering::Relaxed));
+        // test: confirm that we can always get shards up to the # of cpus
+        {
+            let placements = [
+                (false, Placement::Unbound),
+                (false, Placement::Fenced(cpu_set.clone())),
+                (true, Placement::MaxSpread(None)),
+                (true, Placement::MaxSpread(Some(cpu_set.clone()))),
+                (true, Placement::MaxPack(None)),
+                (true, Placement::MaxPack(Some(cpu_set.clone()))),
+            ];
+
+            for (_shard_limited, p) in std::array::IntoIter::new(placements) {
+                LocalExecutorPoolBuilder::new(cpu_set.len())
+                    .placement(p)
+                    .on_all_shards(|| async move {})
+                    .unwrap()
+                    .join_all();
+            }
+        }
+
+        // test: confirm that some placements fail when shards are # of cpus + 1
+        {
+            let placements = [
+                (false, Placement::Unbound),
+                (false, Placement::Fenced(cpu_set.clone())),
+                (true, Placement::MaxSpread(None)),
+                (true, Placement::MaxSpread(Some(cpu_set.clone()))),
+                (true, Placement::MaxPack(None)),
+                (true, Placement::MaxPack(Some(cpu_set.clone()))),
+            ];
+
+            for (shard_limited, p) in std::array::IntoIter::new(placements) {
+                match LocalExecutorPoolBuilder::new(1 + cpu_set.len())
+                    .placement(p)
+                    .on_all_shards(|| async move {})
+                {
+                    Ok(handles) => {
+                        handles.join_all();
+                        assert!(!shard_limited);
+                    }
+                    Err(_) => assert!(shard_limited),
+                }
+            }
+        }
     }
 
     #[test]
@@ -2792,6 +2892,73 @@ mod test {
             Local::later().await;
             do_later.await;
             assert_eq!(a, 2);
+        });
+    }
+
+    #[test]
+    fn executor_pool_builder_thread_panic() {
+        let nr_execs = 8;
+        let res = LocalExecutorPoolBuilder::new(nr_execs)
+            .on_all_shards(|| async move { panic!("join handle will be Err") })
+            .unwrap()
+            .join_all();
+
+        assert_eq!(nr_execs, res.len());
+        assert!(res.into_iter().all(|r| r.is_err()));
+    }
+
+    #[test]
+    fn executor_pool_builder_return_values() {
+        let nr_execs = 8;
+        let x = Arc::new(AtomicUsize::new(0));
+        let mut values = LocalExecutorPoolBuilder::new(nr_execs)
+            .on_all_shards(|| async move { x.fetch_add(1, Ordering::Relaxed) })
+            .unwrap()
+            .join_all()
+            .into_iter()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+
+        values.sort_unstable();
+        assert_eq!(values, (0..nr_execs).into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn executor_pool_builder_spawn_cancel() {
+        let nr_shards = 8;
+        let mut builder = LocalExecutorPoolBuilder::new(nr_shards);
+        let nr_exectuted = Arc::new(AtomicUsize::new(0));
+
+        let fut_gen = {
+            let nr_exectuted = Arc::clone(&nr_exectuted);
+            || async move {
+                nr_exectuted.fetch_add(1, Ordering::Relaxed);
+                unreachable!("should not execute")
+            }
+        };
+
+        let mut handles = PoolThreadHandles::new();
+        let placement = std::mem::take(&mut builder.placement);
+        let mut cpu_set_gen =
+            placement::CpuSetGenerator::new(placement, builder.nr_shards).unwrap();
+        let latch = Latch::new(builder.nr_shards);
+
+        let ii_cxl = 2;
+        for ii in 0..builder.nr_shards {
+            if ii == nr_shards - ii_cxl {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                assert!(ii_cxl <= latch.cancel().unwrap());
+            }
+            match builder.spawn_thread(&mut cpu_set_gen, &latch, fut_gen.clone()) {
+                Ok(handle) => handles.push(handle),
+                Err(_) => break,
+            }
+        }
+
+        assert_eq!(0, nr_exectuted.load(Ordering::Relaxed));
+        assert_eq!(nr_shards, handles.handles.len());
+        handles.join_all().into_iter().for_each(|s| {
+            assert!(format!("{}", s.unwrap_err()).contains("spawn failed"));
         });
     }
 }
