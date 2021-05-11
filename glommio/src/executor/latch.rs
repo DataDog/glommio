@@ -208,13 +208,12 @@ mod test {
             })
             .collect::<Vec<_>>()
             .into_iter()
-            .map(|h| h.join().unwrap())
-            .collect::<Vec<_>>();
+            .map(|h| h.join().unwrap());
 
         let mut waits = Vec::new();
         let mut cxls = Vec::new();
         let mut cxl_attempts = Vec::new();
-        for r in res.into_iter() {
+        for r in res {
             match r {
                 Ok(w) => waits.push(w),
                 Err(Ok(id)) => cxls.push(id),

@@ -2737,10 +2737,9 @@ mod test {
             })
             .unwrap();
 
-        assert_eq!(
-            nr_cpus,
-            handles.handles().iter().map(|h| h.thread().id()).count()
-        );
+        let _: std::thread::ThreadId = handles.handles[0].thread().id();
+
+        assert_eq!(nr_cpus, handles.handles().iter().count());
 
         let mut fut_output = handles
             .join_all()
@@ -2748,7 +2747,7 @@ mod test {
             .map(Result::unwrap)
             .collect::<Vec<_>>();
 
-        fut_output.sort();
+        fut_output.sort_unstable();
 
         assert_eq!(fut_output, (0..nr_cpus).into_iter().collect::<Vec<_>>());
 
@@ -2758,7 +2757,7 @@ mod test {
     #[test]
     fn executor_pool_builder_placements() {
         let cpu_set = CpuSet::online().unwrap();
-        assert!(0 < cpu_set.len());
+        assert!(!cpu_set.is_empty());
 
         for nn in 0..2 {
             let nr_execs = nn * cpu_set.len();
@@ -2774,10 +2773,7 @@ mod test {
             for pp in std::array::IntoIter::new(placements) {
                 let ids = Arc::new(Mutex::new(HashMap::new()));
                 let cpus = Arc::new(Mutex::new(HashMap::new()));
-                let cpu_hard_bind = match pp {
-                    Placement::Unbound | Placement::Fenced(_) => false,
-                    _ => true,
-                };
+                let cpu_hard_bind = !matches!(pp, Placement::Unbound | Placement::Fenced(_));
 
                 let handles = LocalExecutorPoolBuilder::new(nr_execs)
                     .placement(pp)
@@ -2825,7 +2821,7 @@ mod test {
     #[test]
     fn executor_pool_builder_shards_limit() {
         let cpu_set = CpuSet::online().unwrap();
-        assert!(0 < cpu_set.len());
+        assert!(!cpu_set.is_empty());
 
         // test: confirm that we can always get shards up to the # of cpus
         {
@@ -2923,7 +2919,7 @@ mod test {
             .map(Result::unwrap)
             .collect::<Vec<_>>();
 
-        values.sort();
+        values.sort_unstable();
         assert_eq!(values, (0..nr_execs).into_iter().collect::<Vec<_>>());
     }
 

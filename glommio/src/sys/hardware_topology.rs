@@ -183,10 +183,10 @@ pub(crate) mod test_helpers {
 
     pub fn cpu_loc(numa_node: usize, package: usize, core: usize, cpu: usize) -> CpuLocation {
         CpuLocation {
-            numa_node,
-            package,
-            core,
             cpu,
+            core,
+            package,
+            numa_node,
         }
     }
 }
