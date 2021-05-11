@@ -442,7 +442,15 @@ pub mod timer;
 
 pub use crate::{
     byte_slice_ext::{ByteSliceExt, ByteSliceMutExt},
-    error::{GlommioError, QueueErrorKind, ResourceType, Result},
+    error::{
+        BuilderErrorKind,
+        ExecutorErrorKind,
+        GlommioError,
+        QueueErrorKind,
+        ReactorErrorKind,
+        ResourceType,
+        Result,
+    },
     executor::{
         CpuSet,
         ExecutorStats,

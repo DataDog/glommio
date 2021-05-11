@@ -59,6 +59,7 @@ pub enum QueueErrorKind {
 /// Errors coming from the reactor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReactorErrorKind {
+    /// Indicates an incorrect source type.
     IncorrectSourceType,
 }
 
@@ -73,6 +74,7 @@ impl fmt::Display for ReactorErrorKind {
 /// Error types that can be created by the executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutorErrorKind {
+    /// Error variants for executor queues.
     QueueError {
         /// index of the queue
         index: usize,
@@ -111,7 +113,7 @@ pub enum BuilderErrorKind {
     },
     /// Error type returned by
     /// [`PoolThreadHandles::join_all`](crate::PoolThreadHandles::join_all)
-    /// for threads that panicked.  Same as
+    /// for threads that panicked.  The contained error is forwarded from
     /// [`JoinHandle`](std::thread::JoinHandle).
     ThreadPanic(Box<dyn std::any::Any + Send>),
 }
