@@ -9,7 +9,7 @@ use lockfree::channel::mpsc;
 use log::debug;
 use nix::sys::socket::SockAddr;
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     convert::TryFrom,
     ffi::CString,
     fmt,
@@ -497,15 +497,15 @@ pub struct InnerSource {
     raw: RawFd,
 
     /// Tasks interested in events on this source.
-    wakers: RefCell<Wakers>,
+    wakers: Wakers,
 
-    source_type: RefCell<SourceType>,
+    source_type: SourceType,
 
     io_requirements: IoRequirements,
 
-    timeout: RefCell<Option<TimeSpec64>>,
+    timeout: Option<TimeSpec64>,
 
-    enqueued: Cell<Option<EnqueuedSource>>,
+    enqueued: Option<EnqueuedSource>,
 
     stats_collection: Option<StatsCollectionFn>,
 
@@ -530,7 +530,7 @@ impl fmt::Debug for InnerSource {
 
 #[derive(Debug)]
 pub struct Source {
-    pub(crate) inner: Rc<InnerSource>,
+    pub(crate) inner: Rc<RefCell<InnerSource>>,
 }
 
 impl Source {
@@ -543,16 +543,16 @@ impl Source {
         task_queue: Option<TaskQueueHandle>,
     ) -> Source {
         Source {
-            inner: Rc::new(InnerSource {
+            inner: Rc::new(RefCell::new(InnerSource {
                 raw,
-                wakers: RefCell::new(Wakers::new()),
-                source_type: RefCell::new(source_type),
+                wakers: Wakers::new(),
+                source_type,
                 io_requirements: ioreq,
-                enqueued: Cell::new(None),
-                timeout: RefCell::new(None),
+                enqueued: None,
+                timeout: None,
                 stats_collection: stats_collection_fn,
                 task_queue,
-            }),
+            })),
         }
     }
 }

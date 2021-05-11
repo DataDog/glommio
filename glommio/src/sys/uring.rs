@@ -296,12 +296,13 @@ where
                 sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
 
                 let src = peek_source(from_user_data(op.user_data));
+                let mut srcb = src.borrow_mut();
                 if let SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) =
-                    &mut *src.source_type.borrow_mut()
+                    &mut srcb.source_type
                 {
                     *slot = Some(IoBuffer::Dma(buf));
                 } else {
-                    panic!("Expected Read source type");
+                    unreachable!("Expected Read source type");
                 };
             }
             UringOpDescriptor::Open(path, flags, mode) => {
@@ -351,8 +352,9 @@ where
             UringOpDescriptor::ReadFixed(pos, len) => {
                 let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
                 let src = peek_source(from_user_data(op.user_data));
+                let mut srcb = src.borrow_mut();
 
-                match &mut *src.source_type.borrow_mut() {
+                match &mut srcb.source_type {
                     SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
                         sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
                         *slot = Some(IoBuffer::Dma(buf));
@@ -403,7 +405,8 @@ where
                 );
 
                 let src = peek_source(from_user_data(op.user_data));
-                match &mut *src.source_type.borrow_mut() {
+                let mut srcb = src.borrow_mut();
+                match &mut srcb.source_type {
                     SourceType::SockRecv(slot) => {
                         *slot = Some(buf);
                     }
@@ -414,7 +417,8 @@ where
             UringOpDescriptor::SockRecvMsg(len, flags) => {
                 let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
                 let src = peek_source(from_user_data(op.user_data));
-                match &mut *src.source_type.borrow_mut() {
+                let mut srcb = src.borrow_mut();
+                match &mut srcb.source_type {
                     SourceType::SockRecvMsg(slot, iov, hdr, msg_name) => {
                         iov.iov_base = buf.as_mut_ptr() as *mut libc::c_void;
                         iov.iov_len = len;
@@ -461,8 +465,8 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
 
 fn process_one_event<F, R>(cqe: Option<iou::CQE>, try_process: F, post_process: R) -> Option<bool>
 where
-    F: FnOnce(&InnerSource) -> Option<()>,
-    R: FnOnce(&InnerSource, io::Result<usize>) -> io::Result<usize>,
+    F: FnOnce(Ref<'_, InnerSource>) -> Option<()>,
+    R: FnOnce(Ref<'_, InnerSource>, io::Result<usize>) -> io::Result<usize>,
 {
     if let Some(value) = cqe {
         // No user data is POLL_REMOVE or CANCEL, we won't process.
@@ -475,10 +479,11 @@ where
         let result = value.result();
 
         let mut woke = false;
-        if try_process(&*src).is_none() {
-            let mut w = src.wakers.borrow_mut();
-            w.result = Some(post_process(&*src, transmute_error(result)));
-            if let Some(waiter) = w.waiter.take() {
+        if try_process(src.borrow()).is_none() {
+            let res = Some(post_process(src.borrow(), transmute_error(result)));
+            let mut inner_source = src.borrow_mut();
+            inner_source.wakers.result = res;
+            if let Some(waiter) = inner_source.wakers.waiter.take() {
                 woke = true;
                 wake!(waiter);
             }
@@ -488,8 +493,8 @@ where
     None
 }
 
-type SourceMap = FreeList<Rc<InnerSource>>;
-pub(crate) type SourceId = Idx<Rc<InnerSource>>;
+type SourceMap = FreeList<Rc<RefCell<InnerSource>>>;
+pub(crate) type SourceId = Idx<Rc<RefCell<InnerSource>>>;
 fn from_user_data(user_data: u64) -> SourceId {
     SourceId::from_raw((user_data - 1) as usize)
 }
@@ -503,22 +508,23 @@ fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
     SOURCE_MAP.with(|x| {
         let item = source.inner.clone();
         let id = x.borrow_mut().alloc(item);
-        source.inner.enqueued.set(Some(EnqueuedSource {
+        source.inner.borrow_mut().enqueued.replace(EnqueuedSource {
             id,
             queue: queue.clone(),
-        }));
+        });
         id
     })
 }
 
-fn peek_source(id: SourceId) -> Rc<InnerSource> {
+// TODO: the clone here seems unnecessary
+fn peek_source(id: SourceId) -> Rc<RefCell<InnerSource>> {
     SOURCE_MAP.with(|x| Rc::clone(&x.borrow()[id]))
 }
 
-fn consume_source(id: SourceId) -> Rc<InnerSource> {
+fn consume_source(id: SourceId) -> Rc<RefCell<InnerSource>> {
     SOURCE_MAP.with(|x| {
         let source = x.borrow_mut().dealloc(id);
-        source.enqueued.set(None);
+        source.borrow_mut().enqueued.take();
         source
     })
 }
@@ -794,37 +800,40 @@ impl UringCommon for PollRing {
 }
 
 impl InnerSource {
-    pub(crate) fn update_source_type(&self, source_type: SourceType) -> SourceType {
-        std::mem::replace(&mut *self.source_type.borrow_mut(), source_type)
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        std::mem::replace(&mut self.source_type, source_type)
     }
 }
 
 impl Source {
-    pub(crate) fn set_timeout(&self, d: Duration) -> Option<Duration> {
-        let mut t = self.inner.timeout.borrow_mut();
+    pub(crate) fn set_timeout(&mut self, d: Duration) -> Option<Duration> {
+        let mut inner = self.inner.borrow_mut();
+        let t = &mut inner.timeout;
         let old = *t;
         *t = Some(TimeSpec64::from(d));
         old.map(Duration::from)
     }
 
     fn timeout_ref(&self) -> Ref<'_, Option<TimeSpec64>> {
-        self.inner.timeout.borrow()
+        Ref::map(self.inner.borrow(), |x| &x.timeout)
     }
 
     pub(crate) fn latency_req(&self) -> Latency {
-        self.inner.io_requirements.latency_req
+        self.inner.borrow().io_requirements.latency_req
     }
 
     fn source_type(&self) -> Ref<'_, SourceType> {
-        self.inner.source_type.borrow()
+        Ref::map(self.inner.borrow(), |x| &x.source_type)
     }
 
     pub(crate) fn source_type_mut(&self) -> RefMut<'_, SourceType> {
-        self.inner.source_type.borrow_mut()
+        RefMut::map(self.inner.borrow_mut(), |x| &mut x.source_type)
     }
 
     pub(crate) fn extract_source_type(&self) -> SourceType {
-        self.inner.update_source_type(SourceType::Invalid)
+        self.inner
+            .borrow_mut()
+            .update_source_type(SourceType::Invalid)
     }
 
     pub(crate) fn extract_dma_buffer(&mut self) -> DmaBuffer {
@@ -846,28 +855,31 @@ impl Source {
     }
 
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.result.take().map(|x| x.map(|x| x as usize))
+        self.inner
+            .borrow_mut()
+            .wakers
+            .result
+            .take()
+            .map(|x| x.map(|x| x as usize))
     }
 
     pub(crate) fn has_result(&self) -> bool {
-        let w = self.inner.wakers.borrow();
-        w.result.is_some()
+        self.inner.borrow().wakers.result.is_some()
     }
 
     pub(crate) fn add_waiter(&self, waker: Waker) {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.waiter.replace(waker);
+        self.inner.borrow_mut().wakers.waiter.replace(waker);
     }
 
     pub(crate) fn raw(&self) -> RawFd {
-        self.inner.raw
+        self.inner.borrow().raw
     }
 }
 
 impl Drop for Source {
     fn drop(&mut self) {
-        if let Some(EnqueuedSource { id, queue }) = self.inner.enqueued.take() {
+        let enqueued = self.inner.borrow_mut().enqueued.take();
+        if let Some(EnqueuedSource { id, queue }) = enqueued {
             queue.borrow_mut().cancel_request(id);
         }
     }
@@ -1024,7 +1036,7 @@ impl UringCommon for SleepableRing {
     fn consume_one_event(&mut self) -> Option<bool> {
         process_one_event(
             self.ring.peek_for_cqe(),
-            |source| match &mut *source.source_type.borrow_mut() {
+            |source| match source.source_type {
                 SourceType::LinkRings => Some(()),
                 _ => None,
             },
