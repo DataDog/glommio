@@ -42,11 +42,9 @@ use std::{
         atomic::{AtomicU32, Ordering},
         Arc,
     },
-    task::{Poll, Waker},
+    task::Waker,
     time::{Duration, Instant},
 };
-
-use futures_lite::*;
 
 use crate::{
     sys,
@@ -412,7 +410,7 @@ impl Reactor {
     }
 
     pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockAddr, d: Duration) -> Source {
-        let mut source = self.new_source(raw, SourceType::Connect(addr), None);
+        let source = self.new_source(raw, SourceType::Connect(addr), None);
         source.set_timeout(d);
         self.sys.connect(&source);
         source
@@ -431,7 +429,7 @@ impl Reactor {
         buf: DmaBuffer,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let mut source = self.new_source(fd, SourceType::SockSend(buf), None);
+        let source = self.new_source(fd, SourceType::SockSend(buf), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -463,7 +461,7 @@ impl Reactor {
             msg_flags: 0,
         };
 
-        let mut source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
+        let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -493,7 +491,7 @@ impl Reactor {
             iov_base: std::ptr::null_mut(),
             iov_len: 0,
         };
-        let mut source = self.new_source(
+        let source = self.new_source(
             fd,
             SourceType::SockRecvMsg(
                 None,
@@ -517,7 +515,7 @@ impl Reactor {
         size: usize,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let mut source = self.new_source(fd, SourceType::SockRecv(None), None);
+        let source = self.new_source(fd, SourceType::SockRecv(None), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -738,21 +736,5 @@ impl Reactor {
             // An actual error occureed.
             Err(err) => Err(err),
         }
-    }
-}
-
-// FIXME: source should be partitioned in two, write_dma and read_dma should not
-// be allowed in files that don't support it, and same for readable() writable()
-impl Source {
-    pub(crate) async fn collect_rw(&self) -> io::Result<usize> {
-        future::poll_fn(|cx| {
-            if let Some(result) = self.take_result() {
-                return Poll::Ready(result);
-            }
-
-            self.add_waiter(cx.waker().clone());
-            Poll::Pending
-        })
-        .await
     }
 }

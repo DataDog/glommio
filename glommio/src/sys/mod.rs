@@ -3,14 +3,11 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{iou::sqe::SockAddrStorage, uring_sys, RingIoStats, TaskQueueHandle};
+use crate::uring_sys;
 use ahash::AHashMap;
 use lockfree::channel::mpsc;
 use log::debug;
-use nix::sys::socket::SockAddr;
 use std::{
-    cell::RefCell,
-    convert::TryFrom,
     ffi::CString,
     fmt,
     io,
@@ -21,7 +18,6 @@ use std::{
         io::{AsRawFd, FromRawFd, RawFd},
     },
     path::Path,
-    rc::Rc,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -222,15 +218,13 @@ fn cstr(path: &Path) -> io::Result<CString> {
 }
 
 mod dma_buffer;
+pub(crate) mod source;
 pub(crate) mod sysfs;
 mod uring;
 
 pub use self::dma_buffer::DmaBuffer;
-pub(crate) use self::uring::*;
-use crate::{
-    error::{ExecutorErrorKind, GlommioError, ReactorErrorKind},
-    IoRequirements,
-};
+pub(crate) use self::{source::*, uring::*};
+use crate::error::{ExecutorErrorKind, GlommioError};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -389,51 +383,6 @@ pub(crate) enum PollableStatus {
     NonPollable(DirectIo),
 }
 
-#[derive(Debug)]
-pub(crate) enum SourceType {
-    Write(PollableStatus, IoBuffer),
-    Read(PollableStatus, Option<IoBuffer>),
-    SockSend(DmaBuffer),
-    SockRecv(Option<DmaBuffer>),
-    SockRecvMsg(
-        Option<DmaBuffer>,
-        libc::iovec,
-        libc::msghdr,
-        MaybeUninit<nix::sys::socket::sockaddr_storage>,
-    ),
-    SockSendMsg(
-        DmaBuffer,
-        libc::iovec,
-        libc::msghdr,
-        nix::sys::socket::SockAddr,
-    ),
-    Open(CString),
-    FdataSync,
-    Fallocate,
-    Close,
-    LinkRings,
-    Statx(CString, Box<RefCell<libc::statx>>),
-    Timeout(TimeSpec64),
-    Connect(SockAddr),
-    Accept(SockAddrStorage),
-    Invalid,
-    #[cfg(feature = "bench")]
-    Noop,
-}
-
-impl TryFrom<SourceType> for libc::statx {
-    type Error = GlommioError<()>;
-
-    fn try_from(value: SourceType) -> Result<Self, Self::Error> {
-        match value {
-            SourceType::Statx(_, buf) => Ok(buf.into_inner()),
-            _ => Err(GlommioError::ReactorError(
-                ReactorErrorKind::IncorrectSourceType,
-            )),
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct TimeSpec64 {
     raw: uring_sys::__kernel_timespec,
@@ -490,74 +439,6 @@ impl Wakers {
         Wakers {
             result: None,
             waiter: None,
-        }
-    }
-}
-
-pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats) -> ();
-
-/// A registered source of I/O events.
-pub struct InnerSource {
-    /// Raw file descriptor on Unix platforms.
-    raw: RawFd,
-
-    /// Tasks interested in events on this source.
-    wakers: Wakers,
-
-    source_type: SourceType,
-
-    io_requirements: IoRequirements,
-
-    timeout: Option<TimeSpec64>,
-
-    enqueued: Option<EnqueuedSource>,
-
-    stats_collection: Option<StatsCollectionFn>,
-
-    task_queue: Option<TaskQueueHandle>,
-}
-
-pub struct EnqueuedSource {
-    pub(crate) id: SourceId,
-    pub(crate) queue: ReactorQueue,
-}
-
-impl fmt::Debug for InnerSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InnerSource")
-            .field("raw", &self.raw)
-            .field("wakers", &self.wakers)
-            .field("source_type", &self.source_type)
-            .field("io_requirements", &self.io_requirements)
-            .finish()
-    }
-}
-
-#[derive(Debug)]
-pub struct Source {
-    pub(crate) inner: Rc<RefCell<InnerSource>>,
-}
-
-impl Source {
-    /// Registers an I/O source in the reactor.
-    pub(crate) fn new(
-        ioreq: IoRequirements,
-        raw: RawFd,
-        source_type: SourceType,
-        stats_collection_fn: Option<StatsCollectionFn>,
-        task_queue: Option<TaskQueueHandle>,
-    ) -> Source {
-        Source {
-            inner: Rc::new(RefCell::new(InnerSource {
-                raw,
-                wakers: Wakers::new(),
-                source_type,
-                io_requirements: ioreq,
-                enqueued: None,
-                timeout: None,
-                stats_collection: stats_collection_fn,
-                task_queue,
-            })),
         }
     }
 }

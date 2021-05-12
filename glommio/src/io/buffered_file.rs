@@ -151,7 +151,7 @@ impl BufferedFile {
     /// [`DmaFile`]: struct.DmaFile.html
     /// Reads from a specific position in the file and returns the buffer.
     pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
-        let mut source =
+        let source =
             self.file
                 .reactor
                 .upgrade()

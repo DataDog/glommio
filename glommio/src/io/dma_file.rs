@@ -227,7 +227,7 @@ impl DmaFile {
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
     pub async fn read_at_aligned(&self, pos: u64, size: usize) -> Result<ReadResult> {
-        let mut source = self.file.reactor.upgrade().unwrap().read_dma(
+        let source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             pos,
             size,
@@ -252,7 +252,7 @@ impl DmaFile {
         let b = (pos - eff_pos) as usize;
 
         let eff_size = self.align_up((size + b) as u64) as usize;
-        let mut source = self.file.reactor.upgrade().unwrap().read_dma(
+        let source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             eff_pos,
             eff_size,

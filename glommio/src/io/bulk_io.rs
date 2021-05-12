@@ -97,7 +97,7 @@ impl<V: IoVec> Stream for ReadManyResult<V> {
         match ready!(self.inner.poll_next(cx)) {
             None => Poll::Ready(None),
             Some((source, args)) => {
-                if let Some(mut source) = source {
+                if let Some(source) = source {
                     enhanced_try!(source.take_result().unwrap(), "Reading", self.inner.file)?;
                     self.current_result =
                         ReadResult::from_whole_buffer(source.extract_dma_buffer());

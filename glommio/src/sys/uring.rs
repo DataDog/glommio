@@ -22,7 +22,6 @@ use std::{
     ptr,
     rc::Rc,
     sync::Arc,
-    task::Waker,
     time::Duration,
 };
 
@@ -34,29 +33,27 @@ use crate::{
         self,
         dma_buffer::{BufferStorage, DmaBuffer},
         DirectIo,
+        EnqueuedSource,
         InnerSource,
         IoBuffer,
         PollableStatus,
         Source,
         SourceType,
+        TimeSpec64,
     },
-    uring_sys,
+    uring_sys::{self, IoRingOp},
     IoRequirements,
     IoStats,
     Latency,
     RingIoStats,
     TaskQueueHandle,
 };
+use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use nix::sys::{
     socket::{MsgFlags, SockAddr, SockFlag},
     stat::Mode as OpenMode,
 };
-
-use crate::uring_sys::IoRingOp;
-
-use super::{EnqueuedSource, TimeSpec64};
-use ahash::AHashMap;
 
 const MSG_ZEROCOPY: i32 = 0x4000000;
 
@@ -558,7 +555,7 @@ impl UringQueueState {
         }))
     }
 
-    fn cancel_request(&mut self, id: SourceId) {
+    pub(crate) fn cancel_request(&mut self, id: SourceId) {
         let found = self
             .submissions
             .iter()
@@ -821,92 +818,6 @@ impl UringCommon for PollRing {
             Some(true)
         } else {
             None
-        }
-    }
-}
-
-impl InnerSource {
-    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
-        std::mem::replace(&mut self.source_type, source_type)
-    }
-}
-
-impl Source {
-    pub(crate) fn set_timeout(&mut self, d: Duration) -> Option<Duration> {
-        let mut inner = self.inner.borrow_mut();
-        let t = &mut inner.timeout;
-        let old = *t;
-        *t = Some(TimeSpec64::from(d));
-        old.map(Duration::from)
-    }
-
-    fn timeout_ref(&self) -> Ref<'_, Option<TimeSpec64>> {
-        Ref::map(self.inner.borrow(), |x| &x.timeout)
-    }
-
-    pub(crate) fn latency_req(&self) -> Latency {
-        self.inner.borrow().io_requirements.latency_req
-    }
-
-    fn source_type(&self) -> Ref<'_, SourceType> {
-        Ref::map(self.inner.borrow(), |x| &x.source_type)
-    }
-
-    pub(crate) fn source_type_mut(&self) -> RefMut<'_, SourceType> {
-        RefMut::map(self.inner.borrow_mut(), |x| &mut x.source_type)
-    }
-
-    pub(crate) fn extract_source_type(&self) -> SourceType {
-        self.inner
-            .borrow_mut()
-            .update_source_type(SourceType::Invalid)
-    }
-
-    pub(crate) fn extract_dma_buffer(&mut self) -> DmaBuffer {
-        let stype = self.extract_source_type();
-        match stype {
-            SourceType::Read(_, Some(IoBuffer::Dma(buffer))) => buffer,
-            SourceType::Write(_, IoBuffer::Dma(buffer)) => buffer,
-            x => panic!("Could not extract buffer. Source: {:?}", x),
-        }
-    }
-
-    pub(crate) fn extract_buffer(&mut self) -> Vec<u8> {
-        let stype = self.extract_source_type();
-        match stype {
-            SourceType::Read(_, Some(IoBuffer::Buffered(buffer))) => buffer,
-            SourceType::Write(_, IoBuffer::Buffered(buffer)) => buffer,
-            x => panic!("Could not extract buffer. Source: {:?}", x),
-        }
-    }
-
-    pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
-        self.inner
-            .borrow_mut()
-            .wakers
-            .result
-            .take()
-            .map(|x| x.map(|x| x as usize))
-    }
-
-    pub(crate) fn has_result(&self) -> bool {
-        self.inner.borrow().wakers.result.is_some()
-    }
-
-    pub(crate) fn add_waiter(&self, waker: Waker) {
-        self.inner.borrow_mut().wakers.waiter.replace(waker);
-    }
-
-    pub(crate) fn raw(&self) -> RawFd {
-        self.inner.borrow().raw
-    }
-}
-
-impl Drop for Source {
-    fn drop(&mut self) {
-        let enqueued = self.inner.borrow_mut().enqueued.take();
-        if let Some(EnqueuedSource { id, queue }) = enqueued {
-            queue.borrow_mut().cancel_request(id);
         }
     }
 }

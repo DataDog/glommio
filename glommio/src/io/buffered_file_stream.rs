@@ -366,7 +366,7 @@ impl StreamWriter {
         }
     }
 
-    fn consume_flush_result(&mut self, mut source: Source) -> io::Result<()> {
+    fn consume_flush_result(&mut self, source: Source) -> io::Result<()> {
         let res = source.take_result().unwrap();
         if res.is_ok() {
             let mut buffer = source.extract_buffer();
@@ -552,7 +552,7 @@ impl AsyncBufRead for StreamReader {
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
         match self.source.take() {
-            Some(mut source) => {
+            Some(source) => {
                 let res = source.take_result().unwrap();
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
@@ -645,7 +645,7 @@ impl AsyncBufRead for Stdin {
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
         match self.source.take() {
-            Some(mut source) => {
+            Some(source) => {
                 let res = source.take_result().unwrap();
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
