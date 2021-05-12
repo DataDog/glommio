@@ -269,8 +269,12 @@ lazy_static! {
     static ref IO_URING_RECENT_ENOUGH: bool = check_supported_operations(GLOMMIO_URING_OPS);
 }
 
-fn fill_sqe<F>(sqe: &mut iou::SQE<'_>, op: &UringDescriptor, buffer_allocation: F)
-where
+fn fill_sqe<F>(
+    sqe: &mut iou::SQE<'_>,
+    op: &UringDescriptor,
+    buffer_allocation: F,
+    source_map: &mut SourceMap,
+) where
     F: FnOnce(usize) -> Option<DmaBuffer>,
 {
     let mut user_data = op.user_data;
@@ -295,14 +299,15 @@ where
                 let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
                 sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
 
-                let src = peek_source(from_user_data(op.user_data));
-                if let SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) =
-                    &mut *src.source_type.borrow_mut()
-                {
-                    *slot = Some(IoBuffer::Dma(buf));
-                } else {
-                    panic!("Expected Read source type");
-                };
+                source_map.peek_source_mut(from_user_data(op.user_data), |mut x| {
+                    if let SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) =
+                        &mut x.source_type
+                    {
+                        *slot = Some(IoBuffer::Dma(buf));
+                    } else {
+                        unreachable!("Expected Read source type");
+                    };
+                });
             }
             UringOpDescriptor::Open(path, flags, mode) => {
                 let path = CStr::from_ptr(path as _);
@@ -350,26 +355,26 @@ where
             }
             UringOpDescriptor::ReadFixed(pos, len) => {
                 let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
-                let src = peek_source(from_user_data(op.user_data));
-
-                match &mut *src.source_type.borrow_mut() {
-                    SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
-                        sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-                        *slot = Some(IoBuffer::Dma(buf));
-                    }
-                    SourceType::Read(_, slot) => {
-                        match buf.uring_buffer_id() {
-                            None => {
-                                sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-                            }
-                            Some(idx) => {
-                                sqe.prep_read_fixed(op.fd, buf.as_bytes_mut(), pos, idx);
-                            }
-                        };
-                        *slot = Some(IoBuffer::Dma(buf));
-                    }
-                    _ => unreachable!(),
-                };
+                source_map.peek_source_mut(from_user_data(op.user_data), |mut src| {
+                    match &mut src.source_type {
+                        SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
+                            sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
+                            *slot = Some(IoBuffer::Dma(buf));
+                        }
+                        SourceType::Read(_, slot) => {
+                            match buf.uring_buffer_id() {
+                                None => {
+                                    sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
+                                }
+                                Some(idx) => {
+                                    sqe.prep_read_fixed(op.fd, buf.as_bytes_mut(), pos, idx);
+                                }
+                            };
+                            *slot = Some(IoBuffer::Dma(buf));
+                        }
+                        _ => unreachable!(),
+                    };
+                });
             }
 
             UringOpDescriptor::WriteFixed(ptr, len, pos, buf_index) => {
@@ -402,39 +407,42 @@ where
                     MsgFlags::from_bits_unchecked(flags),
                 );
 
-                let src = peek_source(from_user_data(op.user_data));
-                match &mut *src.source_type.borrow_mut() {
-                    SourceType::SockRecv(slot) => {
-                        *slot = Some(buf);
-                    }
-                    _ => unreachable!(),
-                };
+                source_map.peek_source_mut(from_user_data(op.user_data), |mut src| {
+                    match &mut src.source_type {
+                        SourceType::SockRecv(slot) => {
+                            *slot = Some(buf);
+                        }
+                        _ => unreachable!(),
+                    };
+                });
             }
 
             UringOpDescriptor::SockRecvMsg(len, flags) => {
                 let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
-                let src = peek_source(from_user_data(op.user_data));
-                match &mut *src.source_type.borrow_mut() {
-                    SourceType::SockRecvMsg(slot, iov, hdr, msg_name) => {
-                        iov.iov_base = buf.as_mut_ptr() as *mut libc::c_void;
-                        iov.iov_len = len;
+                source_map.peek_source_mut(from_user_data(op.user_data), |mut src| {
+                    match &mut src.source_type {
+                        SourceType::SockRecvMsg(slot, iov, hdr, msg_name) => {
+                            iov.iov_base = buf.as_mut_ptr() as *mut libc::c_void;
+                            iov.iov_len = len;
 
-                        let msg_namelen = std::mem::size_of::<nix::sys::socket::sockaddr_storage>()
-                            as libc::socklen_t;
-                        hdr.msg_name = msg_name.as_mut_ptr() as *mut libc::c_void;
-                        hdr.msg_namelen = msg_namelen;
-                        hdr.msg_iov = iov as *mut libc::iovec;
-                        hdr.msg_iovlen = 1;
+                            let msg_namelen =
+                                std::mem::size_of::<nix::sys::socket::sockaddr_storage>()
+                                    as libc::socklen_t;
+                            hdr.msg_name = msg_name.as_mut_ptr() as *mut libc::c_void;
+                            hdr.msg_namelen = msg_namelen;
+                            hdr.msg_iov = iov as *mut libc::iovec;
+                            hdr.msg_iovlen = 1;
 
-                        sqe.prep_recvmsg(
-                            op.fd,
-                            hdr as *mut libc::msghdr,
-                            MsgFlags::from_bits_unchecked(flags),
-                        );
-                        *slot = Some(buf);
-                    }
-                    _ => unreachable!(),
-                };
+                            sqe.prep_recvmsg(
+                                op.fd,
+                                hdr as *mut libc::msghdr,
+                                MsgFlags::from_bits_unchecked(flags),
+                            );
+                            *slot = Some(buf);
+                        }
+                        _ => unreachable!(),
+                    };
+                });
             }
             UringOpDescriptor::Nop => sqe.prep_nop(),
         }
@@ -459,10 +467,15 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
         })
 }
 
-fn process_one_event<F, R>(cqe: Option<iou::CQE>, try_process: F, post_process: R) -> Option<bool>
+fn process_one_event<F, R>(
+    cqe: Option<iou::CQE>,
+    try_process: F,
+    post_process: R,
+    source_map: Rc<RefCell<SourceMap>>,
+) -> Option<bool>
 where
-    F: FnOnce(&InnerSource) -> Option<()>,
-    R: FnOnce(&InnerSource, io::Result<usize>) -> io::Result<usize>,
+    F: FnOnce(Ref<'_, InnerSource>) -> Option<()>,
+    R: FnOnce(Ref<'_, InnerSource>, io::Result<usize>) -> io::Result<usize>,
 {
     if let Some(value) = cqe {
         // No user data is POLL_REMOVE or CANCEL, we won't process.
@@ -470,15 +483,18 @@ where
             return Some(false);
         }
 
-        let src = consume_source(from_user_data(value.user_data()));
+        let src = source_map
+            .borrow_mut()
+            .consume_source(from_user_data(value.user_data()));
 
         let result = value.result();
 
         let mut woke = false;
-        if try_process(&*src).is_none() {
-            let mut w = src.wakers.borrow_mut();
-            w.result = Some(post_process(&*src, transmute_error(result)));
-            if let Some(waiter) = w.waiter.take() {
+        if try_process(src.borrow()).is_none() {
+            let res = Some(post_process(src.borrow(), transmute_error(result)));
+            let mut inner_source = src.borrow_mut();
+            inner_source.wakers.result = res;
+            if let Some(waiter) = inner_source.wakers.waiter.take() {
                 woke = true;
                 wake!(waiter);
             }
@@ -488,8 +504,8 @@ where
     None
 }
 
-type SourceMap = FreeList<Rc<InnerSource>>;
-pub(crate) type SourceId = Idx<Rc<InnerSource>>;
+type SourceMap = FreeList<Rc<RefCell<InnerSource>>>;
+pub(crate) type SourceId = Idx<Rc<RefCell<InnerSource>>>;
 fn from_user_data(user_data: u64) -> SourceId {
     SourceId::from_raw((user_data - 1) as usize)
 }
@@ -497,45 +513,48 @@ fn to_user_data(id: SourceId) -> u64 {
     id.to_raw() as u64 + 1
 }
 
-thread_local!(static SOURCE_MAP: RefCell<SourceMap> = Default::default());
-
-fn add_source(source: &Source, queue: ReactorQueue) -> SourceId {
-    SOURCE_MAP.with(|x| {
+impl SourceMap {
+    fn add_source(&mut self, source: &Source, queue: ReactorQueue) -> SourceId {
         let item = source.inner.clone();
-        let id = x.borrow_mut().alloc(item);
-        source.inner.enqueued.set(Some(EnqueuedSource {
-            id,
-            queue: queue.clone(),
-        }));
-        id
-    })
-}
-
-fn peek_source(id: SourceId) -> Rc<InnerSource> {
-    SOURCE_MAP.with(|x| Rc::clone(&x.borrow()[id]))
-}
-
-fn consume_source(id: SourceId) -> Rc<InnerSource> {
-    SOURCE_MAP.with(|x| {
-        let source = x.borrow_mut().dealloc(id);
-        source.enqueued.set(None);
+        let id = self.alloc(item);
         source
-    })
+            .inner
+            .borrow_mut()
+            .enqueued
+            .replace(EnqueuedSource { id, queue });
+        id
+    }
+
+    fn peek_source_mut<Fn: for<'a> FnOnce(RefMut<'a, InnerSource>)>(
+        &mut self,
+        id: SourceId,
+        f: Fn,
+    ) {
+        f(self[id].borrow_mut());
+    }
+
+    fn consume_source(&mut self, id: SourceId) -> Rc<RefCell<InnerSource>> {
+        let source = self.dealloc(id);
+        source.borrow_mut().enqueued.take();
+        source
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct UringQueueState {
     submissions: VecDeque<UringDescriptor>,
     cancellations: VecDeque<UringDescriptor>,
+    source_map: Rc<RefCell<SourceMap>>,
 }
 
 pub(crate) type ReactorQueue = Rc<RefCell<UringQueueState>>;
 
 impl UringQueueState {
-    fn with_capacity(cap: usize) -> ReactorQueue {
+    fn with_capacity(cap: usize, source_map: Rc<RefCell<SourceMap>>) -> ReactorQueue {
         Rc::new(RefCell::new(UringQueueState {
             submissions: VecDeque::with_capacity(cap),
             cancellations: VecDeque::new(),
+            source_map,
         }))
     }
 
@@ -549,7 +568,7 @@ impl UringQueueState {
                 self.submissions.remove(idx);
                 // We never submitted the request, so it's safe to consume
                 // source here -- kernel didn't see our buffers.
-                consume_source(id);
+                self.source_map.borrow_mut().consume_source(id);
             }
             // We are cancelling this request, but it is already submitted.
             // This means that the kernel might be using the buffers right
@@ -666,10 +685,15 @@ struct PollRing {
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
     task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
+    source_map: Rc<RefCell<SourceMap>>,
 }
 
 impl PollRing {
-    fn new(size: usize, allocator: Rc<UringBufferAllocator>) -> io::Result<Self> {
+    fn new(
+        size: usize,
+        allocator: Rc<UringBufferAllocator>,
+        source_map: Rc<RefCell<SourceMap>>,
+    ) -> io::Result<Self> {
         let ring = iou::IoUring::new_with_flags(
             size as _,
             iou::SetupFlags::IOPOLL,
@@ -680,10 +704,11 @@ impl PollRing {
             completed: 0,
             size,
             ring,
-            submission_queue: UringQueueState::with_capacity(size * 4),
+            submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
             allocator,
             stats: RingIoStats::new(),
             task_queue_stats: AHashMap::new(),
+            source_map,
         })
     }
 
@@ -727,6 +752,7 @@ impl UringCommon for PollRing {
     }
 
     fn consume_one_event(&mut self) -> Option<bool> {
+        let source_map = self.source_map.clone();
         process_one_event(
             self.ring.peek_for_cqe(),
             |_| None,
@@ -746,6 +772,7 @@ impl UringCommon for PollRing {
                 }
                 res
             },
+            source_map,
         )
         .map(|x| {
             self.completed += 1;
@@ -784,7 +811,12 @@ impl UringCommon for PollRing {
                 self.submitted += 1;
                 let op = queue.pop_front().unwrap();
                 let allocator = self.allocator.clone();
-                fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
+                fill_sqe(
+                    &mut sqe,
+                    &op,
+                    move |size| allocator.new_buffer(size),
+                    &mut *self.source_map.borrow_mut(),
+                );
             }
             Some(true)
         } else {
@@ -794,37 +826,40 @@ impl UringCommon for PollRing {
 }
 
 impl InnerSource {
-    pub(crate) fn update_source_type(&self, source_type: SourceType) -> SourceType {
-        std::mem::replace(&mut *self.source_type.borrow_mut(), source_type)
+    pub(crate) fn update_source_type(&mut self, source_type: SourceType) -> SourceType {
+        std::mem::replace(&mut self.source_type, source_type)
     }
 }
 
 impl Source {
-    pub(crate) fn set_timeout(&self, d: Duration) -> Option<Duration> {
-        let mut t = self.inner.timeout.borrow_mut();
+    pub(crate) fn set_timeout(&mut self, d: Duration) -> Option<Duration> {
+        let mut inner = self.inner.borrow_mut();
+        let t = &mut inner.timeout;
         let old = *t;
         *t = Some(TimeSpec64::from(d));
         old.map(Duration::from)
     }
 
     fn timeout_ref(&self) -> Ref<'_, Option<TimeSpec64>> {
-        self.inner.timeout.borrow()
+        Ref::map(self.inner.borrow(), |x| &x.timeout)
     }
 
     pub(crate) fn latency_req(&self) -> Latency {
-        self.inner.io_requirements.latency_req
+        self.inner.borrow().io_requirements.latency_req
     }
 
     fn source_type(&self) -> Ref<'_, SourceType> {
-        self.inner.source_type.borrow()
+        Ref::map(self.inner.borrow(), |x| &x.source_type)
     }
 
     pub(crate) fn source_type_mut(&self) -> RefMut<'_, SourceType> {
-        self.inner.source_type.borrow_mut()
+        RefMut::map(self.inner.borrow_mut(), |x| &mut x.source_type)
     }
 
     pub(crate) fn extract_source_type(&self) -> SourceType {
-        self.inner.update_source_type(SourceType::Invalid)
+        self.inner
+            .borrow_mut()
+            .update_source_type(SourceType::Invalid)
     }
 
     pub(crate) fn extract_dma_buffer(&mut self) -> DmaBuffer {
@@ -846,28 +881,31 @@ impl Source {
     }
 
     pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.result.take().map(|x| x.map(|x| x as usize))
+        self.inner
+            .borrow_mut()
+            .wakers
+            .result
+            .take()
+            .map(|x| x.map(|x| x as usize))
     }
 
     pub(crate) fn has_result(&self) -> bool {
-        let w = self.inner.wakers.borrow();
-        w.result.is_some()
+        self.inner.borrow().wakers.result.is_some()
     }
 
     pub(crate) fn add_waiter(&self, waker: Waker) {
-        let mut w = self.inner.wakers.borrow_mut();
-        w.waiter.replace(waker);
+        self.inner.borrow_mut().wakers.waiter.replace(waker);
     }
 
     pub(crate) fn raw(&self) -> RawFd {
-        self.inner.raw
+        self.inner.borrow().raw
     }
 }
 
 impl Drop for Source {
     fn drop(&mut self) {
-        if let Some(EnqueuedSource { id, queue }) = self.inner.enqueued.take() {
+        let enqueued = self.inner.borrow_mut().enqueued.take();
+        if let Some(EnqueuedSource { id, queue }) = enqueued {
             queue.borrow_mut().cancel_request(id);
         }
     }
@@ -882,6 +920,7 @@ struct SleepableRing {
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
     task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
+    source_map: Rc<RefCell<SourceMap>>,
 }
 
 impl SleepableRing {
@@ -889,17 +928,19 @@ impl SleepableRing {
         size: usize,
         name: &'static str,
         allocator: Rc<UringBufferAllocator>,
+        source_map: Rc<RefCell<SourceMap>>,
     ) -> io::Result<Self> {
         assert_eq!(*IO_URING_RECENT_ENOUGH, true);
         Ok(SleepableRing {
             ring: iou::IoUring::new(size as _)?,
             size,
-            submission_queue: UringQueueState::with_capacity(size * 4),
+            submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
             waiting_submission: 0,
             name,
             allocator,
             stats: RingIoStats::new(),
             task_queue_stats: AHashMap::new(),
+            source_map,
         })
     }
 
@@ -915,7 +956,10 @@ impl SleepableRing {
             None,
             None,
         );
-        let new_id = add_source(&source, self.submission_queue.clone());
+        let new_id = self
+            .source_map
+            .borrow_mut()
+            .add_source(&source, self.submission_queue.clone());
         let op = match &*source.source_type() {
             SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
             _ => unreachable!(),
@@ -946,11 +990,20 @@ impl SleepableRing {
             let op = UringDescriptor {
                 fd: eventfd_src.raw(),
                 flags: SubmissionFlags::empty(),
-                user_data: to_user_data(add_source(eventfd_src, self.submission_queue.clone())),
+                user_data: to_user_data(
+                    self.source_map
+                        .borrow_mut()
+                        .add_source(eventfd_src, self.submission_queue.clone()),
+                ),
                 args: UringOpDescriptor::Read(0, 8),
             };
             let allocator = self.allocator.clone();
-            fill_sqe(&mut sqe, &op, |size| allocator.new_buffer(size));
+            fill_sqe(
+                &mut sqe,
+                &op,
+                |size| allocator.new_buffer(size),
+                &mut *self.source_map.borrow_mut(),
+            );
             true
         } else {
             false
@@ -964,10 +1017,19 @@ impl SleepableRing {
             let op = UringDescriptor {
                 fd: link.raw(),
                 flags: SubmissionFlags::empty(),
-                user_data: to_user_data(add_source(link, self.submission_queue.clone())),
+                user_data: to_user_data(
+                    self.source_map
+                        .borrow_mut()
+                        .add_source(link, self.submission_queue.clone()),
+                ),
                 args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
             };
-            fill_sqe(&mut sqe, &op, DmaBuffer::new);
+            fill_sqe(
+                &mut sqe,
+                &op,
+                DmaBuffer::new,
+                &mut *self.source_map.borrow_mut(),
+            );
         } else {
             // Can't link rings because we ran out of CQEs. Just can't sleep.
             // Submit what we have, once we're out of here we'll consume them
@@ -1022,9 +1084,10 @@ impl UringCommon for SleepableRing {
     }
 
     fn consume_one_event(&mut self) -> Option<bool> {
+        let source_map = self.source_map.clone();
         process_one_event(
             self.ring.peek_for_cqe(),
-            |source| match &mut *source.source_type.borrow_mut() {
+            |source| match source.source_type {
                 SourceType::LinkRings => Some(()),
                 _ => None,
             },
@@ -1044,6 +1107,7 @@ impl UringCommon for SleepableRing {
                 }
                 res
             },
+            source_map,
         )
     }
 
@@ -1078,7 +1142,12 @@ impl UringCommon for SleepableRing {
                 self.waiting_submission += 1;
                 let op = queue.pop_front().unwrap();
                 let allocator = self.allocator.clone();
-                fill_sqe(&mut sqe, &op, move |size| allocator.new_buffer(size));
+                fill_sqe(
+                    &mut sqe,
+                    &op,
+                    move |size| allocator.new_buffer(size),
+                    &mut *self.source_map.borrow_mut(),
+                );
             }
             Some(true)
         } else {
@@ -1101,6 +1170,7 @@ pub(crate) struct Reactor {
     notifier: Arc<sys::SleepNotifier>,
     // This is the source used to handle the notifications into the ring
     eventfd_src: Source,
+    source_map: Rc<RefCell<SourceMap>>,
 }
 
 fn common_flags() -> PollFlags {
@@ -1160,14 +1230,15 @@ impl Reactor {
             ));
         }
 
+        let source_map = Rc::new(RefCell::new(SourceMap::default()));
         // always have at least some small amount of memory for the slab
         io_memory = std::cmp::max(align_up(io_memory, 4096), 65536);
 
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
         let registry = vec![allocator.as_bytes()];
 
-        let mut main_ring = SleepableRing::new(128, "main", allocator.clone())?;
-        let poll_ring = PollRing::new(128, allocator.clone())?;
+        let mut main_ring = SleepableRing::new(128, "main", allocator.clone(), source_map.clone())?;
+        let poll_ring = PollRing::new(128, allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
@@ -1188,7 +1259,8 @@ impl Reactor {
             },
         }
 
-        let latency_ring = SleepableRing::new(128, "latency", allocator.clone())?;
+        let latency_ring =
+            SleepableRing::new(128, "latency", allocator.clone(), source_map.clone())?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(
@@ -1208,6 +1280,7 @@ impl Reactor {
             link_fd,
             notifier,
             eventfd_src,
+            source_map,
         })
     }
 
@@ -1548,7 +1621,7 @@ impl Reactor {
             Latency::NotImportant => &self.main_ring,
             Latency::Matters(_) => &self.latency_ring,
         };
-        queue_request_into_ring(ring, source, op)
+        queue_request_into_ring(ring, source, op, &mut *self.source_map.borrow_mut())
     }
 
     fn queue_storage_io_request(&self, source: &Source, op: UringOpDescriptor) {
@@ -1557,8 +1630,18 @@ impl Reactor {
             _ => panic!("SourceType should declare if it supports poll operations"),
         };
         match pollable {
-            PollableStatus::Pollable => queue_request_into_ring(&self.poll_ring, source, op),
-            PollableStatus::NonPollable(_) => queue_request_into_ring(&self.main_ring, source, op),
+            PollableStatus::Pollable => queue_request_into_ring(
+                &self.poll_ring,
+                source,
+                op,
+                &mut *self.source_map.borrow_mut(),
+            ),
+            PollableStatus::NonPollable(_) => queue_request_into_ring(
+                &self.main_ring,
+                source,
+                op,
+                &mut *self.source_map.borrow_mut(),
+            ),
         }
     }
 
@@ -1591,9 +1674,10 @@ fn queue_request_into_ring(
     ring: &RefCell<impl UringCommon>,
     source: &Source,
     descriptor: UringOpDescriptor,
+    source_map: &mut SourceMap,
 ) {
     let q = ring.borrow_mut().submission_queue();
-    let id = add_source(source, Rc::clone(&q));
+    let id = source_map.add_source(source, Rc::clone(&q));
 
     let flags = match &*source.timeout_ref() {
         Some(_) => SubmissionFlags::IO_LINK,
@@ -1726,7 +1810,8 @@ mod tests {
     #[test]
     fn sqe_link_chain() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
-        let mut ring = SleepableRing::new(4, "main", allocator).unwrap();
+        let source_map = Rc::new(RefCell::new(SourceMap::default()));
+        let mut ring = SleepableRing::new(4, "main", allocator, source_map).unwrap();
         let q = ring.submission_queue();
         let mut queue = q.borrow_mut();
 
@@ -1759,7 +1844,8 @@ mod tests {
     #[should_panic(expected = "Unterminated SQE link chain")]
     fn unterminated_sqe_link_chain() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
-        let mut ring = SleepableRing::new(2, "main", allocator).unwrap();
+        let source_map = Rc::new(RefCell::new(SourceMap::default()));
+        let mut ring = SleepableRing::new(2, "main", allocator, source_map).unwrap();
         let q = ring.submission_queue();
         let mut queue = q.borrow_mut();
 
@@ -1778,7 +1864,8 @@ mod tests {
     #[should_panic(expected = "Link chain length (3) overflows submission queue bounds (2)")]
     fn sqe_link_chain_overflow() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
-        let mut ring = SleepableRing::new(2, "main", allocator).unwrap();
+        let source_map = Rc::new(RefCell::new(SourceMap::default()));
+        let mut ring = SleepableRing::new(2, "main", allocator, source_map).unwrap();
         let q = ring.submission_queue();
         let mut queue = q.borrow_mut();
 

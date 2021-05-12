@@ -412,7 +412,7 @@ impl Reactor {
     }
 
     pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockAddr, d: Duration) -> Source {
-        let source = self.new_source(raw, SourceType::Connect(addr), None);
+        let mut source = self.new_source(raw, SourceType::Connect(addr), None);
         source.set_timeout(d);
         self.sys.connect(&source);
         source
@@ -431,7 +431,7 @@ impl Reactor {
         buf: DmaBuffer,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let source = self.new_source(fd, SourceType::SockSend(buf), None);
+        let mut source = self.new_source(fd, SourceType::SockSend(buf), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -463,7 +463,7 @@ impl Reactor {
             msg_flags: 0,
         };
 
-        let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
+        let mut source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -493,7 +493,7 @@ impl Reactor {
             iov_base: std::ptr::null_mut(),
             iov_len: 0,
         };
-        let source = self.new_source(
+        let mut source = self.new_source(
             fd,
             SourceType::SockRecvMsg(
                 None,
@@ -517,7 +517,7 @@ impl Reactor {
         size: usize,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let source = self.new_source(fd, SourceType::SockRecv(None), None);
+        let mut source = self.new_source(fd, SourceType::SockRecv(None), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
