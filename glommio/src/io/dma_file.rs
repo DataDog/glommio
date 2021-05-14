@@ -234,9 +234,11 @@ impl DmaFile {
             self.pollable,
         );
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        let mut buffer = source.extract_dma_buffer();
-        buffer.trim_to_size(read_size);
-        Ok(ReadResult::from_whole_buffer(buffer))
+        Ok(ReadResult::from_sliced_buffer(
+            source.extract_dma_buffer(),
+            0,
+            read_size,
+        ))
     }
 
     /// Reads into buffer in buf from a specific position in the file.
@@ -260,10 +262,11 @@ impl DmaFile {
         );
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        let mut buffer = source.extract_dma_buffer();
-        buffer.trim_front(b);
-        buffer.trim_to_size(std::cmp::min(read_size, size));
-        Ok(ReadResult::from_whole_buffer(buffer))
+        Ok(ReadResult::from_sliced_buffer(
+            source.extract_dma_buffer(),
+            b,
+            std::cmp::min(read_size, size),
+        ))
     }
 
     /// Submit many reads and process the results in a stream-like fashion via a

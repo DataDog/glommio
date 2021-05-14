@@ -121,9 +121,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         let sz = source.collect_rw().await?;
         match source.extract_source_type() {
             SourceType::SockRecv(mut src) => {
-                let mut src = src.take().unwrap();
-                src.trim_to_size(sz);
-                buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
+                buf[0..sz].copy_from_slice(&src.take().unwrap().as_bytes()[0..sz]);
             }
             _ => unreachable!(),
         }

@@ -165,9 +165,11 @@ impl BufferedFile {
                 Some(self.as_raw_fd()),
             )
         })?;
-        let mut buffer = source.extract_dma_buffer();
-        buffer.trim_to_size(read_size);
-        Ok(ReadResult::from_whole_buffer(buffer))
+        Ok(ReadResult::from_sliced_buffer(
+            source.extract_dma_buffer(),
+            0,
+            read_size,
+        ))
     }
 
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush

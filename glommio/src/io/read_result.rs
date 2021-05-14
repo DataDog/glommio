@@ -56,6 +56,18 @@ impl ReadResult {
         }))
     }
 
+    pub(crate) fn from_sliced_buffer(buffer: DmaBuffer, extra_offset: usize, len: usize) -> Self {
+        Self(NonZeroUsize::new(len).map(|len| {
+            let ret = ReadResultInner {
+                buffer: Rc::new(buffer),
+                offset: extra_offset,
+                len,
+            };
+            ReadResultInner::check_invariants(&ret);
+            ret
+        }))
+    }
+
     /// Creates a slice of this ReadResult with the given offset and length.
     ///
     /// Returns `None` if either offset or offset + len would not fit in the
