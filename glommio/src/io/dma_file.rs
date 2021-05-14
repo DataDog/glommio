@@ -235,7 +235,7 @@ impl DmaFile {
         );
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         Ok(ReadResult::from_sliced_buffer(
-            source.extract_dma_buffer(),
+            source.extract_buffer(),
             0,
             read_size,
         ))
@@ -263,7 +263,7 @@ impl DmaFile {
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         Ok(ReadResult::from_sliced_buffer(
-            source.extract_dma_buffer(),
+            source.extract_buffer(),
             b,
             std::cmp::min(read_size, size),
         ))

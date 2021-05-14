@@ -6,7 +6,7 @@
 use crate::{
     io::BufferedFile,
     parking::Reactor,
-    sys::{DmaBuffer, Source},
+    sys::{IoBuffer, Source},
     Local,
 };
 use futures_lite::{
@@ -167,11 +167,11 @@ impl Buffer {
         self.data = buf;
     }
 
-    fn replenish_buffer(&mut self, buf: DmaBuffer, len: usize) {
+    fn replenish_buffer(&mut self, buf: IoBuffer, len: usize) {
         use crate::ByteSliceExt;
         self.buffer_pos = 0;
         self.data.resize(len, 0u8);
-        buf.as_bytes()[..len].read_at(0, &mut self.data);
+        buf[..len].read_at(0, &mut self.data);
     }
 
     fn remaining_unconsumed_bytes(&self) -> usize {
@@ -369,10 +369,13 @@ impl StreamWriter {
     fn consume_flush_result(&mut self, source: Source) -> io::Result<()> {
         let res = source.take_result().unwrap();
         if res.is_ok() {
-            let mut buffer = source.extract_buffer();
-            self.file_pos += buffer.len() as u64;
-            buffer.truncate(0);
-            self.buffer.replace_buffer(buffer);
+            if let IoBuffer::Buffered(mut buffer) = source.extract_buffer() {
+                self.file_pos += buffer.len() as u64;
+                buffer.truncate(0);
+                self.buffer.replace_buffer(buffer);
+            } else {
+                unreachable!("expected vec buffer");
+            }
         }
         res.map(|_x| ())
     }
@@ -562,7 +565,7 @@ impl AsyncBufRead for StreamReader {
                         let added_size = new_pos - old_pos;
                         self.file_pos += added_size;
                         self.buffer
-                            .replenish_buffer(source.extract_dma_buffer(), added_size as usize);
+                            .replenish_buffer(source.extract_buffer(), added_size as usize);
                         let this = self.project();
                         Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                     }
@@ -648,8 +651,7 @@ impl AsyncBufRead for Stdin {
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
                     Ok(sz) => {
-                        self.buffer
-                            .replenish_buffer(source.extract_dma_buffer(), sz);
+                        self.buffer.replenish_buffer(source.extract_buffer(), sz);
                         let this = self.project();
                         Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                     }

@@ -166,7 +166,7 @@ impl BufferedFile {
             )
         })?;
         Ok(ReadResult::from_sliced_buffer(
-            source.extract_dma_buffer(),
+            source.extract_buffer(),
             0,
             read_size,
         ))

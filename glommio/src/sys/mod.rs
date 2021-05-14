@@ -225,6 +225,7 @@ mod uring;
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
+use std::ops::Deref;
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -363,6 +364,17 @@ impl Drop for SleepNotifier {
 pub(crate) enum IoBuffer {
     Dma(DmaBuffer),
     Buffered(Vec<u8>),
+}
+
+impl Deref for IoBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match &self {
+            IoBuffer::Dma(buffer) => buffer.as_bytes(),
+            IoBuffer::Buffered(buffer) => buffer.as_slice(),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]

@@ -174,20 +174,11 @@ impl Source {
             .update_source_type(SourceType::Invalid)
     }
 
-    pub(crate) fn extract_dma_buffer(&self) -> DmaBuffer {
+    pub(crate) fn extract_buffer(&self) -> IoBuffer {
         let stype = self.extract_source_type();
         match stype {
-            SourceType::Read(_, Some(IoBuffer::Dma(buffer))) => buffer,
-            SourceType::Write(_, IoBuffer::Dma(buffer)) => buffer,
-            x => panic!("Could not extract buffer. Source: {:?}", x),
-        }
-    }
-
-    pub(crate) fn extract_buffer(&self) -> Vec<u8> {
-        let stype = self.extract_source_type();
-        match stype {
-            SourceType::Read(_, Some(IoBuffer::Buffered(buffer))) => buffer,
-            SourceType::Write(_, IoBuffer::Buffered(buffer)) => buffer,
+            SourceType::Read(_, Some(buffer)) => buffer,
+            SourceType::Write(_, buffer) => buffer,
             x => panic!("Could not extract buffer. Source: {:?}", x),
         }
     }

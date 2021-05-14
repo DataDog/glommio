@@ -2,7 +2,7 @@
 // under the mit/apache-2.0 license, at your convenience
 //
 // this product includes software developed at datadog (https://www.datadoghq.com/). copyright 2020 datadog, inc.
-use crate::sys::DmaBuffer;
+use crate::sys::IoBuffer;
 use core::num::NonZeroUsize;
 use std::rc::Rc;
 
@@ -23,7 +23,7 @@ impl core::ops::Deref for ReadResult {
 
 #[derive(Clone, Debug)]
 struct ReadResultInner {
-    buffer: Rc<DmaBuffer>,
+    buffer: Rc<IoBuffer>,
     offset: usize,
 
     // This (usage of `NonZeroUsize`) is probably needed to make sure that rustc
@@ -39,7 +39,10 @@ impl core::ops::Deref for ReadResultInner {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        &self.buffer.as_bytes()[self.offset..][..self.len.get()]
+        match &*self.buffer {
+            IoBuffer::Dma(buffer) => &buffer.as_bytes()[self.offset..][..self.len.get()],
+            IoBuffer::Buffered(buffer) => &buffer.as_slice()[self.offset..][..self.len.get()],
+        }
     }
 }
 
@@ -48,7 +51,7 @@ impl ReadResult {
         Self(None)
     }
 
-    pub(crate) fn from_whole_buffer(buffer: DmaBuffer) -> Self {
+    pub(crate) fn from_whole_buffer(buffer: IoBuffer) -> Self {
         Self(NonZeroUsize::new(buffer.len()).map(|len| ReadResultInner {
             buffer: Rc::new(buffer),
             offset: 0,
@@ -56,7 +59,7 @@ impl ReadResult {
         }))
     }
 
-    pub(crate) fn from_sliced_buffer(buffer: DmaBuffer, extra_offset: usize, len: usize) -> Self {
+    pub(crate) fn from_sliced_buffer(buffer: IoBuffer, extra_offset: usize, len: usize) -> Self {
         Self(NonZeroUsize::new(len).map(|len| {
             let ret = ReadResultInner {
                 buffer: Rc::new(buffer),
