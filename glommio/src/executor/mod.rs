@@ -331,8 +331,8 @@ struct ExecutorQueues {
 }
 
 impl ExecutorQueues {
-    fn new(preempt_timer_duration: Duration) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(ExecutorQueues {
+    fn new(preempt_timer_duration: Duration, spin_before_park: Option<Duration>) -> Self {
+        ExecutorQueues {
             active_executors: BinaryHeap::new(),
             available_executors: AHashMap::new(),
             active_executing: None,
@@ -340,9 +340,9 @@ impl ExecutorQueues {
             last_vruntime: 0,
             preempt_timer_duration,
             default_preempt_timer_duration: preempt_timer_duration,
-            spin_before_park: None,
+            spin_before_park,
             stats: ExecutorStats::new(),
-        }))
+        }
     }
 
     fn reevaluate_preempt_timer(&mut self) {
@@ -493,11 +493,13 @@ impl LocalExecutorBuilder {
     /// ```
     pub fn make(self) -> Result<LocalExecutor> {
         let notifier = sys::new_sleep_notifier()?;
-        let mut le = LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
-        if let Some(cpu) = self.binding {
-            le.bind_to_cpu_set(Some(cpu))?;
-            le.queues.borrow_mut().spin_before_park = self.spin_before_park;
-        }
+        let mut le = LocalExecutor::new(
+            notifier,
+            self.io_memory,
+            self.preempt_timer_duration,
+            self.binding.map(Some),
+            self.spin_before_park,
+        )?;
         le.init();
         Ok(le)
     }
@@ -557,12 +559,14 @@ impl LocalExecutorBuilder {
         Builder::new()
             .name(name)
             .spawn(move || {
-                let mut le =
-                    LocalExecutor::new(notifier, self.io_memory, self.preempt_timer_duration);
-                if let Some(cpu) = self.binding {
-                    le.bind_to_cpu_set(Some(cpu)).unwrap();
-                    le.queues.borrow_mut().spin_before_park = self.spin_before_park;
-                }
+                let mut le = LocalExecutor::new(
+                    notifier,
+                    self.io_memory,
+                    self.preempt_timer_duration,
+                    self.binding.map(Some),
+                    self.spin_before_park,
+                )
+                .unwrap();
                 le.init();
                 le.run(async move {
                     fut_gen().await;
@@ -730,7 +734,7 @@ impl LocalExecutorPoolBuilder {
     {
         // NOTE: `self.placement` was `std::mem::take`en in `Self::on_all_shards`; you
         // should no longer rely on its value at this point
-        let cpu_set = cpu_set_gen.next();
+        let cpu_binding = cpu_set_gen.next().cpu_binding();
         let notifier = sys::new_sleep_notifier()?;
         let name = format!("{}-{}", &self.name, notifier.id());
         let handle = Builder::new().name(name).spawn({
@@ -743,13 +747,14 @@ impl LocalExecutorPoolBuilder {
                 // only allow the thread to create the `LocalExecutor` if all other threads that
                 // are supposed to be created by the pool builder were successfully spawned
                 if latch.arrive_and_wait() == LatchState::Ready {
-                    let mut le = LocalExecutor::new(notifier, io_memory, preempt_timer_duration);
-
-                    if !cpu_set.is_empty() {
-                        let set = cpu_set.map(|l| l.cpu);
-                        le.bind_to_cpu_set(set).unwrap();
-                        le.queues.borrow_mut().spin_before_park = spin_before_park;
-                    }
+                    let mut le = LocalExecutor::new(
+                        notifier,
+                        io_memory,
+                        preempt_timer_duration,
+                        cpu_binding,
+                        spin_before_park,
+                    )
+                    .unwrap();
                     le.init();
                     le.run(async move { Ok(fut_gen().await) })
                 } else {
@@ -861,10 +866,6 @@ impl LocalExecutor {
         self.reactor.clone()
     }
 
-    fn bind_to_cpu_set(&self, set: impl IntoIterator<Item = usize>) -> Result<()> {
-        bind_to_cpu_set(set)
-    }
-
     fn init(&mut self) {
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
@@ -877,14 +878,29 @@ impl LocalExecutor {
         notifier: Arc<sys::SleepNotifier>,
         io_memory: usize,
         preempt_timer: Duration,
-    ) -> LocalExecutor {
+        cpu_binding: Option<impl IntoIterator<Item = usize>>,
+        mut spin_before_park: Option<Duration>,
+    ) -> Result<LocalExecutor> {
+        // Linux's default memory policy is "local allocation" which allocates memory
+        // on the NUMA node containing the CPU where the allocation takes place.
+        // Hence, we bind to a CPU in the provided CPU set before allocating any
+        // memory for the `LocalExecutor`, thereby allowing any access to these
+        // data structures to occur on a local NUMA node (nevertheless, for some
+        // `Placement` variants a CPU set could span multiple NUMA nodes).
+        // For additional information see:
+        // https://www.kernel.org/doc/html/latest/admin-guide/mm/numa_memory_policy.html
+        match cpu_binding {
+            Some(cpu_set) => bind_to_cpu_set(cpu_set)?,
+            None => spin_before_park = None,
+        }
         let p = parking::Parker::new();
-        LocalExecutor {
-            queues: ExecutorQueues::new(preempt_timer),
+        let queues = ExecutorQueues::new(preempt_timer, spin_before_park);
+        Ok(LocalExecutor {
+            queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
             reactor: Rc::new(parking::Reactor::new(notifier, io_memory)),
-        }
+        })
     }
 
     /// Returns a unique identifier for this Executor.

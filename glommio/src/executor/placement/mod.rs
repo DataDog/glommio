@@ -228,7 +228,7 @@ impl CpuSet {
 /// via a [`LocalExecutorPoolBuilder`].
 #[derive(Clone, Debug)]
 pub(crate) enum CpuIter {
-    Empty,
+    Unbound,
     Single(CpuLocation),
     Multi(Vec<CpuLocation>),
 }
@@ -240,35 +240,29 @@ impl CpuIter {
 
     fn from_option(cpu_loc: Option<CpuLocation>) -> Self {
         match cpu_loc {
-            None => Self::Empty,
+            None => Self::Unbound,
             Some(cpu) => Self::Single(cpu),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        0 == self.len()
+    pub fn cpu_binding(self) -> Option<impl IntoIterator<Item = usize>> {
+        match self {
+            Self::Unbound => None,
+            Self::Single(_) | Self::Multi(_) => Some(self.map(|l| l.cpu)),
+        }
     }
 }
 
-impl ExactSizeIterator for CpuIter {}
 impl Iterator for CpuIter {
     type Item = CpuLocation;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Empty => None,
-            Self::Single(_) => match std::mem::replace(self, Self::Empty) {
+            Self::Unbound => None,
+            Self::Single(_) => match std::mem::replace(self, Self::Unbound) {
                 Self::Single(cpu) => Some(cpu),
                 _ => unreachable!("expected CpuIter::Single"),
             },
             Self::Multi(v) => v.pop(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Empty => (0, Some(0)),
-            Self::Single(_) => (1, Some(1)),
-            Self::Multi(v) => (v.len(), Some(v.len())),
         }
     }
 }
@@ -329,7 +323,7 @@ impl CpuSetGenerator {
     /// depending on the [`Placement`].
     pub fn next(&mut self) -> CpuIter {
         match self {
-            Self::Unbound => CpuIter::Empty,
+            Self::Unbound => CpuIter::Unbound,
             Self::Fenced(cpus) => CpuIter::from_vec(cpus.as_vec().clone()),
             Self::MaxSpread(it) => CpuIter::from_option(it.next()),
             Self::MaxPack(it) => CpuIter::from_option(it.next()),
