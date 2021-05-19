@@ -21,10 +21,14 @@ pub(crate) struct SysAlloc {
 
 impl SysAlloc {
     fn new(size: usize) -> Option<Self> {
-        let layout = Layout::from_size_align(size, 4096).unwrap();
-        let data = unsafe { alloc::alloc::alloc(layout) as *mut u8 };
-        let data = ptr::NonNull::new(data)?;
-        Some(SysAlloc { data, layout })
+        if size == 0 {
+            None
+        } else {
+            let layout = Layout::from_size_align(size, 4096).unwrap();
+            let data = unsafe { alloc::alloc::alloc(layout) as *mut u8 };
+            let data = ptr::NonNull::new(data)?;
+            Some(SysAlloc { data, layout })
+        }
     }
 
     fn as_ptr(&self) -> *const u8 {
