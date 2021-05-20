@@ -5,7 +5,16 @@
 //
 use crate::{
     iou::sqe::{SockAddr, SockAddrStorage},
-    sys::{DmaBuffer, IoBuffer, PollableStatus, ReactorQueue, SourceId, TimeSpec64, Wakers},
+    sys::{
+        DmaBuffer,
+        IoBuffer,
+        OsResult,
+        PollableStatus,
+        ReactorQueue,
+        SourceId,
+        TimeSpec64,
+        Wakers,
+    },
     GlommioError,
     IoRequirements,
     Latency,
@@ -168,13 +177,13 @@ impl Source {
         RefMut::map(self.inner.borrow_mut(), |x| &mut x.source_type)
     }
 
-    pub(crate) fn extract_source_type(&self) -> SourceType {
+    pub(crate) fn extract_source_type(self) -> SourceType {
         self.inner
             .borrow_mut()
             .update_source_type(SourceType::Invalid)
     }
 
-    pub(crate) fn extract_buffer(&self) -> IoBuffer {
+    pub(crate) fn extract_buffer(self) -> IoBuffer {
         let stype = self.extract_source_type();
         match stype {
             SourceType::Read(_, Some(buffer)) => buffer,
@@ -183,21 +192,25 @@ impl Source {
         }
     }
 
-    pub(crate) fn take_result(&self) -> Option<io::Result<usize>> {
-        self.inner
-            .borrow_mut()
-            .wakers
-            .result
-            .take()
-            .map(|x| x.map(|x| x as usize))
+    pub(crate) fn buffer(&self) -> Ref<'_, IoBuffer> {
+        Ref::map(self.source_type(), |stype| match &*stype {
+            SourceType::Read(_, Some(buffer)) => buffer,
+            SourceType::Write(_, buffer) => buffer,
+            x => panic!("Could not extract buffer. Source: {:?}", x),
+        })
     }
 
-    pub(crate) fn has_result(&self) -> bool {
-        self.inner.borrow().wakers.result.is_some()
+    pub(crate) fn result(&self) -> Option<io::Result<usize>> {
+        self.inner
+            .borrow()
+            .wakers
+            .result
+            .as_ref()
+            .map(|x| OsResult::from(x).into())
     }
 
     pub(crate) fn add_waiter(&self, waker: Waker) {
-        self.inner.borrow_mut().wakers.waiter.replace(waker);
+        self.inner.borrow_mut().wakers.waiters.push(waker)
     }
 
     pub(super) fn raw(&self) -> RawFd {
@@ -206,7 +219,7 @@ impl Source {
 
     pub(crate) async fn collect_rw(&self) -> io::Result<usize> {
         future::poll_fn(|cx| {
-            if let Some(result) = self.take_result() {
+            if let Some(result) = self.result() {
                 return Poll::Ready(result);
             }
 

@@ -35,7 +35,7 @@ use std::{
     io,
     mem,
     os::unix::{ffi::OsStrExt, io::RawFd},
-    panic::{self, RefUnwindSafe, UnwindSafe},
+    panic::{RefUnwindSafe, UnwindSafe},
     path::Path,
     rc::Rc,
     sync::{

@@ -32,9 +32,10 @@ impl TryFrom<Source> for RecvBuffer {
     type Error = io::Error;
 
     fn try_from(source: Source) -> io::Result<RecvBuffer> {
+        let res = source.result();
         match source.extract_source_type() {
             SourceType::SockRecv(mut buf) => {
-                let sz = source.take_result().unwrap()?;
+                let sz = res.unwrap()?;
                 let mut buf = buf.take().unwrap();
                 buf.trim_to_size(sz);
                 Ok(RecvBuffer { buf })
@@ -224,7 +225,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
             )),
         };
 
-        if !source.has_result() {
+        if source.result().is_none() {
             source.add_waiter(cx.waker().clone());
             self.source_rx = Some(source);
             Poll::Pending
@@ -250,7 +251,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
             )),
         };
 
-        match source.take_result() {
+        match source.result() {
             None => {
                 source.add_waiter(cx.waker().clone());
                 self.source_tx = Some(source);

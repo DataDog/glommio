@@ -491,10 +491,7 @@ where
             let res = Some(post_process(src.borrow(), transmute_error(result)));
             let mut inner_source = src.borrow_mut();
             inner_source.wakers.result = res;
-            if let Some(waiter) = inner_source.wakers.waiter.take() {
-                woke = true;
-                wake!(waiter);
-            }
+            woke = inner_source.wakers.wake_waiters();
         }
         return Some(woke);
     }
@@ -948,7 +945,7 @@ impl SleepableRing {
             return self.ring.submit_sqes().map(|x| x as usize);
         }
 
-        let res = eventfd_src.take_result();
+        let res = eventfd_src.result();
         match res {
             None => {
                 // We already have the eventfd registered and nobody woke us up so far.

@@ -306,7 +306,7 @@ macro_rules! wake {
     ($waker:expr $(,)?) => {
         use log::error;
 
-        if let Err(x) = panic::catch_unwind(|| $waker.wake()) {
+        if let Err(x) = std::panic::catch_unwind(|| $waker.wake()) {
             error!("Panic while calling waker! {:?}", x);
         }
     };

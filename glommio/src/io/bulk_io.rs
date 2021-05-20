@@ -38,7 +38,7 @@ impl<U: Copy + Unpin> Stream for OrderedBulkIo<U> {
         match self.iovs.front() {
             None => Poll::Ready(None),
             Some((Some(source), _)) => {
-                let res = if source.has_result() {
+                let res = if source.result().is_some() {
                     Poll::Ready(Some(self.iovs.pop_front().unwrap()))
                 } else {
                     Poll::Pending
@@ -98,7 +98,7 @@ impl<V: IoVec> Stream for ReadManyResult<V> {
             None => Poll::Ready(None),
             Some((source, args)) => {
                 if let Some(source) = source {
-                    enhanced_try!(source.take_result().unwrap(), "Reading", self.inner.file)?;
+                    enhanced_try!(source.result().unwrap(), "Reading", self.inner.file)?;
                     self.current_result = ReadResult::from_whole_buffer(source.extract_buffer());
                 }
                 Poll::Ready(Some(Ok((

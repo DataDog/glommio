@@ -72,7 +72,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> FromRawFd for GlommioDatagr
 }
 
 impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
-    async fn consume_receive_buffer(&self, source: &Source, buf: &mut [u8]) -> io::Result<usize> {
+    async fn consume_receive_buffer(&self, source: Source, buf: &mut [u8]) -> io::Result<usize> {
         let sz = source.collect_rw().await?;
         let src = match source.extract_source_type() {
             SourceType::SockRecv(mut buf) => {
@@ -94,7 +94,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
             MsgFlags::MSG_PEEK,
         );
 
-        self.consume_receive_buffer(&source, buf).await
+        self.consume_receive_buffer(source, buf).await
     }
 
     pub(crate) async fn peek_from(
@@ -116,7 +116,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
                     buf.len(),
                     self.read_timeout.get(),
                 )?;
-                self.consume_receive_buffer(&source, buf).await
+                self.consume_receive_buffer(source, buf).await
             }
         }
     }

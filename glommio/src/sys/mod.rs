@@ -11,6 +11,7 @@ use std::{
     ffi::CString,
     fmt,
     io,
+    io::Error,
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},
     os::unix::{
@@ -225,6 +226,7 @@ mod uring;
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
+use smallvec::SmallVec;
 use std::ops::Deref;
 
 #[derive(Debug, Default)]
@@ -247,6 +249,54 @@ impl ReactorGlobalState {
         let res = self.sleep_notifiers.insert(id, Arc::downgrade(&notifier));
         assert!(res.is_none());
         Ok(notifier)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub(super) struct OsError(i32);
+
+#[derive(Debug, Copy, Clone)]
+pub(super) enum OsResult {
+    Ok(usize),
+    Err(OsError),
+}
+
+impl From<io::Result<usize>> for OsResult {
+    fn from(other: io::Result<usize>) -> Self {
+        match other {
+            io::Result::Ok(v) => OsResult::Ok(v),
+            io::Result::Err(err) => OsResult::Err(OsError(err.raw_os_error().unwrap())),
+        }
+    }
+}
+
+impl From<&io::Result<usize>> for OsResult {
+    fn from(other: &io::Result<usize>) -> Self {
+        match other {
+            io::Result::Ok(v) => OsResult::Ok(*v),
+            io::Result::Err(err) => OsResult::Err(OsError(err.raw_os_error().unwrap())),
+        }
+    }
+}
+
+impl From<OsResult> for io::Result<usize> {
+    fn from(res: OsResult) -> Self {
+        match res {
+            OsResult::Ok(v) => io::Result::Ok(v),
+            OsResult::Err(err) => io::Result::Err(err.into()),
+        }
+    }
+}
+
+impl From<OsError> for io::Error {
+    fn from(err: OsError) -> Self {
+        Error::from_raw_os_error(err.0)
+    }
+}
+
+impl fmt::Debug for OsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Error::from_raw_os_error(self.0).fmt(f)
     }
 }
 
@@ -438,19 +488,30 @@ impl From<Duration> for TimeSpec64 {
 
 /// Tasks interested in events on a source.
 #[derive(Debug)]
-pub(crate) struct Wakers {
+pub(super) struct Wakers {
     /// Raw result of the operation.
-    pub(crate) result: Option<io::Result<usize>>,
+    pub(super) result: Option<io::Result<usize>>,
 
     /// Tasks waiting for the next event.
-    pub(crate) waiter: Option<Waker>,
+    pub(super) waiters: SmallVec<[Waker; 1]>,
 }
 
 impl Wakers {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Wakers {
             result: None,
-            waiter: None,
+            waiters: Default::default(),
+        }
+    }
+
+    pub(super) fn wake_waiters(&mut self) -> bool {
+        if self.waiters.is_empty() {
+            false
+        } else {
+            self.waiters.drain(..).for_each(|x| {
+                wake!(x);
+            });
+            true
         }
     }
 }
