@@ -111,6 +111,16 @@ pub enum BuilderErrorKind {
         /// The number of CPUs available.
         available: usize,
     },
+    /// Error type for using [`Placement::Custom`](crate::Placement::Custom)
+    /// with a number of [`CpuSet`](crate::CpuSet)s that does not match the
+    /// number of shards requested.
+    NrShards {
+        /// The number of [`CpuSet`](crate::CpuSet)s provided.
+        cpu_sets: usize,
+
+        /// The number of shards requested.
+        shards: usize,
+    },
     /// Error type returned by
     /// [`PoolThreadHandles::join_all`](crate::PoolThreadHandles::join_all)
     /// for threads that panicked.  The contained error is forwarded from
@@ -124,8 +134,13 @@ impl fmt::Display for BuilderErrorKind {
             Self::InsufficientCpus {
                 available,
                 required,
-            } => write!(f, "Found {} of {} required CPUs", available, required),
-            Self::ThreadPanic(_) => write!(f, "Thread panicked"),
+            } => write!(f, "found {} of {} required CPUs", available, required),
+            Self::NrShards { cpu_sets, shards } => write!(
+                f,
+                "provided {} CpuSet(s), requested {} shards",
+                cpu_sets, shards
+            ),
+            Self::ThreadPanic(_) => write!(f, "thread panicked"),
         }
     }
 }
@@ -404,6 +419,10 @@ impl<T> Debug for GlommioError<T> {
                     "InsufficientCpus {{ required: {}, available: {} }}",
                     required, available
                 )),
+                BuilderErrorKind::NrShards { cpu_sets, shards } => f.write_fmt(format_args!(
+                    "NrShards {{ cpu_sets: {}, shards: {} }}",
+                    cpu_sets, shards
+                )),
                 BuilderErrorKind::ThreadPanic(_) => write!(f, "Thread panicked {{ .. }}"),
             },
             GlommioError::EnhancedIoError {
@@ -451,6 +470,7 @@ impl<T> From<GlommioError<T>> for io::Error {
                 format!("invalid executor id {}", id),
             ),
             GlommioError::BuilderError(BuilderErrorKind::InsufficientCpus { .. })
+            | GlommioError::BuilderError(BuilderErrorKind::NrShards { .. })
             | GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(_)) => io::Error::new(
                 io::ErrorKind::Other,
                 format!("Executor builder error: {}", display_err),

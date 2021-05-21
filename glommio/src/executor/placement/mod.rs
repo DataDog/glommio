@@ -149,8 +149,18 @@ pub enum Placement {
     /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
     /// Err`.
     MaxPack(Option<CpuSet>),
-    /* TODO:
-     * Custom, */
+    /// One [`LocalExecutor`] is bound to each of the [`CpuSet`]s specified by
+    /// `Custom`. The number of `CpuSet`s in the `Vec` should match the
+    /// number of shards requested from the pool builder.
+    ///
+    /// #### Errors
+    ///
+    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::Err` if
+    /// either of the follow is true:
+    /// * The length of the vector does not match the number of shards requested
+    ///   in [`LocalExecutorPoolBuilder::new`].
+    /// * Any of the [`CpuSet`]s is empty.
+    Custom(Vec<CpuSet>),
 }
 
 /// The default is `Placement::Unbound`
@@ -228,7 +238,7 @@ impl CpuSet {
 /// via a [`LocalExecutorPoolBuilder`].
 #[derive(Clone, Debug)]
 pub(crate) enum CpuIter {
-    Empty,
+    Unbound,
     Single(CpuLocation),
     Multi(Vec<CpuLocation>),
 }
@@ -240,35 +250,29 @@ impl CpuIter {
 
     fn from_option(cpu_loc: Option<CpuLocation>) -> Self {
         match cpu_loc {
-            None => Self::Empty,
+            None => Self::Unbound,
             Some(cpu) => Self::Single(cpu),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        0 == self.len()
+    pub fn cpu_binding(self) -> Option<impl IntoIterator<Item = usize>> {
+        match self {
+            Self::Unbound => None,
+            Self::Single(_) | Self::Multi(_) => Some(self.map(|l| l.cpu)),
+        }
     }
 }
 
-impl ExactSizeIterator for CpuIter {}
 impl Iterator for CpuIter {
     type Item = CpuLocation;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Empty => None,
-            Self::Single(_) => match std::mem::replace(self, Self::Empty) {
+            Self::Unbound => None,
+            Self::Single(_) => match std::mem::replace(self, Self::Unbound) {
                 Self::Single(cpu) => Some(cpu),
                 _ => unreachable!("expected CpuIter::Single"),
             },
             Self::Multi(v) => v.pop(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Empty => (0, Some(0)),
-            Self::Single(_) => (1, Some(1)),
-            Self::Multi(v) => (v.len(), Some(v.len())),
         }
     }
 }
@@ -280,6 +284,7 @@ pub(crate) enum CpuSetGenerator {
     Fenced(CpuSet),
     MaxSpread(MaxSpreader),
     MaxPack(MaxPacker),
+    Custom(Vec<CpuSet>),
 }
 
 impl CpuSetGenerator {
@@ -306,6 +311,18 @@ impl CpuSetGenerator {
                 Self::check_nr_cpus(nr_shards, &cpus)?;
                 Self::MaxPack(MaxPacker::from_cpu_set(cpus))
             }
+            Placement::Custom(cpu_sets) => {
+                if cpu_sets.len() != nr_shards {
+                    return Err(GlommioError::BuilderError(BuilderErrorKind::NrShards {
+                        cpu_sets: cpu_sets.len(),
+                        shards: nr_shards,
+                    }));
+                }
+                for cpu_set in &cpu_sets {
+                    Self::check_nr_cpus(1, cpu_set)?;
+                }
+                Self::Custom(cpu_sets)
+            }
         };
         Ok(this)
     }
@@ -329,10 +346,13 @@ impl CpuSetGenerator {
     /// depending on the [`Placement`].
     pub fn next(&mut self) -> CpuIter {
         match self {
-            Self::Unbound => CpuIter::Empty,
+            Self::Unbound => CpuIter::Unbound,
             Self::Fenced(cpus) => CpuIter::from_vec(cpus.as_vec().clone()),
             Self::MaxSpread(it) => CpuIter::from_option(it.next()),
             Self::MaxPack(it) => CpuIter::from_option(it.next()),
+            Self::Custom(cpu_sets) => {
+                CpuIter::Multi(cpu_sets.pop().expect("insufficient cpu sets").take())
+            }
         }
     }
 }
@@ -757,5 +777,50 @@ mod test {
             counts[cpu_location.cpu] += 1;
         }
         assert_eq!(counts, [10, 10, 10, 10, 10, 10, 10]);
+    }
+
+    #[test]
+    fn custom_placement() {
+        let set1 = CpuSet(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+        let set2 = CpuSet(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+        let set3 = CpuSet(vec![]);
+
+        {
+            let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
+            let mut gen = CpuSetGenerator::new(p, 2).unwrap();
+            let mut bindings = vec![];
+            for _ in 0..2 {
+                let v = gen
+                    .next()
+                    .cpu_binding()
+                    .unwrap()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                bindings.push(v);
+            }
+            assert_eq!(bindings, vec![vec![1, 4, 0, 5], vec![1, 3, 0, 2]]);
+        }
+        {
+            let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
+            assert!(CpuSetGenerator::new(p, 1).is_err());
+        }
+        {
+            let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
+            assert!(CpuSetGenerator::new(p, 3).is_err());
+        }
+        {
+            let p = Placement::Custom(vec![set1, set2, set3]);
+            assert!(CpuSetGenerator::new(p, 3).is_err());
+        }
     }
 }
