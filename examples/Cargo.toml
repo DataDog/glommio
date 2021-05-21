@@ -13,7 +13,6 @@ pretty-bytes = "0.2.2"
 clap = "2.33"
 sys-info = "0.7.0"
 fastrand = "1.4.0"
-fasthash = "0.3.2"
 
 # hyper and tokio for the hyper example. We just need the traits from Tokio
 hyper = { version = "0.13.9", default-features = false }
