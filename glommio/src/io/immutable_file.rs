@@ -241,6 +241,7 @@ where
                 .open(self.path)
                 .await?,
         );
+        file.attach_scheduler();
         let size = file.file_size().await?;
         let stream_builder = DmaStreamReaderBuilder::from_rc(file)
             .with_buffer_size(self.buffer_size)
@@ -260,6 +261,8 @@ impl ImmutableFilePreSealSink {
     /// [`ImmutableFile`]
     pub async fn seal(mut self) -> Result<ImmutableFile> {
         let stream_builder = poll_fn(|cx| self.writer.poll_seal(cx)).await?;
+        stream_builder.file.attach_scheduler();
+
         let size = stream_builder.file.file_size().await?;
         Ok(ImmutableFile {
             stream_builder,

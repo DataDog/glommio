@@ -158,6 +158,10 @@ impl DmaFile {
         Ok(f)
     }
 
+    pub(super) fn attach_scheduler(&self) {
+        self.file.attach_scheduler()
+    }
+
     /// Allocates a buffer that is suitable for using to write to this file.
     pub fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         self.file.reactor.upgrade().unwrap().alloc_dma_buffer(size)

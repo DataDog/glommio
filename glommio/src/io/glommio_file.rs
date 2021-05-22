@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
-use crate::{parking::Reactor, sys, GlommioError, Local};
+use crate::{io::sched::FileScheduler, parking::Reactor, sys, GlommioError, Local};
 use log::debug;
 use std::{
     cell::{Ref, RefCell},
@@ -37,6 +37,7 @@ pub(crate) struct GlommioFile {
     pub(crate) dev_major: u32,
     pub(crate) dev_minor: u32,
     pub(crate) reactor: Weak<Reactor>,
+    pub(crate) scheduler: RefCell<Option<FileScheduler>>,
 }
 
 impl Drop for GlommioFile {
@@ -73,6 +74,7 @@ impl FromRawFd for GlommioFile {
             dev_major: 0,
             dev_minor: 0,
             reactor: Rc::downgrade(&Local::get_reactor()),
+            scheduler: RefCell::new(None),
         }
     }
 }
@@ -103,6 +105,7 @@ impl GlommioFile {
             dev_major: 0,
             dev_minor: 0,
             reactor: Rc::downgrade(&reactor),
+            scheduler: RefCell::new(None),
         };
 
         let st = file.statx().await?;
@@ -110,6 +113,16 @@ impl GlommioFile {
         file.dev_major = st.stx_dev_major;
         file.dev_minor = st.stx_dev_minor;
         Ok(file)
+    }
+
+    pub(super) fn attach_scheduler(&self) {
+        if self.scheduler.borrow().is_none() {
+            self.scheduler.replace(Some(
+                Local::get_reactor()
+                    .io_scheduler()
+                    .get_file_scheduler(self.identity()),
+            ));
+        }
     }
 
     pub(crate) fn identity(&self) -> Identity {
