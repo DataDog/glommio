@@ -3,7 +3,10 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::io::dma_file::{DmaFile, Result};
+use crate::io::{
+    dma_file::{DmaFile, Result},
+    BufferedFile,
+};
 use std::{io, path::Path};
 
 /// Options and flags which can be used to configure how a file is opened.
@@ -13,9 +16,10 @@ use std::{io, path::Path};
 /// The [`DmaFile::open`] and [`DmaFile::create`] methods are aliases for
 /// commonly used options using this builder.
 #[derive(Clone, Debug)]
-pub struct DmaOpenOptions {
+pub struct OpenOptions {
     read: bool,
     pub(super) write: bool,
+    append: bool,
     truncate: bool,
     create: bool,
     create_new: bool,
@@ -24,13 +28,13 @@ pub struct DmaOpenOptions {
     pub(super) mode: libc::mode_t,
 }
 
-impl Default for DmaOpenOptions {
+impl Default for OpenOptions {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DmaOpenOptions {
+impl OpenOptions {
     /// Creates a blank new set of options ready for configuration.
     ///
     /// All options are initially set to false.
@@ -38,6 +42,7 @@ impl DmaOpenOptions {
         Self {
             read: false,
             write: false,
+            append: false,
             truncate: false,
             create: false,
             create_new: false,
@@ -47,10 +52,6 @@ impl DmaOpenOptions {
             mode: 0o666,
         }
     }
-
-    // the following methods are directly taken from std/sys/unix/fs.rs
-    // NOTE(zserik): I omitted `append` from the following methods.
-    //               I don't think it makes much sense for unbuffered files.
 
     /// Sets the option for read access.
     ///
@@ -73,6 +74,16 @@ impl DmaOpenOptions {
         self
     }
 
+    /// Sets the option for appending a previous file.
+    ///
+    /// If a file is successfully opened with this option set it will append new
+    /// data at the end of it.
+    ///
+    /// The file must be opened with write access for append to work.
+    pub fn append(&mut self, append: bool) {
+        self.append = append;
+    }
+
     /// Sets the option for truncating a previous file.
     ///
     /// If a file is successfully opened with this option set it will truncate
@@ -86,7 +97,7 @@ impl DmaOpenOptions {
 
     /// Sets the option to create a new file, or open it if it already exists.
     ///
-    /// In order for the file to be created, [`DmaOpenOptions::write`] access
+    /// In order for the file to be created, [`OpenOptions::write`] access
     /// must be used.
     pub fn create(&mut self, create: bool) -> &mut Self {
         self.create = create;
@@ -126,32 +137,60 @@ impl DmaOpenOptions {
     }
 
     pub(super) fn get_access_mode(&self) -> Result<libc::c_int> {
-        Ok(match (self.read, self.write) {
-            (true, false) => libc::O_RDONLY,
-            (false, true) => libc::O_WRONLY,
-            (true, true) => libc::O_RDWR,
-            (false, false) => return Err(io::Error::from_raw_os_error(libc::EINVAL).into()),
+        Ok(match (self.read, self.write, self.append) {
+            (true, false, false) => libc::O_RDONLY,
+            (false, true, false) => libc::O_WRONLY,
+            (true, true, false) => libc::O_RDWR,
+            (false, _, true) => libc::O_WRONLY | libc::O_APPEND,
+            (true, _, true) => libc::O_RDWR | libc::O_APPEND,
+            (false, false, false) => return Err(io::Error::from_raw_os_error(libc::EINVAL).into()),
         })
     }
 
     pub(super) fn get_creation_mode(&self) -> Result<libc::c_int> {
-        if !self.write && (self.truncate || self.create || self.create_new) {
-            Err(io::Error::from_raw_os_error(libc::EINVAL).into())
-        } else {
-            Ok(match (self.create, self.truncate, self.create_new) {
-                (false, false, false) => 0,
-                (true, false, false) => libc::O_CREAT,
-                (false, true, false) => libc::O_TRUNC,
-                (true, true, false) => libc::O_CREAT | libc::O_TRUNC,
-                (_, _, true) => libc::O_CREAT | libc::O_EXCL,
-            })
+        match (self.write, self.append) {
+            (true, false) => {}
+            (false, false) => {
+                if self.truncate || self.create || self.create_new {
+                    return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
+                }
+            }
+            (_, true) => {
+                if self.truncate && !self.create_new {
+                    return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
+                }
+            }
         }
+
+        Ok(match (self.create, self.truncate, self.create_new) {
+            (false, false, false) => 0,
+            (true, false, false) => libc::O_CREAT,
+            (false, true, false) => libc::O_TRUNC,
+            (true, true, false) => libc::O_CREAT | libc::O_TRUNC,
+            (_, _, true) => libc::O_CREAT | libc::O_EXCL,
+        })
     }
 
     /// Similiar to `OpenOptions::open()` in the standard library, but returns a
     /// DMA file
-    pub async fn open<P: AsRef<Path>>(&self, path: P) -> Result<DmaFile> {
+    pub async fn dma_open<P: AsRef<Path>>(&self, path: P) -> Result<DmaFile> {
         DmaFile::open_with_options(
+            -1_i32,
+            path.as_ref(),
+            if self.create || self.create_new {
+                "Creating"
+            } else {
+                "Opening"
+            },
+            self,
+        )
+        .await
+    }
+
+    /// Similiar to `OpenOptions::open()` in the standard library, but returns a
+    /// Buffered file
+    pub async fn buffered_open<P: AsRef<Path>>(&self, path: P) -> Result<BufferedFile> {
+        BufferedFile::open_with_options(
             -1_i32,
             path.as_ref(),
             if self.create || self.create_new {

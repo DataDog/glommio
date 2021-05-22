@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::{
-    dma_open_options::DmaOpenOptions,
+    open_options::OpenOptions,
     DmaStreamReaderBuilder,
     DmaStreamWriter,
     DmaStreamWriterBuilder,
@@ -191,11 +191,11 @@ where
     /// [`new`]: ImmutableFileBuilder::new
     /// [`seal`]: ImmutableFilePreSealSink::seal
     pub async fn build_sink(self) -> Result<ImmutableFilePreSealSink> {
-        let file = DmaOpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
-            .open(self.path)
+            .dma_open(self.path)
             .await?;
 
         if let Some(size) = self.pre_allocate {
@@ -235,10 +235,10 @@ where
     /// [`new`]: ImmutableFileBuilder::new
     pub async fn build_existing(self) -> Result<ImmutableFile> {
         let file = Rc::new(
-            DmaOpenOptions::new()
+            OpenOptions::new()
                 .read(true)
                 .write(false)
-                .open(self.path)
+                .dma_open(self.path)
                 .await?,
         );
         file.attach_scheduler();

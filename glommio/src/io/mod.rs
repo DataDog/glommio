@@ -125,9 +125,9 @@ mod bulk_io;
 mod directory;
 mod dma_file;
 mod dma_file_stream;
-mod dma_open_options;
 mod glommio_file;
 mod immutable_file;
+mod open_options;
 mod read_result;
 mod sched;
 
@@ -175,8 +175,8 @@ pub use self::{
         DmaStreamWriter,
         DmaStreamWriterBuilder,
     },
-    dma_open_options::DmaOpenOptions,
     immutable_file::{ImmutableFile, ImmutableFileBuilder, ImmutableFilePreSealSink},
+    open_options::OpenOptions,
     read_result::ReadResult,
 };
 pub use crate::sys::DmaBuffer;

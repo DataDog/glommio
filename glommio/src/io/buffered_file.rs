@@ -5,7 +5,7 @@
 //
 
 use crate::{
-    io::{glommio_file::GlommioFile, read_result::ReadResult},
+    io::{glommio_file::GlommioFile, read_result::ReadResult, OpenOptions},
     GlommioError,
 };
 use std::{
@@ -82,11 +82,12 @@ impl BufferedFile {
     ///
     /// [`create`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.create
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
-        let flags = libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
-        GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644)
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .buffered_open(path.as_ref())
             .await
-            .map_err(|source| GlommioError::create_enhanced(source, "Creating", Some(path), None))
-            .map(|file| BufferedFile { file })
     }
 
     /// Similar to [`open`] in the standard library, but returns a
@@ -94,10 +95,25 @@ impl BufferedFile {
     ///
     /// [`open`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.open
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
-        let flags = libc::O_CLOEXEC | libc::O_RDONLY;
-        GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644)
+        OpenOptions::new()
+            .read(true)
+            .buffered_open(path.as_ref())
             .await
-            .map_err(|source| GlommioError::create_enhanced(source, "Reading", Some(path), None))
+    }
+
+    pub(super) async fn open_with_options<'a>(
+        dir: RawFd,
+        path: &'a Path,
+        opdesc: &'static str,
+        opts: &'a OpenOptions,
+    ) -> Result<BufferedFile> {
+        let flags = libc::O_CLOEXEC
+            | opts.get_access_mode()?
+            | opts.get_creation_mode()?
+            | (opts.custom_flags as libc::c_int & !libc::O_ACCMODE);
+        GlommioFile::open_at(dir, path, flags, opts.mode)
+            .await
+            .map_err(|source| GlommioError::create_enhanced(source, opdesc, Some(path), None))
             .map(|file| BufferedFile { file })
     }
 

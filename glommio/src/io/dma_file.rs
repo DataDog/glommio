@@ -6,8 +6,8 @@
 use crate::{
     io::{
         bulk_io::{CoalescedReads, IoVec, OrderedBulkIo, ReadManyArgs, ReadManyResult},
-        dma_open_options::DmaOpenOptions,
         glommio_file::GlommioFile,
+        open_options::OpenOptions,
         read_result::ReadResult,
     },
     sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
@@ -143,7 +143,7 @@ impl DmaFile {
         dir: RawFd,
         path: &'a Path,
         opdesc: &'static str,
-        opts: &'a DmaOpenOptions,
+        opts: &'a OpenOptions,
     ) -> Result<DmaFile> {
         let flags = libc::O_CLOEXEC
             | opts.get_access_mode()?
@@ -169,17 +169,17 @@ impl DmaFile {
 
     /// Similar to `create()` in the standard library, but returns a DMA file
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
-        DmaOpenOptions::new()
+        OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(path.as_ref())
+            .dma_open(path.as_ref())
             .await
     }
 
     /// Similar to `open()` in the standard library, but returns a DMA file
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
-        DmaOpenOptions::new().read(true).open(path.as_ref()).await
+        OpenOptions::new().read(true).dma_open(path.as_ref()).await
     }
 
     /// Write the buffer in `buf` to a specific position in the file.
@@ -740,12 +740,12 @@ pub(crate) mod test {
     });
 
     async fn write_dma_file(path: PathBuf, bytes: usize) -> DmaFile {
-        let new_file = DmaOpenOptions::new()
+        let new_file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .read(true)
-            .open(path)
+            .dma_open(path)
             .await
             .expect("failed to create file");
 
