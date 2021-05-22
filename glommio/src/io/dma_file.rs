@@ -236,13 +236,10 @@ impl DmaFile {
             pos,
             size,
             self.pollable,
+            self.file.scheduler.borrow().as_ref(),
         );
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        Ok(ReadResult::from_sliced_buffer(
-            source.extract_buffer(),
-            0,
-            read_size,
-        ))
+        Ok(ReadResult::from_sliced_buffer(source, 0, read_size))
     }
 
     /// Reads into buffer in buf from a specific position in the file.
@@ -263,11 +260,12 @@ impl DmaFile {
             eff_pos,
             eff_size,
             self.pollable,
+            self.file.scheduler.borrow().as_ref(),
         );
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
         Ok(ReadResult::from_sliced_buffer(
-            source.extract_buffer(),
+            source,
             b,
             std::cmp::min(read_size, size),
         ))
@@ -322,13 +320,14 @@ impl DmaFile {
                     iov.1.0,
                     iov.1.1,
                     self.pollable,
+                    self.file.scheduler.borrow().as_ref(),
                 );
                 last = Some((iov.1.0, iov.1.1));
                 (Some(source), args)
             });
         ReadManyResult {
             inner: OrderedBulkIo::new(self.clone(), it),
-            current_result: Default::default(),
+            current: Default::default(),
         }
     }
 

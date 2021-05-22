@@ -47,7 +47,7 @@ use std::{
 };
 
 use crate::{
-    io::IoScheduler,
+    io::{FileScheduler, IoScheduler, ScheduledSource},
     sys,
     sys::{
         DirectIo,
@@ -535,7 +535,8 @@ impl Reactor {
         pos: u64,
         size: usize,
         pollable: PollableStatus,
-    ) -> Source {
+        scheduler: Option<&FileScheduler>,
+    ) -> ScheduledSource {
         let source = self.new_source(
             raw,
             SourceType::Read(pollable, None),
@@ -546,11 +547,27 @@ impl Reactor {
                 }
             }),
         );
-        self.sys.read_dma(&source, pos, size);
-        source
+
+        if let Some(scheduler) = scheduler {
+            if let Some(source) = scheduler.consume_scheduled(pos..pos + size as u64) {
+                source
+            } else {
+                self.sys.read_dma(&source, pos, size);
+                scheduler.schedule(source, pos..pos + size as u64)
+            }
+        } else {
+            self.sys.read_dma(&source, pos, size);
+            ScheduledSource::new_raw(source, pos..pos + size as u64)
+        }
     }
 
-    pub(crate) fn read_buffered(&self, raw: RawFd, pos: u64, size: usize) -> Source {
+    pub(crate) fn read_buffered(
+        &self,
+        raw: RawFd,
+        pos: u64,
+        size: usize,
+        scheduler: Option<&FileScheduler>,
+    ) -> ScheduledSource {
         let source = self.new_source(
             raw,
             SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
@@ -561,8 +578,18 @@ impl Reactor {
                 }
             }),
         );
-        self.sys.read_buffered(&source, pos, size);
-        source
+
+        if let Some(scheduler) = scheduler {
+            if let Some(source) = scheduler.consume_scheduled(pos..pos + size as u64) {
+                source
+            } else {
+                self.sys.read_buffered(&source, pos, size);
+                scheduler.schedule(source, pos..pos + size as u64)
+            }
+        } else {
+            self.sys.read_buffered(&source, pos, size);
+            ScheduledSource::new_raw(source, pos..pos + size as u64)
+        }
     }
 
     pub(crate) fn fdatasync(&self, raw: RawFd) -> Source {

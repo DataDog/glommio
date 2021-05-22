@@ -25,7 +25,7 @@ type Result<T> = crate::Result<T, ()>;
 /// examples.
 #[derive(Debug)]
 pub struct BufferedFile {
-    file: GlommioFile,
+    pub(super) file: GlommioFile,
 }
 
 impl AsRawFd for BufferedFile {
@@ -151,12 +151,12 @@ impl BufferedFile {
     /// [`DmaFile`]: struct.DmaFile.html
     /// Reads from a specific position in the file and returns the buffer.
     pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
-        let source =
-            self.file
-                .reactor
-                .upgrade()
-                .unwrap()
-                .read_buffered(self.as_raw_fd(), pos, size);
+        let source = self.file.reactor.upgrade().unwrap().read_buffered(
+            self.as_raw_fd(),
+            pos,
+            size,
+            self.file.scheduler.borrow().as_ref(),
+        );
         let read_size = source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
@@ -165,11 +165,7 @@ impl BufferedFile {
                 Some(self.as_raw_fd()),
             )
         })?;
-        Ok(ReadResult::from_sliced_buffer(
-            source.extract_buffer(),
-            0,
-            read_size,
-        ))
+        Ok(ReadResult::from_sliced_buffer(source, 0, read_size))
     }
 
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush
