@@ -28,7 +28,7 @@ use crate::iou::sqe::SockAddrStorage;
 use ahash::AHashMap;
 use nix::sys::socket::{MsgFlags, SockAddr};
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::{BTreeMap, VecDeque},
     ffi::CString,
     fmt,
@@ -47,6 +47,7 @@ use std::{
 };
 
 use crate::{
+    io::IoScheduler,
     sys,
     sys::{
         DirectIo,
@@ -258,8 +259,7 @@ pub(crate) struct Reactor {
 
     shared_channels: RefCell<SharedChannels>,
 
-    /// I/O Requirements of the task currently executing.
-    current_io_requirements: Cell<IoRequirements>,
+    io_scheduler: Rc<IoScheduler>,
 
     /// Whether there are events in the latency ring.
     ///
@@ -284,7 +284,7 @@ impl Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
-            current_io_requirements: Cell::new(IoRequirements::default()),
+            io_scheduler: Rc::new(IoScheduler::new()),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
         }
@@ -317,9 +317,8 @@ impl Reactor {
         stype: SourceType,
         stats_collection_fn: Option<StatsCollectionFn>,
     ) -> Source {
-        let ioreq = self.current_io_requirements.get();
         sys::Source::new(
-            ioreq,
+            self.io_scheduler.requirements(),
             raw,
             stype,
             stats_collection_fn,
@@ -328,7 +327,7 @@ impl Reactor {
     }
 
     pub(crate) fn inform_io_requirements(&self, req: IoRequirements) {
-        self.current_io_requirements.set(req);
+        self.io_scheduler.inform_requirements(req);
     }
 
     pub(crate) fn register_shared_channel<F>(&self, test_function: Box<F>) -> u64
@@ -736,5 +735,9 @@ impl Reactor {
             // An actual error occureed.
             Err(err) => Err(err),
         }
+    }
+
+    pub(crate) fn io_scheduler(&self) -> &Rc<IoScheduler> {
+        &self.io_scheduler
     }
 }

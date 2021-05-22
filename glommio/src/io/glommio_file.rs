@@ -17,6 +17,10 @@ use std::{
 
 type Result<T> = crate::Result<T, ()>;
 
+pub(super) type Device = u64;
+pub(super) type Inode = u64;
+pub(super) type Identity = (Device, Inode);
+
 /// A wrapper over `std::fs::File` which carries a path (for better error
 /// messages) and prints a warning if closed synchronously.
 ///
@@ -108,10 +112,15 @@ impl GlommioFile {
         Ok(file)
     }
 
+    pub(crate) fn identity(&self) -> Identity {
+        (
+            (self.dev_major as u64) << 32 | self.dev_minor as u64,
+            self.inode,
+        )
+    }
+
     pub(crate) fn is_same(&self, other: &GlommioFile) -> bool {
-        self.inode == other.inode
-            && self.dev_major == other.dev_major
-            && self.dev_minor == other.dev_minor
+        self.identity() == other.identity()
     }
 
     pub(crate) fn discard(mut self) -> (RawFd, Option<PathBuf>) {

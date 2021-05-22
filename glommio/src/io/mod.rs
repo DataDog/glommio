@@ -129,6 +129,7 @@ mod dma_open_options;
 mod glommio_file;
 mod immutable_file;
 mod read_result;
+mod sched;
 
 use crate::sys;
 use std::path::Path;
@@ -155,6 +156,7 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
     )
 }
 
+pub(crate) use self::sched::{FileScheduler, IoScheduler, ScheduledSource};
 pub use self::{
     buffered_file::BufferedFile,
     buffered_file_stream::{
