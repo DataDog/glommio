@@ -212,3 +212,397 @@ impl Drop for ScheduledSource {
         }
     }
 }
+
+#[cfg(test)]
+#[macro_use]
+pub(crate) mod test {
+    use super::*;
+    use crate::{
+        io::{dma_file::test::make_test_directories, DmaFile, OpenOptions, ReadResult},
+        sys::SourceType,
+        Local,
+    };
+    use futures::join;
+    use std::rc::Rc;
+
+    macro_rules! dma_file_test {
+        ( $name:ident, $dir:ident, $kind:ident, $code:block) => {
+            #[test]
+            fn $name() {
+                for dir in make_test_directories(&format!("dma-{}", stringify!($name))) {
+                    let $dir = dir.path.clone();
+                    let $kind = dir.kind;
+                    test_executor!(async move { $code });
+                }
+            }
+        };
+    }
+
+    #[test]
+    fn file_sched_lifetime() {
+        let sched = Rc::new(IoScheduler::new());
+
+        let file_sched1 = sched.get_file_scheduler((0, 1));
+        let file_sched2 = sched.get_file_scheduler((0, 1));
+        assert!(Rc::ptr_eq(&file_sched1.inner, &file_sched2.inner));
+
+        assert_eq!(sched.file_schedulers.borrow().iter().count(), 1);
+        drop(file_sched2);
+        assert_eq!(sched.file_schedulers.borrow().iter().count(), 1);
+        drop(file_sched1);
+        assert_eq!(sched.file_schedulers.borrow().iter().count(), 0);
+    }
+
+    #[test]
+    fn file_sched_drop_orphan() {
+        let sched = Rc::new(IoScheduler::new());
+
+        let file_sched1 = sched.get_file_scheduler((0, 0));
+        drop(sched);
+        drop(file_sched1);
+    }
+
+    #[test]
+    fn file_sched_conflicts() {
+        let sched = Rc::new(IoScheduler::new());
+
+        let file_sched1 = sched.get_file_scheduler((0, 1));
+        let file_sched2 = sched.get_file_scheduler((0, 2));
+        assert!(!Rc::ptr_eq(&file_sched1.inner, &file_sched2.inner));
+
+        assert_eq!(sched.file_schedulers.borrow().iter().count(), 2);
+        drop(file_sched2);
+        assert_eq!(sched.file_schedulers.borrow().iter().count(), 1);
+        drop(file_sched1);
+        assert_eq!(sched.file_schedulers.borrow().iter().count(), 0);
+    }
+
+    #[test]
+    fn source_sched_lifetime() {
+        let sched = Rc::new(IoScheduler::new());
+
+        let file = sched.get_file_scheduler((0, 1));
+
+        assert!(file.consume_scheduled(0..512).is_none());
+        let sched_source1 = file.schedule(
+            Source::new(Default::default(), 0, SourceType::Invalid, None, None),
+            0..512,
+        );
+        let sched_source2 = file.consume_scheduled(0..512).unwrap();
+
+        assert!(Rc::ptr_eq(&sched_source1.inner, &sched_source2.inner));
+
+        assert_eq!(file.inner.sources.borrow().iter().count(), 1);
+        drop(sched_source1);
+        assert_eq!(file.inner.sources.borrow().iter().count(), 1);
+        drop(sched_source2);
+        assert_eq!(file.inner.sources.borrow().iter().count(), 0);
+    }
+
+    #[test]
+    fn source_sched_drop_orphan() {
+        {
+            let sched = Rc::new(IoScheduler::new());
+            let file = sched.get_file_scheduler((0, 1));
+            let _ = file.schedule(
+                Source::new(Default::default(), 0, SourceType::Invalid, None, None),
+                0..512,
+            );
+            // test dropping a ScheduledSource with a ScheduledFile but no io scheduler
+            drop(sched);
+        }
+
+        {
+            let sched = Rc::new(IoScheduler::new());
+            let file = sched.get_file_scheduler((0, 1));
+            let _ = file.schedule(
+                Source::new(Default::default(), 0, SourceType::Invalid, None, None),
+                0..512,
+            );
+            // test dropping a ScheduledSource with no host ScheduledFile
+            drop(file);
+        }
+
+        {
+            let sched = Rc::new(IoScheduler::new());
+            let file = sched.get_file_scheduler((0, 1));
+            let _ = file.schedule(
+                Source::new(Default::default(), 0, SourceType::Invalid, None, None),
+                0..512,
+            );
+            // test dropping a ScheduledSource with no host ScheduledFile and io scheduler
+            drop(sched);
+            drop(file);
+        }
+    }
+
+    async fn read_some(file: Rc<DmaFile>, r: Range<usize>) -> ReadResult {
+        let read_buf = file
+            .read_at(r.start as u64, r.end - r.start)
+            .await
+            .expect("failed to read");
+        std::assert_eq!(read_buf.len(), r.end - r.start);
+        for i in 0..read_buf.len() {
+            std::assert_eq!(read_buf[i], (r.start + i) as u8);
+        }
+        read_buf
+    }
+
+    dma_file_test!(file_simple_dedup, path, _k, {
+        let mut new_file = Rc::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to create file"),
+        );
+
+        let mut buf = new_file.alloc_dma_buffer(512 << 10);
+        for x in 0..512 << 10 {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 512 << 10);
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+
+        new_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to open file"),
+        );
+        new_file.attach_scheduler();
+
+        let read_buf1 = read_some(new_file.clone(), 0..4096).await;
+        // we expect one IO to have been performed at this point
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+
+        let read_buf2 = read_some(new_file.clone(), 0..4096).await;
+        // should feed from the first buffer
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+
+        drop(read_buf1);
+        let read_buf3 = read_some(new_file.clone(), 0..4096).await;
+        // initial buffer lifetime should have been extended
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+
+        drop(read_buf2);
+        drop(read_buf3);
+        let _ = read_some(new_file.clone(), 0..4096).await;
+        // all buffers are dead so this last read should trigger an IO request
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 2);
+
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_simple_dedup_concurrent, path, _k, {
+        let mut new_file = Rc::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to create file"),
+        );
+
+        let mut buf = new_file.alloc_dma_buffer(512 << 10);
+        for x in 0..512 << 10 {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 512 << 10);
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+
+        new_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to open file"),
+        );
+        new_file.attach_scheduler();
+
+        let read_buf1 = read_some(new_file.clone(), 0..4096);
+        let read_buf2 = read_some(new_file.clone(), 0..4096);
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+
+        join!(read_buf1, read_buf2);
+
+        // should feed from the first buffer
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_offset_dedup, path, _k, {
+        let mut new_file = Rc::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to create file"),
+        );
+
+        let mut buf = new_file.alloc_dma_buffer(512 << 10);
+        for x in 0..512 << 10 {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 512 << 10);
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+
+        new_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to open file"),
+        );
+        new_file.attach_scheduler();
+
+        let _first = read_some(new_file.clone(), 0..16384).await;
+        // we expect one IO to have been performed at this point
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+
+        let _second = read_some(new_file.clone(), 67..578).await;
+        // should feed from the first buffer
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_opt_out_dedup, path, _k, {
+        let mut new_file = Rc::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to create file"),
+        );
+
+        let mut buf = new_file.alloc_dma_buffer(512 << 10);
+        for x in 0..512 << 10 {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 512 << 10);
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+
+        new_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to open file"),
+        );
+
+        let _first = read_some(new_file.clone(), 0..4096).await;
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+
+        let _second = read_some(new_file.clone(), 0..4096).await;
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 2);
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_hard_link_dedup, path, _k, {
+        let mut new_file = Rc::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to create file"),
+        );
+
+        std::fs::hard_link(path.join("testfile"), path.join("link"))
+            .expect("failed to create hard link");
+
+        let linked_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("link"))
+                .await
+                .expect("failed to open file"),
+        );
+        linked_file.attach_scheduler();
+
+        let mut buf = new_file.alloc_dma_buffer(512 << 10);
+        for x in 0..512 << 10 {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 512 << 10);
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+
+        new_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to open file"),
+        );
+        new_file.attach_scheduler();
+
+        let _first = read_some(new_file.clone(), 0..4096).await;
+        // we expect one IO to have been performed at this point
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+
+        let _second = read_some(linked_file.clone(), 0..4096).await;
+        // should feed from the first buffer
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        new_file.close_rc().await.expect("failed to close file");
+        linked_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_soft_link_dedup, path, _k, {
+        let mut new_file = Rc::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to create file"),
+        );
+
+        std::os::unix::fs::symlink(path.join("testfile"), path.join("link"))
+            .expect("failed to create soft link");
+
+        let linked_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("link"))
+                .await
+                .expect("failed to open file"),
+        );
+        linked_file.attach_scheduler();
+
+        let mut buf = new_file.alloc_dma_buffer(512 << 10);
+        for x in 0..512 << 10 {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let res = new_file.write_at(buf, 0).await.expect("failed to write");
+        assert_eq!(res, 512 << 10);
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+
+        new_file = Rc::new(
+            OpenOptions::new()
+                .read(true)
+                .dma_open(path.join("testfile"))
+                .await
+                .expect("failed to open file"),
+        );
+        new_file.attach_scheduler();
+
+        let _first = read_some(new_file.clone(), 0..4096).await;
+        // we expect one IO to have been performed at this point
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+
+        let _second = read_some(linked_file.clone(), 0..4096).await;
+        // should feed from the first buffer
+        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        new_file.close_rc().await.expect("failed to close file");
+        linked_file.close_rc().await.expect("failed to close file");
+    });
+}
