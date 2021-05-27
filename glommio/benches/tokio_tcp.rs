@@ -17,17 +17,17 @@ use tokio::{
 async fn main() -> io::Result<()> {
     let runs: u32 = 100_000;
 
-    // Test the speed of establishing a connection, :8000
+    // Test the speed of establishing a connection, :9000
     tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:8000").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:9000").await.unwrap();
         loop {
             let _ = listener.accept().await.unwrap();
         }
     });
 
-    // Test the speed of a round-trip, :8001
+    // Test the speed of a round-trip, :9001
     tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:8001").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:9001").await.unwrap();
         let (mut stream, _) = listener.accept().await.unwrap();
         loop {
             let mut byte = [0u8; 1];
@@ -41,7 +41,7 @@ async fn main() -> io::Result<()> {
 
     // Test bandwidth, server side act as a sink, many connections allowed
     tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:8002").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:9002").await.unwrap();
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
             tokio::spawn(async move {
@@ -62,12 +62,12 @@ async fn main() -> io::Result<()> {
     // Connection establishment
     let t = Instant::now();
     for _ in 0..runs {
-        let _stream = TcpStream::connect("127.0.0.1:8000").await.unwrap();
+        let _stream = TcpStream::connect("127.0.0.1:9000").await.unwrap();
     }
     println!("cost to establish a connection {:#?}", t.elapsed() / runs);
 
     // round trips
-    let mut stream = TcpStream::connect("127.0.0.1:8001").await?;
+    let mut stream = TcpStream::connect("127.0.0.1:9001").await?;
     let t = Instant::now();
     for _ in 0..runs {
         let mut byte = [65u8; 1];
@@ -77,7 +77,7 @@ async fn main() -> io::Result<()> {
     println!("cost of a byte-sized round trip {:#?}", t.elapsed() / runs);
 
     // bandwidth
-    let mut stream = TcpStream::connect("127.0.0.1:8002").await.unwrap();
+    let mut stream = TcpStream::connect("127.0.0.1:9002").await.unwrap();
     let t = Instant::now();
     let byte = vec![65u8; 8192];
     let mut total: f64 = 0.0;
@@ -98,7 +98,7 @@ async fn main() -> io::Result<()> {
     for _ in 0..100 {
         handles.push(tokio::spawn(enclose! { (total) async move {
             let t = Instant::now();
-            let mut stream = TcpStream::connect("127.0.0.1:8002").await.unwrap();
+            let mut stream = TcpStream::connect("127.0.0.1:9002").await.unwrap();
             let byte = vec![65u8; 8192];
             while t.elapsed().as_secs() < 5 {
                 let wr = stream.write(&byte).await.unwrap();
