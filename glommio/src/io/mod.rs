@@ -62,7 +62,8 @@
 //!   are not careful.
 //! * Without a user-provided cache, random performance can be bad.
 //!
-//! There are two main structs that deal with File Direct I/O:
+//! At the lowest level, there are two main structs that deal with File Direct
+//! I/O:
 //!
 //! [`DmaFile`] is targeted at random Direct I/O. Reads from and writes to it
 //! expect a position.
@@ -77,6 +78,21 @@
 //! for read-ahead meaning it will initiate I/O for positions you will read into
 //! the future sooner.
 //!
+//! ImmutableFile
+//! =============
+//!
+//! Often times, due to constraints of modern storage systems, files are
+//! immutable once written. To safely capture that pattern and provide useful
+//! otimizations, Glommio exposes an [`ImmutableFile`]: The [`ImmutableFile`]
+//! can be written to once created, but once sealed it is assumed not to change.
+//! This allows Glommio to provide some optimizations, like basic caching, that
+//! should make Direct I/O more palatable.
+//!
+//! If this matches your access patterns, consider using an [`ImmutableFile`]
+//! instead of the lower level [`DmaFile`]. [`ImmutableFile`]s can be accessed
+//! both randomly or sequentially.
+//!
+//! [`ImmutableFile`]: struct.ImmutableFile.html
 //! [`BufferedFile`]: struct.BufferedFile.html
 //! [`DmaFile`]: struct.DmaFile.html
 //! [`DmaBuffer`]: struct.DmaBuffer.html
@@ -111,6 +127,7 @@ mod dma_file;
 mod dma_file_stream;
 mod dma_open_options;
 mod glommio_file;
+mod immutable_file;
 mod read_result;
 
 use crate::sys;
@@ -157,6 +174,7 @@ pub use self::{
         DmaStreamWriterBuilder,
     },
     dma_open_options::DmaOpenOptions,
+    immutable_file::{ImmutableFile, ImmutableFileBuilder, ImmutableFilePreSealSink},
     read_result::ReadResult,
 };
 pub use crate::sys::DmaBuffer;
