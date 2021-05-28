@@ -130,6 +130,11 @@ pub(crate) fn accept_syscall(fd: RawFd) -> io::Result<RawFd> {
     syscall!(accept(fd, addr.as_mut_ptr() as *mut _, &mut length))
 }
 
+pub(crate) fn direct_io_ify(fd: RawFd, flags: libc::c_int) -> io::Result<()> {
+    syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_DIRECT))?;
+    Ok(())
+}
+
 // This essentially converts the nix errors into something we can integrate with
 // the rest of the crate.
 pub(crate) unsafe fn ssptr_to_sockaddr(

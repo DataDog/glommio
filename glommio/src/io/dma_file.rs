@@ -10,7 +10,7 @@ use crate::{
         glommio_file::GlommioFile,
         read_result::ReadResult,
     },
-    sys::{sysfs, DirectIo, DmaBuffer, PollableStatus},
+    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
 };
 use nix::sys::statfs::*;
 use std::{
@@ -108,30 +108,20 @@ impl DmaFile {
         flags: libc::c_int,
         mode: libc::mode_t,
     ) -> io::Result<DmaFile> {
-        let mut pollable = PollableStatus::Pollable;
-        let res = GlommioFile::open_at(dir, path, flags, mode).await;
+        // Allow this to work on non direct I/O devices, but only
+        // if this is in-memory.
+        let file = GlommioFile::open_at(dir, path, flags, mode).await?;
 
-        let file = match res {
-            Err(os_err) => {
-                // if we failed to open the file with a recoverable error,
-                // open again without O_DIRECT
-                if os_err.raw_os_error().unwrap() == libc::EINVAL {
-                    // Allow this to work on non direct I/O devices, but only
-                    // if this is in-memory.
-                    let buf = statfs(path).unwrap();
-                    let fstype = buf.filesystem_type();
-                    if fstype == TMPFS_MAGIC {
-                        pollable = PollableStatus::NonPollable(DirectIo::Disabled);
-                        GlommioFile::open_at(dir, path, flags & !libc::O_DIRECT, mode).await
-                    } else {
-                        Err(os_err)
-                    }
-                } else {
-                    Err(os_err)
-                }
-            }
-            Ok(res) => Ok(res),
-        }?;
+        let buf = statfs(path).unwrap();
+        let fstype = buf.filesystem_type();
+        let mut pollable;
+
+        if fstype == TMPFS_MAGIC {
+            pollable = PollableStatus::NonPollable(DirectIo::Disabled);
+        } else {
+            pollable = PollableStatus::Pollable;
+            sys::direct_io_ify(file.as_raw_fd(), flags)?;
+        }
 
         // Docker overlay can show as dev_major 0.
         // Anything like that is obviously not something that supports the poll ring.
@@ -154,9 +144,7 @@ impl DmaFile {
         opdesc: &'static str,
         opts: &'a DmaOpenOptions,
     ) -> Result<DmaFile> {
-        // try to open the file with O_DIRECT if the underlying media supports it
         let flags = libc::O_CLOEXEC
-            | libc::O_DIRECT
             | opts.get_access_mode()?
             | opts.get_creation_mode()?
             | (opts.custom_flags as libc::c_int & !libc::O_ACCMODE);
