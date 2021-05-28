@@ -47,7 +47,7 @@ pub struct DmaStreamReaderBuilder {
     end: u64,
     buffer_size: usize,
     read_ahead: usize,
-    file: Rc<DmaFile>,
+    pub(super) file: Rc<DmaFile>,
 }
 
 impl DmaStreamReaderBuilder {
@@ -804,6 +804,29 @@ struct DmaStreamWriterState {
     flush_on_close: bool,
 }
 
+macro_rules! already_closed {
+    () => {
+        // We do it like this so that the write and read close errors are exactly the
+        // same. The reader uses enhanced errors, so it has a message in
+        // the inner attribute of io::Error
+        Poll::Ready(Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("{}", io::Error::from_raw_os_error(libc::EBADF)),
+        )))
+    };
+}
+
+macro_rules! ensure_not_closed {
+    ( $file:expr ) => {
+        match $file.take() {
+            Some(file) => file,
+            None => {
+                return already_closed!();
+            }
+        }
+    };
+}
+
 impl DmaStreamWriterState {
     fn add_waker(&mut self, waker: Waker) {
         // Linear file stream, not supposed to have parallel writers!!
@@ -811,7 +834,13 @@ impl DmaStreamWriterState {
         self.waker = Some(waker);
     }
 
-    fn initiate_close(&mut self, waker: Waker, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
+    fn initiate_close(
+        &mut self,
+        waker: Waker,
+        state: Rc<RefCell<Self>>,
+        file: Rc<DmaFile>,
+        do_close: bool,
+    ) {
         let final_pos = self.file_pos();
         let must_truncate = final_pos != self.file_pos;
 
@@ -852,12 +881,13 @@ impl DmaStreamWriterState {
                 }
             }
 
-            let res = file.close_rc().await;
-            collect_error!(state, res);
+            if do_close {
+                let res = file.close_rc().await;
+                collect_error!(state, res);
+            }
 
             let mut state = state.borrow_mut();
             state.flushed_pos = final_pos;
-            drop(state);
         })
         .detach();
     }
@@ -1090,6 +1120,40 @@ impl DmaStreamWriter {
         file.fdatasync().await?;
         Ok(file_pos_at_sync_time)
     }
+
+    // internal function that does everything that close does (flushes buffers, etc,
+    // but leaves the file open. Useful for the immutable file abstraction.
+    pub(super) fn poll_seal(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<DmaStreamReaderBuilder>> {
+        let mut state = self.state.borrow_mut();
+        match state.file_status {
+            FileStatus::Open => {
+                let file = ensure_not_closed!(self.file.clone());
+                state.initiate_close(cx.waker().clone(), self.state.clone(), file, false);
+                Poll::Pending
+            }
+            FileStatus::Closing => {
+                state.file_status = FileStatus::Closed;
+                let file = ensure_not_closed!(self.file);
+
+                let wb = state.write_behind;
+                let bufsz = state.buffer_size;
+                let builder = DmaStreamReaderBuilder::from_rc(file)
+                    .with_read_ahead(wb)
+                    .with_buffer_size(bufsz);
+
+                match current_error!(state) {
+                    Some(err) => Poll::Ready(err),
+                    None => Poll::Ready(Ok(builder)),
+                }
+            }
+            FileStatus::Closed => {
+                already_closed!()
+            }
+        }
+    }
 }
 
 impl AsyncWrite for DmaStreamWriter {
@@ -1152,7 +1216,7 @@ impl AsyncWrite for DmaStreamWriter {
         let mut state = self.state.borrow_mut();
         match state.file_status {
             FileStatus::Open => {
-                state.initiate_close(cx.waker().clone(), self.state.clone(), file.unwrap());
+                state.initiate_close(cx.waker().clone(), self.state.clone(), file.unwrap(), true);
                 Poll::Pending
             }
             FileStatus::Closing => {
@@ -1163,13 +1227,7 @@ impl AsyncWrite for DmaStreamWriter {
                 }
             }
             FileStatus::Closed => {
-                // We do it like this so that the write and read close errors are exactly the
-                // same. The reader uses enhanced errors, so it has a message in
-                // the inner attribute of io::Error
-                Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{}", io::Error::from_raw_os_error(libc::EBADF)),
-                )))
+                already_closed!()
             }
         }
     }
