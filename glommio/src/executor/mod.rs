@@ -57,7 +57,7 @@ use crate::{
     error::BuilderErrorKind,
     parking,
     sys,
-    task::{self, waker_fn::waker_fn},
+    task::{self, waker_fn::dummy_waker},
     GlommioError,
     IoRequirements,
     IoStats,
@@ -1123,7 +1123,9 @@ impl LocalExecutor {
     /// assert_eq!(res, 6);
     /// ```
     pub fn run<T>(&self, future: impl Future<Output = T>) -> T {
-        let waker = waker_fn(|| {});
+        // this waker is never exposed in the public interface and is only used to check
+        // whether the task's `JoinHandle` is `Ready`
+        let waker = dummy_waker();
         let cx = &mut Context::from_waker(&waker);
 
         let spin_before_park = self.spin_before_park().unwrap_or_default();
