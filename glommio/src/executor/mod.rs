@@ -1127,6 +1127,9 @@ impl LocalExecutor {
         let cx = &mut Context::from_waker(&waker);
 
         let spin_before_park = self.spin_before_park().unwrap_or_default();
+        if LOCAL_EX.is_set() {
+            panic!("There is already an Executor running in this thread");
+        }
 
         LOCAL_EX.set(self, || {
             let future = self.spawn(async move { future.await }).detach();
@@ -2975,6 +2978,14 @@ mod test {
         assert_eq!(nr_shards, handles.handles.len());
         handles.join_all().into_iter().for_each(|s| {
             assert!(format!("{}", s.unwrap_err()).contains("spawn failed"));
+        });
+    }
+
+    #[should_panic]
+    #[test]
+    fn executor_inception() {
+        LocalExecutor::default().run(async {
+            LocalExecutor::default().run(async {});
         });
     }
 }
