@@ -465,7 +465,7 @@ mod tests {
         let (p, c) = super::inner_make(10, usize::MAX - 1);
 
         for i in 0..10 {
-            assert_eq!(p.try_push(i).is_none(), true);
+            assert!(p.try_push(i).is_none());
         }
 
         for i in 0..10 {

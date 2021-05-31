@@ -341,7 +341,7 @@ impl Reactor {
         let id = channels.id;
         channels.id += 1;
         let ret = channels.check_map.insert(id, test_function);
-        assert_eq!(ret.is_none(), true);
+        assert!(ret.is_none());
         id
     }
 

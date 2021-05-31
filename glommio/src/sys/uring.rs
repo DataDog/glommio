@@ -930,7 +930,7 @@ impl SleepableRing {
         allocator: Rc<UringBufferAllocator>,
         source_map: Rc<RefCell<SourceMap>>,
     ) -> io::Result<Self> {
-        assert_eq!(*IO_URING_RECENT_ENOUGH, true);
+        assert!(*IO_URING_RECENT_ENOUGH);
         Ok(SleepableRing {
             ring: iou::IoUring::new(size as _)?,
             size,
@@ -1270,7 +1270,7 @@ impl Reactor {
             None,
             None,
         );
-        assert_eq!(main_ring.install_eventfd(&eventfd_src), true);
+        assert!(main_ring.install_eventfd(&eventfd_src));
 
         Ok(Reactor {
             main_ring: RefCell::new(main_ring),

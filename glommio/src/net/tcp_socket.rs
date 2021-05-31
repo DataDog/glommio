@@ -755,7 +755,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let stream = TcpStream::connect(addr).await.unwrap();
             stream.set_nodelay(true).expect("set_nodelay call failed");
-            assert_eq!(stream.nodelay().unwrap(), true);
+            assert!(stream.nodelay().unwrap());
         });
     }
 
@@ -891,7 +891,7 @@ mod tests {
 
             let res = TcpStream::connect(addr).await;
             // server is now dead, connection must fail
-            assert_eq!(res.is_err(), true)
+            assert!(res.is_err())
         });
     }
 
@@ -1098,7 +1098,7 @@ mod tests {
                 assert_eq!(buf, b"msg1");
                 stream.consume(4);
                 let buf = stream.fill_buf().await?;
-                assert_eq!(buf.is_empty(), true);
+                assert!(buf.is_empty());
                 Ok(())
             })
             .detach();
@@ -1203,7 +1203,7 @@ mod tests {
                 stream
                     .set_write_timeout(Some(Duration::from_nanos(0)))
                     .unwrap_err();
-                assert_eq!(stream.write_timeout().is_none(), true);
+                assert!(stream.write_timeout().is_none());
                 stream
                     .set_write_timeout(Some(Duration::from_secs(1)))
                     .unwrap();

@@ -609,7 +609,7 @@ impl AsyncWrite for StreamWriter {
 
         if !self.buffer.data.is_empty() {
             let x = self.flush_write_buffer(cx.waker().clone());
-            assert_eq!(x, true);
+            assert!(x);
             Poll::Pending
         } else {
             Poll::Ready(Ok(self.buffer.copy_from_buffer(buf)))

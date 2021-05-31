@@ -865,9 +865,9 @@ mod test {
     fn producer_bounded_has_capacity() {
         test_executor!(async move {
             let (sender, receiver) = new_bounded(1);
-            assert_eq!(sender.is_full(), false);
+            assert!(!sender.is_full());
             sender.try_send(0).unwrap();
-            assert_eq!(sender.is_full(), true);
+            assert!(sender.is_full());
             drop(receiver);
         });
     }

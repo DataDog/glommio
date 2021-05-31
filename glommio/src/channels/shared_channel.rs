@@ -617,7 +617,7 @@ mod test {
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 let receiver: ConnectedReceiver<usize> = receiver.connect().await;
-                assert_eq!(receiver.recv().await.is_none(), true);
+                assert!(receiver.recv().await.is_none());
             })
             .unwrap();
 
@@ -638,7 +638,7 @@ mod test {
                 future::poll_fn(move |cx| {
                     let mut f1 = receiver.recv().boxed_local();
                     assert_eq!(f1.poll(cx), Poll::Pending);
-                    assert_eq!(sender.try_send(1).is_ok(), true);
+                    assert!(sender.try_send(1).is_ok());
                     let r = receiver.recv_one(cx);
                     assert_eq!(r, Poll::Ready(Some(1)));
                     r
@@ -722,7 +722,7 @@ mod test {
                 let sender = sender.connect().await;
                 sender.send(0).await.unwrap();
                 let x = sender.try_send(1);
-                assert_eq!(x.is_err(), true);
+                assert!(x.is_err());
                 s1.store(1, Ordering::Relaxed);
             })
             .unwrap();
