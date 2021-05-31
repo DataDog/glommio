@@ -42,8 +42,6 @@ pub struct ImmutableFileBuilder<P>
 where
     P: AsRef<Path>,
 {
-    max_merged_buffer_size: usize,
-    max_read_amp: Option<usize>,
     concurrency: usize,
     buffer_size: usize,
     flush_disabled: bool,
@@ -58,8 +56,6 @@ where
 /// [`build_sink`]: ImmutableFileBuilder::build_sink
 /// [`ImmutableFileBuilder`]: ImmutableFileBuilder
 pub struct ImmutableFilePreSealSink {
-    max_merged_buffer_size: usize,
-    max_read_amp: Option<usize>,
     writer: DmaStreamWriter,
 }
 
@@ -84,8 +80,6 @@ pub struct ImmutableFilePreSealSink {
 /// [`read_at`]: ImmutableFile::read_at
 /// [`read_many`]: ImmutableFile::read_many
 pub struct ImmutableFile {
-    max_merged_buffer_size: usize,
-    max_read_amp: Option<usize>,
     stream_builder: DmaStreamReaderBuilder,
 }
 
@@ -114,8 +108,6 @@ where
             path: fname,
             buffer_size: 128 << 10,
             concurrency: 10,
-            max_merged_buffer_size: 1 << 20,
-            max_read_amp: Some(128 << 10),
             flush_disabled: false,
         }
     }
@@ -179,11 +171,7 @@ where
             .with_write_behind(self.concurrency)
             .build();
 
-        Ok(ImmutableFilePreSealSink {
-            writer,
-            max_merged_buffer_size: self.max_merged_buffer_size,
-            max_read_amp: self.max_read_amp,
-        })
+        Ok(ImmutableFilePreSealSink { writer })
     }
 
     /// Builds an [`ImmutableFile`] with the properties defined by this
@@ -207,11 +195,7 @@ where
             .with_buffer_size(self.buffer_size)
             .with_read_ahead(self.concurrency);
 
-        Ok(ImmutableFile {
-            stream_builder,
-            max_merged_buffer_size: self.max_merged_buffer_size,
-            max_read_amp: self.max_read_amp,
-        })
+        Ok(ImmutableFile { stream_builder })
     }
 }
 
@@ -223,11 +207,7 @@ impl ImmutableFilePreSealSink {
     pub async fn seal(mut self) -> Result<ImmutableFile> {
         let stream_builder = poll_fn(|cx| self.writer.poll_seal(cx)).await?;
 
-        Ok(ImmutableFile {
-            stream_builder,
-            max_merged_buffer_size: self.max_merged_buffer_size,
-            max_read_amp: self.max_read_amp,
-        })
+        Ok(ImmutableFile { stream_builder })
     }
 }
 
@@ -278,16 +258,19 @@ impl ImmutableFile {
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match.
-    pub fn read_many<V: IoVec, S: Iterator<Item = V>>(&self, iovs: S) -> ReadManyResult<V>
+    pub fn read_many<V: IoVec, S: Iterator<Item = V>>(
+        &self,
+        iovs: S,
+        max_merged_buffer_size: usize,
+        max_read_amp: Option<usize>,
+    ) -> ReadManyResult<V>
     where
         V: IoVec,
         S: Iterator<Item = V>,
     {
-        self.stream_builder.file.clone().read_many(
-            iovs,
-            self.max_merged_buffer_size,
-            self.max_read_amp,
-        )
+        self.stream_builder
+            .file
+            .read_many(iovs, max_merged_buffer_size, max_read_amp)
     }
 
     /// Creates a [`DmaStreamReaderBuilder`] from this `ImmutableFile`.
@@ -385,7 +368,7 @@ mod test {
         let stream = immutable.seal().await.unwrap();
 
         let iovs = vec![(0, 1), (3, 1)];
-        let mut bufs = stream.read_many(iovs.into_iter());
+        let mut bufs = stream.read_many(iovs.into_iter(), 0, None);
         let next_buffer = bufs.next().await.unwrap();
         assert_eq!(next_buffer.unwrap().1.len(), 1);
         let next_buffer = bufs.next().await.unwrap();
