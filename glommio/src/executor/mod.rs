@@ -198,9 +198,9 @@ macro_rules! to_io_error {
         match $error {
             Ok(x) => Ok(x),
             Err(nix::Error::Sys(_)) => Err(io::Error::last_os_error()),
-            Err(nix::Error::InvalidUtf8) => Err(io::Error::new(io::ErrorKind::InvalidInput, "")),
-            Err(nix::Error::InvalidPath) => Err(io::Error::new(io::ErrorKind::InvalidInput, "")),
-            Err(nix::Error::UnsupportedOperation) => Err(io::Error::new(io::ErrorKind::Other, "")),
+            Err(nix::Error::InvalidUtf8) => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+            Err(nix::Error::InvalidPath) => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+            Err(nix::Error::UnsupportedOperation) => Err(io::Error::from(io::ErrorKind::Other)),
         }
     }};
 }
