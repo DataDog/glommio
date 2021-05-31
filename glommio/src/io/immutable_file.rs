@@ -386,9 +386,9 @@ mod test {
 
         let iovs = vec![(0, 1), (3, 1)];
         let mut bufs = stream.read_many(iovs.into_iter());
-        let foo = bufs.next().await.unwrap();
-        assert_eq!(foo.unwrap().1.len(), 1);
-        let foo = bufs.next().await.unwrap();
-        assert_eq!(foo.unwrap().1.len(), 1);
+        let next_buffer = bufs.next().await.unwrap();
+        assert_eq!(next_buffer.unwrap().1.len(), 1);
+        let next_buffer = bufs.next().await.unwrap();
+        assert_eq!(next_buffer.unwrap().1.len(), 1);
     });
 }

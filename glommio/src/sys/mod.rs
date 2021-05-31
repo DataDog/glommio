@@ -250,7 +250,7 @@ impl ReactorGlobalState {
 
         let notifier = SleepNotifier::new(id)?;
         let res = self.sleep_notifiers.insert(id, Arc::downgrade(&notifier));
-        assert_eq!(res.is_none(), true);
+        assert!(res.is_none());
         Ok(notifier)
     }
 }

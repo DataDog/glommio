@@ -824,7 +824,7 @@ mod tests {
         let mut buf = [0u8; 10];
         let (sz, addr) = p1.recv_from(&mut buf).await.unwrap();
         assert_eq!(sz, 4);
-        assert_eq!(addr.path().is_none(), true);
+        assert!(addr.path().is_none());
     });
 
     unix_socket_test!(datagram_connect_unbounded, dir, {

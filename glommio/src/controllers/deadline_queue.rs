@@ -652,7 +652,7 @@ mod test {
             let drop_happens = test.drop_guarantee.clone();
             let res = queue.push_work(test).await.unwrap();
             assert_eq!(res, 0);
-            assert_eq!(drop_happens.get(), true);
+            assert!(drop_happens.get());
         });
     }
 
