@@ -547,12 +547,12 @@ impl Semaphore {
     ///  If semaphore is closed
     /// `Err(GlommioError::Closed(ResourceType::Semaphore { .. }))` will be
     /// returned.  If semaphore does not have sufficient amount of units
-    ///  `
+    ///  ```
     ///  Err(GlommioError::WouldBlock(ResourceType::Semaphore {
     ///      requested: u64,
     ///      available: u64
     ///  }))
-    ///  `
+    ///  ```
     ///  will be returned.
     ///
     /// # Examples
@@ -598,12 +598,12 @@ impl Semaphore {
     ///  If semaphore is closed
     /// `Err(GlommioError::Closed(ResourceType::Semaphore { .. }))` will be
     /// returned.  If semaphore does not have sufficient amount of units
-    ///  `
+    ///  ```
     ///  Err(GlommioError::WouldBlock(ResourceType::Semaphore {
     ///      requested: u64,
     ///      available: u64
     ///  }))
-    ///  `
+    ///  ```
     ///  will be returned.
     ///
     /// # Examples
