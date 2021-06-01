@@ -534,6 +534,10 @@ impl Semaphore {
     /// returns immediately, with the RAAI guard,
     /// reducing the number of available units by the given amount.
     ///
+    /// The [`Permit`] is bound to the lifetime of the current reference of this
+    /// semaphore. If you are need it to live longer, consider using
+    /// [`try_acquire_static_permit`].
+    ///
     /// If insufficient units are available then this method will return
     /// `Err` and the number of available permits is unchanged.
     ///
@@ -554,23 +558,73 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{sync::Semaphore, LocalExecutor};
-    ///
+    /// # use glommio::{sync::Semaphore, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
     /// let sem = Semaphore::new(1);
-    ///
-    /// let ex = LocalExecutor::default();
-    ///
-    /// ex.run(async move {
-    ///     let permit = sem.acquire_permit(1).await.unwrap();
-    ///     // once it is dropped it can be acquired again
-    ///     // going out of scope will drop
-    /// });
+    /// let permit = sem.try_acquire_permit(1).unwrap();
+    /// let permit2 = sem.try_acquire_permit(1).unwrap_err();
+    /// # });
     /// ```
+    /// [`Permit`]: Permit
+    /// [`try_acquire_static_permit`]: Semaphore::try_acquire_static_permit
     pub fn try_acquire_permit(&self, units: u64) -> Result<Permit<'_>> {
         let mut state = self.state.borrow_mut();
 
         if state.waiters_list.is_empty() && state.try_acquire(units)? {
             return Ok(Permit::new(units, self));
+        }
+        Err(GlommioError::WouldBlock(ResourceType::Semaphore {
+            requested: units,
+            available: state.available(),
+        }))
+    }
+
+    /// Acquires the given number of units, if they are available, and
+    /// returns immediately, with the RAAI guard,
+    /// reducing the number of available units by the given amount.
+    ///
+    /// This function returns a [`StaticPermit`]
+    /// and is suitable for `'static` contexts. If your lifetimes are simple
+    /// and you don't need the permit to outlive your context, consider using
+    /// [`try_acquire_permit`] instead.
+    ///
+    /// If insufficient units are available then this method will return
+    /// `Err` and the number of available permits is unchanged.
+    ///
+    /// This method does not suspend.
+    ///
+    /// # Errors
+    ///  If semaphore is closed
+    /// `Err(GlommioError::Closed(ResourceType::Semaphore { .. }))` will be
+    /// returned.  If semaphore does not have sufficient amount of units
+    ///  `
+    ///  Err(GlommioError::WouldBlock(ResourceType::Semaphore {
+    ///      requested: u64,
+    ///      available: u64
+    ///  }))
+    ///  `
+    ///  will be returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use glommio::{sync::Semaphore, LocalExecutor};
+    /// # use std::rc::Rc;
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let sem = Rc::new(Semaphore::new(1));
+    /// let permit = sem.try_acquire_static_permit(1).unwrap();
+    /// let permit2 = sem.try_acquire_static_permit(1).unwrap_err();
+    /// # });
+    /// ```
+    /// [`StaticPermit`]: StaticPermit
+    /// [`try_acquire_permit`]: Semaphore::try_acquire_permit
+    pub fn try_acquire_static_permit(self: &Rc<Self>, units: u64) -> Result<StaticPermit> {
+        let mut state = self.state.borrow_mut();
+
+        if state.waiters_list.is_empty() && state.try_acquire(units)? {
+            return Ok(StaticPermit::new(units, self.clone()));
         }
         Err(GlommioError::WouldBlock(ResourceType::Semaphore {
             requested: units,
@@ -773,6 +827,27 @@ mod test {
     fn try_acquire_permit_insufficient_units() {
         let sem = Semaphore::new(42);
         let result = sem.try_acquire_permit(62);
+        assert!(result.is_err());
+
+        let err = result.err().unwrap();
+        if !matches!(
+            err,
+            GlommioError::WouldBlock(ResourceType::Semaphore { .. })
+        ) {
+            panic!("Incorrect error type is returned from try_acquire_permit method");
+        }
+    }
+
+    #[test]
+    fn try_acquire_static_permit_sufficient_units() {
+        let sem = Rc::new(Semaphore::new(42));
+        let _ = sem.try_acquire_static_permit(24).unwrap();
+    }
+
+    #[test]
+    fn try_acquire_static_permit_insufficient_units() {
+        let sem = Rc::new(Semaphore::new(42));
+        let result = sem.try_acquire_static_permit(62);
         assert!(result.is_err());
 
         let err = result.err().unwrap();
