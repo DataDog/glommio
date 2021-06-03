@@ -209,6 +209,41 @@ impl ImmutableFilePreSealSink {
 
         Ok(ImmutableFile { stream_builder })
     }
+
+    /// Waits for all currently in-flight buffers to return and be safely stored
+    /// in the underlying storage
+    ///
+    /// Note that the current buffer being written to is not flushed, as it may
+    /// not be properly aligned. Buffers that are currently in-flight will
+    /// be waited on, and a sync operation will be issued by the operating
+    /// system.
+    ///
+    /// Returns the flushed position of the file at the time the sync started.
+    pub async fn sync(&self) -> Result<u64> {
+        self.writer.sync().await
+    }
+
+    /// Acquires the current position of this [`ImmutableFilePreSealSink`].
+    pub fn current_pos(&self) -> u64 {
+        self.writer.current_pos()
+    }
+
+    /// Acquires the current position of this [`ImmutableFilePreSealSink`] that
+    /// is flushed to the underlying media.
+    ///
+    /// Warning: the position reported by this API is not restart or crash safe.
+    /// You need to call [`ImmutableFilePreSealSink::sync`] for that. Although
+    /// the ImmutableFilePreSealSink uses Direct I/O, modern storage devices
+    /// have their own caches and may still lose data that sits on those
+    /// caches upon a restart until [`ImmutableFilePreSealSink::sync`] is called
+    /// (Note that [`ImmutableFilePreSealSink::seal`] implies a sync).
+    ///
+    /// However within the same session, new readers trying to read from any
+    /// position before what we return in this method will be guaranteed to
+    /// read the data we just wrote.
+    pub fn current_flushed_pos(&self) -> u64 {
+        self.writer.current_flushed_pos()
+    }
 }
 
 impl AsyncWrite for ImmutableFilePreSealSink {
@@ -337,6 +372,26 @@ mod test {
         let mut buf = [0u8; 128];
         let x = reader.read(&mut buf).await.unwrap();
         assert_eq!(x, 6);
+    });
+
+    immutable_file_test!(stream_pos, path, {
+        let fname = path.join("testfile");
+        let mut immutable = ImmutableFileBuilder::new(fname).build_sink().await.unwrap();
+        assert_eq!(immutable.current_pos(), 0);
+        assert_eq!(immutable.current_flushed_pos(), 0);
+
+        immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        assert_eq!(immutable.current_pos(), 6);
+        assert_eq!(immutable.current_flushed_pos(), 0);
+
+        immutable.write(&[6, 7, 8, 9]).await.unwrap();
+
+        let stream = immutable.seal().await.unwrap();
+        let mut reader = stream.stream_reader().build();
+
+        let mut buf = [0u8; 128];
+        let x = reader.read(&mut buf).await.unwrap();
+        assert_eq!(x, 10);
     });
 
     immutable_file_test!(seal_and_random, path, {
