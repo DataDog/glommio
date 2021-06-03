@@ -14,6 +14,7 @@ use crate::io::{
 };
 
 use futures_lite::{future::poll_fn, io::AsyncWrite};
+use log::warn;
 use std::{
     cell::Ref,
     io,
@@ -45,6 +46,8 @@ where
     concurrency: usize,
     buffer_size: usize,
     flush_disabled: bool,
+    pre_allocate: Option<u64>,
+    hint_extent_size: Option<usize>,
     path: P,
 }
 
@@ -110,6 +113,8 @@ where
             buffer_size: 128 << 10,
             concurrency: 10,
             flush_disabled: false,
+            pre_allocate: None,
+            hint_extent_size: None,
         }
     }
 
@@ -151,6 +156,32 @@ where
         self
     }
 
+    /// pre-allocates space in the filesystem to hold a file at least as big as
+    /// the size argument.
+    pub fn with_pre_allocation(mut self, size: Option<u64>) -> Self {
+        self.pre_allocate = size;
+        self
+    }
+
+    /// Hint to the OS the size of increase of this file, to allow more
+    /// efficient allocation of blocks.
+    ///
+    /// Allocating blocks at the filesystem level turns asynchronous writes into
+    /// threaded synchronous writes, as we need to first find the blocks to
+    /// host the file.
+    ///
+    /// If the extent is larger, that means many blocks are allocated at a time.
+    /// For instance, if the extent size is 1MB, that means that only 1 out
+    /// of 4 256kB writes will be turned synchronous. Combined with diligent
+    /// use of `fallocate` we can greatly minimize context switches.
+    ///
+    /// It is important not to set the extent size too big. Writes can fail
+    /// otherwise if the extent can't be allocated.
+    pub fn with_hint_extent_size(mut self, size: Option<usize>) -> Self {
+        self.hint_extent_size = size;
+        self
+    }
+
     /// Builds an [`ImmutableFilePreSealSink`] with the properties defined by
     /// this builder.
     ///
@@ -166,6 +197,24 @@ where
             .create_new(true)
             .open(self.path)
             .await?;
+
+        if let Some(size) = self.pre_allocate {
+            if let Err(err) = file.pre_allocate(size).await {
+                warn!(
+                    "Error: failed to run pre_allocate on ImmutableFile: {}",
+                    err
+                );
+            }
+        }
+        if let Some(size) = self.hint_extent_size {
+            if let Err(err) = file.hint_extent_size(size).await {
+                warn!(
+                    "Error: failed to run hint_extent_size on ImmutableFile: {}",
+                    err
+                );
+            }
+        }
+
         let writer = DmaStreamWriterBuilder::new(file)
             .with_sync_on_close_disabled(self.flush_disabled)
             .with_buffer_size(self.buffer_size)

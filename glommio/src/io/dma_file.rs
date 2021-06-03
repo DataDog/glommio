@@ -355,7 +355,7 @@ impl DmaFile {
     ///
     /// It is important not to set the extent size too big. Writes can fail
     /// otherwise if the extent can't be allocated.
-    pub async fn hint_extent_size(&self, size: usize) -> nix::Result<i32> {
+    pub async fn hint_extent_size(&self, size: usize) -> Result<i32> {
         self.file.hint_extent_size(size).await
     }
 
