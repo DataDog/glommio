@@ -81,6 +81,7 @@ pub struct ImmutableFilePreSealSink {
 /// [`read_many`]: ImmutableFile::read_many
 pub struct ImmutableFile {
     stream_builder: DmaStreamReaderBuilder,
+    size: u64,
 }
 
 impl<P> ImmutableFileBuilder<P>
@@ -191,11 +192,15 @@ where
                 .open(self.path)
                 .await?,
         );
+        let size = file.file_size().await?;
         let stream_builder = DmaStreamReaderBuilder::from_rc(file)
             .with_buffer_size(self.buffer_size)
             .with_read_ahead(self.concurrency);
 
-        Ok(ImmutableFile { stream_builder })
+        Ok(ImmutableFile {
+            stream_builder,
+            size,
+        })
     }
 }
 
@@ -206,8 +211,11 @@ impl ImmutableFilePreSealSink {
     /// [`ImmutableFile`]
     pub async fn seal(mut self) -> Result<ImmutableFile> {
         let stream_builder = poll_fn(|cx| self.writer.poll_seal(cx)).await?;
-
-        Ok(ImmutableFile { stream_builder })
+        let size = stream_builder.file.file_size().await?;
+        Ok(ImmutableFile {
+            stream_builder,
+            size,
+        })
     }
 
     /// Waits for all currently in-flight buffers to return and be safely stored
@@ -265,6 +273,17 @@ impl AsyncWrite for ImmutableFilePreSealSink {
 }
 
 impl ImmutableFile {
+    /// Returns an `Option` containing the path associated with this open
+    /// directory, or `None` if there isn't one.
+    pub fn path(&self) -> Option<&Path> {
+        self.stream_builder.file.path()
+    }
+
+    /// Returns the size of a file, in bytes
+    pub fn file_size(&self) -> u64 {
+        self.size
+    }
+
     /// Reads into buffer in buf from a specific position in the file.
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
