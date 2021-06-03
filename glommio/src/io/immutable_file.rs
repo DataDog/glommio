@@ -327,6 +327,13 @@ impl ImmutableFile {
             .read_many(iovs, max_merged_buffer_size, max_read_amp)
     }
 
+    /// Closes this [`ImmutableFile`]
+    /// Note that this method returns an error if other entities hold references
+    /// to the underlying file, such as read streams.
+    pub async fn close(self) -> Result<()> {
+        self.stream_builder.file.close_rc().await
+    }
+
     /// Creates a [`DmaStreamReaderBuilder`] from this `ImmutableFile`.
     ///
     /// The resulting builder can be augmented with any option available to the
@@ -391,6 +398,9 @@ mod test {
         let mut buf = [0u8; 128];
         let x = reader.read(&mut buf).await.unwrap();
         assert_eq!(x, 6);
+
+        reader.close().await.unwrap();
+        stream.close().await.unwrap();
     });
 
     immutable_file_test!(stream_pos, path, {
@@ -411,6 +421,9 @@ mod test {
         let mut buf = [0u8; 128];
         let x = reader.read(&mut buf).await.unwrap();
         assert_eq!(x, 10);
+
+        reader.close().await.unwrap();
+        stream.close().await.unwrap();
     });
 
     immutable_file_test!(seal_and_random, path, {
@@ -433,6 +446,8 @@ mod test {
             2,
             stream::iter(vec![task1, task2]).then(|x| x).count().await
         );
+
+        stream.close().await.unwrap();
     });
 
     immutable_file_test!(seal_ready_many, path, {
@@ -441,11 +456,15 @@ mod test {
         immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
         let stream = immutable.seal().await.unwrap();
 
-        let iovs = vec![(0, 1), (3, 1)];
-        let mut bufs = stream.read_many(iovs.into_iter(), 0, None);
-        let next_buffer = bufs.next().await.unwrap();
-        assert_eq!(next_buffer.unwrap().1.len(), 1);
-        let next_buffer = bufs.next().await.unwrap();
-        assert_eq!(next_buffer.unwrap().1.len(), 1);
+        {
+            let iovs = vec![(0, 1), (3, 1)];
+            let mut bufs = stream.read_many(iovs.into_iter(), 0, None);
+            let next_buffer = bufs.next().await.unwrap();
+            assert_eq!(next_buffer.unwrap().1.len(), 1);
+            let next_buffer = bufs.next().await.unwrap();
+            assert_eq!(next_buffer.unwrap().1.len(), 1);
+        } // ReadManyResult hols a reference to the file so we scope it
+
+        stream.close().await.unwrap();
     });
 }
