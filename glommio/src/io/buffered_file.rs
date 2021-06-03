@@ -9,6 +9,7 @@ use crate::{
     GlommioError,
 };
 use std::{
+    cell::Ref,
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     path::{Path, PathBuf},
 };
@@ -134,7 +135,7 @@ impl BufferedFile {
             GlommioError::create_enhanced(
                 source,
                 "Writing",
-                self.file.path.as_ref(),
+                self.file.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
         })
@@ -160,7 +161,7 @@ impl BufferedFile {
             GlommioError::create_enhanced(
                 source,
                 "Reading",
-                self.file.path.as_ref(),
+                self.file.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
         })?;
@@ -219,7 +220,7 @@ impl BufferedFile {
 
     /// Returns an `Option` containing the path associated with this open
     /// directory, or `None` if there isn't one.
-    pub fn path(&self) -> Option<&Path> {
+    pub fn path(&self) -> Option<Ref<'_, Path>> {
         self.file.path()
     }
 

@@ -17,6 +17,7 @@ use std::path::Path;
 
 use futures_lite::{future::poll_fn, io::AsyncWrite};
 use std::{
+    cell::Ref,
     io,
     pin::Pin,
     rc::Rc,
@@ -275,7 +276,7 @@ impl AsyncWrite for ImmutableFilePreSealSink {
 impl ImmutableFile {
     /// Returns an `Option` containing the path associated with this open
     /// directory, or `None` if there isn't one.
-    pub fn path(&self) -> Option<&Path> {
+    pub fn path(&self) -> Option<Ref<'_, Path>> {
         self.stream_builder.file.path()
     }
 
