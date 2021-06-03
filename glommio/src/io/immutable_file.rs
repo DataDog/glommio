@@ -13,12 +13,11 @@ use crate::io::{
     ReadResult,
 };
 
-use std::path::Path;
-
 use futures_lite::{future::poll_fn, io::AsyncWrite};
 use std::{
     cell::Ref,
     io,
+    path::Path,
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
@@ -285,6 +284,21 @@ impl ImmutableFile {
         self.size
     }
 
+    /// Returns true if the ['ImmutableFile'] represent the same file on the
+    /// underlying device.
+    ///
+    /// Files are considered to be the same if they live in the same file system
+    /// and have the same Linux inode. Note that based on this rule a
+    /// symlink is *not* considered to be the same file.
+    ///
+    /// Files will be considered to be the same if:
+    /// * A file is opened multiple times (different file descriptors, but same
+    ///   file!)
+    /// * they are hard links.
+    pub fn is_same(&self, other: &ImmutableFile) -> bool {
+        self.stream_builder.file.is_same(&other.stream_builder.file)
+    }
+
     /// Reads into buffer in buf from a specific position in the file.
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
@@ -326,6 +340,24 @@ impl ImmutableFile {
         self.stream_builder
             .file
             .read_many(iovs, max_merged_buffer_size, max_read_amp)
+    }
+
+    /// rename this file.
+    ///
+    /// **Warning:** synchronous operation, will block the reactor
+    pub async fn rename<P: AsRef<Path>>(&self, new_path: P) -> Result<()> {
+        self.stream_builder.file.rename(new_path).await
+    }
+
+    /// remove this file.
+    ///
+    /// The file does not have to be closed to be removed. Removing removes
+    /// the name from the filesystem but the file will still be accessible for
+    /// as long as it is open.
+    ///
+    /// **Warning:** synchronous operation, will block the reactor
+    pub async fn remove(&self) -> Result<()> {
+        self.stream_builder.file.remove().await
     }
 
     /// Closes this [`ImmutableFile`]
