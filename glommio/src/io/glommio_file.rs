@@ -7,6 +7,7 @@
 use crate::{parking::Reactor, sys, GlommioError, Local};
 use log::debug;
 use std::{
+    cell::{Ref, RefCell},
     convert::TryInto,
     io,
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
@@ -27,7 +28,7 @@ pub(crate) struct GlommioFile {
     // A file can appear in many paths, through renaming and linking.
     // If we do that, each path should have its own object. This is to
     // facilitate error displaying.
-    pub(crate) path: Option<PathBuf>,
+    pub(crate) path: RefCell<Option<PathBuf>>,
     pub(crate) inode: u64,
     pub(crate) dev_major: u32,
     pub(crate) dev_minor: u32,
@@ -43,7 +44,8 @@ That means that while the file is already out of scope, the file descriptor is s
                  until the next I/O cycle.
 This is likely file, but in extreme situations can lead to resource exhaustion. An explicit \
                  asynchronous close is still preferred",
-                self.path, file
+                self.path.borrow(),
+                file
             );
             if let Some(r) = self.reactor.upgrade() {
                 r.sys.async_close(file);
@@ -62,7 +64,7 @@ impl FromRawFd for GlommioFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         GlommioFile {
             file: Some(fd),
-            path: None,
+            path: RefCell::new(None),
             inode: 0,
             dev_major: 0,
             dev_minor: 0,
@@ -92,7 +94,7 @@ impl GlommioFile {
 
         let mut file = GlommioFile {
             file: Some(fd as _),
-            path: Some(path),
+            path: RefCell::new(Some(path)),
             inode: 0,
             dev_major: 0,
             dev_minor: 0,
@@ -131,15 +133,14 @@ impl GlommioFile {
         Ok(())
     }
 
-    pub(crate) fn with_path(mut self, path: Option<PathBuf>) -> GlommioFile {
-        self.path = path;
+    pub(crate) fn with_path(self, path: Option<PathBuf>) -> GlommioFile {
+        self.path.replace(path);
         self
     }
 
-    pub(crate) fn path_required(&self, op: &'static str) -> Result<&Path> {
-        self.path
-            .as_deref()
-            .ok_or_else(|| GlommioError::EnhancedIoError {
+    pub(crate) fn path_required(&self, op: &'static str) -> Result<Ref<'_, Path>> {
+        match *self.path.borrow() {
+            None => Err(GlommioError::EnhancedIoError {
                 op,
                 path: None,
                 fd: Some(self.as_raw_fd()),
@@ -147,11 +148,18 @@ impl GlommioFile {
                     std::io::ErrorKind::InvalidData,
                     "operation requires a valid path",
                 ),
-            })
+            }),
+            Some(_) => Ok(Ref::map(self.path.borrow(), |p| {
+                p.as_ref().unwrap().as_path()
+            })),
+        }
     }
 
-    pub(crate) fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+    pub(crate) fn path(&self) -> Option<Ref<'_, Path>> {
+        self.path
+            .borrow()
+            .as_deref()
+            .map(|_| Ref::map(self.path.borrow(), |p| p.as_ref().unwrap().as_path()))
     }
 
     pub(crate) async fn pre_allocate(&self, size: u64) -> Result<()> {
@@ -165,15 +173,18 @@ impl GlommioFile {
             GlommioError::create_enhanced(
                 source,
                 "Pre-allocate space",
-                self.path.as_ref(),
+                self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
         })?;
         Ok(())
     }
 
-    pub(crate) async fn hint_extent_size(&self, size: usize) -> nix::Result<i32> {
-        sys::fs_hint_extentsize(self.as_raw_fd(), size)
+    pub(crate) async fn hint_extent_size(&self, size: usize) -> Result<i32> {
+        match sys::fs_hint_extentsize(self.as_raw_fd(), size) {
+            Ok(hint) => Ok(hint),
+            Err(err) => Err(io::Error::from_raw_os_error(err.as_errno().unwrap() as i32).into()),
+        }
     }
 
     pub(crate) async fn truncate(&self, size: u64) -> Result<()> {
@@ -181,16 +192,16 @@ impl GlommioFile {
             GlommioError::create_enhanced(
                 source,
                 "Truncating",
-                self.path.as_ref(),
+                self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
         })
     }
 
-    pub(crate) async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
-        let old_path = self.path_required("rename")?;
+    pub(crate) async fn rename<P: AsRef<Path>>(&self, new_path: P) -> Result<()> {
+        let old_path = self.path_required("rename")?.to_path_buf();
         crate::io::rename(old_path, &new_path).await?;
-        self.path = Some(new_path.as_ref().to_owned());
+        self.path.replace(Some(new_path.as_ref().to_owned()));
         Ok(())
     }
 
@@ -200,7 +211,7 @@ impl GlommioFile {
             GlommioError::create_enhanced(
                 source,
                 "Syncing",
-                self.path.as_ref(),
+                self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
         })?;
@@ -209,11 +220,11 @@ impl GlommioFile {
 
     pub(crate) async fn remove(&self) -> Result<()> {
         let path = self.path_required("remove")?;
-        sys::remove_file(path).map_err(|source| {
+        sys::remove_file(path.as_ref()).map_err(|source| {
             GlommioError::create_enhanced(
                 source,
                 "Removing",
-                self.path.as_ref(),
+                self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
         })
@@ -227,12 +238,12 @@ impl GlommioFile {
             .reactor
             .upgrade()
             .unwrap()
-            .statx(self.as_raw_fd(), path);
+            .statx(self.as_raw_fd(), path.as_ref());
         source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
                 "getting file metadata",
-                self.path.as_ref(),
+                self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
         })?;
@@ -262,7 +273,7 @@ pub(crate) mod test {
             let gf = GlommioFile::open_at(-1, &file, libc::O_CREAT, 644)
                 .await
                 .unwrap();
-            let gf_fd = gf.path.as_ref().cloned().unwrap();
+            let gf_fd = gf.path.borrow().as_ref().cloned().unwrap();
 
             let file_list = || {
                 let mut files = vec![];

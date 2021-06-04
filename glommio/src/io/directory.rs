@@ -10,6 +10,7 @@ use crate::{
     Local,
 };
 use std::{
+    cell::Ref,
     io,
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     path::Path,
@@ -39,11 +40,12 @@ impl Directory {
             GlommioError::create_enhanced(
                 source,
                 "Cloning directory",
-                self.file.path.as_ref(),
+                self.file.path.borrow().as_ref(),
                 Some(self.file.as_raw_fd()),
             )
         })?;
-        let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(self.file.path.clone());
+        let file =
+            unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(self.file.path.borrow().clone());
         Ok(Directory { file })
     }
 
@@ -131,7 +133,8 @@ impl Directory {
     /// Returns an iterator to the contents of this directory
     pub fn sync_read_dir(&self) -> Result<std::fs::ReadDir> {
         let path = self.file.path_required("read directory")?;
-        enhanced_try!(std::fs::read_dir(path), "Reading a directory", self.file).map_err(Into::into)
+        enhanced_try!(std::fs::read_dir(&*path), "Reading a directory", self.file)
+            .map_err(Into::into)
     }
 
     /// Issues fdatasync into the underlying file.
@@ -153,7 +156,7 @@ impl Directory {
 
     /// Returns an `Option` containing the path associated with this open
     /// directory, or `None` if there isn't one.
-    pub fn path(&self) -> Option<&Path> {
+    pub fn path(&self) -> Option<Ref<'_, Path>> {
         self.file.path()
     }
 }

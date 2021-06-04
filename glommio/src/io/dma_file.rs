@@ -14,6 +14,7 @@ use crate::{
 };
 use nix::sys::statfs::*;
 use std::{
+    cell::Ref,
     io,
     os::unix::io::{AsRawFd, RawFd},
     path::Path,
@@ -354,7 +355,7 @@ impl DmaFile {
     ///
     /// It is important not to set the extent size too big. Writes can fail
     /// otherwise if the extent can't be allocated.
-    pub async fn hint_extent_size(&self, size: usize) -> nix::Result<i32> {
+    pub async fn hint_extent_size(&self, size: usize) -> Result<i32> {
         self.file.hint_extent_size(size).await
     }
 
@@ -368,7 +369,7 @@ impl DmaFile {
     /// rename this file.
     ///
     /// **Warning:** synchronous operation, will block the reactor
-    pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
+    pub async fn rename<P: AsRef<Path>>(&self, new_path: P) -> Result<()> {
         self.file.rename(new_path).await
     }
 
@@ -395,7 +396,7 @@ impl DmaFile {
 
     /// Returns an `Option` containing the path associated with this open
     /// directory, or `None` if there isn't one.
-    pub fn path(&self) -> Option<&Path> {
+    pub fn path(&self) -> Option<Ref<'_, Path>> {
         self.file.path()
     }
 
@@ -491,7 +492,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_rename, path, _k, {
-        let mut new_file = DmaFile::create(path.join("testfile"))
+        let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
 
@@ -507,7 +508,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_rename_noop, path, _k, {
-        let mut new_file = DmaFile::create(path.join("testfile"))
+        let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
 
@@ -571,7 +572,7 @@ pub(crate) mod test {
             .await
             .expect("failed to create file");
 
-        assert_eq!(new_file.path().unwrap(), path.join("testfile"));
+        assert_eq!(*new_file.path().unwrap(), path.join("testfile"));
         new_file.close().await.expect("failed to close file");
     });
 

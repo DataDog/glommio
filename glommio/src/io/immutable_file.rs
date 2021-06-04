@@ -13,11 +13,12 @@ use crate::io::{
     ReadResult,
 };
 
-use std::path::Path;
-
 use futures_lite::{future::poll_fn, io::AsyncWrite};
+use log::warn;
 use std::{
+    cell::Ref,
     io,
+    path::Path,
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
@@ -42,11 +43,11 @@ pub struct ImmutableFileBuilder<P>
 where
     P: AsRef<Path>,
 {
-    max_merged_buffer_size: usize,
-    max_read_amp: Option<usize>,
     concurrency: usize,
     buffer_size: usize,
     flush_disabled: bool,
+    pre_allocate: Option<u64>,
+    hint_extent_size: Option<usize>,
     path: P,
 }
 
@@ -58,8 +59,6 @@ where
 /// [`build_sink`]: ImmutableFileBuilder::build_sink
 /// [`ImmutableFileBuilder`]: ImmutableFileBuilder
 pub struct ImmutableFilePreSealSink {
-    max_merged_buffer_size: usize,
-    max_read_amp: Option<usize>,
     writer: DmaStreamWriter,
 }
 
@@ -84,9 +83,8 @@ pub struct ImmutableFilePreSealSink {
 /// [`read_at`]: ImmutableFile::read_at
 /// [`read_many`]: ImmutableFile::read_many
 pub struct ImmutableFile {
-    max_merged_buffer_size: usize,
-    max_read_amp: Option<usize>,
     stream_builder: DmaStreamReaderBuilder,
+    size: u64,
 }
 
 impl<P> ImmutableFileBuilder<P>
@@ -114,9 +112,9 @@ where
             path: fname,
             buffer_size: 128 << 10,
             concurrency: 10,
-            max_merged_buffer_size: 1 << 20,
-            max_read_amp: Some(128 << 10),
             flush_disabled: false,
+            pre_allocate: None,
+            hint_extent_size: None,
         }
     }
 
@@ -158,6 +156,32 @@ where
         self
     }
 
+    /// pre-allocates space in the filesystem to hold a file at least as big as
+    /// the size argument.
+    pub fn with_pre_allocation(mut self, size: Option<u64>) -> Self {
+        self.pre_allocate = size;
+        self
+    }
+
+    /// Hint to the OS the size of increase of this file, to allow more
+    /// efficient allocation of blocks.
+    ///
+    /// Allocating blocks at the filesystem level turns asynchronous writes into
+    /// threaded synchronous writes, as we need to first find the blocks to
+    /// host the file.
+    ///
+    /// If the extent is larger, that means many blocks are allocated at a time.
+    /// For instance, if the extent size is 1MB, that means that only 1 out
+    /// of 4 256kB writes will be turned synchronous. Combined with diligent
+    /// use of `fallocate` we can greatly minimize context switches.
+    ///
+    /// It is important not to set the extent size too big. Writes can fail
+    /// otherwise if the extent can't be allocated.
+    pub fn with_hint_extent_size(mut self, size: Option<usize>) -> Self {
+        self.hint_extent_size = size;
+        self
+    }
+
     /// Builds an [`ImmutableFilePreSealSink`] with the properties defined by
     /// this builder.
     ///
@@ -173,17 +197,31 @@ where
             .create_new(true)
             .open(self.path)
             .await?;
+
+        if let Some(size) = self.pre_allocate {
+            if let Err(err) = file.pre_allocate(size).await {
+                warn!(
+                    "Error: failed to run pre_allocate on ImmutableFile: {}",
+                    err
+                );
+            }
+        }
+        if let Some(size) = self.hint_extent_size {
+            if let Err(err) = file.hint_extent_size(size).await {
+                warn!(
+                    "Error: failed to run hint_extent_size on ImmutableFile: {}",
+                    err
+                );
+            }
+        }
+
         let writer = DmaStreamWriterBuilder::new(file)
             .with_sync_on_close_disabled(self.flush_disabled)
             .with_buffer_size(self.buffer_size)
             .with_write_behind(self.concurrency)
             .build();
 
-        Ok(ImmutableFilePreSealSink {
-            writer,
-            max_merged_buffer_size: self.max_merged_buffer_size,
-            max_read_amp: self.max_read_amp,
-        })
+        Ok(ImmutableFilePreSealSink { writer })
     }
 
     /// Builds an [`ImmutableFile`] with the properties defined by this
@@ -203,14 +241,14 @@ where
                 .open(self.path)
                 .await?,
         );
+        let size = file.file_size().await?;
         let stream_builder = DmaStreamReaderBuilder::from_rc(file)
             .with_buffer_size(self.buffer_size)
             .with_read_ahead(self.concurrency);
 
         Ok(ImmutableFile {
             stream_builder,
-            max_merged_buffer_size: self.max_merged_buffer_size,
-            max_read_amp: self.max_read_amp,
+            size,
         })
     }
 }
@@ -222,12 +260,46 @@ impl ImmutableFilePreSealSink {
     /// [`ImmutableFile`]
     pub async fn seal(mut self) -> Result<ImmutableFile> {
         let stream_builder = poll_fn(|cx| self.writer.poll_seal(cx)).await?;
-
+        let size = stream_builder.file.file_size().await?;
         Ok(ImmutableFile {
             stream_builder,
-            max_merged_buffer_size: self.max_merged_buffer_size,
-            max_read_amp: self.max_read_amp,
+            size,
         })
+    }
+
+    /// Waits for all currently in-flight buffers to return and be safely stored
+    /// in the underlying storage
+    ///
+    /// Note that the current buffer being written to is not flushed, as it may
+    /// not be properly aligned. Buffers that are currently in-flight will
+    /// be waited on, and a sync operation will be issued by the operating
+    /// system.
+    ///
+    /// Returns the flushed position of the file at the time the sync started.
+    pub async fn sync(&self) -> Result<u64> {
+        self.writer.sync().await
+    }
+
+    /// Acquires the current position of this [`ImmutableFilePreSealSink`].
+    pub fn current_pos(&self) -> u64 {
+        self.writer.current_pos()
+    }
+
+    /// Acquires the current position of this [`ImmutableFilePreSealSink`] that
+    /// is flushed to the underlying media.
+    ///
+    /// Warning: the position reported by this API is not restart or crash safe.
+    /// You need to call [`ImmutableFilePreSealSink::sync`] for that. Although
+    /// the ImmutableFilePreSealSink uses Direct I/O, modern storage devices
+    /// have their own caches and may still lose data that sits on those
+    /// caches upon a restart until [`ImmutableFilePreSealSink::sync`] is called
+    /// (Note that [`ImmutableFilePreSealSink::seal`] implies a sync).
+    ///
+    /// However within the same session, new readers trying to read from any
+    /// position before what we return in this method will be guaranteed to
+    /// read the data we just wrote.
+    pub fn current_flushed_pos(&self) -> u64 {
+        self.writer.current_flushed_pos()
     }
 }
 
@@ -250,6 +322,32 @@ impl AsyncWrite for ImmutableFilePreSealSink {
 }
 
 impl ImmutableFile {
+    /// Returns an `Option` containing the path associated with this open
+    /// directory, or `None` if there isn't one.
+    pub fn path(&self) -> Option<Ref<'_, Path>> {
+        self.stream_builder.file.path()
+    }
+
+    /// Returns the size of a file, in bytes
+    pub fn file_size(&self) -> u64 {
+        self.size
+    }
+
+    /// Returns true if the ['ImmutableFile'] represent the same file on the
+    /// underlying device.
+    ///
+    /// Files are considered to be the same if they live in the same file system
+    /// and have the same Linux inode. Note that based on this rule a
+    /// symlink is *not* considered to be the same file.
+    ///
+    /// Files will be considered to be the same if:
+    /// * A file is opened multiple times (different file descriptors, but same
+    ///   file!)
+    /// * they are hard links.
+    pub fn is_same(&self, other: &ImmutableFile) -> bool {
+        self.stream_builder.file.is_same(&other.stream_builder.file)
+    }
+
     /// Reads into buffer in buf from a specific position in the file.
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
@@ -278,16 +376,44 @@ impl ImmutableFile {
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match.
-    pub fn read_many<V: IoVec, S: Iterator<Item = V>>(&self, iovs: S) -> ReadManyResult<V>
+    pub fn read_many<V: IoVec, S: Iterator<Item = V>>(
+        &self,
+        iovs: S,
+        max_merged_buffer_size: usize,
+        max_read_amp: Option<usize>,
+    ) -> ReadManyResult<V>
     where
         V: IoVec,
         S: Iterator<Item = V>,
     {
-        self.stream_builder.file.clone().read_many(
-            iovs,
-            self.max_merged_buffer_size,
-            self.max_read_amp,
-        )
+        self.stream_builder
+            .file
+            .read_many(iovs, max_merged_buffer_size, max_read_amp)
+    }
+
+    /// rename this file.
+    ///
+    /// **Warning:** synchronous operation, will block the reactor
+    pub async fn rename<P: AsRef<Path>>(&self, new_path: P) -> Result<()> {
+        self.stream_builder.file.rename(new_path).await
+    }
+
+    /// remove this file.
+    ///
+    /// The file does not have to be closed to be removed. Removing removes
+    /// the name from the filesystem but the file will still be accessible for
+    /// as long as it is open.
+    ///
+    /// **Warning:** synchronous operation, will block the reactor
+    pub async fn remove(&self) -> Result<()> {
+        self.stream_builder.file.remove().await
+    }
+
+    /// Closes this [`ImmutableFile`]
+    /// Note that this method returns an error if other entities hold references
+    /// to the underlying file, such as read streams.
+    pub async fn close(self) -> Result<()> {
+        self.stream_builder.file.close_rc().await
     }
 
     /// Creates a [`DmaStreamReaderBuilder`] from this `ImmutableFile`.
@@ -354,6 +480,32 @@ mod test {
         let mut buf = [0u8; 128];
         let x = reader.read(&mut buf).await.unwrap();
         assert_eq!(x, 6);
+
+        reader.close().await.unwrap();
+        stream.close().await.unwrap();
+    });
+
+    immutable_file_test!(stream_pos, path, {
+        let fname = path.join("testfile");
+        let mut immutable = ImmutableFileBuilder::new(fname).build_sink().await.unwrap();
+        assert_eq!(immutable.current_pos(), 0);
+        assert_eq!(immutable.current_flushed_pos(), 0);
+
+        immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        assert_eq!(immutable.current_pos(), 6);
+        assert_eq!(immutable.current_flushed_pos(), 0);
+
+        immutable.write(&[6, 7, 8, 9]).await.unwrap();
+
+        let stream = immutable.seal().await.unwrap();
+        let mut reader = stream.stream_reader().build();
+
+        let mut buf = [0u8; 128];
+        let x = reader.read(&mut buf).await.unwrap();
+        assert_eq!(x, 10);
+
+        reader.close().await.unwrap();
+        stream.close().await.unwrap();
     });
 
     immutable_file_test!(seal_and_random, path, {
@@ -376,6 +528,8 @@ mod test {
             2,
             stream::iter(vec![task1, task2]).then(|x| x).count().await
         );
+
+        stream.close().await.unwrap();
     });
 
     immutable_file_test!(seal_ready_many, path, {
@@ -384,11 +538,15 @@ mod test {
         immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
         let stream = immutable.seal().await.unwrap();
 
-        let iovs = vec![(0, 1), (3, 1)];
-        let mut bufs = stream.read_many(iovs.into_iter());
-        let next_buffer = bufs.next().await.unwrap();
-        assert_eq!(next_buffer.unwrap().1.len(), 1);
-        let next_buffer = bufs.next().await.unwrap();
-        assert_eq!(next_buffer.unwrap().1.len(), 1);
+        {
+            let iovs = vec![(0, 1), (3, 1)];
+            let mut bufs = stream.read_many(iovs.into_iter(), 0, None);
+            let next_buffer = bufs.next().await.unwrap();
+            assert_eq!(next_buffer.unwrap().1.len(), 1);
+            let next_buffer = bufs.next().await.unwrap();
+            assert_eq!(next_buffer.unwrap().1.len(), 1);
+        } // ReadManyResult hols a reference to the file so we scope it
+
+        stream.close().await.unwrap();
     });
 }
