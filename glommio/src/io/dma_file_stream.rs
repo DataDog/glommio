@@ -1867,7 +1867,6 @@ mod test {
         assert_eq!(writer.sync().await.unwrap(), 5000);
         // write more
         writer.write_all(&buffer).await.unwrap();
-        assert_eq!(writer.sync().await.unwrap(), 10000);
         writer.close().await.unwrap();
 
         assert_eq!(writer.current_flushed_pos(), 10000);
