@@ -784,13 +784,18 @@ enum FileStatus {
 }
 
 #[derive(Debug)]
+enum FlushStatus {
+    Pending(Option<task::JoinHandle<()>>),
+    Complete
+}
+
+#[derive(Debug)]
 struct DmaStreamWriterState {
     buffer_size: usize,
     waker: Option<Waker>,
     file_status: FileStatus,
     error: Option<io::Error>,
-    // flush_pos -> (completed, handle)
-    pending: BTreeMap<u64, (bool, Option<task::JoinHandle<()>>)>,
+    flushes: BTreeMap<u64, FlushStatus>,
     current_buffer: Option<DmaBuffer>,
     aligned_pos: u64,
     flushed_pos: u64,
@@ -886,22 +891,25 @@ impl DmaStreamWriterState {
         self.flushed_pos
     }
 
-    fn adjust_flushed_pos(&mut self, just_written: u64) {
-        assert!(self.pending.insert(just_written, (true, None)).is_some());
-        for (flush_pos, (completed, _)) in self.pending.iter_mut() {
-            if *completed {
-                self.flushed_pos = *flush_pos;
-            } else {
-                break;
-            }
+    fn adjust_flushed_pos(&mut self, written_upto: u64) {
+        assert!(self.flushes.insert(written_upto, FlushStatus::Complete).is_some());
+        for (flush_pos, status) in self.flushes.iter() {
+            match *status {
+                FlushStatus::Complete => self.flushed_pos = *flush_pos,
+                FlushStatus::Pending(_) => break,
+            };
         }
-        self.pending = self.pending.split_off(&(self.flushed_pos + 1));
+        // reap completed prefix
+        self.flushes = self.flushes.split_off(&(self.flushed_pos + 1));
     }
 
     fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.pending
+        self.flushes
             .values_mut()
-            .flat_map(|(_, handle)| handle.take())
+            .filter_map(|status| match status {
+                FlushStatus::Pending(handle) => handle.take(),
+                _ => None,
+            })
             .collect()
     }
 
@@ -913,7 +921,7 @@ impl DmaStreamWriterState {
         // If buffer was full, it should have been flushed already
         assert!(padding > 0);
         let post_flush_pos = self.current_pos();
-        if self.flushed_pos > post_flush_pos || self.pending.contains_key(&post_flush_pos) {
+        if self.flushed_pos > post_flush_pos || self.flushes.contains_key(&post_flush_pos) {
             return;
         }
         let buffer = self.current_buffer.take().unwrap();
@@ -950,15 +958,15 @@ impl DmaStreamWriterState {
             }
         })
         .detach();
-        self.pending.insert(flush_pos, (false, Some(handle)));
+        self.flushes.insert(flush_pos, FlushStatus::Pending(Some(handle)));
         padding
     }
 }
 
 impl Drop for DmaStreamWriterState {
     fn drop(&mut self) {
-        for (_, h) in std::mem::take(&mut self.pending) {
-            if let (_, Some(h)) = h {
+        for (_, h) in std::mem::take(&mut self.flushes) {
+            if let FlushStatus::Pending(Some(h)) = h {
                 h.cancel();
             }
         }
@@ -995,7 +1003,7 @@ impl DmaStreamWriter {
             sync_on_close: builder.sync_on_close,
             current_buffer: None,
             waker: None,
-            pending: BTreeMap::new(),
+            flushes: BTreeMap::new(),
             error: None,
             file_status: FileStatus::Open,
             aligned_pos: 0,
@@ -1081,14 +1089,14 @@ impl DmaStreamWriter {
 
     /// TODO document
     pub async fn flush_through(&self, pos: u64) -> Result<u64> {
-        let pos = std::cmp::min(self.current_pos(), pos);
         let file = self.file.clone().unwrap();
-        let mut pending = {
+        let (mut pending, pos) = {
             let mut state = self.state.borrow_mut();
+            let pos = std::cmp::min(state.current_pos(), pos);
             if pos > state.aligned_pos {
                 state.flush_partial(self.state.clone(), file.clone());
             }
-            state.current_pending()
+            (state.current_pending(), pos)
         };
         for flush in pending.drain(..) {
             flush.await;
@@ -1198,7 +1206,7 @@ impl AsyncWrite for DmaStreamWriter {
         while written < buf.len() {
             match state.current_buffer.take() {
                 None => {
-                    if state.pending.len() < state.write_behind {
+                    if state.flushes.len() < state.write_behind {
                         state.current_buffer = Some(
                             self.file
                                 .as_ref()
