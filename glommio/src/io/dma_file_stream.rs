@@ -913,6 +913,16 @@ impl DmaStreamWriterState {
             .collect()
     }
 
+    fn current_pending_count(&mut self) -> usize {
+        self.flushes
+            .values()
+            .filter(|status| match status {
+                FlushStatus::Pending(_) => true,
+                _ => false
+            })
+            .count()
+    }
+
     fn flush_partial(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         if self.buffer_pos == 0 {
             return;
@@ -1206,7 +1216,7 @@ impl AsyncWrite for DmaStreamWriter {
         while written < buf.len() {
             match state.current_buffer.take() {
                 None => {
-                    if state.flushes.len() < state.write_behind {
+                    if state.current_pending_count() < state.write_behind {
                         state.current_buffer = Some(
                             self.file
                                 .as_ref()
