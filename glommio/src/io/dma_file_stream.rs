@@ -796,6 +796,7 @@ struct DmaStreamWriterState {
     file_status: FileStatus,
     error: Option<io::Error>,
     flushes: BTreeMap<u64, FlushStatus>,
+    pending_flush_count: usize,
     current_buffer: Option<DmaBuffer>,
     aligned_pos: u64,
     flushed_pos: u64,
@@ -893,8 +894,9 @@ impl DmaStreamWriterState {
 
     fn adjust_flushed_pos(&mut self, written_upto: u64) {
         assert!(self.flushes.insert(written_upto, FlushStatus::Complete).is_some());
+        self.pending_flush_count -= 1;
         for (flush_pos, status) in self.flushes.iter() {
-            match *status {
+            match status {
                 FlushStatus::Complete => self.flushed_pos = *flush_pos,
                 FlushStatus::Pending(_) => break,
             };
@@ -904,23 +906,17 @@ impl DmaStreamWriterState {
     }
 
     fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.flushes
-            .values_mut()
-            .filter_map(|status| match status {
-                FlushStatus::Pending(handle) => handle.take(),
-                _ => None,
-            })
-            .collect()
+        self.flushes.values_mut().filter_map(|status| match status {
+            FlushStatus::Pending(handle) => handle.take(),
+            _ => None,
+        }).collect()
     }
 
-    fn current_pending_count(&mut self) -> usize {
-        self.flushes
-            .values()
-            .filter(|status| match status {
-                FlushStatus::Pending(_) => true,
-                _ => false
-            })
-            .count()
+    fn current_pending_through(&mut self, pos: u64) -> Vec<task::JoinHandle<()>> {
+        self.flushes.range_mut(..=pos).filter_map(|(_, status)| match status {
+            FlushStatus::Pending(handle) => handle.take(),
+            _ => None,
+        }).collect()
     }
 
     fn flush_partial(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
@@ -968,6 +964,7 @@ impl DmaStreamWriterState {
             }
         })
         .detach();
+        self.pending_flush_count += 1;
         self.flushes.insert(flush_pos, FlushStatus::Pending(Some(handle)));
         padding
     }
@@ -1014,6 +1011,7 @@ impl DmaStreamWriter {
             current_buffer: None,
             waker: None,
             flushes: BTreeMap::new(),
+            pending_flush_count: 0,
             error: None,
             file_status: FileStatus::Open,
             aligned_pos: 0,
@@ -1099,14 +1097,13 @@ impl DmaStreamWriter {
 
     /// TODO document
     pub async fn flush_through(&self, pos: u64) -> Result<u64> {
-        let file = self.file.clone().unwrap();
-        let (mut pending, pos) = {
+        let (pos, mut pending) = {
             let mut state = self.state.borrow_mut();
             let pos = std::cmp::min(state.current_pos(), pos);
             if pos > state.aligned_pos {
-                state.flush_partial(self.state.clone(), file.clone());
+                state.flush_partial(self.state.clone(), self.file.clone().unwrap());
             }
-            (state.current_pending(), pos)
+            (pos, state.current_pending_through(pos))
         };
         for flush in pending.drain(..) {
             flush.await;
@@ -1216,7 +1213,7 @@ impl AsyncWrite for DmaStreamWriter {
         while written < buf.len() {
             match state.current_buffer.take() {
                 None => {
-                    if state.current_pending_count() < state.write_behind {
+                    if state.pending_flush_count < state.write_behind {
                         state.current_buffer = Some(
                             self.file
                                 .as_ref()
