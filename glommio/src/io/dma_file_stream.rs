@@ -869,11 +869,13 @@ impl DmaStreamWriterState {
                 }
             }
 
-            if final_pos != state.aligned_pos {
+            if final_pos > state.aligned_pos {
                 let res = file.truncate(final_pos).await;
                 if collect_error!(state, res) {
                     return;
                 }
+            } else {
+                assert_eq!(final_pos, state.aligned_pos);
             }
 
             if do_close {
