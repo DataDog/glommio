@@ -57,7 +57,7 @@ use crate::{
         SleepNotifier,
         Source,
         SourceType,
-        StatsCollectionFn,
+        StatsCollection,
     },
     IoRequirements,
     IoStats,
@@ -315,13 +315,13 @@ impl Reactor {
         &self,
         raw: RawFd,
         stype: SourceType,
-        stats_collection_fn: Option<StatsCollectionFn>,
+        stats_collection: Option<StatsCollection>,
     ) -> Source {
         sys::Source::new(
             self.io_scheduler.requirements(),
             raw,
             stype,
-            stats_collection_fn,
+            stats_collection,
             Some(Local::current_task_queue()),
         )
     }
@@ -370,33 +370,43 @@ impl Reactor {
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_writes += op_count;
+                    stats.file_bytes_written += *result as u64 * op_count;
+                }
+            }),
+            reused: None,
+        };
+
         let source = self.new_source(
             raw,
             SourceType::Write(pollable, IoBuffer::Dma(buf)),
-            Some(|result, stats| {
-                if let Ok(result) = result {
-                    stats.file_writes += 1;
-                    stats.file_bytes_written += *result as u64;
-                }
-            }),
+            Some(stats),
         );
         self.sys.write_dma(&source, pos);
         source
     }
 
     pub(crate) fn write_buffered(&self, raw: RawFd, buf: Vec<u8>, pos: u64) -> Source {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_buffered_writes += op_count;
+                    stats.file_buffered_bytes_written += *result as u64 * op_count;
+                }
+            }),
+            reused: None,
+        };
+
         let source = self.new_source(
             raw,
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIo::Disabled),
                 IoBuffer::Buffered(buf),
             ),
-            Some(|result, stats| {
-                if let Ok(result) = result {
-                    stats.file_buffered_writes += 1;
-                    stats.file_buffered_bytes_written += *result as u64;
-                }
-            }),
+            Some(stats),
         );
         self.sys.write_buffered(&source, pos);
         source
@@ -537,19 +547,27 @@ impl Reactor {
         pollable: PollableStatus,
         scheduler: Option<&FileScheduler>,
     ) -> ScheduledSource {
-        let source = self.new_source(
-            raw,
-            SourceType::Read(pollable, None),
-            Some(|result, stats| {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
                 if let Ok(result) = result {
-                    stats.file_reads += 1;
-                    stats.file_bytes_read += *result as u64;
+                    stats.file_reads += op_count;
+                    stats.file_bytes_read += *result as u64 * op_count;
                 }
             }),
-        );
+            reused: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_deduped_reads += op_count;
+                    stats.file_deduped_bytes_read += *result as u64 * op_count;
+                }
+            }),
+        };
+
+        let source = self.new_source(raw, SourceType::Read(pollable, None), Some(stats));
 
         if let Some(scheduler) = scheduler {
-            if let Some(source) = scheduler.consume_scheduled(pos..pos + size as u64) {
+            if let Some(source) =
+                scheduler.consume_scheduled(pos..pos + size as u64, Some(&self.sys))
+            {
                 source
             } else {
                 self.sys.read_dma(&source, pos, size);
@@ -568,19 +586,26 @@ impl Reactor {
         size: usize,
         scheduler: Option<&FileScheduler>,
     ) -> ScheduledSource {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_buffered_reads += op_count;
+                    stats.file_buffered_bytes_read += *result as u64 * op_count;
+                }
+            }),
+            reused: None,
+        };
+
         let source = self.new_source(
             raw,
             SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
-            Some(|result, stats| {
-                if let Ok(result) = result {
-                    stats.file_buffered_reads += 1;
-                    stats.file_buffered_bytes_read += *result as u64;
-                }
-            }),
+            Some(stats),
         );
 
         if let Some(scheduler) = scheduler {
-            if let Some(source) = scheduler.consume_scheduled(pos..pos + size as u64) {
+            if let Some(source) =
+                scheduler.consume_scheduled(pos..pos + size as u64, Some(&self.sys))
+            {
                 source
             } else {
                 self.sys.read_buffered(&source, pos, size);
@@ -614,10 +639,13 @@ impl Reactor {
         let source = self.new_source(
             raw,
             SourceType::Close,
-            Some(|result, stats| {
-                if result.is_ok() {
-                    stats.files_closed += 1
-                }
+            Some(StatsCollection {
+                fulfilled: Some(|result, stats, op_count| {
+                    if result.is_ok() {
+                        stats.files_closed += op_count
+                    }
+                }),
+                reused: None,
             }),
         );
         self.sys.close(&source);
@@ -653,10 +681,13 @@ impl Reactor {
         let source = self.new_source(
             dir,
             SourceType::Open(path),
-            Some(|result, stats| {
-                if result.is_ok() {
-                    stats.files_opened += 1
-                }
+            Some(StatsCollection {
+                fulfilled: Some(|result, stats, op_count| {
+                    if result.is_ok() {
+                        stats.files_opened += op_count
+                    }
+                }),
+                reused: None,
             }),
         );
         self.sys.open_at(&source, flags, mode);

@@ -1,4 +1,9 @@
-use crate::{io::glommio_file::Identity, sys::Source, IoRequirements};
+use crate::{
+    io::glommio_file::Identity,
+    sys::{Reactor, Source},
+    IoRequirements,
+    Local,
+};
 use intrusive_collections::{intrusive_adapter, Bound, KeyAdapter, RBTree, RBTreeLink};
 use std::{
     cell::{Cell, RefCell},
@@ -105,7 +110,11 @@ impl Drop for FileScheduler {
 }
 
 impl FileScheduler {
-    pub(crate) fn consume_scheduled(&self, data_range: Range<u64>) -> Option<ScheduledSource> {
+    pub(crate) fn consume_scheduled(
+        &self,
+        data_range: Range<u64>,
+        sys: Option<&Reactor>,
+    ) -> Option<ScheduledSource> {
         let sources = self.inner.sources.borrow();
         let mut candidates = sources.range(
             Bound::Included(&data_range.start),
@@ -115,6 +124,22 @@ impl FileScheduler {
         if let Some(sched_source) = candidates.find(|&x| {
             x.data_range.contains(&data_range.start) && x.data_range.contains(&(data_range.end - 1))
         }) {
+            if let (Some(sys), Some(result)) = (sys, sched_source.source.result()) {
+                if let Some(reused) = sched_source
+                    .source
+                    .stats_collection()
+                    .and_then(|x| x.reused)
+                {
+                    let mut ring = sys.ring_for_source(&sched_source.source);
+                    reused(&result, ring.io_stats_mut(), 1);
+                    reused(
+                        &result,
+                        ring.io_stats_for_task_queue_mut(Local::current_task_queue()),
+                        1,
+                    );
+                }
+            }
+
             unsafe {
                 let offset_start = data_range.start - sched_source.data_range.start;
                 Some(ScheduledSource {
@@ -283,12 +308,12 @@ pub(crate) mod test {
 
         let file = sched.get_file_scheduler((0, 1));
 
-        assert!(file.consume_scheduled(0..512).is_none());
+        assert!(file.consume_scheduled(0..512, None).is_none());
         let sched_source1 = file.schedule(
             Source::new(Default::default(), 0, SourceType::Invalid, None, None),
             0..512,
         );
-        let sched_source2 = file.consume_scheduled(0..512).unwrap();
+        let sched_source2 = file.consume_scheduled(0..512, None).unwrap();
 
         assert!(Rc::ptr_eq(&sched_source1.inner, &sched_source2.inner));
 
@@ -378,21 +403,25 @@ pub(crate) mod test {
         let read_buf1 = read_some(new_file.clone(), 0..4096).await;
         // we expect one IO to have been performed at this point
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 0);
 
         let read_buf2 = read_some(new_file.clone(), 0..4096).await;
         // should feed from the first buffer
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
 
         drop(read_buf1);
         let read_buf3 = read_some(new_file.clone(), 0..4096).await;
         // initial buffer lifetime should have been extended
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 2);
 
         drop(read_buf2);
         drop(read_buf3);
         let _ = read_some(new_file.clone(), 0..4096).await;
         // all buffers are dead so this last read should trigger an IO request
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 2);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 2);
 
         new_file.close_rc().await.expect("failed to close file");
     });
@@ -432,6 +461,7 @@ pub(crate) mod test {
 
         // should feed from the first buffer
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -465,10 +495,12 @@ pub(crate) mod test {
         let _first = read_some(new_file.clone(), 0..16384).await;
         // we expect one IO to have been performed at this point
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 0);
 
         let _second = read_some(new_file.clone(), 67..578).await;
         // should feed from the first buffer
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -503,6 +535,7 @@ pub(crate) mod test {
 
         let _second = read_some(new_file.clone(), 0..4096).await;
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 2);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 0);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -552,6 +585,7 @@ pub(crate) mod test {
         let _second = read_some(linked_file.clone(), 0..4096).await;
         // should feed from the first buffer
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
         linked_file.close_rc().await.expect("failed to close file");
     });
@@ -602,6 +636,7 @@ pub(crate) mod test {
         let _second = read_some(linked_file.clone(), 0..4096).await;
         // should feed from the first buffer
         assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
         linked_file.close_rc().await.expect("failed to close file");
     });

@@ -85,7 +85,14 @@ pub struct EnqueuedSource {
     pub(crate) queue: ReactorQueue,
 }
 
-pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats) -> ();
+pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats, waiters: u64) -> ();
+#[derive(Copy, Clone)]
+pub(crate) struct StatsCollection {
+    /// fulfilled runs when the source exits the reactor
+    pub(crate) fulfilled: Option<StatsCollectionFn>,
+    /// reused runs when a fulfilled source is reused by another consumer
+    pub(crate) reused: Option<StatsCollectionFn>,
+}
 
 /// A registered source of I/O events.
 pub(crate) struct InnerSource {
@@ -103,7 +110,7 @@ pub(crate) struct InnerSource {
 
     pub(crate) enqueued: Option<EnqueuedSource>,
 
-    pub(crate) stats_collection: Option<StatsCollectionFn>,
+    pub(crate) stats_collection: Option<StatsCollection>,
 
     pub(crate) task_queue: Option<TaskQueueHandle>,
 }
@@ -136,7 +143,7 @@ impl Source {
         ioreq: IoRequirements,
         raw: RawFd,
         source_type: SourceType,
-        stats_collection_fn: Option<StatsCollectionFn>,
+        stats_collection: Option<StatsCollection>,
         task_queue: Option<TaskQueueHandle>,
     ) -> Source {
         Source {
@@ -147,7 +154,7 @@ impl Source {
                 io_requirements: ioreq,
                 enqueued: None,
                 timeout: None,
-                stats_collection: stats_collection_fn,
+                stats_collection,
                 task_queue,
             })),
         }
@@ -215,6 +222,10 @@ impl Source {
 
     pub(super) fn raw(&self) -> RawFd {
         self.inner.borrow().raw
+    }
+
+    pub(crate) fn stats_collection(&self) -> Option<StatsCollection> {
+        self.inner.borrow().stats_collection
     }
 
     pub(crate) async fn collect_rw(&self) -> io::Result<usize> {

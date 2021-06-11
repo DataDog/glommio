@@ -464,6 +464,29 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
         })
 }
 
+fn record_stats<Ring: ReactorRing>(ring: &mut Ring, src: &InnerSource, res: &io::Result<usize>) {
+    if let Some(fulfilled) = src.stats_collection.and_then(|x| x.fulfilled) {
+        fulfilled(res, &mut ring.io_stats_mut(), 1);
+        if let Some(handle) = src.task_queue {
+            fulfilled(res, ring.io_stats_for_task_queue_mut(handle), 1);
+        }
+    }
+
+    let waiters = usize::saturating_sub(src.wakers.waiters.len(), 1);
+    if waiters > 0 {
+        if let Some(reused) = src.stats_collection.and_then(|x| x.reused) {
+            reused(res, &mut ring.io_stats_mut(), waiters as u64);
+            if let Some(handle) = src.task_queue {
+                reused(
+                    res,
+                    ring.io_stats_for_task_queue_mut(handle),
+                    waiters as u64,
+                );
+            }
+        }
+    }
+}
+
 fn process_one_event<F, R>(
     cqe: Option<iou::CQE>,
     try_process: F,
@@ -576,6 +599,11 @@ impl UringQueueState {
             }),
         }
     }
+}
+
+pub(crate) trait ReactorRing {
+    fn io_stats_mut(&mut self) -> &mut RingIoStats;
+    fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats;
 }
 
 trait UringCommon {
@@ -715,6 +743,16 @@ impl PollRing {
     }
 }
 
+impl ReactorRing for PollRing {
+    fn io_stats_mut(&mut self) -> &mut RingIoStats {
+        &mut self.stats
+    }
+
+    fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats {
+        self.task_queue_stats.entry(handle).or_default()
+    }
+}
+
 impl UringCommon for PollRing {
     fn name(&self) -> &'static str {
         "poll"
@@ -751,19 +789,7 @@ impl UringCommon for PollRing {
             self.ring.peek_for_cqe(),
             |_| None,
             |src, res| {
-                if let Some(stats_collection) = src.stats_collection {
-                    stats_collection(&res, &mut self.stats);
-                    if let Some(handle) = src.task_queue {
-                        self.task_queue_stats
-                            .entry(handle)
-                            .and_modify(|stats| stats_collection(&res, stats))
-                            .or_insert_with(|| {
-                                let mut stats: RingIoStats = Default::default();
-                                stats_collection(&res, &mut stats);
-                                stats
-                            });
-                    }
-                }
+                record_stats(self, &src, &res);
                 res
             },
             source_map,
@@ -968,6 +994,16 @@ impl SleepableRing {
     }
 }
 
+impl ReactorRing for SleepableRing {
+    fn io_stats_mut(&mut self) -> &mut RingIoStats {
+        &mut self.stats
+    }
+
+    fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats {
+        self.task_queue_stats.entry(handle).or_default()
+    }
+}
+
 impl UringCommon for SleepableRing {
     fn name(&self) -> &'static str {
         self.name
@@ -1000,19 +1036,7 @@ impl UringCommon for SleepableRing {
                 _ => None,
             },
             |src, res| {
-                if let Some(stats_collection) = src.stats_collection {
-                    stats_collection(&res, &mut self.stats);
-                    if let Some(handle) = src.task_queue {
-                        self.task_queue_stats
-                            .entry(handle)
-                            .and_modify(|stats| stats_collection(&res, stats))
-                            .or_insert_with(|| {
-                                let mut stats: RingIoStats = Default::default();
-                                stats_collection(&res, &mut stats);
-                                stats
-                            });
-                    }
-                }
+                record_stats(self, &src, &res);
                 res
             },
             source_map,
@@ -1550,6 +1574,32 @@ impl Reactor {
                 op,
                 &mut *self.source_map.borrow_mut(),
             ),
+        }
+    }
+
+    pub(crate) fn ring_for_source(&self, source: &Source) -> RefMut<'_, dyn ReactorRing> {
+        match &*source.source_type() {
+            SourceType::Read(p, _) | SourceType::Write(p, _) => {
+                return match p {
+                    PollableStatus::Pollable => {
+                        RefMut::map(self.poll_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
+                    }
+                    PollableStatus::NonPollable(_) => {
+                        RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
+                    }
+                };
+            }
+            SourceType::Invalid => {
+                unreachable!("called ring_for_source on invalid source")
+            }
+            _ => match source.latency_req() {
+                Latency::NotImportant => {
+                    RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
+                }
+                Latency::Matters(_) => RefMut::map(self.latency_ring.borrow_mut(), |x| {
+                    x as &mut dyn ReactorRing
+                }),
+            },
         }
     }
 

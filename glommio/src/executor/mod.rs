@@ -140,7 +140,12 @@ impl PartialEq for TaskQueue {
 impl Eq for TaskQueue {}
 
 impl TaskQueue {
-    fn new<S>(index: usize, name: S, shares: Shares, ioreq: IoRequirements) -> Rc<RefCell<Self>>
+    fn new<S>(
+        index: TaskQueueHandle,
+        name: S,
+        shares: Shares,
+        ioreq: IoRequirements,
+    ) -> Rc<RefCell<Self>>
     where
         S: Into<String>,
     {
@@ -271,7 +276,7 @@ impl ExecutorStats {
 /// Allows information about the current state of a particular task queue to be
 /// consumed by applications.
 pub struct TaskQueueStats {
-    index: usize,
+    index: TaskQueueHandle,
     // so we can easily produce a handle
     reciprocal_shares: u64,
     queue_selected: u64,
@@ -279,7 +284,7 @@ pub struct TaskQueueStats {
 }
 
 impl TaskQueueStats {
-    fn new(index: usize, reciprocal_shares: u64) -> Self {
+    fn new(index: TaskQueueHandle, reciprocal_shares: u64) -> Self {
         Self {
             index,
             reciprocal_shares,
@@ -289,7 +294,7 @@ impl TaskQueueStats {
     }
 
     /// Returns a numeric ID that uniquely identifies this Task queue
-    pub fn index(&self) -> usize {
+    pub fn index(&self) -> TaskQueueHandle {
         self.index
     }
 
@@ -870,7 +875,12 @@ impl LocalExecutor {
         let io_requirements = IoRequirements::new(Latency::NotImportant, 0);
         self.queues.borrow_mut().available_executors.insert(
             0,
-            TaskQueue::new(0, "default", Shares::Static(1000), io_requirements),
+            TaskQueue::new(
+                Default::default(),
+                "default",
+                Shares::Static(1000),
+                io_requirements,
+            ),
         );
     }
 
@@ -928,7 +938,7 @@ impl LocalExecutor {
         };
 
         let io_requirements = IoRequirements::new(latency, index);
-        let tq = TaskQueue::new(index, name, shares, io_requirements);
+        let tq = TaskQueue::new(TaskQueueHandle { index }, name, shares, io_requirements);
 
         self.queues
             .borrow_mut()
@@ -965,17 +975,14 @@ impl LocalExecutor {
     }
 
     fn current_task_queue(&self) -> TaskQueueHandle {
-        TaskQueueHandle {
-            index: self
-                .queues
-                .borrow()
-                .active_executing
-                .as_ref()
-                .unwrap()
-                .borrow()
-                .stats
-                .index,
-        }
+        self.queues
+            .borrow()
+            .active_executing
+            .as_ref()
+            .unwrap()
+            .borrow()
+            .stats
+            .index
     }
 
     fn mark_me_for_yield(&self) {
