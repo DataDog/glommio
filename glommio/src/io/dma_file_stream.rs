@@ -786,7 +786,7 @@ enum FileStatus {
 #[derive(Debug)]
 enum FlushStatus {
     Pending(Option<task::JoinHandle<()>>),
-    Complete
+    Complete,
 }
 
 #[derive(Debug)]
@@ -895,7 +895,11 @@ impl DmaStreamWriterState {
     }
 
     fn adjust_flushed_pos(&mut self, written_upto: u64) {
-        assert!(self.flushes.insert(written_upto, FlushStatus::Complete).is_some());
+        assert!(
+            self.flushes
+                .insert(written_upto, FlushStatus::Complete)
+                .is_some()
+        );
         self.pending_flush_count -= 1;
         for (flush_pos, status) in self.flushes.iter() {
             match status {
@@ -908,17 +912,23 @@ impl DmaStreamWriterState {
     }
 
     fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
-        self.flushes.values_mut().filter_map(|status| match status {
-            FlushStatus::Pending(handle) => handle.take(),
-            _ => None,
-        }).collect()
+        self.flushes
+            .values_mut()
+            .filter_map(|status| match status {
+                FlushStatus::Pending(handle) => handle.take(),
+                _ => None,
+            })
+            .collect()
     }
 
     fn current_pending_through(&mut self, pos: u64) -> Vec<task::JoinHandle<()>> {
-        self.flushes.range_mut(..=pos).filter_map(|(_, status)| match status {
-            FlushStatus::Pending(handle) => handle.take(),
-            _ => None,
-        }).collect()
+        self.flushes
+            .range_mut(..=pos)
+            .filter_map(|(_, status)| match status {
+                FlushStatus::Pending(handle) => handle.take(),
+                _ => None,
+            })
+            .collect()
     }
 
     fn flush_partial(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
@@ -967,7 +977,8 @@ impl DmaStreamWriterState {
         })
         .detach();
         self.pending_flush_count += 1;
-        self.flushes.insert(flush_pos, FlushStatus::Pending(Some(handle)));
+        self.flushes
+            .insert(flush_pos, FlushStatus::Pending(Some(handle)));
         padding
     }
 }
