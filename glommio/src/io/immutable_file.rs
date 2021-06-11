@@ -14,7 +14,6 @@ use crate::io::{
 };
 
 use futures_lite::{future::poll_fn, io::AsyncWrite};
-use log::warn;
 use std::{
     cell::Ref,
     io,
@@ -198,21 +197,12 @@ where
             .dma_open(self.path)
             .await?;
 
+        // these two syscall are hints and are allowed to fail.
         if let Some(size) = self.pre_allocate {
-            if let Err(err) = file.pre_allocate(size).await {
-                warn!(
-                    "Error: failed to run pre_allocate on ImmutableFile: {}",
-                    err
-                );
-            }
+            let _ = file.pre_allocate(size).await;
         }
         if let Some(size) = self.hint_extent_size {
-            if let Err(err) = file.hint_extent_size(size).await {
-                warn!(
-                    "Error: failed to run hint_extent_size on ImmutableFile: {}",
-                    err
-                );
-            }
+            let _ = file.hint_extent_size(size).await;
         }
 
         let writer = DmaStreamWriterBuilder::new(file)
