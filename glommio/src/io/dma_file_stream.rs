@@ -901,14 +901,21 @@ impl DmaStreamWriterState {
                 .is_some()
         );
         self.pending_flush_count -= 1;
-        for (flush_pos, status) in self.flushes.iter() {
+        let mut to_reap = Vec::new();
+        for (flush_pos, status) in self.flushes.iter_mut() {
             match status {
-                FlushStatus::Complete => self.flushed_pos = *flush_pos,
+                FlushStatus::Complete => {
+                    self.flushed_pos = *flush_pos;
+                    to_reap.push(*flush_pos);
+                },
                 FlushStatus::Pending(_) => break,
             };
         }
-        // reap completed prefix
-        self.flushes = self.flushes.split_off(&(self.flushed_pos + 1));
+        // maybe one day range_drain(..=flush_pos)
+        // https://github.com/rust-lang/rust/issues/81074
+        for pos in &to_reap {
+            self.flushes.remove(pos);
+        }
     }
 
     fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
