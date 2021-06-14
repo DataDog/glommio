@@ -5,7 +5,10 @@
 //
 //! glommio::channels is a module that provides glommio channel-like
 //! abstractions.
-mod spsc_queue;
+
+/// A single-producer, single-consumer lock-free queue, allowing two threads
+/// to efficently communicate.
+pub mod spsc_queue;
 
 /// Allow data to be transmitted across two tasks in the same shard.
 ///

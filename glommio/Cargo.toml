@@ -89,3 +89,8 @@ required-features = ["bench"]
 [[bench]]
 name = "sharding"
 harness = false
+
+
+[[bench]]
+name = "spsc_queue"
+harness = false

@@ -1,38 +1,40 @@
 use std::{
     cell::{Cell, UnsafeCell},
     fmt,
+    marker::PhantomData,
+    mem::{self, MaybeUninit},
+    slice::from_raw_parts_mut,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
 };
 
 #[derive(Debug)]
-#[repr(align(64))]
+#[repr(align(128))]
 struct ProducerCacheline {
-    /// The bounded size as specified by the user.
-    capacity: usize,
-
     /// Index position of current tail
     tail: AtomicUsize,
-    shadow_head: Cell<usize>,
+    limit: Cell<usize>,
     /// Id == 0 : never connected
     /// Id == usize::MAX: disconnected
     consumer_id: AtomicUsize,
 }
 
 #[derive(Debug)]
-#[repr(align(64))]
+#[repr(align(128))]
 struct ConsumerCacheline {
-    /// The bounded size as specified by the user.
-    capacity: usize,
-
     /// Index position of the current head
     head: AtomicUsize,
-    shadow_tail: Cell<usize>,
     /// Id == 0 : never connected
     /// Id == usize::MAX: disconnected
     producer_id: AtomicUsize,
+}
+
+#[derive(Debug)]
+struct Slot<T> {
+    value: UnsafeCell<MaybeUninit<T>>,
+    has_value: AtomicBool,
 }
 
 /// The internal memory buffer used by the queue.
@@ -42,18 +44,22 @@ struct ConsumerCacheline {
 /// consumer use to track location in the ring.
 #[repr(C)]
 pub(crate) struct Buffer<T> {
-    buffer_storage: Vec<UnsafeCell<T>>,
+    buffer_storage: *mut Slot<T>,
+    capacity: usize,
+    mask: usize,
+    lookahead: usize,
 
     pcache: ProducerCacheline,
     ccache: ConsumerCacheline,
+
+    _marker: PhantomData<T>,
 }
 
 impl<T> fmt::Debug for Buffer<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let head = self.ccache.head.load(Ordering::Relaxed);
         let tail = self.pcache.tail.load(Ordering::Relaxed);
-        let shead = self.pcache.shadow_head.get();
-        let stail = self.ccache.shadow_tail.get();
+        let limit = self.pcache.limit.get();
         let id_to_str = |id| match id {
             0 => "not connected".into(),
             usize::MAX => "disconnected".into(),
@@ -64,11 +70,10 @@ impl<T> fmt::Debug for Buffer<T> {
         let producer_id = id_to_str(self.ccache.producer_id.load(Ordering::Relaxed));
 
         f.debug_struct("SPSC Buffer")
-            .field("capacity:", &self.ccache.capacity)
+            .field("capacity:", &self.capacity)
             .field("consumer_head:", &head)
-            .field("shadow_head:", &shead)
             .field("producer_tail:", &tail)
-            .field("shadow_tail:", &stail)
+            .field("lookahead_limit:", &limit)
             .field("consumer_id:", &consumer_id)
             .field("producer_id:", &producer_id)
             .finish()
@@ -78,7 +83,7 @@ impl<T> fmt::Debug for Buffer<T> {
 unsafe impl<T: Sync> Sync for Buffer<T> {}
 
 /// A handle to the queue which allows consuming values from the buffer
-pub(crate) struct Consumer<T> {
+pub struct Consumer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
@@ -91,7 +96,7 @@ impl<T> Clone for Consumer<T> {
 }
 
 /// A handle to the queue which allows adding values onto the buffer
-pub(crate) struct Producer<T> {
+pub struct Producer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
@@ -121,29 +126,32 @@ unsafe impl<T: Send> Send for Producer<T> {}
 impl<T> Buffer<T> {
     /// Attempt to pop a value off the buffer.
     ///
-    /// If the buffer is empty, this method will not block.  Instead, it will
-    /// return `None` signifying the buffer was empty.  The caller may then
+    /// If the buffer is empty, this method will not block. Instead, it will
+    /// return `None` signifying the buffer was empty. The caller may then
     /// decide what to do next (e.g. spin-wait, sleep, process something
     /// else, etc)
     fn try_pop(&self) -> Option<T> {
-        let current_head = self.ccache.head.load(Ordering::Relaxed);
-
-        if current_head == self.ccache.shadow_tail.get() {
-            self.ccache
-                .shadow_tail
-                .set(self.pcache.tail.load(Ordering::Acquire));
-            if current_head == self.ccache.shadow_tail.get() {
-                return None;
-            }
+        let head = self.ccache.head.load(Ordering::Relaxed);
+        let slot = unsafe { &*self.buffer_storage.add(head & self.mask) };
+        if !slot.has_value.load(Ordering::Acquire) {
+            return None;
         }
+        let v = Some(unsafe { slot.value.get().read().assume_init() });
+        slot.has_value.store(false, Ordering::Release);
+        self.ccache.head.store(head + 1, Ordering::Relaxed);
+        v
+    }
 
-        let resp = unsafe {
-            self.buffer_storage[current_head % self.ccache.capacity]
-                .get()
-                .read()
-        };
-        self.ccache.head.store(current_head + 1, Ordering::Release);
-        Some(resp)
+    fn has_space(&self, tail: usize) -> bool {
+        let index = (tail + self.lookahead) & self.mask;
+        let slot = unsafe { &*self.buffer_storage.add(index) };
+        if !slot.has_value.load(Ordering::Acquire) {
+            self.pcache.limit.set(tail + self.lookahead);
+            true
+        } else {
+            let slot = unsafe { &*self.buffer_storage.add(tail & self.mask) };
+            !slot.has_value.load(Ordering::Acquire)
+        }
     }
 
     /// Attempt to push a value onto the buffer.
@@ -156,23 +164,17 @@ impl<T> Buffer<T> {
         if self.consumer_disconnected() {
             return Some(v);
         }
-        let current_tail = self.pcache.tail.load(Ordering::Relaxed);
-
-        if self.pcache.shadow_head.get() + self.pcache.capacity <= current_tail {
-            self.pcache
-                .shadow_head
-                .set(self.ccache.head.load(Ordering::Acquire));
-            if self.pcache.shadow_head.get() + self.pcache.capacity <= current_tail {
-                return Some(v);
-            }
+        let tail = self.pcache.tail.load(Ordering::Relaxed);
+        if tail >= self.lookahead && !self.has_space(tail) {
+            return Some(v);
         }
-
-        unsafe {
-            self.buffer_storage[current_tail % self.pcache.capacity]
-                .get()
-                .write(v);
-        }
-        self.pcache.tail.store(current_tail + 1, Ordering::Release);
+        let slot = unsafe {
+            let slot = &*self.buffer_storage.add(tail & self.mask);
+            slot.value.get().write(MaybeUninit::new(v));
+            slot
+        };
+        slot.has_value.store(true, Ordering::Release);
+        self.pcache.tail.store(tail + 1, Ordering::Relaxed);
         None
     }
 
@@ -205,65 +207,77 @@ impl<T> Buffer<T> {
     /// This value represents the current size of the queue.  This value can be
     /// from 0-`capacity` inclusive.
     pub(crate) fn size(&self) -> usize {
-        self.pcache.tail.load(Ordering::Acquire) - self.ccache.head.load(Ordering::Acquire)
+        std::cmp::min(
+            self.capacity,
+            self.pcache
+                .tail
+                .load(Ordering::Acquire)
+                .saturating_sub(self.ccache.head.load(Ordering::Acquire)),
+        )
     }
 }
 
 /// Handles deallocation of heap memory when the buffer is dropped
 impl<T> Drop for Buffer<T> {
     fn drop(&mut self) {
-        // Pop the rest of the values off the queue.  By moving them into this scope,
+        // Pop the rest of the values off the queue. By moving them into this scope,
         // we implicitly call their destructor
         while self.try_pop().is_some() {}
         // We don't want to run any destructors here, because we didn't run
         // any of the constructors through the vector. And whatever object was
         // in fact still alive we popped above.
         unsafe {
-            self.buffer_storage.set_len(0);
+            let ptr = from_raw_parts_mut(self.buffer_storage, self.capacity) as *mut [Slot<T>];
+            Box::from_raw(ptr);
         }
     }
 }
 
-pub(crate) fn make<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+/// Creates a new `spsc_queue` returning its producer and consumer
+/// endpoints.
+pub fn make<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     inner_make(capacity, 0)
 }
 
+const MAX_LOOKAHEAD: usize = 1 << 12;
+
 fn inner_make<T>(capacity: usize, initial_value: usize) -> (Producer<T>, Consumer<T>) {
-    let buffer_storage = allocate_buffer(capacity);
-
-    let arc = Arc::new(Buffer {
+    let capacity = capacity.next_power_of_two();
+    let buffer_storage = allocate_buffer::<T>(capacity);
+    let buf = Arc::new(Buffer {
         buffer_storage,
-        ccache: ConsumerCacheline {
-            capacity,
-
-            head: AtomicUsize::new(initial_value),
-            shadow_tail: Cell::new(initial_value),
-            producer_id: AtomicUsize::new(0),
-        },
+        capacity,
+        mask: capacity - 1,
+        lookahead: std::cmp::min(capacity / 4, MAX_LOOKAHEAD),
         pcache: ProducerCacheline {
-            capacity,
-
             tail: AtomicUsize::new(initial_value),
-            shadow_head: Cell::new(initial_value),
+            limit: Cell::new(0),
             consumer_id: AtomicUsize::new(0),
         },
+        ccache: ConsumerCacheline {
+            head: AtomicUsize::new(initial_value),
+            producer_id: AtomicUsize::new(0),
+        },
+        _marker: PhantomData,
     });
-
     (
         Producer {
-            buffer: arc.clone(),
+            buffer: buf.clone(),
         },
-        Consumer { buffer: arc },
+        Consumer { buffer: buf },
     )
 }
 
-fn allocate_buffer<T>(capacity: usize) -> Vec<UnsafeCell<T>> {
-    let size = capacity.next_power_of_two();
-    let mut vec = Vec::with_capacity(size);
-    unsafe {
-        vec.set_len(size);
-    }
-    vec
+fn allocate_buffer<T>(capacity: usize) -> *mut Slot<T> {
+    let mut boxed: Box<[Slot<T>]> = (0..capacity)
+        .map(|_| Slot {
+            has_value: AtomicBool::new(false),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+        })
+        .collect();
+    let ptr = boxed.as_mut_ptr();
+    mem::forget(boxed);
+    ptr
 }
 
 pub(crate) trait BufferHalf {
@@ -277,7 +291,9 @@ pub(crate) trait BufferHalf {
     ///
     /// This value represents the total capacity of the queue when it is full.
     /// It does not represent the current usage.  For that, call `size()`.
-    fn capacity(&self) -> usize;
+    fn capacity(&self) -> usize {
+        self.buffer().capacity
+    }
 
     /// Returns the current size of the queue
     ///
@@ -292,10 +308,6 @@ impl<T> BufferHalf for Producer<T> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
         &*self.buffer
-    }
-
-    fn capacity(&self) -> usize {
-        (*self.buffer).pcache.capacity
     }
 
     fn connect(&self, id: usize) {
@@ -319,7 +331,7 @@ impl<T> Producer<T> {
     /// added to the queue and the method will return `None`, signifying
     /// success.  If the queue is full, this method will return `Some(v)``,
     /// where `v` is your original value.
-    pub(crate) fn try_push(&self, v: T) -> Option<T> {
+    pub fn try_push(&self, v: T) -> Option<T> {
         (*self.buffer).try_push(v)
     }
 
@@ -327,11 +339,12 @@ impl<T> Producer<T> {
     /// are going to be produced.
     ///
     /// Returns the buffer status before the disconnect
-    pub(crate) fn disconnect(&self) -> bool {
+    pub fn disconnect(&self) -> bool {
         (*self.buffer).disconnect_producer()
     }
 
-    pub(crate) fn consumer_disconnected(&self) -> bool {
+    /// Whether the associated consumer is disconnected.
+    pub fn consumer_disconnected(&self) -> bool {
         (*self.buffer).consumer_disconnected()
     }
 
@@ -339,7 +352,7 @@ impl<T> Producer<T> {
     ///
     /// This value represents the number of items that can be pushed onto the
     /// queue before it becomes full.
-    pub(crate) fn free_space(&self) -> usize {
+    pub fn free_space(&self) -> usize {
         self.capacity() - self.size()
     }
 }
@@ -362,10 +375,6 @@ impl<T> BufferHalf for Consumer<T> {
     fn peer_id(&self) -> usize {
         (*self.buffer).ccache.producer_id.load(Ordering::Acquire)
     }
-
-    fn capacity(&self) -> usize {
-        (*self.buffer).ccache.capacity
-    }
 }
 
 impl<T> Consumer<T> {
@@ -374,11 +383,12 @@ impl<T> Consumer<T> {
     /// producer to try_push should fail
     ///
     /// Returns the buffer status before the disconnect
-    pub(crate) fn disconnect(&self) -> bool {
+    pub fn disconnect(&self) -> bool {
         (*self.buffer).disconnect_consumer()
     }
 
-    pub(crate) fn producer_disconnected(&self) -> bool {
+    /// Whether the associated producer is disconnected.
+    pub fn producer_disconnected(&self) -> bool {
         (*self.buffer).producer_disconnected()
     }
 
@@ -387,7 +397,7 @@ impl<T> Consumer<T> {
     /// This method does not block.  If the queue is empty, the method will
     /// return `None`.  If there is a value available, the method will
     /// return `Some(v)`, where `v` is the value being popped off the queue.
-    pub(crate) fn try_pop(&self) -> Option<T> {
+    pub fn try_pop(&self) -> Option<T> {
         (*self.buffer).try_pop()
     }
 }
@@ -401,15 +411,16 @@ mod tests {
     fn test_try_push() {
         let (p, _) = super::make(10);
 
-        for i in 0..10 {
+        assert_eq!(p.capacity(), 16);
+
+        for i in 0..16 {
             p.try_push(i);
-            assert_eq!(p.capacity(), 10);
             assert_eq!(p.size(), i + 1);
         }
 
-        match p.try_push(10) {
+        match p.try_push(16) {
             Some(v) => {
-                assert_eq!(v, 10);
+                assert_eq!(v, 16);
             }
             None => unreachable!("Queue should not have accepted another write!"),
         }
