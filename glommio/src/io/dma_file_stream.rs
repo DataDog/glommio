@@ -919,10 +919,10 @@ impl DmaStreamWriterState {
         self.pending_flush_count -= 1;
     }
 
-    fn current_pending(&mut self, through_pos: u64) -> Vec<task::JoinHandle<()>> {
+    fn current_pending(&mut self, upto_pos: u64) -> Vec<task::JoinHandle<()>> {
         let mut pending = Vec::with_capacity(self.pending_flush_count);
         for (pos, status) in &mut self.flushes {
-            if *pos > through_pos {
+            if *pos > upto_pos {
                 break;
             }
             if let FlushStatus::Pending(handle) = status {
@@ -1120,7 +1120,7 @@ impl DmaStreamWriter {
     }
 
     /// TODO document
-    pub async fn flush_through(&self, pos: u64) -> Result<u64> {
+    pub async fn flush_upto(&self, pos: u64) -> Result<u64> {
         let (pos, mut pending) = {
             let mut state = self.state.borrow_mut();
             let pos = std::cmp::min(state.current_pos(), pos);
@@ -1146,8 +1146,8 @@ impl DmaStreamWriter {
     }
 
     /// TODO document
-    pub async fn sync_through(&self, pos: u64) -> Result<u64> {
-        let flushed_pos = self.flush_through(pos).await?;
+    pub async fn sync_upto(&self, pos: u64) -> Result<u64> {
+        let flushed_pos = self.flush_upto(pos).await?;
         self.file.clone().unwrap().fdatasync().await?;
         Ok(flushed_pos)
     }
@@ -1184,7 +1184,7 @@ impl DmaStreamWriter {
     /// });
     /// ```
     pub async fn sync(&self) -> Result<u64> {
-        Ok(self.sync_through(self.current_pos()).await?)
+        Ok(self.sync_upto(self.current_pos()).await?)
     }
 
     // internal function that does everything that close does (flushes buffers, etc,
