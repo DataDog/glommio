@@ -6,8 +6,8 @@
 use crate::{
     io::{
         bulk_io::{CoalescedReads, IoVec, OrderedBulkIo, ReadManyArgs, ReadManyResult},
-        dma_open_options::DmaOpenOptions,
         glommio_file::GlommioFile,
+        open_options::OpenOptions,
         read_result::ReadResult,
     },
     sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
@@ -143,7 +143,7 @@ impl DmaFile {
         dir: RawFd,
         path: &'a Path,
         opdesc: &'static str,
-        opts: &'a DmaOpenOptions,
+        opts: &'a OpenOptions,
     ) -> Result<DmaFile> {
         let flags = libc::O_CLOEXEC
             | opts.get_access_mode()?
@@ -158,6 +158,10 @@ impl DmaFile {
         Ok(f)
     }
 
+    pub(super) fn attach_scheduler(&self) {
+        self.file.attach_scheduler()
+    }
+
     /// Allocates a buffer that is suitable for using to write to this file.
     pub fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
         self.file.reactor.upgrade().unwrap().alloc_dma_buffer(size)
@@ -165,17 +169,17 @@ impl DmaFile {
 
     /// Similar to `create()` in the standard library, but returns a DMA file
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
-        DmaOpenOptions::new()
+        OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(path.as_ref())
+            .dma_open(path.as_ref())
             .await
     }
 
     /// Similar to `open()` in the standard library, but returns a DMA file
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<DmaFile> {
-        DmaOpenOptions::new().read(true).open(path.as_ref()).await
+        OpenOptions::new().read(true).dma_open(path.as_ref()).await
     }
 
     /// Write the buffer in `buf` to a specific position in the file.
@@ -227,16 +231,15 @@ impl DmaFile {
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
     pub async fn read_at_aligned(&self, pos: u64, size: usize) -> Result<ReadResult> {
-        let mut source = self.file.reactor.upgrade().unwrap().read_dma(
+        let source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             pos,
             size,
             self.pollable,
+            self.file.scheduler.borrow().as_ref(),
         );
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        let mut buffer = source.extract_dma_buffer();
-        buffer.trim_to_size(read_size);
-        Ok(ReadResult::from_whole_buffer(buffer))
+        Ok(ReadResult::from_sliced_buffer(source, 0, read_size))
     }
 
     /// Reads into buffer in buf from a specific position in the file.
@@ -252,18 +255,20 @@ impl DmaFile {
         let b = (pos - eff_pos) as usize;
 
         let eff_size = self.align_up((size + b) as u64) as usize;
-        let mut source = self.file.reactor.upgrade().unwrap().read_dma(
+        let source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             eff_pos,
             eff_size,
             self.pollable,
+            self.file.scheduler.borrow().as_ref(),
         );
 
         let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        let mut buffer = source.extract_dma_buffer();
-        buffer.trim_front(b);
-        buffer.trim_to_size(std::cmp::min(read_size, size));
-        Ok(ReadResult::from_whole_buffer(buffer))
+        Ok(ReadResult::from_sliced_buffer(
+            source,
+            b,
+            std::cmp::min(read_size, size),
+        ))
     }
 
     /// Submit many reads and process the results in a stream-like fashion via a
@@ -315,13 +320,14 @@ impl DmaFile {
                     iov.1.0,
                     iov.1.1,
                     self.pollable,
+                    self.file.scheduler.borrow().as_ref(),
                 );
                 last = Some((iov.1.0, iov.1.1));
                 (Some(source), args)
             });
         ReadManyResult {
             inner: OrderedBulkIo::new(self.clone(), it),
-            current_result: Default::default(),
+            current: Default::default(),
         }
     }
 
@@ -734,12 +740,12 @@ pub(crate) mod test {
     });
 
     async fn write_dma_file(path: PathBuf, bytes: usize) -> DmaFile {
-        let new_file = DmaOpenOptions::new()
+        let new_file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .read(true)
-            .open(path)
+            .dma_open(path)
             .await
             .expect("failed to create file");
 

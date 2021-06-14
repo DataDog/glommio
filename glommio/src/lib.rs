@@ -306,7 +306,7 @@ macro_rules! wake {
     ($waker:expr $(,)?) => {
         use log::error;
 
-        if let Err(x) = panic::catch_unwind(|| $waker.wake()) {
+        if let Err(x) = std::panic::catch_unwind(|| $waker.wake()) {
             error!("Panic while calling waker! {:?}", x);
         }
     };
@@ -555,6 +555,8 @@ pub struct RingIoStats {
     pub(crate) file_bytes_read: u64,
     pub(crate) file_buffered_reads: u64,
     pub(crate) file_buffered_bytes_read: u64,
+    pub(crate) file_deduped_reads: u64,
+    pub(crate) file_deduped_bytes_read: u64,
     pub(crate) file_writes: u64,
     pub(crate) file_bytes_written: u64,
     pub(crate) file_buffered_writes: u64,
@@ -593,6 +595,13 @@ impl RingIoStats {
         (self.file_reads, self.file_bytes_read)
     }
 
+    /// File read IO stats (deduplicated)
+    ///
+    /// Returns the number of reads that fed from another preexisting buffer
+    pub fn file_deduped_reads(&self) -> (u64, u64) {
+        (self.file_deduped_reads, self.file_deduped_bytes_read)
+    }
+
     /// Buffered file read IO stats
     ///
     /// Returns the number of individual buffered read ops as well as bytes read
@@ -625,6 +634,8 @@ impl Sum<RingIoStats> for RingIoStats {
             file_bytes_read: a.file_bytes_read + b.file_bytes_read,
             file_buffered_reads: a.file_buffered_reads + b.file_buffered_reads,
             file_buffered_bytes_read: a.file_buffered_bytes_read + b.file_buffered_bytes_read,
+            file_deduped_reads: a.file_deduped_reads + b.file_deduped_reads,
+            file_deduped_bytes_read: a.file_deduped_bytes_read + b.file_deduped_bytes_read,
             file_writes: a.file_writes + b.file_writes,
             file_bytes_written: a.file_bytes_written + b.file_bytes_written,
             file_buffered_writes: a.file_buffered_writes + b.file_buffered_writes,

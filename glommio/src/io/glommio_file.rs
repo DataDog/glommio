@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
-use crate::{parking::Reactor, sys, GlommioError, Local};
+use crate::{io::sched::FileScheduler, parking::Reactor, sys, GlommioError, Local};
 use log::debug;
 use std::{
     cell::{Ref, RefCell},
@@ -16,6 +16,10 @@ use std::{
 };
 
 type Result<T> = crate::Result<T, ()>;
+
+pub(super) type Device = u64;
+pub(super) type Inode = u64;
+pub(super) type Identity = (Device, Inode);
 
 /// A wrapper over `std::fs::File` which carries a path (for better error
 /// messages) and prints a warning if closed synchronously.
@@ -33,6 +37,7 @@ pub(crate) struct GlommioFile {
     pub(crate) dev_major: u32,
     pub(crate) dev_minor: u32,
     pub(crate) reactor: Weak<Reactor>,
+    pub(crate) scheduler: RefCell<Option<FileScheduler>>,
 }
 
 impl Drop for GlommioFile {
@@ -69,6 +74,7 @@ impl FromRawFd for GlommioFile {
             dev_major: 0,
             dev_minor: 0,
             reactor: Rc::downgrade(&Local::get_reactor()),
+            scheduler: RefCell::new(None),
         }
     }
 }
@@ -99,6 +105,7 @@ impl GlommioFile {
             dev_major: 0,
             dev_minor: 0,
             reactor: Rc::downgrade(&reactor),
+            scheduler: RefCell::new(None),
         };
 
         let st = file.statx().await?;
@@ -108,10 +115,25 @@ impl GlommioFile {
         Ok(file)
     }
 
+    pub(super) fn attach_scheduler(&self) {
+        if self.scheduler.borrow().is_none() {
+            self.scheduler.replace(Some(
+                Local::get_reactor()
+                    .io_scheduler()
+                    .get_file_scheduler(self.identity()),
+            ));
+        }
+    }
+
+    pub(crate) fn identity(&self) -> Identity {
+        (
+            (self.dev_major as u64) << 32 | self.dev_minor as u64,
+            self.inode,
+        )
+    }
+
     pub(crate) fn is_same(&self, other: &GlommioFile) -> bool {
-        self.inode == other.inode
-            && self.dev_major == other.dev_major
-            && self.dev_minor == other.dev_minor
+        self.identity() == other.identity()
     }
 
     pub(crate) fn discard(mut self) -> (RawFd, Option<PathBuf>) {

@@ -3,17 +3,15 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{iou::sqe::SockAddrStorage, uring_sys, RingIoStats, TaskQueueHandle};
+use crate::uring_sys;
 use ahash::AHashMap;
 use lockfree::channel::mpsc;
 use log::debug;
-use nix::sys::socket::SockAddr;
 use std::{
-    cell::RefCell,
-    convert::TryFrom,
     ffi::CString,
     fmt,
     io,
+    io::Error,
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},
     os::unix::{
@@ -21,7 +19,6 @@ use std::{
         io::{AsRawFd, FromRawFd, RawFd},
     },
     path::Path,
-    rc::Rc,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -222,15 +219,15 @@ fn cstr(path: &Path) -> io::Result<CString> {
 }
 
 mod dma_buffer;
+pub(crate) mod source;
 pub(crate) mod sysfs;
 mod uring;
 
 pub use self::dma_buffer::DmaBuffer;
-pub(crate) use self::uring::*;
-use crate::{
-    error::{ExecutorErrorKind, GlommioError, ReactorErrorKind},
-    IoRequirements,
-};
+pub(crate) use self::{source::*, uring::*};
+use crate::error::{ExecutorErrorKind, GlommioError};
+use smallvec::SmallVec;
+use std::ops::Deref;
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -252,6 +249,54 @@ impl ReactorGlobalState {
         let res = self.sleep_notifiers.insert(id, Arc::downgrade(&notifier));
         assert!(res.is_none());
         Ok(notifier)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub(super) struct OsError(i32);
+
+#[derive(Debug, Copy, Clone)]
+pub(super) enum OsResult {
+    Ok(usize),
+    Err(OsError),
+}
+
+impl From<io::Result<usize>> for OsResult {
+    fn from(other: io::Result<usize>) -> Self {
+        match other {
+            io::Result::Ok(v) => OsResult::Ok(v),
+            io::Result::Err(err) => OsResult::Err(OsError(err.raw_os_error().unwrap())),
+        }
+    }
+}
+
+impl From<&io::Result<usize>> for OsResult {
+    fn from(other: &io::Result<usize>) -> Self {
+        match other {
+            io::Result::Ok(v) => OsResult::Ok(*v),
+            io::Result::Err(err) => OsResult::Err(OsError(err.raw_os_error().unwrap())),
+        }
+    }
+}
+
+impl From<OsResult> for io::Result<usize> {
+    fn from(res: OsResult) -> Self {
+        match res {
+            OsResult::Ok(v) => io::Result::Ok(v),
+            OsResult::Err(err) => io::Result::Err(err.into()),
+        }
+    }
+}
+
+impl From<OsError> for io::Error {
+    fn from(err: OsError) -> Self {
+        Error::from_raw_os_error(err.0)
+    }
+}
+
+impl fmt::Debug for OsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Error::from_raw_os_error(self.0).fmt(f)
     }
 }
 
@@ -371,6 +416,17 @@ pub(crate) enum IoBuffer {
     Buffered(Vec<u8>),
 }
 
+impl Deref for IoBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match &self {
+            IoBuffer::Dma(buffer) => buffer.as_bytes(),
+            IoBuffer::Buffered(buffer) => buffer.as_slice(),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum DirectIo {
     Enabled,
@@ -387,51 +443,6 @@ pub(crate) enum PollableStatus {
     Pollable,
     // Non pollable can go either way
     NonPollable(DirectIo),
-}
-
-#[derive(Debug)]
-pub(crate) enum SourceType {
-    Write(PollableStatus, IoBuffer),
-    Read(PollableStatus, Option<IoBuffer>),
-    SockSend(DmaBuffer),
-    SockRecv(Option<DmaBuffer>),
-    SockRecvMsg(
-        Option<DmaBuffer>,
-        libc::iovec,
-        libc::msghdr,
-        MaybeUninit<nix::sys::socket::sockaddr_storage>,
-    ),
-    SockSendMsg(
-        DmaBuffer,
-        libc::iovec,
-        libc::msghdr,
-        nix::sys::socket::SockAddr,
-    ),
-    Open(CString),
-    FdataSync,
-    Fallocate,
-    Close,
-    LinkRings,
-    Statx(CString, Box<RefCell<libc::statx>>),
-    Timeout(TimeSpec64),
-    Connect(SockAddr),
-    Accept(SockAddrStorage),
-    Invalid,
-    #[cfg(feature = "bench")]
-    Noop,
-}
-
-impl TryFrom<SourceType> for libc::statx {
-    type Error = GlommioError<()>;
-
-    fn try_from(value: SourceType) -> Result<Self, Self::Error> {
-        match value {
-            SourceType::Statx(_, buf) => Ok(buf.into_inner()),
-            _ => Err(GlommioError::ReactorError(
-                ReactorErrorKind::IncorrectSourceType,
-            )),
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -477,87 +488,30 @@ impl From<Duration> for TimeSpec64 {
 
 /// Tasks interested in events on a source.
 #[derive(Debug)]
-pub(crate) struct Wakers {
+pub(super) struct Wakers {
     /// Raw result of the operation.
-    pub(crate) result: Option<io::Result<usize>>,
+    pub(super) result: Option<io::Result<usize>>,
 
     /// Tasks waiting for the next event.
-    pub(crate) waiter: Option<Waker>,
+    pub(super) waiters: SmallVec<[Waker; 1]>,
 }
 
 impl Wakers {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Wakers {
             result: None,
-            waiter: None,
+            waiters: Default::default(),
         }
     }
-}
 
-pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats) -> ();
-
-/// A registered source of I/O events.
-pub struct InnerSource {
-    /// Raw file descriptor on Unix platforms.
-    raw: RawFd,
-
-    /// Tasks interested in events on this source.
-    wakers: Wakers,
-
-    source_type: SourceType,
-
-    io_requirements: IoRequirements,
-
-    timeout: Option<TimeSpec64>,
-
-    enqueued: Option<EnqueuedSource>,
-
-    stats_collection: Option<StatsCollectionFn>,
-
-    task_queue: Option<TaskQueueHandle>,
-}
-
-pub struct EnqueuedSource {
-    pub(crate) id: SourceId,
-    pub(crate) queue: ReactorQueue,
-}
-
-impl fmt::Debug for InnerSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InnerSource")
-            .field("raw", &self.raw)
-            .field("wakers", &self.wakers)
-            .field("source_type", &self.source_type)
-            .field("io_requirements", &self.io_requirements)
-            .finish()
-    }
-}
-
-#[derive(Debug)]
-pub struct Source {
-    pub(crate) inner: Rc<RefCell<InnerSource>>,
-}
-
-impl Source {
-    /// Registers an I/O source in the reactor.
-    pub(crate) fn new(
-        ioreq: IoRequirements,
-        raw: RawFd,
-        source_type: SourceType,
-        stats_collection_fn: Option<StatsCollectionFn>,
-        task_queue: Option<TaskQueueHandle>,
-    ) -> Source {
-        Source {
-            inner: Rc::new(RefCell::new(InnerSource {
-                raw,
-                wakers: Wakers::new(),
-                source_type,
-                io_requirements: ioreq,
-                enqueued: None,
-                timeout: None,
-                stats_collection: stats_collection_fn,
-                task_queue,
-            })),
+    pub(super) fn wake_waiters(&mut self) -> bool {
+        if self.waiters.is_empty() {
+            false
+        } else {
+            self.waiters.drain(..).for_each(|x| {
+                wake!(x);
+            });
+            true
         }
     }
 }

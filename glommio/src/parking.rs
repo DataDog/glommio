@@ -28,27 +28,26 @@ use crate::iou::sqe::SockAddrStorage;
 use ahash::AHashMap;
 use nix::sys::socket::{MsgFlags, SockAddr};
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::{BTreeMap, VecDeque},
     ffi::CString,
     fmt,
     io,
     mem,
     os::unix::{ffi::OsStrExt, io::RawFd},
-    panic::{self, RefUnwindSafe, UnwindSafe},
+    panic::{RefUnwindSafe, UnwindSafe},
     path::Path,
     rc::Rc,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc,
     },
-    task::{Poll, Waker},
+    task::Waker,
     time::{Duration, Instant},
 };
 
-use futures_lite::*;
-
 use crate::{
+    io::{FileScheduler, IoScheduler, ScheduledSource},
     sys,
     sys::{
         DirectIo,
@@ -58,7 +57,7 @@ use crate::{
         SleepNotifier,
         Source,
         SourceType,
-        StatsCollectionFn,
+        StatsCollection,
     },
     IoRequirements,
     IoStats,
@@ -260,8 +259,7 @@ pub(crate) struct Reactor {
 
     shared_channels: RefCell<SharedChannels>,
 
-    /// I/O Requirements of the task currently executing.
-    current_io_requirements: Cell<IoRequirements>,
+    io_scheduler: Rc<IoScheduler>,
 
     /// Whether there are events in the latency ring.
     ///
@@ -286,7 +284,7 @@ impl Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
-            current_io_requirements: Cell::new(IoRequirements::default()),
+            io_scheduler: Rc::new(IoScheduler::new()),
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
         }
@@ -317,20 +315,19 @@ impl Reactor {
         &self,
         raw: RawFd,
         stype: SourceType,
-        stats_collection_fn: Option<StatsCollectionFn>,
+        stats_collection: Option<StatsCollection>,
     ) -> Source {
-        let ioreq = self.current_io_requirements.get();
         sys::Source::new(
-            ioreq,
+            self.io_scheduler.requirements(),
             raw,
             stype,
-            stats_collection_fn,
+            stats_collection,
             Some(Local::current_task_queue()),
         )
     }
 
     pub(crate) fn inform_io_requirements(&self, req: IoRequirements) {
-        self.current_io_requirements.set(req);
+        self.io_scheduler.inform_requirements(req);
     }
 
     pub(crate) fn register_shared_channel<F>(&self, test_function: Box<F>) -> u64
@@ -373,33 +370,43 @@ impl Reactor {
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_writes += op_count;
+                    stats.file_bytes_written += *result as u64 * op_count;
+                }
+            }),
+            reused: None,
+        };
+
         let source = self.new_source(
             raw,
             SourceType::Write(pollable, IoBuffer::Dma(buf)),
-            Some(|result, stats| {
-                if let Ok(result) = result {
-                    stats.file_writes += 1;
-                    stats.file_bytes_written += *result as u64;
-                }
-            }),
+            Some(stats),
         );
         self.sys.write_dma(&source, pos);
         source
     }
 
     pub(crate) fn write_buffered(&self, raw: RawFd, buf: Vec<u8>, pos: u64) -> Source {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_buffered_writes += op_count;
+                    stats.file_buffered_bytes_written += *result as u64 * op_count;
+                }
+            }),
+            reused: None,
+        };
+
         let source = self.new_source(
             raw,
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIo::Disabled),
                 IoBuffer::Buffered(buf),
             ),
-            Some(|result, stats| {
-                if let Ok(result) = result {
-                    stats.file_buffered_writes += 1;
-                    stats.file_buffered_bytes_written += *result as u64;
-                }
-            }),
+            Some(stats),
         );
         self.sys.write_buffered(&source, pos);
         source
@@ -412,7 +419,7 @@ impl Reactor {
     }
 
     pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockAddr, d: Duration) -> Source {
-        let mut source = self.new_source(raw, SourceType::Connect(addr), None);
+        let source = self.new_source(raw, SourceType::Connect(addr), None);
         source.set_timeout(d);
         self.sys.connect(&source);
         source
@@ -431,7 +438,7 @@ impl Reactor {
         buf: DmaBuffer,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let mut source = self.new_source(fd, SourceType::SockSend(buf), None);
+        let source = self.new_source(fd, SourceType::SockSend(buf), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -463,7 +470,7 @@ impl Reactor {
             msg_flags: 0,
         };
 
-        let mut source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
+        let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -493,7 +500,7 @@ impl Reactor {
             iov_base: std::ptr::null_mut(),
             iov_len: 0,
         };
-        let mut source = self.new_source(
+        let source = self.new_source(
             fd,
             SourceType::SockRecvMsg(
                 None,
@@ -517,7 +524,7 @@ impl Reactor {
         size: usize,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let mut source = self.new_source(fd, SourceType::SockRecv(None), None);
+        let source = self.new_source(fd, SourceType::SockRecv(None), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
@@ -538,34 +545,76 @@ impl Reactor {
         pos: u64,
         size: usize,
         pollable: PollableStatus,
-    ) -> Source {
-        let source = self.new_source(
-            raw,
-            SourceType::Read(pollable, None),
-            Some(|result, stats| {
+        scheduler: Option<&FileScheduler>,
+    ) -> ScheduledSource {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
                 if let Ok(result) = result {
-                    stats.file_reads += 1;
-                    stats.file_bytes_read += *result as u64;
+                    stats.file_reads += op_count;
+                    stats.file_bytes_read += *result as u64 * op_count;
                 }
             }),
-        );
-        self.sys.read_dma(&source, pos, size);
-        source
+            reused: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_deduped_reads += op_count;
+                    stats.file_deduped_bytes_read += *result as u64 * op_count;
+                }
+            }),
+        };
+
+        let source = self.new_source(raw, SourceType::Read(pollable, None), Some(stats));
+
+        if let Some(scheduler) = scheduler {
+            if let Some(source) =
+                scheduler.consume_scheduled(pos..pos + size as u64, Some(&self.sys))
+            {
+                source
+            } else {
+                self.sys.read_dma(&source, pos, size);
+                scheduler.schedule(source, pos..pos + size as u64)
+            }
+        } else {
+            self.sys.read_dma(&source, pos, size);
+            ScheduledSource::new_raw(source, pos..pos + size as u64)
+        }
     }
 
-    pub(crate) fn read_buffered(&self, raw: RawFd, pos: u64, size: usize) -> Source {
+    pub(crate) fn read_buffered(
+        &self,
+        raw: RawFd,
+        pos: u64,
+        size: usize,
+        scheduler: Option<&FileScheduler>,
+    ) -> ScheduledSource {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    stats.file_buffered_reads += op_count;
+                    stats.file_buffered_bytes_read += *result as u64 * op_count;
+                }
+            }),
+            reused: None,
+        };
+
         let source = self.new_source(
             raw,
             SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
-            Some(|result, stats| {
-                if let Ok(result) = result {
-                    stats.file_buffered_reads += 1;
-                    stats.file_buffered_bytes_read += *result as u64;
-                }
-            }),
+            Some(stats),
         );
-        self.sys.read_buffered(&source, pos, size);
-        source
+
+        if let Some(scheduler) = scheduler {
+            if let Some(source) =
+                scheduler.consume_scheduled(pos..pos + size as u64, Some(&self.sys))
+            {
+                source
+            } else {
+                self.sys.read_buffered(&source, pos, size);
+                scheduler.schedule(source, pos..pos + size as u64)
+            }
+        } else {
+            self.sys.read_buffered(&source, pos, size);
+            ScheduledSource::new_raw(source, pos..pos + size as u64)
+        }
     }
 
     pub(crate) fn fdatasync(&self, raw: RawFd) -> Source {
@@ -590,10 +639,13 @@ impl Reactor {
         let source = self.new_source(
             raw,
             SourceType::Close,
-            Some(|result, stats| {
-                if result.is_ok() {
-                    stats.files_closed += 1
-                }
+            Some(StatsCollection {
+                fulfilled: Some(|result, stats, op_count| {
+                    if result.is_ok() {
+                        stats.files_closed += op_count
+                    }
+                }),
+                reused: None,
             }),
         );
         self.sys.close(&source);
@@ -629,10 +681,13 @@ impl Reactor {
         let source = self.new_source(
             dir,
             SourceType::Open(path),
-            Some(|result, stats| {
-                if result.is_ok() {
-                    stats.files_opened += 1
-                }
+            Some(StatsCollection {
+                fulfilled: Some(|result, stats, op_count| {
+                    if result.is_ok() {
+                        stats.files_opened += op_count
+                    }
+                }),
+                reused: None,
             }),
         );
         self.sys.open_at(&source, flags, mode);
@@ -739,20 +794,8 @@ impl Reactor {
             Err(err) => Err(err),
         }
     }
-}
 
-// FIXME: source should be partitioned in two, write_dma and read_dma should not
-// be allowed in files that don't support it, and same for readable() writable()
-impl Source {
-    pub(crate) async fn collect_rw(&self) -> io::Result<usize> {
-        future::poll_fn(|cx| {
-            if let Some(result) = self.take_result() {
-                return Poll::Ready(result);
-            }
-
-            self.add_waiter(cx.waker().clone());
-            Poll::Pending
-        })
-        .await
+    pub(crate) fn io_scheduler(&self) -> &Rc<IoScheduler> {
+        &self.io_scheduler
     }
 }

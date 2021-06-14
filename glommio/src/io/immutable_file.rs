@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::{
-    dma_open_options::DmaOpenOptions,
+    open_options::OpenOptions,
     DmaStreamReaderBuilder,
     DmaStreamWriter,
     DmaStreamWriterBuilder,
@@ -14,7 +14,6 @@ use crate::io::{
 };
 
 use futures_lite::{future::poll_fn, io::AsyncWrite};
-use log::warn;
 use std::{
     cell::Ref,
     io,
@@ -191,28 +190,19 @@ where
     /// [`new`]: ImmutableFileBuilder::new
     /// [`seal`]: ImmutableFilePreSealSink::seal
     pub async fn build_sink(self) -> Result<ImmutableFilePreSealSink> {
-        let file = DmaOpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
-            .open(self.path)
+            .dma_open(self.path)
             .await?;
 
+        // these two syscall are hints and are allowed to fail.
         if let Some(size) = self.pre_allocate {
-            if let Err(err) = file.pre_allocate(size).await {
-                warn!(
-                    "Error: failed to run pre_allocate on ImmutableFile: {}",
-                    err
-                );
-            }
+            let _ = file.pre_allocate(size).await;
         }
         if let Some(size) = self.hint_extent_size {
-            if let Err(err) = file.hint_extent_size(size).await {
-                warn!(
-                    "Error: failed to run hint_extent_size on ImmutableFile: {}",
-                    err
-                );
-            }
+            let _ = file.hint_extent_size(size).await;
         }
 
         let writer = DmaStreamWriterBuilder::new(file)
@@ -235,12 +225,13 @@ where
     /// [`new`]: ImmutableFileBuilder::new
     pub async fn build_existing(self) -> Result<ImmutableFile> {
         let file = Rc::new(
-            DmaOpenOptions::new()
+            OpenOptions::new()
                 .read(true)
                 .write(false)
-                .open(self.path)
+                .dma_open(self.path)
                 .await?,
         );
+        file.attach_scheduler();
         let size = file.file_size().await?;
         let stream_builder = DmaStreamReaderBuilder::from_rc(file)
             .with_buffer_size(self.buffer_size)
@@ -260,6 +251,8 @@ impl ImmutableFilePreSealSink {
     /// [`ImmutableFile`]
     pub async fn seal(mut self) -> Result<ImmutableFile> {
         let stream_builder = poll_fn(|cx| self.writer.poll_seal(cx)).await?;
+        stream_builder.file.attach_scheduler();
+
         let size = stream_builder.file.file_size().await?;
         Ok(ImmutableFile {
             stream_builder,
