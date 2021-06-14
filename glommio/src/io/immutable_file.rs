@@ -267,13 +267,18 @@ impl ImmutableFilePreSealSink {
         })
     }
 
+    /// TODO document
+    pub async fn flush_upto(&self, pos: u64) -> Result<u64> {
+        self.writer.flush_upto(pos).await
+    }
+
+    /// TODO document
+    pub async fn sync_upto(&self, pos: u64) -> Result<u64> {
+        self.writer.sync_upto(pos).await
+    }
+
     /// Waits for all currently in-flight buffers to return and be safely stored
-    /// in the underlying storage
-    ///
-    /// Note that the current buffer being written to is not flushed, as it may
-    /// not be properly aligned. Buffers that are currently in-flight will
-    /// be waited on, and a sync operation will be issued by the operating
-    /// system.
+    /// in the underlying storage.
     ///
     /// Returns the flushed position of the file at the time the sync started.
     pub async fn sync(&self) -> Result<u64> {
