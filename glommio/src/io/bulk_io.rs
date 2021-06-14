@@ -58,7 +58,7 @@ impl<U: Copy + Unpin> Stream for OrderedBulkIo<U> {
 }
 
 /// An interface to an IO vector.
-pub trait IoVec: Copy + Unpin {
+pub trait IoVec: Copy {
     /// The read position (the offset) in the file
     fn pos(&self) -> u64;
     /// The number of bytes to read at [`Self::pos`]
@@ -76,7 +76,7 @@ impl IoVec for (u64, usize) {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct ReadManyArgs<V: IoVec> {
+pub(crate) struct ReadManyArgs<V: IoVec + Unpin> {
     pub(crate) user_read: V,
     pub(crate) system_read: (u64, usize),
 }
@@ -85,12 +85,12 @@ pub(crate) struct ReadManyArgs<V: IoVec> {
 ///
 /// See [`DmaFile::read_many`] for more information
 #[derive(Debug)]
-pub struct ReadManyResult<V: IoVec> {
+pub struct ReadManyResult<V: IoVec + Unpin> {
     pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>>,
     pub(crate) current_result: ReadResult,
 }
 
-impl<V: IoVec> Stream for ReadManyResult<V> {
+impl<V: IoVec + Unpin> Stream for ReadManyResult<V> {
     type Item = super::Result<(V, ReadResult)>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
