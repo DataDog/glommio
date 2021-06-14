@@ -83,7 +83,7 @@ impl<T> fmt::Debug for Buffer<T> {
 unsafe impl<T: Sync> Sync for Buffer<T> {}
 
 /// A handle to the queue which allows consuming values from the buffer
-pub(crate) struct Consumer<T> {
+pub struct Consumer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
@@ -96,7 +96,7 @@ impl<T> Clone for Consumer<T> {
 }
 
 /// A handle to the queue which allows adding values onto the buffer
-pub(crate) struct Producer<T> {
+pub struct Producer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
@@ -233,7 +233,9 @@ impl<T> Drop for Buffer<T> {
     }
 }
 
-pub(crate) fn make<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+/// Creates a new `spsc_queue` returning its producer and consumer
+/// endpoints.
+pub fn make<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     inner_make(capacity, 0)
 }
 
@@ -329,7 +331,7 @@ impl<T> Producer<T> {
     /// added to the queue and the method will return `None`, signifying
     /// success.  If the queue is full, this method will return `Some(v)``,
     /// where `v` is your original value.
-    pub(crate) fn try_push(&self, v: T) -> Option<T> {
+    pub fn try_push(&self, v: T) -> Option<T> {
         (*self.buffer).try_push(v)
     }
 
@@ -337,11 +339,12 @@ impl<T> Producer<T> {
     /// are going to be produced.
     ///
     /// Returns the buffer status before the disconnect
-    pub(crate) fn disconnect(&self) -> bool {
+    pub fn disconnect(&self) -> bool {
         (*self.buffer).disconnect_producer()
     }
 
-    pub(crate) fn consumer_disconnected(&self) -> bool {
+    /// Whether the associated consumer is disconnected.
+    pub fn consumer_disconnected(&self) -> bool {
         (*self.buffer).consumer_disconnected()
     }
 
@@ -349,7 +352,7 @@ impl<T> Producer<T> {
     ///
     /// This value represents the number of items that can be pushed onto the
     /// queue before it becomes full.
-    pub(crate) fn free_space(&self) -> usize {
+    pub fn free_space(&self) -> usize {
         self.capacity() - self.size()
     }
 }
@@ -380,11 +383,12 @@ impl<T> Consumer<T> {
     /// producer to try_push should fail
     ///
     /// Returns the buffer status before the disconnect
-    pub(crate) fn disconnect(&self) -> bool {
+    pub fn disconnect(&self) -> bool {
         (*self.buffer).disconnect_consumer()
     }
 
-    pub(crate) fn producer_disconnected(&self) -> bool {
+    /// Whether the associated producer is disconnected.
+    pub fn producer_disconnected(&self) -> bool {
         (*self.buffer).producer_disconnected()
     }
 
@@ -393,7 +397,7 @@ impl<T> Consumer<T> {
     /// This method does not block.  If the queue is empty, the method will
     /// return `None`.  If there is a value available, the method will
     /// return `Some(v)`, where `v` is the value being popped off the queue.
-    pub(crate) fn try_pop(&self) -> Option<T> {
+    pub fn try_pop(&self) -> Option<T> {
         (*self.buffer).try_pop()
     }
 }
