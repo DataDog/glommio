@@ -5,7 +5,7 @@
 //
 use crate::{
     io::{dma_file::align_down, read_result::ReadResult, DmaFile},
-    sys::DmaBuffer,
+    sys::{self, DmaBuffer},
     task,
     ByteSliceExt,
     ByteSliceMutExt,
@@ -20,10 +20,12 @@ use futures_lite::{
     io::{AsyncRead, AsyncWrite},
     stream::{self, StreamExt},
 };
+use log::debug;
 use std::{
     cell::RefCell,
     collections::VecDeque,
     io,
+    os::unix::prelude::AsRawFd,
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
@@ -835,6 +837,13 @@ impl DmaStreamWriterState {
         self.waker = Some(waker);
     }
 
+    fn must_truncate(&self) -> bool {
+        if let FileStatus::Closed = self.file_status {
+            return false;
+        }
+        self.flushed_pos > self.aligned_pos
+    }
+
     fn initiate_close(
         &mut self,
         waker: Waker,
@@ -869,13 +878,11 @@ impl DmaStreamWriterState {
                 }
             }
 
-            if final_pos > state.aligned_pos {
+            if state.must_truncate() {
                 let res = file.truncate(final_pos).await;
                 if collect_error!(state, res) {
                     return;
                 }
-            } else {
-                assert_eq!(final_pos, state.aligned_pos);
             }
 
             if do_close {
@@ -999,9 +1006,30 @@ impl DmaStreamWriterState {
 
 impl Drop for DmaStreamWriterState {
     fn drop(&mut self) {
-        for (_, status) in std::mem::take(&mut self.flushes) {
-            if let FlushStatus::Pending(Some(h)) = status {
-                h.cancel();
+        assert_eq!(
+            0,
+            self.current_pending(u64::MAX).len(),
+            "DmaStreamerWriter::drop() should have cancelled pending flushes"
+        );
+    }
+}
+
+impl Drop for DmaStreamWriter {
+    fn drop(&mut self) {
+        if let Some(mut state) = self.state.try_borrow_mut().ok() {
+            for handle in state.current_pending(u64::MAX).drain(..) {
+                handle.cancel();
+            }
+            if state.must_truncate() {
+                let file = self.file.take().unwrap();
+                if let Err(err) = sys::truncate_file(file.as_raw_fd(), state.flushed_pos) {
+                    debug!(
+                        "DmaStreamWriter[{:?}] was not closed and drop-time truncation to {}b failed: {}",
+                        file.path(),
+                        state.flushed_pos,
+                        err
+                    );
+                }
             }
         }
     }
@@ -1278,7 +1306,6 @@ impl AsyncWrite for DmaStreamWriter {
         }
     }
 
-    // TODO test
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut state = self.state.borrow_mut();
         if let Some(err) = current_error!(state) {
@@ -1287,7 +1314,7 @@ impl AsyncWrite for DmaStreamWriter {
         if state.flushed_pos() == state.current_pos() {
             return Poll::Ready(Ok(()));
         }
-        state.flush_partial(self.state.clone(), ensure_not_closed!(self.file.clone()));
+        state.flush_partial(self.state.clone(), self.file.clone().unwrap());
         state.add_waker(cx.waker().clone());
         Poll::Pending
     }
@@ -1322,7 +1349,7 @@ mod test {
         timer::Timer,
     };
     use futures::{AsyncReadExt, AsyncWriteExt};
-    use std::{io::ErrorKind, time::Duration};
+    use std::{io::ErrorKind, path::Path, time::Duration};
 
     macro_rules! file_stream_read_test {
         ( $name:ident, $dir:ident, $kind:ident, $file:ident, $file_size:ident: $size:tt, $code:block) => {
@@ -1380,6 +1407,10 @@ mod test {
                 assert_eq!(*i, ($start + (idx as u64)) as u8);
             }
         };
+    }
+
+    fn file_size<P: AsRef<Path>>(path: P) -> u64 {
+        std::fs::metadata(path).unwrap().len()
     }
 
     file_stream_read_test!(read_exact_empty_file, path, _k, file, _file_size: 0, {
@@ -1869,7 +1900,7 @@ mod test {
         assert_eq!(writer.current_flushed_pos(), 5000);
     });
 
-    file_stream_write_test!(flush_upto, path, _k, filename, file, {
+    file_stream_write_test!(flush_upto_and_drop, path, _k, filename, file, {
         let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(4096)
             .with_write_behind(2)
@@ -1879,10 +1910,32 @@ mod test {
         let buffer = [0u8; 5000];
         writer.write_all(&buffer).await.unwrap();
         assert_eq!(writer.flush_upto(0).await.unwrap(), 0);
+        assert_eq!(file_size(&filename), 0);
         assert_eq!(writer.flush_upto(4095).await.unwrap(), 4096);
+        assert_eq!(file_size(&filename), 4096);
         assert_eq!(writer.flush_upto(4096).await.unwrap(), 4096);
+        assert_eq!(file_size(&filename), 4096);
         assert_eq!(writer.flush_upto(5000).await.unwrap(), 5000);
-        writer.close().await.unwrap();
+        assert_eq!(file_size(&filename), 8192);
+        drop(writer);
+        assert_eq!(file_size(&filename), 5000);
+    });
+
+    file_stream_write_test!(flush_and_drop, path, _k, filename, file, {
+        let mut writer = DmaStreamWriterBuilder::new(file)
+            .with_buffer_size(4096)
+            .with_write_behind(2)
+            .build();
+
+        assert_eq!(writer.current_pos(), 0);
+        let buffer = [0u8; 5000];
+        writer.write_all(&buffer).await.unwrap();
+        assert_eq!(writer.current_flushed_pos(), 0);
+        writer.flush().await.unwrap();
+        assert_eq!(writer.current_flushed_pos(), 5000);
+        assert_eq!(file_size(&filename), 8192);
+        drop(writer);
+        assert_eq!(file_size(&filename), 5000);
     });
 
     file_stream_write_test!(sync_and_close, path, _k, filename, file, {
@@ -1895,10 +1948,12 @@ mod test {
         let buffer = [0u8; 5000];
         writer.write_all(&buffer).await.unwrap();
         assert_eq!(writer.sync().await.unwrap(), 5000);
+        assert_eq!(file_size(&filename), 8192);
         // write more
         writer.write_all(&buffer).await.unwrap();
         writer.close().await.unwrap();
 
         assert_eq!(writer.current_flushed_pos(), 10000);
+        assert_eq!(file_size(&filename), 10000);
     });
 }
