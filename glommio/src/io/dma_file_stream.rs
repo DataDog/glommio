@@ -916,6 +916,7 @@ impl DmaStreamWriterState {
     }
 
     fn on_flushed(&mut self, written_pos: u64) {
+        self.pending_flush_count -= 1;
         let mut completion_prefix_len = 0usize;
         let mut completion_prefix_finalized = false;
         for (pos, status) in &mut self.flushes {
@@ -937,7 +938,6 @@ impl DmaStreamWriterState {
             let (pos, _) = self.flushes.drain(..completion_prefix_len).last().unwrap();
             self.flushed_pos = pos;
         }
-        self.pending_flush_count -= 1;
     }
 
     fn current_pending(&mut self, upto_pos: u64) -> Vec<task::JoinHandle<()>> {
@@ -958,15 +958,15 @@ impl DmaStreamWriterState {
         pending
     }
 
-    fn flush_partial(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
+    fn flush_partial(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) -> bool {
         if self.buffer_pos == 0 {
-            return;
+            return false;
         }
         let padding = self.buffer_size - self.buffer_pos;
         assert!(padding > 0, "full buffer should have already been flushed");
         let current_pos = self.current_pos();
         if self.flushed_pos >= current_pos {
-            return;
+            return false;
         }
         if self
             .flushes
@@ -974,31 +974,24 @@ impl DmaStreamWriterState {
             .filter(|(pos, _)| *pos >= current_pos)
             .is_some()
         {
-            return;
+            return false;
         }
+
         let buffer = self.current_buffer.take().unwrap();
-        assert_eq!(self.flush_one_buffer(buffer, state, file), padding);
+
+        // Restore a copy
+        let mut buffer_copy = file.alloc_dma_buffer(self.buffer_size);
+        buffer_copy.as_bytes_mut()[..self.buffer_pos]
+            .copy_from_slice(&buffer.as_bytes()[..self.buffer_pos]);
+        self.current_buffer = Some(buffer_copy);
+
+        self.flush_one_buffer(buffer, state, file);
+        true
     }
 
-    fn flush_one_buffer(
-        &mut self,
-        buffer: DmaBuffer,
-        state: Rc<RefCell<Self>>,
-        file: Rc<DmaFile>,
-    ) -> usize {
+    fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let aligned_pos = self.aligned_pos;
         let flush_pos = self.current_pos();
-        let padding = self.buffer_size - self.buffer_pos;
-        if padding == 0 {
-            self.aligned_pos += self.buffer_size as u64;
-            self.buffer_pos = 0;
-        } else {
-            // Restore a copy
-            let mut buffer_copy = file.alloc_dma_buffer(self.buffer_size);
-            buffer_copy.as_bytes_mut()[..self.buffer_pos]
-                .copy_from_slice(&buffer.as_bytes()[..self.buffer_pos]);
-            self.current_buffer = Some(buffer_copy);
-        }
         let handle = Local::local(async move {
             let res = file.write_at(buffer, aligned_pos).await;
             let mut state = state.borrow_mut();
@@ -1011,10 +1004,9 @@ impl DmaStreamWriterState {
             }
         })
         .detach();
-        self.pending_flush_count += 1;
         self.flushes
             .push_back((flush_pos, FlushStatus::Pending(Some(handle))));
-        padding
+        self.pending_flush_count += 1;
     }
 }
 
@@ -1201,7 +1193,10 @@ impl DmaStreamWriter {
     /// TODO document
     pub async fn sync_upto(&self, pos: u64) -> Result<u64> {
         self.flush_upto(pos).await?;
-        self.state.borrow_mut().sync(&self.file.clone().unwrap()).await
+        self.state
+            .borrow_mut()
+            .sync(&self.file.clone().unwrap())
+            .await
     }
 
     /// Waits for all currently in-flight buffers to return and be safely stored
@@ -1304,13 +1299,13 @@ impl AsyncWrite for DmaStreamWriter {
                     written += writesz;
                     state.buffer_pos += writesz;
                     if state.buffer_pos == state.buffer_size {
-                        assert!(
-                            state.flush_one_buffer(
-                                buffer,
-                                self.state.clone(),
-                                self.file.clone().unwrap(),
-                            ) == 0
+                        state.flush_one_buffer(
+                            buffer,
+                            self.state.clone(),
+                            self.file.clone().unwrap(),
                         );
+                        state.buffer_pos = 0;
+                        state.aligned_pos += state.buffer_size as u64;
                     } else {
                         state.current_buffer = Some(buffer);
                     }
