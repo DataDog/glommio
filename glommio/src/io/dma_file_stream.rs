@@ -902,15 +902,13 @@ impl DmaStreamWriterState {
         self.flushed_pos
     }
 
-    fn synced_pos(&self) -> u64 {
-        self.synced_pos
-    }
-
     async fn sync(&mut self, file: &DmaFile) -> Result<u64> {
-        let flushed_pos = self.flushed_pos;
-        if self.synced_pos < flushed_pos {
+        let flushed_pos_at_sync = self.flushed_pos;
+        if self.synced_pos < flushed_pos_at_sync {
             file.fdatasync().await?;
-            self.synced_pos = flushed_pos;
+            self.synced_pos = flushed_pos_at_sync;
+        } else {
+            assert_eq!(self.synced_pos, flushed_pos_at_sync);
         }
         Ok(self.synced_pos)
     }
@@ -1156,11 +1154,6 @@ impl DmaStreamWriter {
     /// [`close`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWriteExt.html#method.close
     pub fn current_flushed_pos(&self) -> u64 {
         self.state.borrow().flushed_pos()
-    }
-
-    /// TODO document
-    pub fn current_synced_pos(&self) -> u64 {
-        self.state.borrow().synced_pos()
     }
 
     /// TODO document
