@@ -802,6 +802,7 @@ struct DmaStreamWriterState {
     current_buffer: Option<DmaBuffer>,
     aligned_pos: u64,
     flushed_pos: u64,
+    synced_pos: u64,
     buffer_pos: usize,
     write_behind: usize,
     sync_on_close: bool,
@@ -872,7 +873,7 @@ impl DmaStreamWriterState {
             assert_eq!(state.flushed_pos, final_pos);
 
             if state.sync_on_close {
-                let res = file.fdatasync().await;
+                let res = state.sync(&file).await;
                 if collect_error!(state, res) {
                     return;
                 }
@@ -899,6 +900,19 @@ impl DmaStreamWriterState {
 
     fn flushed_pos(&self) -> u64 {
         self.flushed_pos
+    }
+
+    fn synced_pos(&self) -> u64 {
+        self.synced_pos
+    }
+
+    async fn sync(&mut self, file: &DmaFile) -> Result<u64> {
+        let flushed_pos = self.flushed_pos;
+        if self.synced_pos < flushed_pos {
+            file.fdatasync().await?;
+            self.synced_pos = flushed_pos;
+        }
+        Ok(self.synced_pos)
     }
 
     fn on_flushed(&mut self, written_pos: u64) {
@@ -1073,6 +1087,7 @@ impl DmaStreamWriter {
             aligned_pos: 0,
             buffer_pos: 0,
             flushed_pos: 0,
+            synced_pos: 0,
         };
 
         let state = Rc::new(RefCell::new(state));
@@ -1152,6 +1167,11 @@ impl DmaStreamWriter {
     }
 
     /// TODO document
+    pub fn current_synced_pos(&self) -> u64 {
+        self.state.borrow().synced_pos()
+    }
+
+    /// TODO document
     pub async fn flush_upto(&self, pos: u64) -> Result<u64> {
         let (pos, mut pending) = {
             let mut state = self.state.borrow_mut();
@@ -1180,9 +1200,8 @@ impl DmaStreamWriter {
 
     /// TODO document
     pub async fn sync_upto(&self, pos: u64) -> Result<u64> {
-        let flushed_pos = self.flush_upto(pos).await?;
-        self.file.clone().unwrap().fdatasync().await?;
-        Ok(flushed_pos)
+        self.flush_upto(pos).await?;
+        self.state.borrow_mut().sync(&self.file.clone().unwrap()).await
     }
 
     /// Waits for all currently in-flight buffers to return and be safely stored
@@ -1216,7 +1235,7 @@ impl DmaStreamWriter {
     /// });
     /// ```
     pub async fn sync(&self) -> Result<u64> {
-        Ok(self.sync_upto(self.current_pos()).await?)
+        self.sync_upto(self.current_pos()).await
     }
 
     // internal function that does everything that close does (flushes buffers, etc,
