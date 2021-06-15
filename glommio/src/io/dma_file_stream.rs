@@ -1024,7 +1024,8 @@ impl Drop for DmaStreamWriter {
                 let file = self.file.take().unwrap();
                 if let Err(err) = sys::truncate_file(file.as_raw_fd(), state.flushed_pos) {
                     debug!(
-                        "DmaStreamWriter[{:?}] was not closed and drop-time truncation to {}b failed: {}",
+                        "DmaStreamWriter[{:?}] was not closed and drop-time truncation to {}b \
+                         failed: {}",
                         file.path(),
                         state.flushed_pos,
                         err
