@@ -1020,7 +1020,7 @@ impl Drop for DmaStreamWriterState {
 
 impl Drop for DmaStreamWriter {
     fn drop(&mut self) {
-        if let Some(mut state) = self.state.try_borrow_mut().ok() {
+        if let Ok(mut state) = self.state.try_borrow_mut() {
             for handle in state.current_pending(u64::MAX).drain(..) {
                 handle.cancel();
             }
