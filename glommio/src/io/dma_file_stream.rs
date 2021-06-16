@@ -371,7 +371,7 @@ pub struct DmaStreamReader {
 macro_rules! collect_error {
     ( $state:expr, $res:expr ) => {{
         if let Err(x) = $res {
-            $state.borrow_mut().error = Some(x.into());
+            $state.error = Some(x.into());
             true
         } else {
             false
@@ -855,7 +855,6 @@ impl DmaStreamWriterState {
             }
         }
         let mut drainers = std::mem::take(&mut self.pending);
-        let sync_on_close = self.sync_on_close;
         self.file_status = FileStatus::Closing;
         Local::local(async move {
             defer! {
@@ -865,11 +864,15 @@ impl DmaStreamWriterState {
             for (_, v) in drainers.drain() {
                 v.await;
             }
-            if state.borrow().error.is_some() {
+
+            // safe to borrow now across yield points as no more flushers
+            let mut state = state.borrow_mut();
+
+            if state.error.is_some() {
                 return;
             }
 
-            if sync_on_close {
+            if state.sync_on_close {
                 let res = file.fdatasync().await;
                 if collect_error!(state, res) {
                     return;
@@ -888,7 +891,6 @@ impl DmaStreamWriterState {
                 collect_error!(state, res);
             }
 
-            let mut state = state.borrow_mut();
             state.flushed_pos = final_pos;
         })
         .detach();
@@ -933,10 +935,10 @@ impl DmaStreamWriterState {
             flush_id,
             Local::local(async move {
                 let res = file.write_at(buffer, file_pos).await;
-                collect_error!(state, res);
-
                 let mut state = state.borrow_mut();
-                state.adjust_flushed_pos(file_pos);
+                if !collect_error!(state, res) {
+                    state.adjust_flushed_pos(file_pos);
+                }
                 state.pending.remove(&flush_id); // can be None during close
                 if let Some(waker) = state.waker.take() {
                     drop(state);
