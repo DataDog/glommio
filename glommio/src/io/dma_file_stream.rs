@@ -1111,18 +1111,20 @@ impl DmaStreamWriter {
     /// });
     /// ```
     pub async fn sync(&self) -> Result<u64> {
-        let (mut pending, pos_at_sync_time) = {
-            let mut state = self.state.borrow_mut();
-            (state.current_pending(), state.aligned_pos)
-        };
-
+        let mut pending = self.state.borrow_mut().current_pending();
         for v in pending.drain(..) {
             v.await;
         }
-
+        let presync_pos = {
+            let mut state = self.state.borrow_mut();
+            if let Some(err) = current_error!(state) {
+                return err;
+            }
+            state.flushed_pos
+        };
         let file = self.file.clone().unwrap();
         file.fdatasync().await?;
-        Ok(pos_at_sync_time)
+        Ok(presync_pos)
     }
 
     // internal function that does everything that close does (flushes buffers, etc,
