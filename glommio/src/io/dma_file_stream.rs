@@ -872,11 +872,12 @@ impl DmaStreamWriterState {
 
             assert_eq!(state.flushed_pos, final_pos);
 
-            if state.sync_on_close {
-                let res = state.sync(&file).await;
+            if state.sync_on_close && state.synced_pos < final_pos {
+                let res = file.fdatasync().await;
                 if collect_error!(state, res) {
                     return;
                 }
+                state.synced_pos = final_pos;
             }
 
             if state.must_truncate() {
@@ -900,17 +901,6 @@ impl DmaStreamWriterState {
 
     fn flushed_pos(&self) -> u64 {
         self.flushed_pos
-    }
-
-    async fn sync(&mut self, file: &DmaFile) -> Result<u64> {
-        let flushed_pos_at_sync = self.flushed_pos;
-        if self.synced_pos < flushed_pos_at_sync {
-            file.fdatasync().await?;
-            self.synced_pos = flushed_pos_at_sync;
-        } else {
-            assert_eq!(self.synced_pos, flushed_pos_at_sync);
-        }
-        Ok(self.synced_pos)
     }
 
     fn on_flushed(&mut self, written_pos: u64) {
@@ -1186,10 +1176,21 @@ impl DmaStreamWriter {
     /// TODO document
     pub async fn sync_upto(&self, pos: u64) -> Result<u64> {
         self.flush_upto(pos).await?;
-        self.state
-            .borrow_mut()
-            .sync(&self.file.clone().unwrap())
-            .await
+        self.sync_inner().await
+    }
+
+    async fn sync_inner(&self) -> Result<u64> {
+        let (flushed_pos, presync_pos) = {
+            let state = self.state.borrow();
+            (state.flushed_pos, state.synced_pos)
+        };
+        if presync_pos < flushed_pos {
+            self.file.clone().unwrap().fdatasync().await?;
+            self.state.borrow_mut().synced_pos = flushed_pos;
+        } else {
+            assert_eq!(presync_pos, flushed_pos);
+        }
+        Ok(flushed_pos)
     }
 
     /// Waits for all currently in-flight buffers to return and be safely stored
