@@ -701,7 +701,7 @@ impl AsyncRead for DmaStreamReader {
 pub struct DmaStreamWriterBuilder {
     buffer_size: usize,
     write_behind: usize,
-    flush_on_close: bool,
+    sync_on_close: bool,
     file: Rc<DmaFile>,
 }
 
@@ -735,7 +735,7 @@ impl DmaStreamWriterBuilder {
         DmaStreamWriterBuilder {
             buffer_size: 128 << 10,
             write_behind: 4,
-            flush_on_close: true,
+            sync_on_close: true,
             file: Rc::new(file),
         }
     }
@@ -756,7 +756,7 @@ impl DmaStreamWriterBuilder {
     /// Does not issue a sync operation when closing the file. This is dangerous
     /// and in most cases may lead to data loss.
     pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
-        self.flush_on_close = !flush_disabled;
+        self.sync_on_close = !flush_disabled;
         self
     }
 
@@ -803,7 +803,7 @@ struct DmaStreamWriterState {
     flushed_pos: u64,
     buffer_pos: usize,
     write_behind: usize,
-    flush_on_close: bool,
+    sync_on_close: bool,
 }
 
 macro_rules! already_closed {
@@ -855,7 +855,7 @@ impl DmaStreamWriterState {
             }
         }
         let mut drainers = std::mem::take(&mut self.pending);
-        let flush_on_close = self.flush_on_close;
+        let sync_on_close = self.sync_on_close;
         self.file_status = FileStatus::Closing;
         Local::local(async move {
             defer! {
@@ -869,7 +869,7 @@ impl DmaStreamWriterState {
                 return;
             }
 
-            if flush_on_close {
+            if sync_on_close {
                 let res = file.fdatasync().await;
                 if collect_error!(state, res) {
                     return;
@@ -983,7 +983,7 @@ impl DmaStreamWriter {
         let state = DmaStreamWriterState {
             buffer_size: builder.buffer_size,
             write_behind: builder.write_behind,
-            flush_on_close: builder.flush_on_close,
+            sync_on_close: builder.sync_on_close,
             current_buffer: None,
             waker: None,
             pending: AHashMap::new(),
