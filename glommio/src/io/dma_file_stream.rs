@@ -843,7 +843,7 @@ impl DmaStreamWriterState {
         file: Rc<DmaFile>,
         do_close: bool,
     ) {
-        let final_pos = self.file_pos();
+        let final_pos = self.current_pos();
         let must_truncate = final_pos != self.file_pos;
 
         if self.buffer_pos > 0 {
@@ -896,7 +896,7 @@ impl DmaStreamWriterState {
         .detach();
     }
 
-    fn file_pos(&self) -> u64 {
+    fn current_pos(&self) -> u64 {
         self.file_pos + self.buffer_pos as u64
     }
 
@@ -1028,7 +1028,7 @@ impl DmaStreamWriter {
     ///
     /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
     pub fn current_pos(&self) -> u64 {
-        self.state.borrow().file_pos()
+        self.state.borrow().current_pos()
     }
 
     /// Acquires the current position of this [`DmaStreamWriter`] that is
