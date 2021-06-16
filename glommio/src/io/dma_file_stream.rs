@@ -794,7 +794,7 @@ struct DmaStreamWriterState {
     error: Option<io::Error>,
     pending: AHashMap<u64, task::JoinHandle<()>>,
     current_buffer: Option<DmaBuffer>,
-    file_pos: u64,
+    aligned_pos: u64,
     flush_id: u64,
     // this is so we track the last flushed pos. Buffers may return
     // out of order, so we can't report them as flushed_pos yet. Store for
@@ -844,14 +844,14 @@ impl DmaStreamWriterState {
         do_close: bool,
     ) {
         let final_pos = self.current_pos();
-        let must_truncate = final_pos != self.file_pos;
+        let must_truncate = final_pos != self.aligned_pos;
 
         if self.buffer_pos > 0 {
             let buffer = self.current_buffer.take();
             self.flush_one_buffer(buffer.unwrap(), state.clone(), file.clone());
             if must_truncate {
                 // flush will have adjusted that, we will fix.
-                self.file_pos = final_pos;
+                self.aligned_pos = final_pos;
             }
         }
         let mut drainers = std::mem::take(&mut self.pending);
@@ -897,7 +897,7 @@ impl DmaStreamWriterState {
     }
 
     fn current_pos(&self) -> u64 {
-        self.file_pos + self.buffer_pos as u64
+        self.aligned_pos + self.buffer_pos as u64
     }
 
     fn flushed_pos(&self) -> u64 {
@@ -926,18 +926,18 @@ impl DmaStreamWriterState {
     }
 
     fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
-        let file_pos = self.file_pos;
-        self.file_pos += self.buffer_size as u64;
+        let aligned_pos = self.aligned_pos;
+        self.aligned_pos += self.buffer_size as u64;
         self.buffer_pos = 0;
         let flush_id = self.flush_id;
         self.flush_id += 1;
         self.pending.insert(
             flush_id,
             Local::local(async move {
-                let res = file.write_at(buffer, file_pos).await;
+                let res = file.write_at(buffer, aligned_pos).await;
                 let mut state = state.borrow_mut();
                 if !collect_error!(state, res) {
-                    state.adjust_flushed_pos(file_pos);
+                    state.adjust_flushed_pos(aligned_pos);
                 }
                 state.pending.remove(&flush_id); // can be None during close
                 if let Some(waker) = state.waker.take() {
@@ -991,7 +991,7 @@ impl DmaStreamWriter {
             pending: AHashMap::new(),
             error: None,
             file_status: FileStatus::Open,
-            file_pos: 0,
+            aligned_pos: 0,
             buffer_pos: 0,
             flushed_pos: 0,
             flush_id: 0,
@@ -1111,9 +1111,9 @@ impl DmaStreamWriter {
     /// });
     /// ```
     pub async fn sync(&self) -> Result<u64> {
-        let (mut pending, file_pos_at_sync_time) = {
+        let (mut pending, pos_at_sync_time) = {
             let mut state = self.state.borrow_mut();
-            (state.current_pending(), state.file_pos)
+            (state.current_pending(), state.aligned_pos)
         };
 
         for v in pending.drain(..) {
@@ -1122,7 +1122,7 @@ impl DmaStreamWriter {
 
         let file = self.file.clone().unwrap();
         file.fdatasync().await?;
-        Ok(file_pos_at_sync_time)
+        Ok(pos_at_sync_time)
     }
 
     // internal function that does everything that close does (flushes buffers, etc,
