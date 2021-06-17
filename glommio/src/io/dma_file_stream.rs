@@ -1142,12 +1142,15 @@ impl DmaStreamWriter {
     }
 
     async fn flush_inner(&self, partial: bool) -> Result<u64> {
-        let mut pending = {
+        let (target_pos, mut pending) = {
             let mut state = self.state.borrow_mut();
-            if partial && state.buffer_pos > 0 {
+            let pos = if partial && state.buffer_pos > 0 {
                 state.flush_padded(self.state.clone(), self.file.clone().unwrap());
-            }
-            state.current_pending()
+                state.current_pos()
+            } else {
+                state.aligned_pos
+            };
+            (pos, state.current_pending())
         };
         for flush in pending.drain(..) {
             flush.await;
@@ -1156,6 +1159,7 @@ impl DmaStreamWriter {
         if let Some(err) = current_error!(state) {
             return err;
         }
+        assert!(state.flushed_pos() >= target_pos);
         Ok(state.flushed_pos())
     }
 
