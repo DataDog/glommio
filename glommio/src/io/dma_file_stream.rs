@@ -909,28 +909,25 @@ impl DmaStreamWriterState {
 
     fn on_flush_success(&mut self, flush_pos: u64) {
         let mut complete_prefix_len = 0usize;
-        let mut complete_prefix_finalized = false;
-        let mut found_index = None;
-        for (i, (pos, status)) in self.flushes.iter_mut().enumerate() {
+        let mut found_pending = false;
+        for (pos, status) in &mut self.flushes {
             if *pos == flush_pos {
                 *status = FlushStatus::Complete;
-                found_index = Some(i);
             }
-            if !complete_prefix_finalized {
+            if !found_pending {
                 if let FlushStatus::Complete = status {
+                    self.flushed_pos = *pos;
                     complete_prefix_len += 1;
                 } else {
-                    complete_prefix_finalized = true;
+                    found_pending = true;
                 }
             }
-            if found_index.is_some() && complete_prefix_finalized {
+            if found_pending && *pos >= flush_pos {
                 break;
             }
         }
-        found_index.expect("missing flush");
         if complete_prefix_len > 0 {
-            let (pos, _) = self.flushes.drain(..complete_prefix_len).last().unwrap();
-            self.flushed_pos = pos;
+            self.flushes.drain(..complete_prefix_len);
         }
     }
 
