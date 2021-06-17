@@ -856,7 +856,7 @@ impl DmaStreamWriterState {
     ) {
         let final_pos = self.current_pos();
         self.flush_partial(state.clone(), file.clone());
-        let mut pending = self.current_pending(final_pos);
+        let mut pending = self.current_pending();
         self.file_status = FileStatus::Closing;
         Local::local(async move {
             defer! {
@@ -934,19 +934,13 @@ impl DmaStreamWriterState {
         }
     }
 
-    fn current_pending(&mut self, upto_pos: u64) -> Vec<task::JoinHandle<()>> {
-        if self.flushed_pos >= upto_pos {
-            return vec![];
-        }
+    fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
         let mut handles = Vec::with_capacity(self.pending_flush_count);
-        for (pos, status) in &mut self.flushes {
+        for (_pos, status) in &mut self.flushes {
             if let FlushStatus::Pending(handle) = status {
                 if let Some(h) = handle.take() {
                     handles.push(h);
                 }
-            }
-            if *pos > upto_pos {
-                break;
             }
         }
         handles
@@ -1009,7 +1003,7 @@ impl Drop for DmaStreamWriterState {
     fn drop(&mut self) {
         assert_eq!(
             0,
-            self.current_pending(u64::MAX).len(),
+            self.current_pending().len(),
             "DmaStreamerWriter::drop() should have cancelled pending flushes"
         );
     }
@@ -1018,13 +1012,15 @@ impl Drop for DmaStreamWriterState {
 impl Drop for DmaStreamWriter {
     fn drop(&mut self) {
         let mut state = self.state.borrow_mut();
-        let mut pending = state.current_pending(u64::MAX);
+        let mut pending = state.current_pending();
         for flush in pending.drain(..) {
             flush.cancel();
         }
         if state.must_truncate() {
             let file = self.file.take().unwrap();
-            Local::get_reactor().sys.async_truncate(file.as_raw_fd(), state.flushed_pos);
+            Local::get_reactor()
+                .sys
+                .async_truncate(file.as_raw_fd(), state.flushed_pos);
         }
     }
 }
@@ -1145,15 +1141,13 @@ impl DmaStreamWriter {
         self.state.borrow().flushed_pos()
     }
 
-    /// TODO document
-    pub async fn flush_upto(&self, pos: u64) -> Result<u64> {
-        let (pos, mut pending) = {
+    async fn flush_inner(&self, partial: bool) -> Result<u64> {
+        let mut pending = {
             let mut state = self.state.borrow_mut();
-            let pos = std::cmp::min(state.current_pos(), pos);
-            if pos > state.aligned_pos {
+            if partial && state.buffer_pos > 0 {
                 state.flush_partial(self.state.clone(), self.file.clone().unwrap());
             }
-            (pos, state.current_pending(pos))
+            state.current_pending()
         };
         for flush in pending.drain(..) {
             flush.await;
@@ -1162,20 +1156,7 @@ impl DmaStreamWriter {
         if let Some(err) = current_error!(state) {
             return err;
         }
-        let flushed_pos = state.flushed_pos();
-        assert!(
-            flushed_pos >= pos,
-            "flushed_pos({}) < pos({})",
-            flushed_pos,
-            pos
-        );
-        Ok(flushed_pos)
-    }
-
-    /// TODO document
-    pub async fn sync_upto(&self, pos: u64) -> Result<u64> {
-        self.flush_upto(pos).await?;
-        self.sync_inner().await
+        Ok(state.flushed_pos())
     }
 
     async fn sync_inner(&self) -> Result<u64> {
@@ -1190,6 +1171,17 @@ impl DmaStreamWriter {
             assert_eq!(presync_pos, flushed_pos);
         }
         Ok(flushed_pos)
+    }
+
+    /// TODO document
+    pub async fn flush_aligned(&self) -> Result<u64> {
+        self.flush_inner(false).await
+    }
+
+    /// TODO document
+    pub async fn sync_aligned(&self) -> Result<u64> {
+        self.flush_aligned().await?;
+        self.sync_inner().await
     }
 
     /// Waits for all currently in-flight buffers to return and be safely stored
@@ -1223,7 +1215,8 @@ impl DmaStreamWriter {
     /// });
     /// ```
     pub async fn sync(&self) -> Result<u64> {
-        self.sync_upto(self.current_pos()).await
+        self.flush_inner(true).await?;
+        self.sync_inner().await
     }
 
     // internal function that does everything that close does (flushes buffers, etc,
@@ -1908,27 +1901,6 @@ mod test {
         assert_eq!(writer.current_flushed_pos(), 5000);
     });
 
-    file_stream_write_test!(flush_upto_and_drop, path, _k, filename, file, {
-        let mut writer = DmaStreamWriterBuilder::new(file)
-            .with_buffer_size(4096)
-            .with_write_behind(2)
-            .build();
-
-        assert_eq!(writer.current_pos(), 0);
-        let buffer = [0u8; 5000];
-        writer.write_all(&buffer).await.unwrap();
-        assert_eq!(writer.flush_upto(0).await.unwrap(), 0);
-        assert_eq!(file_size(&filename), 0);
-        assert_eq!(writer.flush_upto(4095).await.unwrap(), 4096);
-        assert_eq!(file_size(&filename), 4096);
-        assert_eq!(writer.flush_upto(4096).await.unwrap(), 4096);
-        assert_eq!(file_size(&filename), 4096);
-        assert_eq!(writer.flush_upto(5000).await.unwrap(), 5000);
-        assert_eq!(file_size(&filename), 8192);
-        drop(writer);
-        assert_eq!(file_size(&filename), 5000);
-    });
-
     file_stream_write_test!(flush_and_drop, path, _k, filename, file, {
         let mut writer = DmaStreamWriterBuilder::new(file)
             .with_buffer_size(4096)
@@ -1938,7 +1910,8 @@ mod test {
         assert_eq!(writer.current_pos(), 0);
         let buffer = [0u8; 5000];
         writer.write_all(&buffer).await.unwrap();
-        assert_eq!(writer.current_flushed_pos(), 0);
+        assert_eq!(writer.flush_aligned().await.unwrap(), 4096);
+        assert_eq!(file_size(&filename), 4096);
         writer.flush().await.unwrap();
         assert_eq!(writer.current_flushed_pos(), 5000);
         assert_eq!(file_size(&filename), 8192);

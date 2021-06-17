@@ -261,13 +261,13 @@ impl ImmutableFilePreSealSink {
     }
 
     /// TODO document
-    pub async fn flush_upto(&self, pos: u64) -> Result<u64> {
-        self.writer.flush_upto(pos).await
+    pub async fn flush_aligned(&self) -> Result<u64> {
+        self.writer.flush_aligned().await
     }
 
     /// TODO document
-    pub async fn sync_upto(&self, pos: u64) -> Result<u64> {
-        self.writer.sync_upto(pos).await
+    pub async fn sync_aligned(&self) -> Result<u64> {
+        self.writer.sync_aligned().await
     }
 
     /// Waits for all currently in-flight buffers to return and be safely stored
