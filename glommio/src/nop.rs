@@ -18,9 +18,7 @@ pub struct NopSubmitter {
 impl NopSubmitter {
     /// Construct a new [`NopSubmitter`].
     pub fn new() -> Self {
-        let reactor = Local::get_reactor();
-        let reactor = Rc::downgrade(&reactor);
-        Self { reactor }
+        Self::default()
     }
 
     /// Submit a no-op io_uring operation, and wait for completion.
@@ -29,5 +27,13 @@ impl NopSubmitter {
         let source = reactor.nop();
         source.collect_rw().await?;
         Ok(())
+    }
+}
+
+impl Default for NopSubmitter {
+    fn default() -> Self {
+        let reactor = Local::get_reactor();
+        let reactor = Rc::downgrade(&reactor);
+        Self { reactor }
     }
 }
