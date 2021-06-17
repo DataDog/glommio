@@ -1534,6 +1534,13 @@ impl Reactor {
         (cq.khead, cq.ktail)
     }
 
+    /// RAII-truncate asynchronously files that required it, e.g. because of
+    /// padded writes, but were not closed explicitly.
+    pub(crate) fn async_truncate(&self, fd: RawFd, size: u64) {
+        // actually synchronous for now!
+        let _ = sys::truncate_file(fd, size);
+    }
+
     // RAII-close asynchronously files that were not closed explicitly.
     // We can't do this through a Source, because the Source will be dropped when
     // the file is dropped.

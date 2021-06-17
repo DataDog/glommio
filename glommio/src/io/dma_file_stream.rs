@@ -5,7 +5,7 @@
 //
 use crate::{
     io::{dma_file::align_down, read_result::ReadResult, DmaFile},
-    sys::{self, DmaBuffer},
+    sys::DmaBuffer,
     task,
     ByteSliceExt,
     ByteSliceMutExt,
@@ -20,7 +20,6 @@ use futures_lite::{
     io::{AsyncRead, AsyncWrite},
     stream::{self, StreamExt},
 };
-use log::debug;
 use std::{
     cell::RefCell,
     collections::VecDeque,
@@ -1018,22 +1017,14 @@ impl Drop for DmaStreamWriterState {
 
 impl Drop for DmaStreamWriter {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.state.try_borrow_mut() {
-            for handle in state.current_pending(u64::MAX).drain(..) {
-                handle.cancel();
-            }
-            if state.must_truncate() {
-                let file = self.file.take().unwrap();
-                if let Err(err) = sys::truncate_file(file.as_raw_fd(), state.flushed_pos) {
-                    debug!(
-                        "DmaStreamWriter[{:?}] was not closed and drop-time truncation to {}b \
-                         failed: {}",
-                        file.path(),
-                        state.flushed_pos,
-                        err
-                    );
-                }
-            }
+        let mut state = self.state.borrow_mut();
+        let mut pending = state.current_pending(u64::MAX);
+        for flush in pending.drain(..) {
+            flush.cancel();
+        }
+        if state.must_truncate() {
+            let file = self.file.take().unwrap();
+            Local::get_reactor().sys.async_truncate(file.as_raw_fd(), state.flushed_pos);
         }
     }
 }
