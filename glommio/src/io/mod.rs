@@ -125,10 +125,11 @@ mod bulk_io;
 mod directory;
 mod dma_file;
 mod dma_file_stream;
-mod dma_open_options;
 mod glommio_file;
 mod immutable_file;
+mod open_options;
 mod read_result;
+mod sched;
 
 use crate::sys;
 use std::path::Path;
@@ -155,6 +156,7 @@ pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
     )
 }
 
+pub(crate) use self::sched::{FileScheduler, IoScheduler, ScheduledSource};
 pub use self::{
     buffered_file::BufferedFile,
     buffered_file_stream::{
@@ -173,8 +175,8 @@ pub use self::{
         DmaStreamWriter,
         DmaStreamWriterBuilder,
     },
-    dma_open_options::DmaOpenOptions,
     immutable_file::{ImmutableFile, ImmutableFileBuilder, ImmutableFilePreSealSink},
+    open_options::OpenOptions,
     read_result::ReadResult,
 };
 pub use crate::sys::DmaBuffer;

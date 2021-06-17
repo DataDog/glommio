@@ -5,7 +5,7 @@
 //
 
 use crate::{
-    io::{glommio_file::GlommioFile, read_result::ReadResult},
+    io::{glommio_file::GlommioFile, read_result::ReadResult, OpenOptions},
     GlommioError,
 };
 use std::{
@@ -25,7 +25,7 @@ type Result<T> = crate::Result<T, ()>;
 /// examples.
 #[derive(Debug)]
 pub struct BufferedFile {
-    file: GlommioFile,
+    pub(super) file: GlommioFile,
 }
 
 impl AsRawFd for BufferedFile {
@@ -82,11 +82,12 @@ impl BufferedFile {
     ///
     /// [`create`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.create
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
-        let flags = libc::O_CLOEXEC | libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY;
-        GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644)
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .buffered_open(path.as_ref())
             .await
-            .map_err(|source| GlommioError::create_enhanced(source, "Creating", Some(path), None))
-            .map(|file| BufferedFile { file })
     }
 
     /// Similar to [`open`] in the standard library, but returns a
@@ -94,10 +95,25 @@ impl BufferedFile {
     ///
     /// [`open`]: https://doc.rust-lang.org/std/fs/struct.File.html#method.open
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<BufferedFile> {
-        let flags = libc::O_CLOEXEC | libc::O_RDONLY;
-        GlommioFile::open_at(-1_i32, path.as_ref(), flags, 0o644)
+        OpenOptions::new()
+            .read(true)
+            .buffered_open(path.as_ref())
             .await
-            .map_err(|source| GlommioError::create_enhanced(source, "Reading", Some(path), None))
+    }
+
+    pub(super) async fn open_with_options<'a>(
+        dir: RawFd,
+        path: &'a Path,
+        opdesc: &'static str,
+        opts: &'a OpenOptions,
+    ) -> Result<BufferedFile> {
+        let flags = libc::O_CLOEXEC
+            | opts.get_access_mode()?
+            | opts.get_creation_mode()?
+            | (opts.custom_flags as libc::c_int & !libc::O_ACCMODE);
+        GlommioFile::open_at(dir, path, flags, opts.mode)
+            .await
+            .map_err(|source| GlommioError::create_enhanced(source, opdesc, Some(path), None))
             .map(|file| BufferedFile { file })
     }
 
@@ -151,12 +167,12 @@ impl BufferedFile {
     /// [`DmaFile`]: struct.DmaFile.html
     /// Reads from a specific position in the file and returns the buffer.
     pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
-        let mut source =
-            self.file
-                .reactor
-                .upgrade()
-                .unwrap()
-                .read_buffered(self.as_raw_fd(), pos, size);
+        let source = self.file.reactor.upgrade().unwrap().read_buffered(
+            self.as_raw_fd(),
+            pos,
+            size,
+            self.file.scheduler.borrow().as_ref(),
+        );
         let read_size = source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
@@ -165,9 +181,7 @@ impl BufferedFile {
                 Some(self.as_raw_fd()),
             )
         })?;
-        let mut buffer = source.extract_dma_buffer();
-        buffer.trim_to_size(read_size);
-        Ok(ReadResult::from_whole_buffer(buffer))
+        Ok(ReadResult::from_sliced_buffer(source, 0, read_size))
     }
 
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush

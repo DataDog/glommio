@@ -1,7 +1,4 @@
-use crate::{
-    io::{DmaFile, ReadResult},
-    sys::Source,
-};
+use crate::io::{DmaFile, ReadResult, ScheduledSource};
 use core::task::{Context, Poll};
 use futures_lite::{ready, Stream, StreamExt};
 use itertools::{Itertools, MultiPeek};
@@ -16,11 +13,11 @@ use std::{
 #[derive(Debug)]
 pub(crate) struct OrderedBulkIo<U> {
     file: Rc<DmaFile>,
-    iovs: VecDeque<(Option<Source>, U)>,
+    iovs: VecDeque<(Option<ScheduledSource>, U)>,
 }
 
 impl<U: Copy + Unpin> OrderedBulkIo<U> {
-    pub(crate) fn new<S: Iterator<Item = (Option<Source>, U)>>(
+    pub(crate) fn new<S: Iterator<Item = (Option<ScheduledSource>, U)>>(
         file: Rc<DmaFile>,
         iovs: S,
     ) -> OrderedBulkIo<U> {
@@ -32,18 +29,18 @@ impl<U: Copy + Unpin> OrderedBulkIo<U> {
 }
 
 impl<U: Copy + Unpin> Stream for OrderedBulkIo<U> {
-    type Item = (Option<Source>, U);
+    type Item = (Option<ScheduledSource>, U);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.iovs.front() {
+        match self.iovs.front_mut() {
             None => Poll::Ready(None),
             Some((Some(source), _)) => {
-                let res = if source.has_result() {
+                let res = if source.result().is_some() {
                     Poll::Ready(Some(self.iovs.pop_front().unwrap()))
                 } else {
                     Poll::Pending
                 };
-                if let Some((Some(source), _)) = self.iovs.front() {
+                if let Some((Some(source), _)) = self.iovs.front_mut() {
                     source.add_waiter(cx.waker().clone());
                 }
                 res
@@ -58,7 +55,7 @@ impl<U: Copy + Unpin> Stream for OrderedBulkIo<U> {
 }
 
 /// An interface to an IO vector.
-pub trait IoVec: Copy + Unpin {
+pub trait IoVec: Copy {
     /// The read position (the offset) in the file
     fn pos(&self) -> u64;
     /// The number of bytes to read at [`Self::pos`]
@@ -76,7 +73,7 @@ impl IoVec for (u64, usize) {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct ReadManyArgs<V: IoVec> {
+pub(crate) struct ReadManyArgs<V: IoVec + Unpin> {
     pub(crate) user_read: V,
     pub(crate) system_read: (u64, usize),
 }
@@ -85,31 +82,29 @@ pub(crate) struct ReadManyArgs<V: IoVec> {
 ///
 /// See [`DmaFile::read_many`] for more information
 #[derive(Debug)]
-pub struct ReadManyResult<V: IoVec> {
+pub struct ReadManyResult<V: IoVec + Unpin> {
     pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>>,
-    pub(crate) current_result: ReadResult,
+    pub(crate) current: Option<ScheduledSource>,
 }
 
-impl<V: IoVec> Stream for ReadManyResult<V> {
+impl<V: IoVec + Unpin> Stream for ReadManyResult<V> {
     type Item = super::Result<(V, ReadResult)>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match ready!(self.inner.poll_next(cx)) {
             None => Poll::Ready(None),
             Some((source, args)) => {
-                if let Some(mut source) = source {
-                    enhanced_try!(source.take_result().unwrap(), "Reading", self.inner.file)?;
-                    self.current_result =
-                        ReadResult::from_whole_buffer(source.extract_dma_buffer());
+                if let Some(source) = source {
+                    enhanced_try!(source.result().unwrap(), "Reading", self.inner.file)?;
+                    self.current = Some(source);
                 }
                 Poll::Ready(Some(Ok((
                     args.user_read,
-                    ReadResult::slice(
-                        &self.current_result,
+                    ReadResult::from_sliced_buffer(
+                        self.current.as_ref().unwrap().clone(),
                         (args.user_read.pos() - args.system_read.pos()) as usize,
                         args.user_read.size(),
-                    )
-                    .unwrap_or_default(),
+                    ),
                 ))))
             }
         }

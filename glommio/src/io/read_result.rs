@@ -2,9 +2,8 @@
 // under the mit/apache-2.0 license, at your convenience
 //
 // this product includes software developed at datadog (https://www.datadoghq.com/). copyright 2020 datadog, inc.
-use crate::sys::DmaBuffer;
+use crate::io::ScheduledSource;
 use core::num::NonZeroUsize;
-use std::rc::Rc;
 
 #[derive(Default, Clone, Debug)]
 /// ReadResult encapsulates a buffer, returned by read operations like
@@ -23,7 +22,7 @@ impl core::ops::Deref for ReadResult {
 
 #[derive(Clone, Debug)]
 struct ReadResultInner {
-    buffer: Rc<DmaBuffer>,
+    buffer: ScheduledSource,
     offset: usize,
 
     // This (usage of `NonZeroUsize`) is probably needed to make sure that rustc
@@ -39,7 +38,8 @@ impl core::ops::Deref for ReadResultInner {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        &self.buffer.as_bytes()[self.offset..][..self.len.get()]
+        // unsafe is needed because we need to extract a slice out of a RefCell
+        unsafe { &self.buffer.as_bytes()[self.offset..][..self.len.get()] }
     }
 }
 
@@ -48,11 +48,15 @@ impl ReadResult {
         Self(None)
     }
 
-    pub(crate) fn from_whole_buffer(buffer: DmaBuffer) -> Self {
-        Self(NonZeroUsize::new(buffer.len()).map(|len| ReadResultInner {
-            buffer: Rc::new(buffer),
-            offset: 0,
-            len,
+    pub(crate) fn from_sliced_buffer(buffer: ScheduledSource, offset: usize, len: usize) -> Self {
+        Self(NonZeroUsize::new(len).map(|len| {
+            let ret = ReadResultInner {
+                buffer,
+                offset,
+                len,
+            };
+            ReadResultInner::check_invariants(&ret);
+            ret
         }))
     }
 
@@ -89,7 +93,7 @@ impl ReadResult {
 impl ReadResultInner {
     fn check_invariants(this: &Self) {
         if cfg!(debug_assertions) {
-            let max_len = this.buffer.len();
+            let max_len = this.buffer.buffer().len();
             assert!(
                 (this.offset + this.len.get()) <= max_len,
                 "a ReadResult contains an out-of-range 'end': offset ({} + {}) > buffer length \

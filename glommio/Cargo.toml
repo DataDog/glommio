@@ -29,7 +29,7 @@ lazy_static = "1.4.0"
 enclose = "1.1.8"
 scopeguard = "1.1.0"
 pin-project-lite = "0.1.10"
-smallvec = "1.4.2"
+smallvec = { version = "1.4.2", features = ["union"] }
 buddy-alloc = "0.4.1"
 ahash = "0.5.7"
 intrusive-collections = "0.9.0"
@@ -88,4 +88,9 @@ required-features = ["bench"]
 
 [[bench]]
 name = "sharding"
+harness = false
+
+
+[[bench]]
+name = "spsc_queue"
 harness = false

@@ -4,9 +4,9 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 
 use crate::{
-    io::BufferedFile,
+    io::{BufferedFile, ScheduledSource},
     parking::Reactor,
-    sys::{DmaBuffer, Source},
+    sys::{IoBuffer, Source},
     Local,
 };
 use futures_lite::{
@@ -41,7 +41,8 @@ pin_project! {
         file: BufferedFile,
         file_pos: u64,
         max_pos: u64,
-        source: Option<Source>,
+        io_source: Option<ScheduledSource>,
+        seek_source: Option<Source>,
         buffer: Buffer,
         reactor: Weak<Reactor>,
     }
@@ -54,7 +55,7 @@ pin_project! {
     /// [`AsyncRead`]: https://docs.rs/futures/0.3.6/futures/io/trait.AsyncRead.html
     /// [`AsyncBufRead`]: https://docs.rs/futures/0.3.6/futures/io/trait.AsyncBufRead.html
     pub struct Stdin {
-        source: Option<Source>,
+        source: Option<ScheduledSource>,
         buffer: Buffer,
         reactor: Weak<Reactor>,
     }
@@ -167,11 +168,11 @@ impl Buffer {
         self.data = buf;
     }
 
-    fn replenish_buffer(&mut self, buf: DmaBuffer) {
+    fn replenish_buffer(&mut self, buf: &IoBuffer, len: usize) {
         use crate::ByteSliceExt;
         self.buffer_pos = 0;
-        self.data.resize(buf.len(), 0u8);
-        buf.read_at(0, &mut self.data);
+        self.data.resize(len, 0u8);
+        buf[..len].read_at(0, &mut self.data);
     }
 
     fn remaining_unconsumed_bytes(&self) -> usize {
@@ -212,7 +213,8 @@ impl StreamReader {
             file: builder.file,
             file_pos: builder.start,
             max_pos: builder.end,
-            source: None,
+            io_source: None,
+            seek_source: None,
             buffer: Buffer::new(builder.buffer_size),
             reactor: Rc::downgrade(&Local::get_reactor()),
         }
@@ -366,13 +368,16 @@ impl StreamWriter {
         }
     }
 
-    fn consume_flush_result(&mut self, mut source: Source) -> io::Result<()> {
-        let res = source.take_result().unwrap();
+    fn consume_flush_result(&mut self, source: Source) -> io::Result<()> {
+        let res = source.result().unwrap();
         if res.is_ok() {
-            let mut buffer = source.extract_buffer();
-            self.file_pos += buffer.len() as u64;
-            buffer.truncate(0);
-            self.buffer.replace_buffer(buffer);
+            if let IoBuffer::Buffered(mut buffer) = source.extract_buffer() {
+                self.file_pos += buffer.len() as u64;
+                buffer.truncate(0);
+                self.buffer.replace_buffer(buffer);
+            } else {
+                unreachable!("expected vec buffer");
+            }
         }
         res.map(|_x| ())
     }
@@ -410,7 +415,7 @@ impl StreamWriter {
                     Poll::Pending
                 }
                 Some(source) => {
-                    let _ = source.take_result().unwrap();
+                    let _ = source.result().unwrap();
                     Poll::Ready(Ok(()))
                 }
             }
@@ -430,7 +435,7 @@ impl StreamWriter {
                 Poll::Pending
             }
             Some(source) => {
-                let _ = source.take_result().unwrap();
+                let _ = source.result().unwrap();
                 self.file.take().unwrap().discard();
                 Poll::Ready(Ok(()))
             }
@@ -476,7 +481,7 @@ impl StreamWriter {
 }
 
 macro_rules! do_seek {
-    ( $self:expr, $fileobj:expr, $cx:expr, $pos:expr ) => {
+    ( $self:expr, $source:expr, $fileobj:expr, $cx:expr, $pos:expr ) => {
         match $pos {
             SeekFrom::Start(pos) => {
                 $self.file_pos = pos;
@@ -486,7 +491,7 @@ macro_rules! do_seek {
                 $self.file_pos = ($self.file_pos as i64 + pos) as u64;
                 Poll::Ready(Ok($self.file_pos))
             }
-            SeekFrom::End(pos) => match $self.source.take() {
+            SeekFrom::End(pos) => match $source.take() {
                 None => {
                     let source = $self
                         .reactor
@@ -494,7 +499,7 @@ macro_rules! do_seek {
                         .unwrap()
                         .statx($fileobj.as_raw_fd(), &$fileobj.path().unwrap());
                     source.add_waiter($cx.waker().clone());
-                    $self.source = Some(source);
+                    $source = Some(source);
                     Poll::Pending
                 }
                 Some(source) => {
@@ -515,7 +520,7 @@ impl AsyncSeek for StreamReader {
         cx: &mut Context<'_>,
         pos: SeekFrom,
     ) -> Poll<io::Result<u64>> {
-        do_seek!(self, &self.file, cx, pos)
+        do_seek!(self, self.seek_source, &self.file, cx, pos)
     }
 }
 
@@ -525,7 +530,7 @@ impl AsyncSeek for StreamWriter {
         cx: &mut Context<'_>,
         pos: SeekFrom,
     ) -> Poll<io::Result<u64>> {
-        do_seek!(self, self.file.as_ref().unwrap(), cx, pos)
+        do_seek!(self, self.source, self.file.as_ref().unwrap(), cx, pos)
     }
 }
 
@@ -551,29 +556,27 @@ impl AsyncBufRead for StreamReader {
         mut self: Pin<&'a mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
-        match self.source.take() {
-            Some(mut source) => {
-                let res = source.take_result().unwrap();
+        match self.io_source.take() {
+            Some(source) => {
+                let res = source.result().unwrap();
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
                     Ok(sz) => {
-                        let mut buf = source.extract_dma_buffer();
                         let old_pos = self.file_pos;
                         let new_pos = std::cmp::min(old_pos + sz as u64, self.max_pos);
                         let added_size = new_pos - old_pos;
                         self.file_pos += added_size;
-                        buf.trim_to_size(added_size as usize);
-
-                        self.buffer.replenish_buffer(buf);
+                        self.buffer
+                            .replenish_buffer(&source.buffer(), added_size as usize);
                         let this = self.project();
-                        Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
+                        Poll::Ready(Ok(this.buffer.unconsumed_bytes()))
                     }
                 }
             }
             None => {
                 if self.buffer.remaining_unconsumed_bytes() > 0 {
                     let this = self.project();
-                    Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
+                    Poll::Ready(Ok(this.buffer.unconsumed_bytes()))
                 } else {
                     let file_pos = self.file_pos;
                     let fd = self.file.as_raw_fd();
@@ -581,9 +584,10 @@ impl AsyncBufRead for StreamReader {
                         fd,
                         file_pos,
                         self.buffer.max_buffer_size,
+                        self.file.file.scheduler.borrow().as_ref(),
                     );
                     source.add_waiter(cx.waker().clone());
-                    self.source = Some(source);
+                    self.io_source = Some(source);
                     Poll::Pending
                 }
             }
@@ -645,14 +649,12 @@ impl AsyncBufRead for Stdin {
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
         match self.source.take() {
-            Some(mut source) => {
-                let res = source.take_result().unwrap();
+            Some(source) => {
+                let res = source.result().unwrap();
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
                     Ok(sz) => {
-                        let mut buf = source.extract_dma_buffer();
-                        buf.trim_to_size(sz);
-                        self.buffer.replenish_buffer(buf);
+                        self.buffer.replenish_buffer(&source.buffer(), sz);
                         let this = self.project();
                         Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
                     }
@@ -667,6 +669,7 @@ impl AsyncBufRead for Stdin {
                         libc::STDIN_FILENO,
                         0,
                         self.buffer.max_buffer_size,
+                        None,
                     );
                     source.add_waiter(cx.waker().clone());
                     self.source = Some(source);

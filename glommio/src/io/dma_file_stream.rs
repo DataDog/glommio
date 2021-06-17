@@ -409,6 +409,9 @@ impl DmaStreamReader {
         let to_cancel = handles.len();
         let cancelled = stream::iter(handles).then(|f| f).count().await;
         assert_eq!(to_cancel, cancelled);
+
+        // the file may be used by other processes so failing to close it is not an
+        // issue.
         let _ = self.file.close_rc().await;
 
         let mut state = self.state.borrow_mut();
@@ -754,8 +757,8 @@ impl DmaStreamWriterBuilder {
 
     /// Does not issue a sync operation when closing the file. This is dangerous
     /// and in most cases may lead to data loss.
-    pub fn with_sync_on_close_disabled(mut self, sync_disabled: bool) -> Self {
-        self.sync_on_close = !sync_disabled;
+    pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
+        self.sync_on_close = !flush_disabled;
         self
     }
 
@@ -865,7 +868,9 @@ impl DmaStreamWriterState {
                 flush.await;
             }
 
+            // safe to borrow now across yield points as no more flushers
             let mut state = state.borrow_mut();
+
             if state.error.is_some() {
                 return;
             }
@@ -903,27 +908,29 @@ impl DmaStreamWriterState {
         self.flushed_pos
     }
 
-    fn on_flushed(&mut self, written_pos: u64) {
-        self.pending_flush_count -= 1;
-        let mut completion_prefix_len = 0usize;
-        let mut completion_prefix_finalized = false;
-        for (pos, status) in &mut self.flushes {
-            if *pos == written_pos {
+    fn on_flush_success(&mut self, flush_pos: u64) {
+        let mut complete_prefix_len = 0usize;
+        let mut complete_prefix_finalized = false;
+        let mut found_index = None;
+        for (i, (pos, status)) in self.flushes.iter_mut().enumerate() {
+            if *pos == flush_pos {
                 *status = FlushStatus::Complete;
+                found_index = Some(i);
             }
-            if !completion_prefix_finalized {
+            if !complete_prefix_finalized {
                 if let FlushStatus::Complete = status {
-                    completion_prefix_len += 1;
+                    complete_prefix_len += 1;
                 } else {
-                    completion_prefix_finalized = true;
+                    complete_prefix_finalized = true;
                 }
             }
-            if completion_prefix_finalized && *pos >= written_pos {
+            if found_index.is_some() && complete_prefix_finalized {
                 break;
             }
         }
-        if completion_prefix_len > 0 {
-            let (pos, _) = self.flushes.drain(..completion_prefix_len).last().unwrap();
+        found_index.expect("missing flush");
+        if complete_prefix_len > 0 {
+            let (pos, _) = self.flushes.drain(..complete_prefix_len).last().unwrap();
             self.flushed_pos = pos;
         }
     }
@@ -932,18 +939,18 @@ impl DmaStreamWriterState {
         if self.flushed_pos >= upto_pos {
             return vec![];
         }
-        let mut pending = Vec::with_capacity(self.pending_flush_count);
+        let mut handles = Vec::with_capacity(self.pending_flush_count);
         for (pos, status) in &mut self.flushes {
             if let FlushStatus::Pending(handle) = status {
                 if let Some(h) = handle.take() {
-                    pending.push(h);
+                    handles.push(h);
                 }
             }
             if *pos > upto_pos {
                 break;
             }
         }
-        pending
+        handles
     }
 
     fn flush_partial(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) -> bool {
@@ -980,11 +987,13 @@ impl DmaStreamWriterState {
     fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let aligned_pos = self.aligned_pos;
         let flush_pos = self.current_pos();
+        self.pending_flush_count += 1;
         let handle = Local::local(async move {
             let res = file.write_at(buffer, aligned_pos).await;
             let mut state = state.borrow_mut();
+            state.pending_flush_count -= 1;
             if !collect_error!(state, res) {
-                state.on_flushed(flush_pos);
+                state.on_flush_success(flush_pos);
             }
             if let Some(waker) = state.waker.take() {
                 drop(state);
@@ -994,7 +1003,6 @@ impl DmaStreamWriterState {
         .detach();
         self.flushes
             .push_back((flush_pos, FlushStatus::Pending(Some(handle))));
-        self.pending_flush_count += 1;
     }
 }
 
@@ -1298,8 +1306,8 @@ impl AsyncWrite for DmaStreamWriter {
                             self.state.clone(),
                             self.file.clone().unwrap(),
                         );
-                        state.buffer_pos = 0;
                         state.aligned_pos += state.buffer_size as u64;
+                        state.buffer_pos = 0;
                     } else {
                         state.current_buffer = Some(buffer);
                     }
