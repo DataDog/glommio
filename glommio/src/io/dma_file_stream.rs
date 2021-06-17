@@ -854,10 +854,10 @@ impl DmaStreamWriterState {
         file: Rc<DmaFile>,
         do_close: bool,
     ) {
-        let final_pos = self.current_pos();
-        self.flush_partial(state.clone(), file.clone());
-        let mut pending = self.current_pending();
         self.file_status = FileStatus::Closing;
+        let final_pos = self.current_pos();
+        self.flush_padded(state.clone(), file.clone());
+        let mut pending = self.current_pending();
         Local::local(async move {
             defer! {
                 waker.wake();
@@ -936,7 +936,7 @@ impl DmaStreamWriterState {
 
     fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
         let mut handles = Vec::with_capacity(self.pending_flush_count);
-        for (_pos, status) in &mut self.flushes {
+        for (_, status) in &mut self.flushes {
             if let FlushStatus::Pending(handle) = status {
                 if let Some(h) = handle.take() {
                     handles.push(h);
@@ -946,32 +946,36 @@ impl DmaStreamWriterState {
         handles
     }
 
-    fn flush_partial(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) -> bool {
+    fn flush_padded(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) -> bool {
         if self.buffer_pos == 0 {
             return false;
         }
-        let padding = self.buffer_size - self.buffer_pos;
-        assert!(padding > 0, "full buffer should have already been flushed");
-        let current_pos = self.current_pos();
-        if self.flushed_pos >= current_pos {
-            return false;
-        }
-        if self
+        assert!(
+            self.buffer_pos < self.buffer_size,
+            "full buffer should have already been flushed"
+        );
+
+        let flush_pos = self
             .flushes
             .back()
-            .filter(|(pos, _)| *pos >= current_pos)
-            .is_some()
-        {
+            .map_or(self.flushed_pos, |(pos, _)| *pos);
+
+        let current_pos = self.current_pos();
+
+        if flush_pos == current_pos {
             return false;
+        } else {
+            assert!(flush_pos < current_pos);
         }
 
         let buffer = self.current_buffer.take().unwrap();
 
-        // Restore a copy
-        let mut buffer_copy = file.alloc_dma_buffer(self.buffer_size);
-        buffer_copy.as_bytes_mut()[..self.buffer_pos]
-            .copy_from_slice(&buffer.as_bytes()[..self.buffer_pos]);
-        self.current_buffer = Some(buffer_copy);
+        if let FileStatus::Open = self.file_status {
+            let mut buffer_copy = file.alloc_dma_buffer(self.buffer_size);
+            buffer_copy.as_bytes_mut()[..self.buffer_pos]
+                .copy_from_slice(&buffer.as_bytes()[..self.buffer_pos]);
+            self.current_buffer = Some(buffer_copy);
+        }
 
         self.flush_one_buffer(buffer, state, file);
         true
@@ -1001,9 +1005,8 @@ impl DmaStreamWriterState {
 
 impl Drop for DmaStreamWriterState {
     fn drop(&mut self) {
-        assert_eq!(
-            0,
-            self.current_pending().len(),
+        assert!(
+            self.current_pending().is_empty(),
             "DmaStreamerWriter::drop() should have cancelled pending flushes"
         );
     }
@@ -1145,7 +1148,7 @@ impl DmaStreamWriter {
         let mut pending = {
             let mut state = self.state.borrow_mut();
             if partial && state.buffer_pos > 0 {
-                state.flush_partial(self.state.clone(), self.file.clone().unwrap());
+                state.flush_padded(self.state.clone(), self.file.clone().unwrap());
             }
             state.current_pending()
         };
@@ -1315,7 +1318,7 @@ impl AsyncWrite for DmaStreamWriter {
         if state.flushed_pos() == state.current_pos() {
             return Poll::Ready(Ok(()));
         }
-        state.flush_partial(self.state.clone(), self.file.clone().unwrap());
+        state.flush_padded(self.state.clone(), self.file.clone().unwrap());
         state.add_waker(cx.waker().clone());
         Poll::Pending
     }
