@@ -656,14 +656,14 @@ impl AsyncBufRead for Stdin {
                     Ok(sz) => {
                         self.buffer.replenish_buffer(&source.buffer(), sz);
                         let this = self.project();
-                        Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
+                        Poll::Ready(Ok(this.buffer.unconsumed_bytes()))
                     }
                 }
             }
             None => {
                 if self.buffer.remaining_unconsumed_bytes() > 0 {
                     let this = self.project();
-                    Poll::Ready(Ok(&this.buffer.unconsumed_bytes()))
+                    Poll::Ready(Ok(this.buffer.unconsumed_bytes()))
                 } else {
                     let source = self.reactor.upgrade().unwrap().read_buffered(
                         libc::STDIN_FILENO,

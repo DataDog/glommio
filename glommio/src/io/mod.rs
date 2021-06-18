@@ -140,7 +140,7 @@ pub(super) type Result<T> = crate::Result<T, ()>;
 ///
 /// Warning: synchronous operation, will block the reactor
 pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) -> Result<()> {
-    sys::rename_file(&old_path.as_ref(), &new_path.as_ref())?;
+    sys::rename_file(old_path.as_ref(), new_path.as_ref())?;
     Ok(())
 }
 

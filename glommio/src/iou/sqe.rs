@@ -496,7 +496,7 @@ impl<'a> SQE<'a> {
     ///
     /// You can use this method to inspect the low-level details of an event.
     pub fn raw(&self) -> &uring_sys::io_uring_sqe {
-        &self.sqe
+        self.sqe
     }
 
     pub unsafe fn raw_mut(&mut self) -> &mut uring_sys::io_uring_sqe {
