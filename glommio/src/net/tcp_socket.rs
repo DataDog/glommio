@@ -381,7 +381,7 @@ fn make_tcp_socket(addr: &SocketAddr) -> io::Result<(SockAddr, Socket)> {
         Domain::ipv4()
     };
     let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
-    let inet = InetAddr::from_std(&addr);
+    let inet = InetAddr::from_std(addr);
     let addr = SockAddr::new_inet(inet);
     Ok((addr, socket))
 }

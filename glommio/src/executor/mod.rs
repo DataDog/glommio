@@ -746,7 +746,7 @@ impl LocalExecutorPoolBuilder {
             let io_memory = self.io_memory;
             let preempt_timer_duration = self.preempt_timer_duration;
             let spin_before_park = self.spin_before_park;
-            let latch = Latch::clone(&latch);
+            let latch = Latch::clone(latch);
 
             move || {
                 // only allow the thread to create the `LocalExecutor` if all other threads that
