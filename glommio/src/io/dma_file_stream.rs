@@ -793,16 +793,83 @@ enum FlushStatus {
 }
 
 #[derive(Debug)]
+struct DmaStreamWriterFlushState {
+    flushes: VecDeque<(u64, FlushStatus)>,
+    pending_flush_count: usize,
+    flushed_pos: u64,
+}
+
+impl DmaStreamWriterFlushState {
+    fn new(write_behind: usize) -> DmaStreamWriterFlushState {
+        DmaStreamWriterFlushState {
+            flushes: VecDeque::with_capacity(write_behind * 2),
+            pending_flush_count: 0,
+            flushed_pos: 0,
+        }
+    }
+
+    fn take_pending_handles(&mut self) -> Vec<task::JoinHandle<()>> {
+        let mut handles = Vec::with_capacity(self.pending_flush_count);
+        for (_, status) in &mut self.flushes {
+            if let FlushStatus::Pending(handle) = status {
+                if let Some(h) = handle.take() {
+                    handles.push(h);
+                }
+            }
+        }
+        handles
+    }
+
+    fn on_start(&mut self, flush_pos: u64, handle: task::JoinHandle<()>) {
+        self.pending_flush_count += 1;
+        self.flushes
+            .push_back((flush_pos, FlushStatus::Pending(Some(handle))));
+    }
+
+    fn on_complete(&mut self, flush_pos: u64) -> u64 {
+        let mut drainable_len = 0usize;
+        let mut found_pending = false;
+        for (pos, status) in &mut self.flushes {
+            if *pos == flush_pos {
+                *status = FlushStatus::Complete;
+            }
+            if !found_pending {
+                if let FlushStatus::Complete = status {
+                    drainable_len += 1;
+                    self.flushed_pos = *pos;
+                } else {
+                    found_pending = true;
+                }
+            }
+            if found_pending && *pos >= flush_pos {
+                break;
+            }
+        }
+        if drainable_len > 0 {
+            self.flushes.drain(..drainable_len);
+        }
+        self.flushed_pos
+    }
+}
+
+impl Drop for DmaStreamWriterFlushState {
+    fn drop(&mut self) {
+        let mut pending = self.take_pending_handles();
+        for flush in pending.drain(..) {
+            flush.cancel();
+        }
+    }
+}
+
+#[derive(Debug)]
 struct DmaStreamWriterState {
     buffer_size: usize,
     waker: Option<Waker>,
     file_status: FileStatus,
     error: Option<io::Error>,
-    flushes: VecDeque<(u64, FlushStatus)>,
-    pending_flush_count: usize,
+    flush_state: DmaStreamWriterFlushState,
     current_buffer: Option<DmaBuffer>,
     aligned_pos: u64,
-    flushed_pos: u64,
     buffer_pos: usize,
     write_behind: usize,
     sync_on_close: bool,
@@ -842,7 +909,7 @@ impl DmaStreamWriterState {
         if let FileStatus::Closed = self.file_status {
             return false;
         }
-        self.flushed_pos > self.aligned_pos
+        self.flushed_pos() > self.aligned_pos
     }
 
     fn initiate_close(
@@ -857,7 +924,7 @@ impl DmaStreamWriterState {
             let buffer = self.current_buffer.take();
             self.flush_one_buffer(buffer.unwrap(), state.clone(), file.clone());
         }
-        let mut pending = self.current_pending();
+        let mut pending = self.take_pending_handles();
         self.file_status = FileStatus::Closing;
         Local::local(async move {
             defer! {
@@ -875,7 +942,7 @@ impl DmaStreamWriterState {
                 return;
             }
 
-            assert_eq!(state.flushed_pos, final_pos);
+            assert_eq!(state.flushed_pos(), final_pos);
 
             if state.sync_on_close {
                 let res = file.fdatasync().await;
@@ -904,55 +971,25 @@ impl DmaStreamWriterState {
     }
 
     fn flushed_pos(&self) -> u64 {
-        self.flushed_pos
+        self.flush_state.flushed_pos
     }
 
-    fn on_flush_success(&mut self, flush_pos: u64) {
-        let mut complete_prefix_len = 0usize;
-        let mut found_pending = false;
-        for (pos, status) in &mut self.flushes {
-            if *pos == flush_pos {
-                *status = FlushStatus::Complete;
-            }
-            if !found_pending {
-                if let FlushStatus::Complete = status {
-                    self.flushed_pos = *pos;
-                    complete_prefix_len += 1;
-                } else {
-                    found_pending = true;
-                }
-            }
-            if found_pending && *pos >= flush_pos {
-                break;
-            }
-        }
-        if complete_prefix_len > 0 {
-            self.flushes.drain(..complete_prefix_len);
-        }
+    fn pending_flush_count(&mut self) -> usize {
+        self.flush_state.pending_flush_count
     }
 
-    fn current_pending(&mut self) -> Vec<task::JoinHandle<()>> {
-        let mut handles = Vec::with_capacity(self.pending_flush_count);
-        for (_, status) in &mut self.flushes {
-            if let FlushStatus::Pending(handle) = status {
-                if let Some(h) = handle.take() {
-                    handles.push(h);
-                }
-            }
-        }
-        handles
+    fn take_pending_handles(&mut self) -> Vec<task::JoinHandle<()>> {
+        self.flush_state.take_pending_handles()
     }
 
     fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let aligned_pos = self.aligned_pos;
         let flush_pos = self.current_pos();
-        self.pending_flush_count += 1;
         let handle = Local::local(async move {
             let res = file.write_at(buffer, aligned_pos).await;
             let mut state = state.borrow_mut();
-            state.pending_flush_count -= 1;
             if !collect_error!(state, res) {
-                state.on_flush_success(flush_pos);
+                state.flush_state.on_complete(flush_pos);
             }
             if let Some(waker) = state.waker.take() {
                 drop(state);
@@ -960,17 +997,7 @@ impl DmaStreamWriterState {
             }
         })
         .detach();
-        self.flushes
-            .push_back((flush_pos, FlushStatus::Pending(Some(handle))));
-    }
-}
-
-impl Drop for DmaStreamWriterState {
-    fn drop(&mut self) {
-        let mut pending = self.current_pending();
-        for flush in pending.drain(..) {
-            flush.cancel();
-        }
+        self.flush_state.on_start(flush_pos, handle);
     }
 }
 
@@ -1004,13 +1031,11 @@ impl DmaStreamWriter {
             sync_on_close: builder.sync_on_close,
             current_buffer: None,
             waker: None,
-            flushes: VecDeque::with_capacity(builder.write_behind * 2),
-            pending_flush_count: 0,
+            flush_state: DmaStreamWriterFlushState::new(builder.write_behind),
             error: None,
             file_status: FileStatus::Open,
             aligned_pos: 0,
             buffer_pos: 0,
-            flushed_pos: 0,
         };
 
         let state = Rc::new(RefCell::new(state));
@@ -1126,7 +1151,7 @@ impl DmaStreamWriter {
     /// });
     /// ```
     pub async fn sync(&self) -> Result<u64> {
-        let mut pending = self.state.borrow_mut().current_pending();
+        let mut pending = self.state.borrow_mut().take_pending_handles();
         for v in pending.drain(..) {
             v.await;
         }
@@ -1135,7 +1160,7 @@ impl DmaStreamWriter {
             if let Some(err) = current_error!(state) {
                 return err;
             }
-            state.flushed_pos
+            state.flushed_pos()
         };
         let file = self.file.clone().unwrap();
         file.fdatasync().await?;
@@ -1192,7 +1217,7 @@ impl AsyncWrite for DmaStreamWriter {
         while written < buf.len() {
             match state.current_buffer.take() {
                 None => {
-                    if state.pending_flush_count < state.write_behind {
+                    if state.pending_flush_count() < state.write_behind {
                         state.current_buffer = Some(
                             self.file
                                 .as_ref()
@@ -1827,4 +1852,36 @@ mod test {
 
         assert_eq!(writer.current_flushed_pos(), 10000);
     });
+
+    #[test]
+    fn flushstate() {
+        test_executor!(async move {
+            let fake_handle_gen = || Local::local(async move {}).detach();
+            let mut state = DmaStreamWriterFlushState::new(4);
+
+            state.on_start(8, fake_handle_gen());
+            // flushes: [8->Pending(Some)]
+            assert_eq!(state.take_pending_handles().len(), 1);
+            // flushes: [8->Pending(None)]
+            assert_eq!(state.take_pending_handles().len(), 0);
+            // flushes: [8->Pending(None)]
+            assert_eq!(state.flushes.len(), 1);
+            assert_eq!(state.on_complete(8), 8);
+            // flushes: []
+            assert_eq!(state.flushes.len(), 0);
+
+            state.on_start(16, fake_handle_gen());
+            state.on_start(24, fake_handle_gen());
+            state.on_start(32, fake_handle_gen());
+            // flushes: [16->Pending, 24->Pending, 32->Pending]
+            assert_eq!(state.flushes.len(), 3);
+            assert_eq!(state.on_complete(24), 8);
+            // flushes: [16->Pending, 24->Complete, 32->Pending]
+            assert_eq!(state.on_complete(32), 8);
+            // flushes: [16->Pending, 24->Complete, 32->Complete]
+            assert_eq!(32, state.on_complete(16));
+            // flushes: []
+            assert_eq!(state.flushes.len(), 0);
+        });
+    }
 }
