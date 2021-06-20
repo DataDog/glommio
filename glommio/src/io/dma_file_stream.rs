@@ -827,6 +827,7 @@ impl DmaStreamWriterFlushState {
     }
 
     fn on_complete(&mut self, flush_pos: u64) -> u64 {
+        self.pending_flush_count -= 1;
         let mut drainable_len = 0usize;
         let mut found_pending = false;
         for (pos, status) in &mut self.flushes {
@@ -1856,28 +1857,31 @@ mod test {
     #[test]
     fn flushstate() {
         test_executor!(async move {
-            let fake_handle_gen = || Local::local(async move {}).detach();
+            let handle_gen = || Local::local(async move {}).detach();
             let mut state = DmaStreamWriterFlushState::new(4);
 
-            state.on_start(8, fake_handle_gen());
+            state.on_start(8, handle_gen());
             // flushes: [8->Pending(Some)]
             assert_eq!(state.take_pending_handles().len(), 1);
             // flushes: [8->Pending(None)]
             assert_eq!(state.take_pending_handles().len(), 0);
             // flushes: [8->Pending(None)]
             assert_eq!(state.flushes.len(), 1);
+            assert_eq!(state.pending_flush_count, 1);
             assert_eq!(state.on_complete(8), 8);
             // flushes: []
             assert_eq!(state.flushes.len(), 0);
 
-            state.on_start(16, fake_handle_gen());
-            state.on_start(24, fake_handle_gen());
-            state.on_start(32, fake_handle_gen());
+            state.on_start(16, handle_gen());
+            state.on_start(24, handle_gen());
+            state.on_start(32, handle_gen());
             // flushes: [16->Pending, 24->Pending, 32->Pending]
             assert_eq!(state.flushes.len(), 3);
             assert_eq!(state.on_complete(24), 8);
             // flushes: [16->Pending, 24->Complete, 32->Pending]
             assert_eq!(state.on_complete(32), 8);
+            assert_eq!(state.flushes.len(), 3);
+            assert_eq!(state.pending_flush_count, 1);
             // flushes: [16->Pending, 24->Complete, 32->Complete]
             assert_eq!(32, state.on_complete(16));
             // flushes: []
