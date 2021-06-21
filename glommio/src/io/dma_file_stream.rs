@@ -822,12 +822,22 @@ impl DmaStreamWriterFlushState {
 
     fn on_start(&mut self, flush_pos: u64, handle: task::JoinHandle<()>) {
         self.pending_flush_count += 1;
+        if let Some((prev_flush_pos, _)) = self.flushes.back() {
+            assert!(*prev_flush_pos < flush_pos);
+        }
         self.flushes
             .push_back((flush_pos, FlushStatus::Pending(Some(handle))));
     }
 
     fn on_complete(&mut self, flush_pos: u64) -> u64 {
         self.pending_flush_count -= 1;
+        // note:
+        // - writes can complete out-of-order
+        // - `flushes` is maintained in sorted order of position
+        // we will update the status of `flush_pos` to complete.
+        // we also count contiguous completed flushes from the front,
+        // `flushed_pos` can be updated accordingly and we don't
+        // need to track them anymore, so drain that range.
         let mut drainable_len = 0usize;
         let mut found_pending = false;
         for (pos, status) in &mut self.flushes {
