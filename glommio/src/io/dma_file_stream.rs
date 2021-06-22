@@ -862,15 +862,6 @@ impl DmaStreamWriterFlushState {
     }
 }
 
-impl Drop for DmaStreamWriterFlushState {
-    fn drop(&mut self) {
-        let mut pending = self.take_pending_handles();
-        for flush in pending.drain(..) {
-            flush.cancel();
-        }
-    }
-}
-
 #[derive(Debug)]
 struct DmaStreamWriterState {
     buffer_size: usize,
@@ -1008,6 +999,15 @@ impl DmaStreamWriterState {
         })
         .detach();
         self.flush_state.on_start(flush_pos, handle);
+    }
+}
+
+impl Drop for DmaStreamWriterState {
+    fn drop(&mut self) {
+        let mut pending = self.take_pending_handles();
+        for flush in pending.drain(..) {
+            flush.cancel();
+        }
     }
 }
 
