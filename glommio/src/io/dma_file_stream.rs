@@ -839,20 +839,19 @@ impl DmaStreamWriterFlushState {
         // `flushed_pos` can be updated accordingly and we don't
         // need to track them anymore, so drain that range.
         let mut drainable_len = 0usize;
-        let mut found_pending = false;
+        let mut counting = true;
         for (pos, status) in &mut self.flushes {
             if *pos == flush_pos {
                 *status = FlushStatus::Complete;
             }
-            if !found_pending {
+            if counting {
                 if let FlushStatus::Complete = status {
                     drainable_len += 1;
                     self.flushed_pos = *pos;
                 } else {
-                    found_pending = true;
+                    counting = false;
                 }
-            }
-            if found_pending && *pos >= flush_pos {
+            } else if *pos >= flush_pos {
                 break;
             }
         }
