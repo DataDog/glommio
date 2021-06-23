@@ -989,12 +989,12 @@ impl DmaStreamWriterState {
     fn flush_padded(&mut self, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) -> bool {
         if self.buffer_pos == 0 {
             return false;
+        } else {
+            assert!(
+                self.buffer_pos < self.buffer_size,
+                "full buffer should have already been flushed"
+            );
         }
-        assert!(
-            self.buffer_pos < self.buffer_size,
-            "full buffer should have already been flushed"
-        );
-
         let last_flush_pos = self.flush_state.last_flush_pos();
         let current_pos = self.current_pos();
         if last_flush_pos == current_pos {
@@ -1002,16 +1002,13 @@ impl DmaStreamWriterState {
         } else {
             assert!(last_flush_pos < current_pos);
         }
-
         let buffer = self.current_buffer.take().unwrap();
-
         if let FileStatus::Open = self.file_status {
             let mut buffer_copy = file.alloc_dma_buffer(self.buffer_size);
             buffer_copy.as_bytes_mut()[..self.buffer_pos]
                 .copy_from_slice(&buffer.as_bytes()[..self.buffer_pos]);
             self.current_buffer = Some(buffer_copy);
         }
-
         self.flush_one_buffer(buffer, state, file);
         true
     }
