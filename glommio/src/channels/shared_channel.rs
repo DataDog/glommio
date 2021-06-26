@@ -904,8 +904,7 @@ mod test {
                 let _resp = receiver.recv().await.unwrap();
             })
             .unwrap();
-
-        drop(ex2);
+        ex2.join().unwrap();
         ex1.join().unwrap();
 
         // make sure that our total is always 0, to ensure we have dropped all entries,
