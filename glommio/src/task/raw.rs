@@ -222,20 +222,15 @@ where
         }
 
         // If the task is already scheduled do nothing.
-        if state & SCHEDULED != 0 {
-            // Drop the waker.
-            Self::drop_waker(ptr);
-        } else {
+        if state & SCHEDULED == 0 {
             // Mark the task as scheduled.
             (*(raw.header as *mut Header)).state = state | SCHEDULED;
             if state & RUNNING == 0 {
                 // Schedule the task.
                 Self::schedule(ptr);
-            } else {
-                // Drop the waker.
-                Self::drop_waker(ptr);
             }
         }
+        Self::drop_waker(ptr);
     }
 
     /// Wakes a waker by reference.
@@ -262,14 +257,7 @@ where
             (*(raw.header as *mut Header)).state |= SCHEDULED;
 
             if state & RUNNING == 0 {
-                // Schedule the task. There is no need to call `Self::schedule(ptr)`
-                // because the schedule function cannot be destroyed while the waker is
-                // still alive.
-                let task = Task {
-                    raw_task: NonNull::new_unchecked(ptr as *mut ()),
-                };
-
-                (*raw.schedule)(task);
+                Self::schedule(ptr);
             }
         }
     }
@@ -325,12 +313,12 @@ where
         // dropped too, then we need to decide how to destroy the task.
         if (refs == 0) && state & HANDLE == 0 {
             if state & (COMPLETED | CLOSED) == 0 {
-                // Because we'll schedule it one last time, bump the reference count.
-                Self::increment_references(&mut *(raw.header as *mut Header));
-                // If the task was not completed nor closed, close it and schedule one more time
-                // so that its future gets dropped by the executor.
+                if state & SCHEDULED == 0 {
+                    // If the task was not completed nor closed, close it and schedule one more time
+                    // so that its future gets dropped by the executor.
+                    Self::schedule(ptr);
+                }
                 (*(raw.header as *mut Header)).state = SCHEDULED | CLOSED;
-                Self::schedule(ptr);
             } else {
                 // Otherwise, destroy the task right away.
                 Self::destroy(ptr);
@@ -365,6 +353,7 @@ where
     /// task reference to its schedule function.
     unsafe fn schedule(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
+        Self::increment_references(&mut *(raw.header as *mut Header));
 
         let guard;
         // Calling of schedule functions itself does not increment references,
@@ -464,6 +453,8 @@ where
         //state could be updated after the coll to the poll
         state = (*raw.header).state;
 
+        let mut ret = false;
+
         match poll {
             Poll::Ready(out) => {
                 // Replace the future with its output.
@@ -493,9 +484,6 @@ where
                 // Notify the awaiter that the task has been completed.
                 (*(raw.header as *mut Header)).notify(None);
 
-                // Drop the task reference.
-                Self::drop_task(ptr);
-
                 drop(output);
             }
             Poll::Pending => {
@@ -521,21 +509,17 @@ where
                 if state & CLOSED != 0 {
                     // Notify the awaiter that the future has been dropped.
                     (*(raw.header as *mut Header)).notify(None);
-                    // Drop the task reference.
-                    Self::drop_task(ptr);
                 } else if state & SCHEDULED != 0 {
                     // The thread that woke the task up didn't reschedule it because
                     // it was running so now it's our responsibility to do so.
                     Self::schedule(ptr);
-                    return true;
-                } else {
-                    // Drop the task reference.
-                    Self::drop_task(ptr);
+                    ret = true;
                 }
             }
         }
+        Self::drop_task(ptr);
 
-        return false;
+        return ret;
 
         /// A guard that closes the task if polling its future panics.
         struct Guard<F, R, S>(RawTask<F, R, S>)
