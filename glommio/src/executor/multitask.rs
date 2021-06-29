@@ -139,6 +139,7 @@ impl LocalExecutor {
         tq: Rc<RefCell<TaskQueue>>,
         future: impl Future<Output = T>,
     ) -> Task<T> {
+        tracing::trace!(executor_id, task_queue = ?tq, "Spawning future");
         let tq = Rc::downgrade(&tq);
 
         // The function that schedules a runnable task when it gets woken up.
