@@ -679,6 +679,8 @@ pub(crate) mod test_utils {
     use super::*;
     use nix::sys::statfs::*;
     use std::path::{Path, PathBuf};
+    use tracing::{debug, error, info, trace, warn};
+    use tracing_subscriber::EnvFilter;
 
     #[derive(Copy, Clone)]
     pub(crate) enum TestDirectoryKind {
@@ -729,5 +731,19 @@ pub(crate) mod test_utils {
             TestDirectoryKind::NonPollMedia
         };
         TestDirectory { path: dir, kind }
+    }
+
+    #[test]
+    #[allow(unused_must_use)]
+    fn test_tracing_init() {
+        tracing_subscriber::fmt::fmt()
+            .with_env_filter(EnvFilter::from_env("GLOMMIO_TRACE"))
+            .try_init();
+
+        info!("Started tracing..");
+        debug!("Started tracing..");
+        warn!("Started tracing..");
+        trace!("Started tracing..");
+        error!("Started tracing..");
     }
 }

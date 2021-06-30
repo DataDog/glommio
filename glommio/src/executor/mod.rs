@@ -35,6 +35,7 @@ mod placement;
 
 use latch::{Latch, LatchState};
 pub use placement::{CpuSet, Placement};
+use tracing::trace;
 
 use std::{
     cell::RefCell,
@@ -213,7 +214,7 @@ macro_rules! to_io_error {
 fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
     for cpu in cpus {
-        tracing::trace!("Attempting to bind to cpu: {}", cpu);
+        trace!("Attempting to bind to cpu: {}", cpu);
         to_io_error!(&cpuset.set(cpu))?;
     }
     let pid = nix::unistd::Pid::from_raw(0);
@@ -939,14 +940,6 @@ impl LocalExecutor {
         };
 
         let io_requirements = IoRequirements::new(latency, index);
-        tracing::trace!(
-            shares = ?shares.clone(),
-            ?latency,
-            index,
-            ?io_requirements,
-            "Creating task queue"
-        );
-
         let tq = TaskQueue::new(TaskQueueHandle { index }, name, shares, io_requirements);
 
         self.queues
@@ -1139,22 +1132,6 @@ impl LocalExecutor {
     /// assert_eq!(res, 6);
     /// ```
     pub fn run<T>(&self, future: impl Future<Output = T>) -> T {
-        let queues = self
-            .queues
-            .borrow()
-            .available_executors
-            .iter()
-            .map(|x| {
-                (
-                    *x.0,
-                    x.1.borrow().name.clone(),
-                    x.1.borrow().shares.clone(),
-                    x.1.borrow().io_requirements,
-                )
-            })
-            .collect::<Vec<_>>();
-        tracing::trace!(id = self.id, ?queues, "LocalExecutor running");
-
         // this waker is never exposed in the public interface and is only used to check
         // whether the task's `JoinHandle` is `Ready`
         let waker = dummy_waker();
@@ -1511,7 +1488,7 @@ impl<T> Task<T> {
     /// [`Shares`]: enum.Shares.html
     /// [`Latency`]: enum.Latency.html
     pub fn create_task_queue(shares: Shares, latency: Latency, name: &str) -> TaskQueueHandle {
-        tracing::trace!(?shares, ?latency, name, "Creating task queue");
+        trace!(?shares, ?latency, name, "Creating task queue");
         LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
     }
 
@@ -2019,24 +1996,9 @@ mod test {
     use tracing_subscriber::EnvFilter;
 
     #[test]
-    #[allow(unused_must_use)]
     fn create_and_destroy_executor() {
-        tracing_subscriber::fmt::fmt()
-            .with_env_filter(EnvFilter::from_env("GLOMMIO_TRACE"))
-            .try_init();
-
-        tracing::info!("Started tracing..");
-        tracing::debug!("Started tracing..");
-        tracing::warn!("Started tracing..");
-        tracing::trace!("Started tracing..");
-        tracing::error!("Started tracing..");
         let mut var = Rc::new(RefCell::new(0));
         let local_ex = LocalExecutor::default();
-        let _handle = local_ex.create_task_queue(
-            Shares::Static(700),
-            Latency::Matters(Duration::from_millis(10)),
-            "latency-matters-bigly",
-        );
         let varclone = var.clone();
         local_ex.run(async move {
             let mut m = varclone.borrow_mut();
@@ -2062,13 +2024,7 @@ mod test {
     }
 
     #[test]
-    #[allow(unused_must_use)]
     fn bind_to_cpu_set_range() {
-        tracing_subscriber::fmt::fmt()
-            .with_env_filter(EnvFilter::from_env("GLOMMIO_TRACE"))
-            .try_init();
-        tracing::info!("Started tracing..");
-
         // libc supports cpu ids up to 1023 and will use the intersection of values
         // specified by the cpu mask and those present on the system
         // https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html#NOTES
