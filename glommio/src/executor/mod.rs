@@ -214,7 +214,6 @@ macro_rules! to_io_error {
 fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
     for cpu in cpus {
-        trace!("Attempting to bind to cpu: {}", cpu);
         to_io_error!(&cpuset.set(cpu))?;
     }
     let pid = nix::unistd::Pid::from_raw(0);
@@ -907,6 +906,7 @@ impl LocalExecutor {
         }
         let p = parking::Parker::new();
         let queues = ExecutorQueues::new(preempt_timer, spin_before_park);
+        trace!(id = notifier.id(), "Creating executor");
         Ok(LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
@@ -1488,7 +1488,6 @@ impl<T> Task<T> {
     /// [`Shares`]: enum.Shares.html
     /// [`Latency`]: enum.Latency.html
     pub fn create_task_queue(shares: Shares, latency: Latency, name: &str) -> TaskQueueHandle {
-        trace!(?shares, ?latency, name, "Creating task queue");
         LOCAL_EX.with(|local_ex| local_ex.create_task_queue(shares, latency, name))
     }
 
