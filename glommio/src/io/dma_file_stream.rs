@@ -810,7 +810,8 @@ impl DmaStreamWriterFlushState {
     }
 
     fn last_flush_pos(&self) -> u64 {
-        self.flushes.back()
+        self.flushes
+            .back()
             .map_or(self.flushed_pos, |(pos, _)| *pos)
     }
 
@@ -1207,19 +1208,89 @@ impl DmaStreamWriter {
         Ok(flushed_pos)
     }
 
-    /// TODO document
+    /// Waits for all currently in-flight buffers to be written to the
+    /// underlying storage.
+    ///
+    /// This does not include the current buffer if it is not full. If all data
+    /// must be flushed, use [`flush`].
+    ///
+    /// Returns the flushed position of the file.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use futures::io::AsyncWriteExt;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamWriterBuilder},
+    ///     LocalExecutor,
+    /// };
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("myfile.txt").await.unwrap();
+    ///     let mut writer = DmaStreamWriterBuilder::new(file)
+    ///         .with_buffer_size(4096)
+    ///         .with_write_behind(2)
+    ///         .build();
+    ///     let buffer = [0u8; 5000];
+    ///     writer.write_all(&buffer).await.unwrap();
+    ///     // with 5000 bytes written into a 4096-byte buffer a flush
+    ///     // has certainly started. But if very likely didn't finish right
+    ///     // away.
+    ///     assert_eq!(writer.current_flushed_pos(), 0);
+    ///     assert_eq!(writer.flush_aligned().await.unwrap(), 4096);
+    ///     writer.close().await.unwrap();
+    /// });
+    /// ```
+    ///
+    /// [`flush`]: https://docs.rs/futures/0.3.15/futures/io/trait.AsyncWriteExt.html#method.flush
     pub async fn flush_aligned(&self) -> Result<u64> {
         self.flush_inner(false).await
     }
 
-    /// TODO document
+    /// Waits for all currently in-flight buffers to be written to the
+    /// underlying storage, and ensures they are safely persisted.
+    ///
+    /// This does not include the current buffer if it is not full. If all data
+    /// must be synced, use [`Self::sync`].
+    ///
+    /// Returns the flushed position of the file at the time the sync started.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use futures::io::AsyncWriteExt;
+    /// use glommio::{
+    ///     io::{DmaFile, DmaStreamWriterBuilder},
+    ///     LocalExecutor,
+    /// };
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("myfile.txt").await.unwrap();
+    ///     let mut writer = DmaStreamWriterBuilder::new(file)
+    ///         .with_buffer_size(4096)
+    ///         .with_write_behind(2)
+    ///         .build();
+    ///     let buffer = [0u8; 5000];
+    ///     writer.write_all(&buffer).await.unwrap();
+    ///     // with 5000 bytes written into a 4096-byte buffer a flush
+    ///     // has certainly started. But if very likely didn't finish right
+    ///     // away.
+    ///     assert_eq!(writer.current_flushed_pos(), 0);
+    ///     assert_eq!(writer.sync_aligned().await.unwrap(), 4096);
+    ///     writer.close().await.unwrap();
+    /// });
+    /// ```
     pub async fn sync_aligned(&self) -> Result<u64> {
         self.flush_aligned().await?;
         self.sync_inner().await
     }
 
-    /// Waits for all currently in-flight buffers to return and be safely stored
-    /// in the underlying storage.
+    /// Waits for all buffers to be written to the underlying storage, and
+    /// ensures they are safely persisted.
+    ///
+    /// This includes the current buffer even if it is not full, by padding it.
+    /// The padding will get over-written by future writes, or truncated upon
+    /// [`close`].
     ///
     /// Returns the flushed position of the file at the time the sync started.
     ///
@@ -1248,6 +1319,8 @@ impl DmaStreamWriter {
     ///     writer.close().await.unwrap();
     /// });
     /// ```
+    ///
+    /// [`close`]: https://docs.rs/futures/0.3.15/futures/io/trait.AsyncWriteExt.html#method.close
     pub async fn sync(&self) -> Result<u64> {
         self.flush_inner(true).await?;
         self.sync_inner().await
