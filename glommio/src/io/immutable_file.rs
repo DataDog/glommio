@@ -260,15 +260,40 @@ impl ImmutableFilePreSealSink {
         })
     }
 
-    /// Waits for all currently in-flight buffers to return and be safely stored
-    /// in the underlying storage
+    /// Waits for all currently in-flight buffers to be written to the
+    /// underlying storage.
     ///
-    /// Note that the current buffer being written to is not flushed, as it may
-    /// not be properly aligned. Buffers that are currently in-flight will
-    /// be waited on, and a sync operation will be issued by the operating
-    /// system.
+    /// This does not include the current buffer if it is not full. If all data
+    /// must be flushed, use [`flush`].
+    ///
+    /// Returns the flushed position of the file.
+    ///
+    /// [`flush`]: https://docs.rs/futures/0.3.15/futures/io/trait.AsyncWriteExt.html#method.flush
+    pub async fn flush_aligned(&self) -> Result<u64> {
+        self.writer.flush_aligned().await
+    }
+
+    /// Waits for all currently in-flight buffers to be written to the
+    /// underlying storage, and ensures they are safely persisted.
+    ///
+    /// This does not include the current buffer if it is not full. If all data
+    /// must be synced, use [`Self::sync`].
     ///
     /// Returns the flushed position of the file at the time the sync started.
+    pub async fn sync_aligned(&self) -> Result<u64> {
+        self.writer.sync_aligned().await
+    }
+
+    /// Waits for all buffers to be written to the underlying storage, and
+    /// ensures they are safely persisted.
+    ///
+    /// This includes the current buffer even if it is not full, by padding it.
+    /// The padding will get over-written by future writes, or truncated upon
+    /// [`Self::seal`] or [`close`].
+    ///
+    /// Returns the flushed position of the file at the time the sync started.
+    ///
+    /// [`close`]: https://docs.rs/futures/0.3.15/futures/io/trait.AsyncWriteExt.html#method.close
     pub async fn sync(&self) -> Result<u64> {
         self.writer.sync().await
     }
