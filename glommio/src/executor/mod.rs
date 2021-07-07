@@ -35,6 +35,7 @@ mod placement;
 
 use latch::{Latch, LatchState};
 pub use placement::{CpuSet, Placement};
+use tracing::trace;
 
 use std::{
     cell::RefCell,
@@ -905,6 +906,7 @@ impl LocalExecutor {
         }
         let p = parking::Parker::new();
         let queues = ExecutorQueues::new(preempt_timer, spin_before_park);
+        trace!(id = notifier.id(), "Creating executor");
         Ok(LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
@@ -1993,12 +1995,12 @@ mod test {
         },
         task::Waker,
     };
+    use tracing_subscriber::EnvFilter;
 
     #[test]
     fn create_and_destroy_executor() {
         let mut var = Rc::new(RefCell::new(0));
         let local_ex = LocalExecutor::default();
-
         let varclone = var.clone();
         local_ex.run(async move {
             let mut m = varclone.borrow_mut();

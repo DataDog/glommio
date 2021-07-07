@@ -595,7 +595,7 @@ mod test {
             let cpu_location = max_spreader.next().unwrap();
             counts[cpu_location.cpu] += 1;
         }
-        assert_eq!(1, counts[..3].iter().sum());
+        assert_eq!(1, counts[..3].iter().sum::<i32>());
         assert_eq!(1, counts[3]);
 
         for _ in 2..4 {
@@ -609,7 +609,7 @@ mod test {
             let cpu_location = max_spreader.next().unwrap();
             counts[cpu_location.cpu] += 1;
         }
-        assert_eq!(4, counts[..3].iter().sum());
+        assert_eq!(4, counts[..3].iter().sum::<i32>());
         assert_eq!(2, counts[3]);
 
         for _ in 6..8 {
@@ -665,7 +665,7 @@ mod test {
             }
             counts
                 .chunks(nr_cpu / selected)
-                .for_each(|c| assert_eq!(1, c.iter().sum()));
+                .for_each(|c| assert_eq!(1, c.iter().sum::<i32>()));
             assert_eq!(selected, max_spreader.tree.nr_slots_selected());
             selected_prev = selected;
         }
@@ -689,35 +689,35 @@ mod test {
         let mut max_packer = MaxPacker::from_topology(topology);
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
-        assert_eq!(1, counts[..4].iter().sum());
-        assert_eq!(0, counts[5..].iter().sum());
+        assert_eq!(1, counts[..4].iter().sum::<i32>());
+        assert_eq!(0, counts[5..].iter().sum::<i32>());
 
         for _ in 1..4 {
             let cpu_location = max_packer.next().unwrap();
             counts[cpu_location.cpu] += 1;
         }
-        assert_eq!(4, counts[..4].iter().sum());
-        assert_eq!(0, counts[5..].iter().sum());
+        assert_eq!(4, counts[..4].iter().sum::<i32>());
+        assert_eq!(0, counts[5..].iter().sum::<i32>());
 
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
         assert_eq!(1, counts[6]);
-        assert_eq!(5, counts.iter().sum());
+        assert_eq!(5, counts.iter().sum::<i32>());
 
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
         assert_eq!(1, counts[5]);
-        assert_eq!(6, counts.iter().sum());
+        assert_eq!(6, counts.iter().sum::<i32>());
 
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
         assert_eq!(1, counts[4]);
-        assert_eq!(7, counts.iter().sum());
+        assert_eq!(7, counts.iter().sum::<i32>());
 
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
-        assert_eq!(5, counts[..4].iter().sum());
-        assert_eq!(8, counts.iter().sum());
+        assert_eq!(5, counts[..4].iter().sum::<i32>());
+        assert_eq!(8, counts.iter().sum::<i32>());
 
         for _ in 8..10 * counts.len() {
             let cpu_location = max_packer.next().unwrap();
@@ -746,27 +746,27 @@ mod test {
         let mut max_packer = MaxPacker::from_topology(topology);
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
-        assert_eq!(1, counts[4..].iter().sum());
-        assert_eq!(0, counts[..4].iter().sum());
+        assert_eq!(1, counts[4..].iter().sum::<i32>());
+        assert_eq!(0, counts[..4].iter().sum::<i32>());
 
         for _ in 1..3 {
             let cpu_location = max_packer.next().unwrap();
             counts[cpu_location.cpu] += 1;
         }
-        assert_eq!(3, counts[4..].iter().sum());
-        assert_eq!(0, counts[..4].iter().sum());
+        assert_eq!(3, counts[4..].iter().sum::<i32>());
+        assert_eq!(0, counts[..4].iter().sum::<i32>());
 
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;
-        assert_eq!(4, counts[3..].iter().sum());
-        assert_eq!(0, counts[..3].iter().sum());
+        assert_eq!(4, counts[3..].iter().sum::<i32>());
+        assert_eq!(0, counts[..3].iter().sum::<i32>());
 
         for _ in 4..6 {
             let cpu_location = max_packer.next().unwrap();
             counts[cpu_location.cpu] += 1;
         }
-        assert_eq!(6, counts[1..].iter().sum());
-        assert_eq!(0, counts[..1].iter().sum());
+        assert_eq!(6, counts[1..].iter().sum::<i32>());
+        assert_eq!(0, counts[..1].iter().sum::<i32>());
 
         let cpu_location = max_packer.next().unwrap();
         counts[cpu_location.cpu] += 1;

@@ -537,15 +537,21 @@ mod test {
 
     #[test]
     fn hex_bit_iterator() -> io::Result<()> {
-        assert_eq!(HexBitIterator::from_str("")?.collect::<Vec<_>>(), vec![]);
-        assert_eq!(HexBitIterator::from_str("\n")?.collect::<Vec<_>>(), vec![]);
+        assert_eq!(
+            HexBitIterator::from_str("")?.collect::<Vec<_>>(),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            HexBitIterator::from_str("\n")?.collect::<Vec<_>>(),
+            Vec::<usize>::new()
+        );
         assert_eq!(
             HexBitIterator::from_str("00\n")?.collect::<Vec<_>>(),
-            vec![]
+            Vec::<usize>::new()
         );
         assert_eq!(
             HexBitIterator::from_str("0,0\n")?.collect::<Vec<_>>(),
-            vec![]
+            Vec::<usize>::new()
         );
         assert_eq!(
             HexBitIterator::from_str("03")?.collect::<Vec<_>>(),
@@ -622,7 +628,7 @@ mod test {
             .set_used_sized(0)
             .check()?
             .collect::<Vec<_>>();
-        assert_eq!(it, vec![]);
+        assert_eq!(it, Vec::<usize>::new());
 
         let it = RangeIter::new(5)
             .set_end(25)
@@ -683,13 +689,13 @@ mod test {
             ListIterator::from_str("\0")?
                 .collect_ok::<Vec<_>>()
                 .unwrap(),
-            vec![]
+            Vec::<usize>::new()
         );
         assert_eq!(
             ListIterator::from_str("\n")?
                 .collect_ok::<Vec<_>>()
                 .unwrap(),
-            vec![]
+            Vec::<usize>::new()
         );
         assert_eq!(
             ListIterator::from_str("0,8\n")?
