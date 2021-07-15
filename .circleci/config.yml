@@ -58,10 +58,9 @@ jobs:
       - run:
           name: Generate documentation
           command: cargo doc --all-features
-          # temporarily disabled.
-          # - run:
-          # name: Validate links
-          # command: cargo deadlinks --dir target/doc/glommio
+      - run:
+          name: Validate links
+          command: cargo deadlinks --dir target/doc/glommio
       - save_cache:
           paths:
             - /usr/local/cargo/registry
