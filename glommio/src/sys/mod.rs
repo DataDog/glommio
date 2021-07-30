@@ -3,6 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+use crate::to_io_error;
 use crate::uring_sys;
 use ahash::AHashMap;
 use lockfree::channel::mpsc;
@@ -148,13 +149,7 @@ pub(crate) unsafe fn ssptr_to_sockaddr(
     } else {
         nix::sys::socket::sockaddr_storage_to_addr(&storage, len)
     }
-    .map_err(|e| {
-        let err_no = e.as_errno();
-        match err_no {
-            Some(err_no) => io::Error::from_raw_os_error(err_no as _),
-            None => io::Error::new(io::ErrorKind::Other, "Unknown error"),
-        }
-    })
+    .map_err(|e| to_io_error!(e))
 }
 
 pub(crate) fn recvmsg_syscall(

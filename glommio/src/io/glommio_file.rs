@@ -205,7 +205,7 @@ impl GlommioFile {
     pub(crate) async fn hint_extent_size(&self, size: usize) -> Result<i32> {
         match sys::fs_hint_extentsize(self.as_raw_fd(), size) {
             Ok(hint) => Ok(hint),
-            Err(err) => Err(io::Error::from_raw_os_error(err.as_errno().unwrap() as i32).into()),
+            Err(err) => Err(io::Error::from_raw_os_error(err as _).into()),
         }
     }
 

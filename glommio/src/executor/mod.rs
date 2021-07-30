@@ -199,25 +199,13 @@ impl TaskQueue {
     }
 }
 
-macro_rules! to_io_error {
-    ($error:expr) => {{
-        match $error {
-            Ok(x) => Ok(x),
-            Err(nix::Error::Sys(_)) => Err(io::Error::last_os_error()),
-            Err(nix::Error::InvalidUtf8) => Err(io::Error::from(io::ErrorKind::InvalidInput)),
-            Err(nix::Error::InvalidPath) => Err(io::Error::from(io::ErrorKind::InvalidInput)),
-            Err(nix::Error::UnsupportedOperation) => Err(io::Error::from(io::ErrorKind::Other)),
-        }
-    }};
-}
-
 fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
     for cpu in cpus {
-        to_io_error!(&cpuset.set(cpu))?;
+        cpuset.set(cpu).map_err(|e| to_io_error!(e))?;
     }
     let pid = nix::unistd::Pid::from_raw(0);
-    to_io_error!(nix::sched::sched_setaffinity(pid, &cpuset)).map_err(Into::into)
+    nix::sched::sched_setaffinity(pid, &cpuset).map_err(|e| Into::into(to_io_error!(e)))
 }
 
 // Dealing with references would imply getting an Rc, RefCells, and all of that

@@ -21,6 +21,7 @@ pub use nix::{
 };
 
 use super::Personality;
+use crate::to_io_error;
 use crate::uring_sys;
 
 /// A pending IO event.
@@ -522,13 +523,7 @@ impl SockAddrStorage {
 
     pub unsafe fn as_socket_addr(&self) -> io::Result<SockAddr> {
         let storage = &*self.storage.as_ptr();
-        nix::sys::socket::sockaddr_storage_to_addr(storage, self.len).map_err(|e| {
-            let err_no = e.as_errno();
-            match err_no {
-                Some(err_no) => io::Error::from_raw_os_error(err_no as _),
-                None => io::Error::new(io::ErrorKind::Other, "Unknown error"),
-            }
-        })
+        nix::sys::socket::sockaddr_storage_to_addr(storage, self.len).map_err(|e| to_io_error!(e))
     }
 }
 

@@ -354,6 +354,31 @@ macro_rules! poll_some {
     };
 }
 
+#[macro_export]
+/// Converts a Nix error into a native ErrorKind
+macro_rules! to_io_error {
+    ($e:expr) => {
+        match $e {
+            nix::errno::Errno::EACCES => io::Error::from(io::ErrorKind::PermissionDenied),
+            nix::errno::Errno::EADDRINUSE => io::Error::from(io::ErrorKind::AddrInUse),
+            nix::errno::Errno::EADDRNOTAVAIL => io::Error::from(io::ErrorKind::AddrNotAvailable),
+            nix::errno::Errno::EAGAIN => io::Error::from(io::ErrorKind::WouldBlock),
+            nix::errno::Errno::ECONNABORTED => io::Error::from(io::ErrorKind::ConnectionAborted),
+            nix::errno::Errno::ECONNREFUSED => io::Error::from(io::ErrorKind::ConnectionRefused),
+            nix::errno::Errno::ECONNRESET => io::Error::from(io::ErrorKind::ConnectionReset),
+            nix::errno::Errno::EINTR => io::Error::from(io::ErrorKind::Interrupted),
+            nix::errno::Errno::EINVAL => io::Error::from(io::ErrorKind::InvalidInput),
+            nix::errno::Errno::ENAMETOOLONG => io::Error::from(io::ErrorKind::InvalidInput),
+            nix::errno::Errno::ENOENT => io::Error::from(io::ErrorKind::NotFound),
+            nix::errno::Errno::ENOTCONN => io::Error::from(io::ErrorKind::NotConnected),
+            nix::errno::Errno::ENOTEMPTY => io::Error::from(io::ErrorKind::AlreadyExists),
+            nix::errno::Errno::EPERM => io::Error::from(io::ErrorKind::PermissionDenied),
+            nix::errno::Errno::ETIMEDOUT => io::Error::from(io::ErrorKind::TimedOut),
+            _ => io::Error::from(io::ErrorKind::Other)
+        }
+    };
+}
+
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
