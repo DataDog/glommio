@@ -21,8 +21,7 @@ pub use nix::{
 };
 
 use super::Personality;
-use crate::to_io_error;
-use crate::uring_sys;
+use crate::{to_io_error, uring_sys};
 
 /// A pending IO event.
 ///

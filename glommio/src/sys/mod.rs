@@ -3,8 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::to_io_error;
-use crate::uring_sys;
+use crate::{to_io_error, uring_sys};
 use ahash::AHashMap;
 use lockfree::channel::mpsc;
 use log::debug;

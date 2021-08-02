@@ -374,7 +374,7 @@ macro_rules! to_io_error {
             nix::errno::Errno::ENOTEMPTY => io::Error::from(io::ErrorKind::AlreadyExists),
             nix::errno::Errno::EPERM => io::Error::from(io::ErrorKind::PermissionDenied),
             nix::errno::Errno::ETIMEDOUT => io::Error::from(io::ErrorKind::TimedOut),
-            _ => io::Error::from(io::ErrorKind::Other)
+            _ => io::Error::from(io::ErrorKind::Other),
         }
     };
 }
