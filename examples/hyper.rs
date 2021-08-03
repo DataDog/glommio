@@ -22,6 +22,7 @@ mod hyper_compat {
     };
     use hyper::{server::conn::Http, Body, Request, Response};
     use std::{io, rc::Rc};
+    use tokio::io::ReadBuf;
 
     #[derive(Clone)]
     struct HyperExecutor;
@@ -41,9 +42,16 @@ mod hyper_compat {
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut Context,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            Pin::new(&mut self.0).poll_read(cx, buf)
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.0)
+                .poll_read(cx, buf.initialize_unfilled())
+                .map(|n| {
+                    if n.is_ok() {
+                        buf.advance(n.unwrap());
+                    }
+                    Ok(())
+                })
         }
     }
 
@@ -88,7 +96,9 @@ mod hyper_compat {
                     Local::local(enclose!{(conn_control) async move {
                         let _permit = conn_control.acquire_permit(1).await;
                         if let Err(x) = Http::new().with_executor(HyperExecutor).serve_connection(HyperStream(stream), service_fn(service)).await {
-                            panic!("Stream from {:?} failed with error {:?}", addr, x);
+                            if !x.is_incomplete_message() {
+                                eprintln!("Stream from {:?} failed with error {:?}", addr, x);
+                            }
                         }
                     }}).detach();
                 }
@@ -97,7 +107,7 @@ mod hyper_compat {
     }
 }
 
-use glommio::LocalExecutorBuilder;
+use glommio::{CpuSet, Local, LocalExecutorPoolBuilder, Placement};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use std::convert::Infallible;
 
@@ -115,13 +125,18 @@ async fn hyper_demo(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 fn main() {
     // Issue curl -X GET http://127.0.0.1:8000/hello or curl -X GET http://127.0.0.1:8000/world to
     // see it in action
-    let handle = LocalExecutorBuilder::new()
-        .spawn(|| async move {
-            hyper_compat::serve_http(([0, 0, 0, 0], 8000), hyper_demo, 1)
+
+    println!("Starting server on port 8000");
+
+    LocalExecutorPoolBuilder::new(num_cpus::get())
+        .placement(Placement::MaxSpread(CpuSet::online().ok()))
+        .on_all_shards(|| async move {
+            let id = Local::id();
+            println!("Starting executor {}", id);
+            hyper_compat::serve_http(([0, 0, 0, 0], 8000), hyper_demo, 1024)
                 .await
                 .unwrap();
         })
-        .unwrap();
-
-    handle.join().unwrap();
+        .unwrap()
+        .join_all();
 }
