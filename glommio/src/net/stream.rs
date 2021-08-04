@@ -226,7 +226,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         };
 
         if source.result().is_none() {
-            source.add_waiter(cx.waker().clone());
+            source.add_waiter_single(cx.waker().clone());
             self.source_rx = Some(source);
             Poll::Pending
         } else {
@@ -253,7 +253,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
 
         match source.result() {
             None => {
-                source.add_waiter(cx.waker().clone());
+                source.add_waiter_single(cx.waker().clone());
                 self.source_tx = Some(source);
                 Poll::Pending
             }

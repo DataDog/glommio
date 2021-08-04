@@ -391,7 +391,7 @@ impl StreamWriter {
                 bytes,
                 self.file_pos,
             );
-            source.add_waiter(waker);
+            source.add_waiter_single(waker);
             self.source = Some(source);
             true
         } else {
@@ -410,7 +410,7 @@ impl StreamWriter {
                         .upgrade()
                         .unwrap()
                         .fdatasync(self.file.as_ref().unwrap().as_raw_fd());
-                    source.add_waiter(cx.waker().clone());
+                    source.add_waiter_single(cx.waker().clone());
                     self.source = Some(source);
                     Poll::Pending
                 }
@@ -430,7 +430,7 @@ impl StreamWriter {
                     .upgrade()
                     .unwrap()
                     .close(self.file.as_ref().unwrap().as_raw_fd());
-                source.add_waiter(cx.waker().clone());
+                source.add_waiter_single(cx.waker().clone());
                 self.source = Some(source);
                 Poll::Pending
             }
@@ -498,7 +498,7 @@ macro_rules! do_seek {
                         .upgrade()
                         .unwrap()
                         .statx($fileobj.as_raw_fd(), &$fileobj.path().unwrap());
-                    source.add_waiter($cx.waker().clone());
+                    source.add_waiter_single($cx.waker().clone());
                     $source = Some(source);
                     Poll::Pending
                 }
@@ -586,7 +586,7 @@ impl AsyncBufRead for StreamReader {
                         self.buffer.max_buffer_size,
                         self.file.file.scheduler.borrow().as_ref(),
                     );
-                    source.add_waiter(cx.waker().clone());
+                    source.add_waiter_single(cx.waker().clone());
                     self.io_source = Some(source);
                     Poll::Pending
                 }
@@ -671,7 +671,7 @@ impl AsyncBufRead for Stdin {
                         self.buffer.max_buffer_size,
                         None,
                     );
-                    source.add_waiter(cx.waker().clone());
+                    source.add_waiter_single(cx.waker().clone());
                     self.source = Some(source);
                     Poll::Pending
                 }
