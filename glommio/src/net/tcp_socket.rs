@@ -1193,6 +1193,33 @@ mod tests {
     }
 
     #[test]
+    fn tcp_force_poll() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let ltask = Task::<Result<usize>>::local(async move {
+                let mut stream = listener.accept().await?;
+                poll_fn(|cx| {
+                    let mut buf = [0u8; 64];
+                    // try to overflow the amount of wakers possible
+                    for _ in 0..64_000 {
+                        if let Poll::Ready(_) = Pin::new(&mut stream).poll_read(cx, &mut buf) {
+                            panic!("should be pending");
+                        }
+                    }
+                    Poll::Ready(())
+                })
+                .await;
+                Ok(0)
+            });
+
+            let _s = TcpStream::connect(addr).await.unwrap();
+            ltask.await.unwrap();
+        });
+    }
+
+    #[test]
     fn tcp_invalid_timeout() {
         test_executor!(async move {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();

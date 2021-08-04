@@ -41,7 +41,7 @@ impl<U: Copy + Unpin> Stream for OrderedBulkIo<U> {
                     Poll::Pending
                 };
                 if let Some((Some(source), _)) = self.iovs.front_mut() {
-                    source.add_waiter(cx.waker().clone());
+                    source.add_waiter_many(cx.waker().clone());
                 }
                 res
             }
