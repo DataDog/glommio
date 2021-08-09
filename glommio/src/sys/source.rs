@@ -216,7 +216,19 @@ impl Source {
             .map(|x| OsResult::from(x).into())
     }
 
-    pub(crate) fn add_waiter(&self, waker: Waker) {
+    // adds a single waiter to the list, replacing any waiter that may already
+    // exist. Should be used for single streams that map a future 1:1 to their I/O
+    // source
+    pub(crate) fn add_waiter_single(&self, waker: Waker) {
+        let mut inner = self.inner.borrow_mut();
+        inner.wakers.waiters.pop();
+        inner.wakers.waiters.push(waker);
+        debug_assert_eq!(inner.wakers.waiters.len(), 1)
+    }
+
+    // adds a waiter to the list. Useful for streams that have many futures waiting
+    // on a single I/O source
+    pub(crate) fn add_waiter_many(&self, waker: Waker) {
         self.inner.borrow_mut().wakers.waiters.push(waker)
     }
 
@@ -234,7 +246,7 @@ impl Source {
                 return Poll::Ready(result);
             }
 
-            self.add_waiter(cx.waker().clone());
+            self.add_waiter_many(cx.waker().clone());
             Poll::Pending
         })
         .await
