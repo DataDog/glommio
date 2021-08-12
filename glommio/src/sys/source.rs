@@ -232,6 +232,17 @@ impl Source {
         self.inner.borrow_mut().wakers.waiters.push(waker)
     }
 
+    // used for eventfd, and other internal sources that reuse the same source
+    // across many invocations
+    pub(super) fn take_result(&self) -> Option<io::Result<usize>> {
+        self.inner
+            .borrow_mut()
+            .wakers
+            .result
+            .take()
+            .map(|x| OsResult::from(x).into())
+    }
+
     pub(super) fn raw(&self) -> RawFd {
         self.inner.borrow().raw
     }
