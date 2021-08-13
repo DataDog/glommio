@@ -37,6 +37,7 @@ lockfree = "0.5"
 membarrier = "0.2.2"
 itertools = "0.10.0"
 tracing = "0.1"
+crossbeam = "0.8"
 
 [dev-dependencies]
 futures = "0.3.5"

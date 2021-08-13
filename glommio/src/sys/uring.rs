@@ -13,6 +13,7 @@ use rlimit::{Resource, Rlim};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::VecDeque,
+    convert::TryInto,
     ffi::CStr,
     fmt,
     io,
@@ -31,6 +32,7 @@ use crate::{
     iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, SubmissionFlags, TimeoutFlags},
     sys::{
         self,
+        blocking::{BlockingThread, BlockingThreadOp},
         dma_buffer::{BufferStorage, DmaBuffer},
         DirectIo,
         EnqueuedSource,
@@ -1126,6 +1128,8 @@ pub(crate) struct Reactor {
     // completed if this reactor is woken up from another one
     eventfd_src: Source,
     source_map: Rc<RefCell<SourceMap>>,
+
+    syscall_thread: BlockingThread,
 }
 
 fn common_flags() -> PollFlags {
@@ -1232,6 +1236,7 @@ impl Reactor {
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
             timeout_src: Cell::new(None),
+            syscall_thread: BlockingThread::new(notifier.clone()),
             link_fd,
             notifier,
             eventfd_src,
@@ -1349,6 +1354,56 @@ impl Reactor {
     pub(crate) fn fallocate(&self, source: &Source, offset: u64, size: u64, flags: libc::c_int) {
         let op = UringOpDescriptor::Fallocate(offset, size, flags);
         self.queue_standard_request(source, op);
+    }
+
+    fn blocking_syscall(&self, source: &Source, op: BlockingThreadOp) {
+        let src = source.inner.clone();
+
+        self.syscall_thread.push(
+            op,
+            Box::new(move |res| {
+                let mut inner_source = src.borrow_mut();
+                let res: io::Result<usize> = res.try_into().expect("not a syscall result!");
+
+                inner_source.wakers.result.replace(res);
+                inner_source.wakers.wake_waiters();
+            }),
+        );
+    }
+
+    pub(crate) fn truncate(&self, source: &Source, size: u64) {
+        let op = BlockingThreadOp::Truncate(source.raw(), size as _);
+        self.blocking_syscall(source, op);
+    }
+
+    pub(crate) fn rename(&self, source: &Source) {
+        let (old_path, new_path) = match &*source.source_type() {
+            SourceType::Rename(o, n) => (o.clone(), n.clone()),
+            _ => panic!("Unexpected source for rename operation"),
+        };
+
+        let op = BlockingThreadOp::Rename(old_path, new_path);
+        self.blocking_syscall(source, op);
+    }
+
+    pub(crate) fn create_dir(&self, source: &Source, mode: libc::c_int) {
+        let path = match &*source.source_type() {
+            SourceType::CreateDir(p) => p.clone(),
+            _ => panic!("Unexpected source for rename operation"),
+        };
+
+        let op = BlockingThreadOp::CreateDir(path, mode);
+        self.blocking_syscall(source, op);
+    }
+
+    pub(crate) fn remove_file(&self, source: &Source) {
+        let path = match &*source.source_type() {
+            SourceType::Remove(path) => path.clone(),
+            _ => panic!("Unexpected source for remove operation"),
+        };
+
+        let op = BlockingThreadOp::Remove(path);
+        self.blocking_syscall(source, op);
     }
 
     pub(crate) fn close(&self, source: &Source) {
@@ -1483,6 +1538,8 @@ impl Reactor {
     where
         F: Fn() -> usize,
     {
+        woke += self.flush_syscall_thread();
+
         let mut poll_ring = self.poll_ring.borrow_mut();
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
@@ -1529,7 +1586,8 @@ impl Reactor {
             // details. This translates to sys_membarrier() /
             // MEMBARRIER_CMD_PRIVATE_EXPEDITED
             membarrier::heavy();
-            if process_remote_channels() == 0 {
+            let events = process_remote_channels() + self.flush_syscall_thread();
+            if events == 0 {
                 self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)
                     .expect("some error");
                 // woke up, so no need to notify us anymore.
@@ -1549,6 +1607,10 @@ impl Reactor {
         // need_preempt() should be false at this point. As soon as the next event
         // in the preempt ring completes, though, then it will be true.
         Ok(should_sleep)
+    }
+
+    pub(crate) fn flush_syscall_thread(&self) -> usize {
+        self.syscall_thread.flush()
     }
 
     pub(crate) fn preempt_pointers(&self) -> (*const u32, *const u32) {

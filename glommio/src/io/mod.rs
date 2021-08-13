@@ -131,29 +131,25 @@ mod open_options;
 mod read_result;
 mod sched;
 
-use crate::sys;
+use crate::Local;
 use std::path::Path;
 
 pub(super) type Result<T> = crate::Result<T, ()>;
 
 /// rename an existing file.
-///
-/// Warning: synchronous operation, will block the reactor
 pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) -> Result<()> {
-    sys::rename_file(old_path.as_ref(), new_path.as_ref())?;
+    let reactor = Local::get_reactor();
+    let source = reactor.rename(old_path.as_ref(), new_path.as_ref());
+    source.collect_rw().await?;
     Ok(())
 }
 
 /// remove an existing file given its name
-///
-/// Warning: synchronous operation, will block the reactor
 pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
-    enhanced_try!(
-        sys::remove_file(path.as_ref()),
-        "Removing",
-        Some(path.as_ref()),
-        None
-    )
+    let reactor = Local::get_reactor();
+    let source = reactor.remove_file(path.as_ref());
+    source.collect_rw().await?;
+    Ok(())
 }
 
 pub(crate) use self::sched::{FileScheduler, IoScheduler, ScheduledSource};
