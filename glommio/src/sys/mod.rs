@@ -8,17 +8,12 @@ use ahash::AHashMap;
 use lockfree::channel::mpsc;
 use log::debug;
 use std::{
-    ffi::CString,
     fmt,
     io,
     io::Error,
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},
-    os::unix::{
-        ffi::OsStrExt,
-        io::{AsRawFd, FromRawFd, RawFd},
-    },
-    path::Path,
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -29,6 +24,7 @@ use std::{
     time::Duration,
 };
 
+pub(super) mod blocking;
 pub(crate) mod hardware_topology;
 
 macro_rules! syscall {
@@ -75,20 +71,6 @@ pub(crate) fn fs_hint_extentsize(fd: RawFd, size: usize) -> nix::Result<i32> {
     unsafe { set_fsxattr(fd, &attr) }
 }
 
-pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
-    let path = cstr(path)?;
-    syscall!(unlink(path.as_ptr()))?;
-    Ok(())
-}
-
-pub(crate) fn rename_file(old_path: &Path, new_path: &Path) -> io::Result<()> {
-    let old = cstr(old_path)?;
-    let new = cstr(new_path)?;
-
-    syscall!(rename(old.as_ptr(), new.as_ptr()))?;
-    Ok(())
-}
-
 pub(crate) fn truncate_file(fd: RawFd, size: u64) -> io::Result<()> {
     syscall!(ftruncate(fd, size as i64))?;
     Ok(())
@@ -98,11 +80,6 @@ pub(crate) fn duplicate_file(fd: RawFd) -> io::Result<RawFd> {
     syscall!(dup(fd))
 }
 
-pub(crate) fn sync_open(path: &Path, flags: libc::c_int, mode: libc::c_int) -> io::Result<RawFd> {
-    let path = cstr(path)?;
-    syscall!(open(path.as_ptr(), flags, mode))
-}
-
 pub(crate) fn create_eventfd() -> io::Result<RawFd> {
     syscall!(eventfd(0, libc::O_CLOEXEC))
 }
@@ -110,6 +87,12 @@ pub(crate) fn create_eventfd() -> io::Result<RawFd> {
 pub(crate) fn write_eventfd(eventfd: RawFd) {
     let buf = [1u64; 1];
     let ret = syscall!(write(eventfd, &buf as *const u64 as _, 8)).unwrap();
+    assert_eq!(ret, 8);
+}
+
+pub(crate) fn read_eventfd(eventfd: RawFd) {
+    let mut buf = [1u64; 1];
+    let ret = syscall!(read(eventfd, buf.as_mut_ptr() as _, 8)).unwrap();
     assert_eq!(ret, 8);
 }
 
@@ -206,10 +189,6 @@ pub(crate) fn sendmsg_syscall(
     };
 
     syscall!(sendmsg(fd, &hdr, flags)).map(|x| x as usize)
-}
-
-fn cstr(path: &Path) -> io::Result<CString> {
-    Ok(CString::new(path.as_os_str().as_bytes())?)
 }
 
 mod dma_buffer;

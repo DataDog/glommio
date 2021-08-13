@@ -210,14 +210,21 @@ impl GlommioFile {
     }
 
     pub(crate) async fn truncate(&self, size: u64) -> Result<()> {
-        sys::truncate_file(self.as_raw_fd(), size).map_err(|source| {
+        let source = self
+            .reactor
+            .upgrade()
+            .unwrap()
+            .truncate(self.as_raw_fd(), size);
+
+        source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
                 "Truncating",
                 self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
-        })
+        })?;
+        Ok(())
     }
 
     pub(crate) async fn rename<P: AsRef<Path>>(&self, new_path: P) -> Result<()> {
@@ -242,14 +249,17 @@ impl GlommioFile {
 
     pub(crate) async fn remove(&self) -> Result<()> {
         let path = self.path_required("remove")?;
-        sys::remove_file(path.as_ref()).map_err(|source| {
+        let source = self.reactor.upgrade().unwrap().remove_file(&*path);
+
+        source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
                 "Removing",
                 self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
-        })
+        })?;
+        Ok(())
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall

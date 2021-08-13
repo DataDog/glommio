@@ -49,22 +49,6 @@ impl Directory {
         Ok(Directory { file })
     }
 
-    /// Synchronously open this directory.
-    pub fn sync_open<P: AsRef<Path>>(path: P) -> Result<Directory> {
-        let path = path.as_ref().to_owned();
-        let flags = libc::O_CLOEXEC | libc::O_DIRECTORY;
-        let fd = sys::sync_open(&path, flags, 0o755).map_err(|source| {
-            GlommioError::create_enhanced(
-                source,
-                "Synchronously opening directory",
-                Some(&path),
-                None,
-            )
-        })?;
-        let file = unsafe { GlommioFile::from_raw_fd(fd as _) }.with_path(Some(path));
-        Ok(Directory { file })
-    }
-
     /// Asynchronously open the directory at path
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
@@ -95,10 +79,12 @@ impl Directory {
     }
 
     /// Similar to create() in the standard library, but returns a DMA file
-    pub fn sync_create<P: AsRef<Path>>(path: P) -> Result<Directory> {
+    pub async fn create<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
+        let source = Local::get_reactor().create_dir(&*path, 0o777);
+
         enhanced_try!(
-            match std::fs::create_dir(&path) {
+            match source.collect_rw().await {
                 Ok(_) => Ok(()),
                 Err(x) => {
                     match x.kind() {
@@ -111,7 +97,7 @@ impl Directory {
             Some(&path),
             None
         )?;
-        Self::sync_open(&path)
+        Self::open(&path).await
     }
 
     /// Creates a file under this directory, returns a DMA file

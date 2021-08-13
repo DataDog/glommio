@@ -635,6 +635,38 @@ impl Reactor {
         source
     }
 
+    pub(crate) fn truncate(&self, raw: RawFd, size: u64) -> Source {
+        let source = self.new_source(raw, SourceType::Truncate, None);
+        self.sys.truncate(&source, size);
+        source
+    }
+
+    pub(crate) fn rename<P, Q>(&self, old_path: P, new_path: Q) -> Source
+    where
+        P: AsRef<Path>,
+        Q: AsRef<Path>,
+    {
+        let source = self.new_source(
+            -1,
+            SourceType::Rename(old_path.as_ref().to_owned(), new_path.as_ref().to_owned()),
+            None,
+        );
+        self.sys.rename(&source);
+        source
+    }
+
+    pub(crate) fn remove_file<P: AsRef<Path>>(&self, path: P) -> Source {
+        let source = self.new_source(-1, SourceType::Remove(path.as_ref().to_owned()), None);
+        self.sys.remove_file(&source);
+        source
+    }
+
+    pub(crate) fn create_dir<P: AsRef<Path>>(&self, path: P, mode: libc::c_int) -> Source {
+        let source = self.new_source(-1, SourceType::CreateDir(path.as_ref().to_owned()), None);
+        self.sys.create_dir(&source, mode);
+        source
+    }
+
     pub(crate) fn close(&self, raw: RawFd) -> Source {
         let source = self.new_source(
             raw,
@@ -759,6 +791,7 @@ impl Reactor {
         self.sys.rush_dispatch(None, &mut woke)?;
         woke += self.process_timers().1;
         woke += self.process_shared_channels();
+        woke += self.sys.flush_syscall_thread();
 
         Ok(woke > 0)
     }
