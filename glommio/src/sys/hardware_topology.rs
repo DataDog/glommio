@@ -29,19 +29,54 @@ pub struct CpuLocation {
     pub numa_node: usize,
 }
 
+fn build_cpu_location(
+    sysfs_path: &Path,
+    cpu: usize,
+    numa_node: usize,
+    cpu_to_core: &mut HashMap<usize, usize>,
+) -> io::Result<CpuLocation> {
+    let cpu_path = sysfs_path.join(format!("cpu/cpu{}/topology", cpu));
+
+    let package_id = ListIterator::from_path(&cpu_path.join("physical_package_id"))?
+        .next()
+        .ok_or_else(|| io::Error::new(ErrorKind::Other, "failed to parse physical_package_id"))??;
+
+    Ok(CpuLocation {
+        cpu,
+        core: get_core_id(cpu, &cpu_path, cpu_to_core)?,
+        package: package_id,
+        numa_node,
+    })
+}
+
 /// Request the machine topology.  Only CPUs that are currently `online`
 /// according to `/sys/devices/system/cpu/online` are provided;  `sysfs` is
 /// always at `/sys` per: https://www.kernel.org/doc/html/latest/admin-guide/sysfs-rules.html
 pub fn get_machine_topology_unsorted() -> io::Result<Vec<CpuLocation>> {
     let sysfs_path = Path::new("/sys/devices/system");
-    let nodes_online = ListIterator::from_path(&sysfs_path.join("node/online"))?;
     let mut cpus_online = HashSet::new();
     for cpu in ListIterator::from_path(&sysfs_path.join("cpu/online"))? {
         cpus_online.insert(cpu?);
     }
-
     let mut cpu_locations = Vec::new();
     let mut cpu_to_core = HashMap::new();
+
+    let nodes_online = match ListIterator::from_path(&sysfs_path.join("node/online")) {
+        Ok(x) => x,
+        Err(x) => match x.kind() {
+            io::ErrorKind::NotFound => {
+                for cpu in cpus_online.drain() {
+                    let cpu_location = build_cpu_location(sysfs_path, cpu, 0, &mut cpu_to_core)?;
+                    cpu_locations.push(cpu_location);
+                }
+                return Ok(cpu_locations);
+            }
+            _ => {
+                return Err(x);
+            }
+        },
+    };
+
     for node in nodes_online {
         let node = node?;
         let node_path = sysfs_path.join(format!("node/node{}", node));
@@ -53,21 +88,7 @@ pub fn get_machine_topology_unsorted() -> io::Result<Vec<CpuLocation>> {
                 continue;
             }
 
-            let cpu_path = sysfs_path.join(format!("cpu/cpu{}/topology", cpu));
-
-            let package_id = ListIterator::from_path(&cpu_path.join("physical_package_id"))?
-                .next()
-                .ok_or_else(|| {
-                    io::Error::new(ErrorKind::Other, "failed to parse physical_package_id")
-                })??;
-
-            let cpu_location = CpuLocation {
-                cpu,
-                core: get_core_id(cpu, &cpu_path, &mut cpu_to_core)?,
-                package: package_id,
-                numa_node: node,
-            };
-
+            let cpu_location = build_cpu_location(sysfs_path, cpu, node, &mut cpu_to_core)?;
             cpu_locations.push(cpu_location);
         }
     }
