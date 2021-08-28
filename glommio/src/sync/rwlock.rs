@@ -355,7 +355,7 @@ impl State {
 
         debug_assert!(!(self.readers > 0 && self.writers > 0));
 
-        if self.readers == 0 {
+        if self.readers == 0 && self.writers == 0 {
             self.writers += 1;
             return Ok(true);
         }
@@ -1338,5 +1338,15 @@ mod test {
             *cond.borrow_mut() = 2;
             let _ = lock.write().await.unwrap();
         })
+    }
+
+    #[test]
+    fn rwlock_reentrant() {
+        let ex = LocalExecutor::default();
+        ex.run(async {
+            let lock = RwLock::new(());
+            let _guard = lock.write().await.unwrap();
+            assert!(lock.try_write().is_err());
+        });
     }
 }
