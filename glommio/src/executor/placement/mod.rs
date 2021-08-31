@@ -97,7 +97,7 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 ///
 /// handles.join_all();
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Placement {
     /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
     /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.  This is the
@@ -504,6 +504,52 @@ mod test {
         assert!(set.is_empty());
         let v: Vec<_> = set.take();
         assert_eq!(0, v.len());
+    }
+
+    #[test]
+    fn placement_unbound_clone() {
+        assert!(matches!(Placement::Unbound.clone(), Placement::Unbound));
+    }
+
+    #[test]
+    fn placement_fenced_clone() {
+        let set = CpuSet::online().unwrap();
+        let placement = Placement::Fenced(set);
+        let placement_clone = placement.clone();
+        assert!(matches!(placement_clone, placement));
+    }
+
+    #[test]
+    fn placement_max_spread_clone() {
+        let set = CpuSet::online().unwrap();
+        let some_placement = Placement::MaxSpread(Some(set));
+        let some_placement_clone = some_placement.clone();
+        assert!(matches!(some_placement_clone, some_placement));
+        let none_placement = Placement::MaxSpread(None);
+        let none_placement_clone = none_placement.clone();
+        assert!(matches!(none_placement_clone, none_placement));
+    }
+
+    #[test]
+    fn placement_max_pack_clone() {
+        let set = CpuSet::online().unwrap();
+        let some_placement = Placement::MaxPack(Some(set));
+        let some_placement_clone = some_placement.clone();
+        assert!(matches!(some_placement_clone, some_placement));
+        let none_placement = Placement::MaxPack(None);
+        let none_placement_clone = none_placement.clone();
+        assert!(matches!(none_placement_clone, none_placement));
+    }
+
+    #[test]
+    fn placement_custom_clone() {
+        let set1 = CpuSet::online().unwrap();
+        let set2 = CpuSet::online().unwrap();
+        assert!(set1.len() > 0);
+        assert!(set2.len() > 0);
+        let vec_set = vec![set1, set2];
+        let placement = Placement::Custom(vec_set);
+        assert!(matches!(placement.clone(), placement));
     }
 
     #[test]
