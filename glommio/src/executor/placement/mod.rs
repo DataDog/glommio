@@ -97,7 +97,7 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 ///
 /// handles.join_all();
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Placement {
     /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
     /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.  This is the
