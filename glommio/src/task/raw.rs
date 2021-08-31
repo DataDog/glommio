@@ -122,7 +122,7 @@ where
             (raw.header as *mut Header).write(Header {
                 notifier: sys::get_sleep_notifier_for(executor_id).unwrap(),
                 state: SCHEDULED | HANDLE,
-                references: AtomicI16::new(1),
+                references: AtomicI16::new(0),
                 awaiter: None,
                 vtable: &TaskVTable {
                     schedule: Self::schedule,
