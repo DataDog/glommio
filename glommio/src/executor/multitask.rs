@@ -133,12 +133,12 @@ impl LocalExecutor {
     }
 
     /// Spawns a thread-local future onto this executor.
-    pub(crate) fn spawn<T>(
+    fn spawn<T>(
         &self,
         executor_id: usize,
         tq: Rc<RefCell<TaskQueue>>,
         future: impl Future<Output = T>,
-    ) -> Task<T> {
+    ) -> (Runnable, JoinHandle<T>) {
         let tq = Rc::downgrade(&tq);
 
         // The function that schedules a runnable task when it gets woken up.
@@ -156,7 +156,27 @@ impl LocalExecutor {
 
         // Create a task, push it into the queue by scheduling it, and return its `Task`
         // handle.
-        let (runnable, handle) = task_impl::spawn_local(executor_id, future, schedule);
+        task_impl::spawn_local(executor_id, future, schedule)
+    }
+
+    pub(crate) fn spawn_and_run<T>(
+        &self,
+        executor_id: usize,
+        tq: Rc<RefCell<TaskQueue>>,
+        future: impl Future<Output = T>,
+    ) -> Task<T> {
+        let (runnable, handle) = self.spawn(executor_id, tq, future);
+        runnable.run_right_away();
+        Task(Some(handle))
+    }
+
+    pub(crate) fn spawn_and_schedule<T>(
+        &self,
+        executor_id: usize,
+        tq: Rc<RefCell<TaskQueue>>,
+        future: impl Future<Output = T>,
+    ) -> Task<T> {
+        let (runnable, handle) = self.spawn(executor_id, tq, future);
         runnable.schedule();
         Task(Some(handle))
     }

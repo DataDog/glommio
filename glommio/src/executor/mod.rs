@@ -992,7 +992,7 @@ impl LocalExecutor {
 
         let id = self.id;
         let ex = tq.borrow().ex.clone();
-        ex.spawn(id, tq, future)
+        ex.spawn_and_run(id, tq, future)
     }
 
     fn spawn_into<T, F>(&self, future: F, handle: TaskQueueHandle) -> Result<multitask::Task<T>>
@@ -1005,7 +1005,8 @@ impl LocalExecutor {
         let ex = tq.borrow().ex.clone();
         let id = self.id;
 
-        Ok(ex.spawn(id, tq, future))
+        // can't run right away, because we need to cross into a different task queue
+        Ok(ex.spawn_and_schedule(id, tq, future))
     }
 
     fn preempt_timer_duration(&self) -> Duration {
@@ -1131,7 +1132,10 @@ impl LocalExecutor {
         }
 
         LOCAL_EX.set(self, || {
-            let future = self.spawn(async move { future.await }).detach();
+            let future = self
+                .spawn_into(async move { future.await }, TaskQueueHandle::default())
+                .unwrap()
+                .detach();
             pin!(future);
 
             let mut pre_time = Instant::now();
@@ -1205,13 +1209,6 @@ impl Default for LocalExecutor {
 
 /// A spawned future that can be detached
 ///
-/// Because these tasks can be detached, the futures they execute must be
-/// `'static`. Usually the pattern to make sure something is static is to use
-/// `Rc<RefCell<T>>` or `Rc<Cell<T>>` and clone it, but that has a cost. If that
-/// cost is deemed unacceptable, and you are able to have a well-defined
-/// lifetime, and understand its safety considerations, you can use a
-/// [`ScopedTask`]
-///
 /// Tasks are also futures themselves and yield the output of the spawned
 /// future.
 ///
@@ -1225,20 +1222,54 @@ impl Default for LocalExecutor {
 /// # Examples
 ///
 /// ```
-/// use glommio::{LocalExecutor, Task};
-///
-/// let ex = LocalExecutor::default();
-///
-/// ex.run(async {
-///     let task = Task::local(async {
-///         println!("Hello from a task!");
-///         1 + 2
-///     });
-///
-///     assert_eq!(task.await, 3);
+/// # use glommio::{LocalExecutor, Task};
+/// #
+/// # let ex = LocalExecutor::default();
+/// #
+/// # ex.run(async {
+/// let task = Task::local(async {
+///     println!("Hello from a task!");
+///     1 + 2
 /// });
+///
+/// assert_eq!(task.await, 3);
+/// # });
 /// ```
-/// [`ScopedTask`]: crate::ScopedTask
+/// Note that there is no guarantee of ordering when reasoning about when a
+/// task runs, as that is an implementation detail.
+///
+/// In particular, acquiring a borrow and holding across a task spawning may
+/// work sometimes but panic depending on scheduling decisions, so it is still
+/// illegal.
+///
+///
+/// ```no_run
+/// # use glommio::{LocalExecutor, Task};
+/// # use std::rc::Rc;
+/// # use std::cell::RefCell;
+/// #
+/// # let ex = LocalExecutor::default();
+/// #
+/// # ex.run(async {
+/// let example = Rc::new(RefCell::new(0));
+/// let exclone = example.clone();
+///
+/// let mut ex_mut = example.borrow_mut();
+/// *ex_mut = 1;
+///
+/// let task = Task::local(async move {
+///     let ex = exclone.borrow();
+///     println!("Current value: {}", ex);
+/// });
+///
+/// // This is fine if `task` executes after the current task, but will panic if
+/// // preempts the current task and executes first. This is therefore invalid.
+/// *ex_mut = 2;
+/// drop(ex_mut);
+///
+/// task.await;
+/// # });
+/// ```
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
 pub struct Task<T>(multitask::Task<T>);
@@ -1247,8 +1278,12 @@ impl<T> Task<T> {
     /// Spawns a task onto the current single-threaded executor.
     ///
     /// If called from a [`LocalExecutor`], the task is spawned on it.
-    ///
     /// Otherwise, this method panics.
+    ///
+    /// Note that there is no guarantee of when the spawned task is scheduled.
+    /// The current task can continue its execution or be preempted by the
+    /// newly spawned task immediately. See the documentation for the
+    /// top-level [`Task`] for examples.
     ///
     /// # Examples
     ///
@@ -1362,25 +1397,28 @@ impl<T> Task<T> {
     /// task queue
     ///
     /// If called from a [`LocalExecutor`], the task is spawned on it.
-    ///
     /// Otherwise, this method panics.
+    ///
+    /// Note that there is no guarantee of when the spawned task is scheduled.
+    /// The current task can continue its execution or be preempted by the
+    /// newly spawned task immediately. See the documentation for the
+    /// top-level [`Task`] for examples.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::{Local, LocalExecutor, Shares, Task};
+    /// # use glommio::{Local, LocalExecutor, Shares, Task};
     ///
-    /// let local_ex = LocalExecutor::default();
-    /// local_ex.run(async {
-    ///     let handle = Local::create_task_queue(
-    ///         Shares::default(),
-    ///         glommio::Latency::NotImportant,
-    ///         "test_queue",
-    ///     );
-    ///     let task =
-    ///         Task::<usize>::local_into(async { 1 + 2 }, handle).expect("failed to spawn task");
-    ///     assert_eq!(task.await, 3);
-    /// })
+    /// # let local_ex = LocalExecutor::default();
+    /// # local_ex.run(async {
+    /// let handle = Local::create_task_queue(
+    ///     Shares::default(),
+    ///     glommio::Latency::NotImportant,
+    ///     "test_queue",
+    /// );
+    /// let task = Task::<usize>::local_into(async { 1 + 2 }, handle).expect("failed to spawn task");
+    /// assert_eq!(task.await, 3);
+    /// # });
     /// ```
     pub fn local_into(
         future: impl Future<Output = T> + 'static,

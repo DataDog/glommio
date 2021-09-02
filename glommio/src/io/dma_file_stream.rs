@@ -222,6 +222,8 @@ impl DmaStreamReaderState {
         }
 
         let pending = Local::local(async move {
+            futures_lite::future::yield_now().await;
+
             if read_state.borrow().error.is_some() {
                 return;
             }
@@ -931,6 +933,8 @@ impl DmaStreamWriterState {
         self.flush_padded(state.clone(), file.clone());
         let mut pending = self.take_pending_handles();
         Local::local(async move {
+            futures_lite::future::yield_now().await;
+
             defer! {
                 waker.wake();
             }

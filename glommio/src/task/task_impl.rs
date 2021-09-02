@@ -7,6 +7,8 @@ use core::{fmt, future::Future, marker::PhantomData, mem, ptr::NonNull};
 
 use crate::task::{header::Header, raw::RawTask, state::*, JoinHandle};
 
+use std::sync::atomic::Ordering;
+
 /// Creates a new local task.
 ///
 /// This constructor returns a [`Task`] reference that runs the future and a
@@ -77,7 +79,7 @@ impl Task {
     /// it to its schedule function.
     ///
     /// If the task is canceled, this method won't do anything.
-    pub fn schedule(self) {
+    pub(crate) fn schedule(self) {
         let ptr = self.raw_task.as_ptr();
         let header = ptr as *const Header;
         mem::forget(self);
@@ -107,12 +109,24 @@ impl Task {
     ///
     /// [`JoinHandle`]: struct.JoinHandle.html
     /// [`catch_unwind`]: https://doc.rust-lang.org/std/panic/fn.catch_unwind.html
-    pub fn run(self) -> bool {
+    pub(crate) fn run(self) -> bool {
         let ptr = self.raw_task.as_ptr();
         let header = ptr as *const Header;
         mem::forget(self);
 
         unsafe { ((*header).vtable.run)(ptr) }
+    }
+
+    pub(crate) fn run_right_away(self) -> bool {
+        let ptr = self.raw_task.as_ptr();
+        let header = ptr as *const Header;
+        mem::forget(self);
+
+        unsafe {
+            let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
+            assert_ne!(refs, i16::max_value());
+            ((*header).vtable.run)(ptr)
+        }
     }
 }
 
