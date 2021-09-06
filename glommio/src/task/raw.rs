@@ -208,26 +208,20 @@ where
         if Self::thread_id() != Some(raw.my_id()) {
             let notifier = raw.notifier();
             notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
-            Self::decrement_references(&mut *(raw.header as *mut Header));
-            return;
-        }
+        } else {
+            let state = (*raw.header).state;
 
-        let state = (*raw.header).state;
-
-        // If the task is completed or closed, it can't be woken up.
-        if state & (COMPLETED | CLOSED) != 0 {
-            // Drop the waker.
-            Self::drop_waker(ptr);
-            return;
-        }
-
-        // If the task is already scheduled do nothing.
-        if state & SCHEDULED == 0 {
-            // Mark the task as scheduled.
-            (*(raw.header as *mut Header)).state = state | SCHEDULED;
-            if state & RUNNING == 0 {
-                // Schedule the task.
-                Self::schedule(ptr);
+            // If the task is completed or closed, it can't be woken up.
+            if state & (COMPLETED | CLOSED) == 0 {
+                // If the task is already scheduled do nothing.
+                if state & SCHEDULED == 0 {
+                    // Mark the task as scheduled.
+                    (*(raw.header as *mut Header)).state = state | SCHEDULED;
+                    if state & RUNNING == 0 {
+                        // Schedule the task.
+                        Self::schedule(ptr);
+                    }
+                }
             }
         }
         Self::drop_waker(ptr);
@@ -293,15 +287,9 @@ where
     #[inline]
     unsafe fn drop_waker(ptr: *const ()) {
         let raw = Self::from_ptr(ptr);
-        // If we are dropping in a remote executor, just ignore it:
-        //  * When we cloned remotely, we have bumped the reference count
-        //  * But the remote wake will have transferred through the queue to the owner
-        //    executor
-        //  * The owner executor will then drop after wake.
-        //
-        //  We could decrement the reference count here, since that is atomic, but we
-        // can't run  the schedule / drop machinery.
+
         if Self::thread_id() != Some(raw.my_id()) {
+            Self::decrement_references(&mut *(raw.header as *mut Header), Ordering::Release);
             return;
         }
 
