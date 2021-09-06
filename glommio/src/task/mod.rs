@@ -48,12 +48,32 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+#[cfg(feature = "debugging")]
+pub mod debugging;
 pub(crate) mod header;
 pub(crate) mod join_handle;
 pub(crate) mod raw;
 pub(crate) mod state;
 pub(crate) mod task_impl;
+mod tests;
 pub(crate) mod utils;
 pub(crate) mod waker_fn;
 
 pub use crate::task::{join_handle::JoinHandle, task_impl::Task};
+
+#[macro_export]
+macro_rules! dbg_context {
+    ($ptr:expr, $name:tt, $($body:tt)*) => {{
+        #[cfg(feature = "debugging")]
+        let entered = TaskDebugger::enter($ptr, $name);
+
+        #[cfg(feature = "debugging")]
+        defer! {
+            if entered {
+                TaskDebugger::leave();
+            }
+        }
+
+        $($body)*
+    }};
+}

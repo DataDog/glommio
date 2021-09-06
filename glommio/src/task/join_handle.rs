@@ -12,7 +12,12 @@ use core::{
     task::{Context, Poll},
 };
 
-use crate::task::{header::Header, state::*};
+#[cfg(feature = "debugging")]
+use crate::task::debugging::TaskDebugger;
+use crate::{
+    dbg_context,
+    task::{header::Header, state::*},
+};
 use std::sync::atomic::Ordering;
 
 /// A handle that awaits the result of a task.
@@ -40,100 +45,104 @@ impl<R> JoinHandle<R> {
     /// When a task is canceled, its future will not be polled again.
     pub fn cancel(&self) {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *mut Header;
+        dbg_context!(ptr, "cancel", {
+            let header = ptr as *mut Header;
 
-        unsafe {
-            let state = (*header).state;
+            unsafe {
+                let state = (*header).state;
 
-            // If the task has been completed or closed, it can't be canceled.
-            if state & (COMPLETED | CLOSED) != 0 {
-                return;
+                // If the task has been completed or closed, it can't be canceled.
+                if state & (COMPLETED | CLOSED) != 0 {
+                    return;
+                }
+
+                // If the task is not scheduled nor running, we'll need to schedule it.
+                let new = if state & (SCHEDULED | RUNNING) == 0 {
+                    state | SCHEDULED | CLOSED
+                } else {
+                    state | CLOSED
+                };
+
+                // Mark the task as closed.
+                (*header).state = new;
+
+                if state & (SCHEDULED | RUNNING) == 0 {
+                    // If we schedule it, need to bump the reference count, since after run() we
+                    // decrement it.
+                    let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
+                    assert_ne!(refs, i16::max_value());
+
+                    ((*header).vtable.schedule)(ptr);
+                }
+
+                // Notify the awaiter that the task has been closed.
+                (*header).notify(None);
             }
-
-            // If the task is not scheduled nor running, we'll need to schedule it.
-            let new = if state & (SCHEDULED | RUNNING) == 0 {
-                state | SCHEDULED | CLOSED
-            } else {
-                state | CLOSED
-            };
-
-            // Mark the task as closed.
-            (*header).state = new;
-
-            if state & (SCHEDULED | RUNNING) == 0 {
-                // If we schedule it, need to bump the reference count, since after run() we
-                // decrement it.
-                let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
-                assert_ne!(refs, i16::max_value());
-
-                ((*header).vtable.schedule)(ptr);
-            }
-
-            // Notify the awaiter that the task has been closed.
-            (*header).notify(None);
-        }
+        });
     }
 }
 
 impl<R> Drop for JoinHandle<R> {
     fn drop(&mut self) {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *mut Header;
+        dbg_context!(ptr, "drop_join_handle", {
+            let header = ptr as *mut Header;
 
-        // A place where the output will be stored in case it needs to be dropped.
-        let mut output = None;
+            // A place where the output will be stored in case it needs to be dropped.
+            let mut output = None;
 
-        unsafe {
-            // Optimistically assume the `JoinHandle` is being dropped just after creating
-            // the task. This is a common case, as often users don't wait on the task
-            if (*header).state == SCHEDULED | HANDLE {
-                (*header).state = SCHEDULED;
-                return;
-            }
-
-            let state = (*header).state;
-            let refs = (*header).references.load(Ordering::Relaxed);
-
-            // If the task has been completed but not yet closed, that means its output
-            // must be dropped.
-            if state & COMPLETED != 0 && state & CLOSED == 0 {
-                // Mark the task as closed in order to grab its output.
-                (*header).state |= CLOSED;
-                // Read the output.
-                output = Some((((*header).vtable.get_output)(ptr) as *mut R).read());
-
-                (*header).state &= !HANDLE;
-
-                // If this is the last reference to the task, we need to destroy it.
-                if refs == 0 {
-                    ((*header).vtable.destroy)(ptr)
+            unsafe {
+                // Optimistically assume the `JoinHandle` is being dropped just after creating
+                // the task. This is a common case, as often users don't wait on the task
+                if (*header).state == SCHEDULED | HANDLE {
+                    (*header).state = SCHEDULED;
+                    return;
                 }
-            } else {
-                // If this is the last reference to the task and it's not closed, then
-                // close it and schedule one more time so that its future gets dropped by
-                // the executor.
-                let new = if (refs == 0) & (state & CLOSED == 0) {
-                    SCHEDULED | CLOSED
-                } else {
-                    state & !HANDLE
-                };
 
-                (*header).state = new;
-                // If this is the last reference to the task, we need to either
-                // schedule dropping its future or destroy it.
-                if refs == 0 {
-                    if state & CLOSED == 0 {
-                        let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
-                        assert_ne!(refs, i16::max_value());
-                        ((*header).vtable.schedule)(ptr);
+                let state = (*header).state;
+                let refs = (*header).references.load(Ordering::Relaxed);
+
+                // If the task has been completed but not yet closed, that means its output
+                // must be dropped.
+                if state & COMPLETED != 0 && state & CLOSED == 0 {
+                    // Mark the task as closed in order to grab its output.
+                    (*header).state |= CLOSED;
+                    // Read the output.
+                    output = Some((((*header).vtable.get_output)(ptr) as *mut R).read());
+
+                    (*header).state &= !HANDLE;
+
+                    // If this is the last reference to the task, we need to destroy it.
+                    if refs == 0 {
+                        ((*header).vtable.destroy)(ptr)
+                    }
+                } else {
+                    // If this is the last reference to the task and it's not closed, then
+                    // close it and schedule one more time so that its future gets dropped by
+                    // the executor.
+                    let new = if (refs == 0) & (state & CLOSED == 0) {
+                        SCHEDULED | CLOSED
                     } else {
-                        ((*header).vtable.destroy)(ptr);
+                        state & !HANDLE
+                    };
+
+                    (*header).state = new;
+                    // If this is the last reference to the task, we need to either
+                    // schedule dropping its future or destroy it.
+                    if refs == 0 {
+                        if state & CLOSED == 0 {
+                            let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
+                            assert_ne!(refs, i16::max_value());
+                            ((*header).vtable.schedule)(ptr);
+                        } else {
+                            ((*header).vtable.destroy)(ptr);
+                        }
                     }
                 }
             }
-        }
 
-        drop(output);
+            drop(output);
+        });
     }
 }
 

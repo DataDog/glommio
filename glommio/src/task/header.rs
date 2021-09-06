@@ -4,13 +4,18 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use core::{fmt, task::Waker};
+use std::{
+    cell::Cell,
+    sync::{
+        atomic::{AtomicI16, Ordering},
+        Arc,
+    },
+};
 
-use crate::task::{raw::TaskVTable, state::*, utils::abort_on_panic};
-
-use crate::sys::SleepNotifier;
-use std::sync::Arc;
-
-use std::sync::atomic::{AtomicI16, Ordering};
+use crate::{
+    sys::SleepNotifier,
+    task::{raw::TaskVTable, state::*, utils::abort_on_panic},
+};
 
 /// The header of a task.
 ///
@@ -37,6 +42,9 @@ pub(crate) struct Header {
     /// to several other methods necessary for bookkeeping the
     /// heap-allocated task.
     pub(crate) vtable: &'static TaskVTable,
+
+    #[cfg(feature = "debugging")]
+    pub(crate) debugging: Cell<bool>,
 }
 
 impl Header {
@@ -81,6 +89,31 @@ impl Header {
     pub(crate) fn register(&mut self, waker: &Waker) {
         // Put the waker into the awaiter field.
         abort_on_panic(|| self.awaiter = Some(waker.clone()));
+    }
+
+    pub(crate) fn to_compact_string(&self) -> String {
+        let state = self.state;
+
+        macro_rules! test {
+            ($flag:tt) => {
+                if state & $flag != 0 {
+                    stringify!($flag)
+                } else {
+                    ""
+                }
+            };
+        }
+
+        format!(
+            "thread:{}|{:>9}|{:>7}|{:>9}|{:>6}|{:>6}|refs:{}",
+            self.notifier.id(),
+            test!(SCHEDULED),
+            test!(RUNNING),
+            test!(COMPLETED),
+            test!(CLOSED),
+            test!(HANDLE),
+            self.references.load(Ordering::Relaxed)
+        )
     }
 }
 
