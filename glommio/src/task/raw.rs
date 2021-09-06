@@ -253,8 +253,8 @@ where
                 dbg_context!(ptr, "foreign", {
                     let notifier = raw.notifier();
                     notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+                    return;
                 });
-                return;
             }
 
             let state = (*raw.header).state;
@@ -314,7 +314,13 @@ where
 
             if Self::thread_id() != Some(raw.my_id()) {
                 dbg_context!(ptr, "foreign", {
-                    Self::decrement_references(&mut *(raw.header as *mut Header));
+                    // In case the task complete before the last foreign waker
+                    // is dropped, schedule it once more to ensure the task
+                    // will be destroyed
+                    if Self::decrement_references(&mut *(raw.header as *mut Header)) == 0 {
+                        let notifier = raw.notifier();
+                        notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+                    }
                     return;
                 });
             }
