@@ -4,12 +4,11 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use core::{fmt, task::Waker};
-use std::{
-    cell::Cell,
-    sync::{
-        atomic::{AtomicI16, Ordering},
-        Arc,
-    },
+#[cfg(feature = "debugging")]
+use std::cell::Cell;
+use std::sync::{
+    atomic::{AtomicI16, Ordering},
+    Arc,
 };
 
 use crate::{
@@ -91,6 +90,7 @@ impl Header {
         abort_on_panic(|| self.awaiter = Some(waker.clone()));
     }
 
+    #[cfg(feature = "debugging")]
     pub(crate) fn to_compact_string(&self) -> String {
         let state = self.state;
 

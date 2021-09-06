@@ -61,6 +61,7 @@ pub(crate) mod waker_fn;
 
 pub use crate::task::{join_handle::JoinHandle, task_impl::Task};
 
+/// Mark context for task operations
 #[macro_export]
 macro_rules! dbg_context {
     ($ptr:expr, $name:tt, $($body:tt)*) => {{

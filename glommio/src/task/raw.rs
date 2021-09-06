@@ -11,10 +11,9 @@ use core::{
     ptr::NonNull,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
-use std::{
-    cell::Cell,
-    sync::atomic::{AtomicI16, Ordering},
-};
+#[cfg(feature = "debugging")]
+use std::cell::Cell;
+use std::sync::atomic::{AtomicI16, Ordering};
 
 #[cfg(feature = "debugging")]
 use crate::task::debugging::TaskDebugger;
