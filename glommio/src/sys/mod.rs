@@ -277,7 +277,7 @@ impl fmt::Debug for OsError {
 pub(crate) struct SleepNotifier {
     id: usize,
     eventfd: std::fs::File,
-    memory: Arc<AtomicUsize>,
+    memory: AtomicUsize,
     foreign_wakes: Mutex<mpsc::Receiver<Waker>>,
     waker_sender: mpsc::Sender<Waker>,
 }
@@ -310,7 +310,7 @@ impl SleepNotifier {
         Ok(Arc::new(Self {
             eventfd,
             id,
-            memory: Arc::new(AtomicUsize::new(0)),
+            memory: AtomicUsize::new(0),
             waker_sender,
             foreign_wakes: Mutex::new(foreign_wakes),
         }))
