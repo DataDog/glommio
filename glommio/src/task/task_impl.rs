@@ -5,7 +5,12 @@
 //
 use core::{fmt, future::Future, marker::PhantomData, mem, ptr::NonNull};
 
-use crate::task::{header::Header, raw::RawTask, state::*, JoinHandle};
+#[cfg(feature = "debugging")]
+use crate::task::debugging::TaskDebugger;
+use crate::{
+    dbg_context,
+    task::{header::Header, raw::RawTask, state::*, JoinHandle},
+};
 
 /// Creates a new local task.
 ///
@@ -109,10 +114,13 @@ impl Task {
     /// [`catch_unwind`]: https://doc.rust-lang.org/std/panic/fn.catch_unwind.html
     pub fn run(self) -> bool {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *const Header;
-        mem::forget(self);
-
-        unsafe { ((*header).vtable.run)(ptr) }
+        dbg_context!(ptr, "run", {
+            let header = ptr as *const Header;
+            mem::forget(self);
+            #[cfg(feature = "debugging")]
+            TaskDebugger::set_current_task(ptr);
+            unsafe { ((*header).vtable.run)(ptr) }
+        })
     }
 }
 
