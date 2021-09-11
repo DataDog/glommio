@@ -24,30 +24,9 @@
 //! those tasks on the same thread, no thread context switch is necessary when
 //! going between task execution and I/O.
 
-use crate::iou::sqe::SockAddrStorage;
-use ahash::AHashMap;
-use nix::sys::socket::{MsgFlags, SockAddr};
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, VecDeque},
-    ffi::CString,
-    fmt,
-    io,
-    mem,
-    os::unix::{ffi::OsStrExt, io::RawFd},
-    panic::{RefUnwindSafe, UnwindSafe},
-    path::Path,
-    rc::Rc,
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc,
-    },
-    task::Waker,
-    time::{Duration, Instant},
-};
-
 use crate::{
     io::{FileScheduler, IoScheduler, ScheduledSource},
+    iou::sqe::SockAddrStorage,
     sys,
     sys::{
         DirectIo,
@@ -64,6 +43,27 @@ use crate::{
     Latency,
     Local,
     TaskQueueHandle,
+};
+use ahash::AHashMap;
+use nix::sys::socket::{MsgFlags, SockAddr};
+use smallvec::SmallVec;
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    ffi::CString,
+    fmt,
+    io,
+    mem,
+    os::unix::{ffi::OsStrExt, io::RawFd},
+    panic::{RefUnwindSafe, UnwindSafe},
+    path::Path,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+    task::Waker,
+    time::{Duration, Instant},
 };
 
 /// Waits for a notification.
@@ -204,10 +204,11 @@ impl Timers {
     }
 }
 
+type SharedChannelWakerChecker = (SmallVec<[Waker; 1]>, Option<Box<dyn Fn() -> usize>>);
+
 struct SharedChannels {
     id: u64,
-    check_map: BTreeMap<u64, Box<dyn Fn() -> usize>>,
-    wakers_map: BTreeMap<u64, VecDeque<Waker>>,
+    wakers_map: BTreeMap<u64, SharedChannelWakerChecker>,
     connection_wakers: Vec<Waker>,
 }
 
@@ -216,7 +217,6 @@ impl SharedChannels {
         SharedChannels {
             id: 0,
             connection_wakers: Vec::new(),
-            check_map: BTreeMap::new(),
             wakers_map: BTreeMap::new(),
         }
     }
@@ -227,16 +227,14 @@ impl SharedChannels {
             wake!(waker);
         }
 
-        let current_wakers = mem::take(&mut self.wakers_map);
-        for (id, mut pending) in current_wakers.into_iter() {
-            let room = self.check_map.get(&id).unwrap()();
-            let room = std::cmp::min(room, pending.len());
-            for waker in pending.drain(0..room) {
+        for (_, (pending, check)) in self.wakers_map.iter_mut() {
+            if pending.is_empty() {
+                continue;
+            }
+            let room = std::cmp::min(check.as_ref().unwrap()(), pending.len());
+            for waker in pending.drain(0..room).rev() {
                 woke += 1;
                 wake!(waker);
-            }
-            if !pending.is_empty() {
-                self.wakers_map.insert(id, pending);
             }
         }
         woke
@@ -337,7 +335,9 @@ impl Reactor {
         let mut channels = self.shared_channels.borrow_mut();
         let id = channels.id;
         channels.id += 1;
-        let ret = channels.check_map.insert(id, test_function);
+        let ret = channels
+            .wakers_map
+            .insert(id, (Default::default(), Some(test_function)));
         assert!(ret.is_none());
         id
     }
@@ -345,7 +345,6 @@ impl Reactor {
     pub(crate) fn unregister_shared_channel(&self, id: u64) {
         let mut channels = self.shared_channels.borrow_mut();
         channels.wakers_map.remove(&id);
-        channels.check_map.remove(&id);
     }
 
     pub(crate) fn add_shared_channel_connection_waker(&self, waker: Waker) {
@@ -355,8 +354,12 @@ impl Reactor {
 
     pub(crate) fn add_shared_channel_waker(&self, id: u64, waker: Waker) {
         let mut channels = self.shared_channels.borrow_mut();
-        let map = channels.wakers_map.entry(id).or_insert_with(VecDeque::new);
-        map.push_back(waker);
+        let map = channels
+            .wakers_map
+            .entry(id)
+            .or_insert_with(|| (SmallVec::new(), None));
+
+        map.0.push(waker);
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
