@@ -89,7 +89,7 @@ jobs:
             - v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Run linters
-          command: cargo clippy -- -D warnings
+          command: cargo clippy --all-targets --all-features -- -D warnings
       - save_cache:
           paths:
             - /usr/local/cargo/registry
@@ -115,7 +115,7 @@ jobs:
             - v5-cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
           name: Build all targets
-          command: cargo build --all --all-targets
+          command: cargo build --all --all-targets --all-features
       - save_cache:
           paths:
             - /usr/local/cargo/registry
