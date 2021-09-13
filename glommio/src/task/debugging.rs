@@ -1,6 +1,10 @@
-use crate::{dbg_context, executor::executor_id, task::header::Header};
+//! A task debugger that captures the state of in-flight tasks and allows
+//! third-party code to introspect into the state of the scheduler.
+//! Use the `debugging` feature flag to enable.
+
+use crate::{executor::executor_id, task::header::Header};
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::HashMap,
     time::{Duration, Instant},
 };
@@ -10,6 +14,7 @@ thread_local! {
 }
 
 /// Provide facilities to inspect the lifecycle of glommio tasks
+#[derive(Debug)]
 pub struct TaskDebugger {
     label: Option<&'static str>,
     registry: HashMap<*const (), TaskInfo>,
@@ -39,7 +44,7 @@ impl TaskDebugger {
     pub fn debug_aged_tasks(older_than: Duration) {
         Self::with(|dbg| {
             let mut count = 0;
-            for (k, v) in dbg.registry.iter() {
+            for (_, v) in dbg.registry.iter() {
                 let age = v.ts.elapsed();
                 if age > older_than {
                     count += 1;
@@ -101,6 +106,7 @@ impl TaskDebugger {
         });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn update(ptr: *const ()) {
         Self::with(|dbg| {
             if let Some(info) = dbg.registry.get_mut(&ptr) {
@@ -169,6 +175,7 @@ impl TaskDebugger {
     }
 }
 
+#[derive(Debug)]
 struct TaskInfo {
     ptr: *const (),
     label: Option<&'static str>,

@@ -14,7 +14,7 @@ use std::{
 use super::sysfs::ListIterator;
 
 /// A description of the CPU's location in the machine topology.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CpuLocation {
     /// Holds the CPU id.  This is the most granular field and will distinguish
     /// among [`hyper-threads`].

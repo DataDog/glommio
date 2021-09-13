@@ -2021,7 +2021,6 @@ mod test {
         },
         task::Waker,
     };
-    use tracing_subscriber::EnvFilter;
 
     #[test]
     fn create_and_destroy_executor() {

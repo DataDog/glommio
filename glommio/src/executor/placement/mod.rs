@@ -97,7 +97,7 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 ///
 /// handles.join_all();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Placement {
     /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
     /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.  This is the
@@ -177,7 +177,7 @@ impl Default for Placement {
 /// Please see the documentation for [`Placement`] variants to
 /// understand how `CpuSet` restrictions apply to each variant.  CPUs are
 /// identified via their [`CpuLocation`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CpuSet(Vec<CpuLocation>);
 
 impl CpuSet {
@@ -516,7 +516,7 @@ mod test {
         let set = CpuSet::online().unwrap();
         let placement = Placement::Fenced(set);
         let placement_clone = placement.clone();
-        assert!(matches!(placement_clone, placement));
+        assert_eq!(placement_clone, placement);
     }
 
     #[test]
@@ -524,10 +524,10 @@ mod test {
         let set = CpuSet::online().unwrap();
         let some_placement = Placement::MaxSpread(Some(set));
         let some_placement_clone = some_placement.clone();
-        assert!(matches!(some_placement_clone, some_placement));
+        assert_eq!(some_placement_clone, some_placement);
         let none_placement = Placement::MaxSpread(None);
         let none_placement_clone = none_placement.clone();
-        assert!(matches!(none_placement_clone, none_placement));
+        assert_eq!(none_placement_clone, none_placement);
     }
 
     #[test]
@@ -535,21 +535,21 @@ mod test {
         let set = CpuSet::online().unwrap();
         let some_placement = Placement::MaxPack(Some(set));
         let some_placement_clone = some_placement.clone();
-        assert!(matches!(some_placement_clone, some_placement));
+        assert_eq!(some_placement_clone, some_placement);
         let none_placement = Placement::MaxPack(None);
         let none_placement_clone = none_placement.clone();
-        assert!(matches!(none_placement_clone, none_placement));
+        assert_eq!(none_placement_clone, none_placement);
     }
 
     #[test]
     fn placement_custom_clone() {
         let set1 = CpuSet::online().unwrap();
         let set2 = CpuSet::online().unwrap();
-        assert!(set1.len() > 0);
-        assert!(set2.len() > 0);
+        assert!(set1.is_empty());
+        assert!(set2.is_empty());
         let vec_set = vec![set1, set2];
         let placement = Placement::Custom(vec_set);
-        assert!(matches!(placement.clone(), placement));
+        assert_eq!(placement.clone(), placement);
     }
 
     #[test]

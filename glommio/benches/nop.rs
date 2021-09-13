@@ -11,7 +11,7 @@ struct Bench {
     num_events: u32,
 }
 
-const BENCH_RUNS: &'static [Bench] = &[
+const BENCH_RUNS: &[Bench] = &[
     Bench {
         num_tasks: 100,
         num_events: 10_000_000,
