@@ -47,8 +47,8 @@ mod hyper_compat {
             Pin::new(&mut self.0)
                 .poll_read(cx, buf.initialize_unfilled())
                 .map(|n| {
-                    if n.is_ok() {
-                        buf.advance(n.unwrap());
+                    if let Ok(n) = n {
+                        buf.advance(n);
                     }
                     Ok(())
                 })
