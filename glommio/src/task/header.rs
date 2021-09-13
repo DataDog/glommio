@@ -123,6 +123,11 @@ impl fmt::Debug for Header {
         let refcount = self.references.load(Ordering::Relaxed);
 
         f.debug_struct("Header")
+            .field("ptr", &(self as *const Self))
+            .field(
+                "current_thread_id",
+                &crate::executor::executor_id().unwrap_or(usize::MAX),
+            )
             .field("thread_id", &self.notifier.id())
             .field("scheduled", &(state & SCHEDULED != 0))
             .field("running", &(state & RUNNING != 0))

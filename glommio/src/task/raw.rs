@@ -215,30 +215,35 @@ where
     }
 
     /// Wakes a waker.
-    unsafe fn wake(ptr: *const ()) {
-        dbg_context!(ptr, "wake", {
-            let raw = Self::from_ptr(ptr);
-            if Self::thread_id() != Some(raw.my_id()) {
-                dbg_context!(ptr, "foreign", {
-                    let notifier = raw.notifier();
-                    notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
-                });
-            } else {
-                let state = (*raw.header).state;
+    unsafe fn do_wake(ptr: *const ()) {
+        let raw = Self::from_ptr(ptr);
+        if Self::thread_id() != Some(raw.my_id()) {
+            dbg_context!(ptr, "foreign", {
+                let notifier = raw.notifier();
+                notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+            });
+        } else {
+            let state = (*raw.header).state;
 
-                // If the task is completed or closed, it can't be woken up.
-                if state & (COMPLETED | CLOSED) == 0 {
-                    // If the task is already scheduled do nothing.
-                    if state & SCHEDULED == 0 {
-                        // Mark the task as scheduled.
-                        (*(raw.header as *mut Header)).state = state | SCHEDULED;
-                        if state & RUNNING == 0 {
-                            // Schedule the task.
-                            Self::schedule(ptr);
-                        }
+            // If the task is completed or closed, it can't be woken up.
+            if state & (COMPLETED | CLOSED) == 0 {
+                // If the task is already scheduled do nothing.
+                if state & SCHEDULED == 0 {
+                    // Mark the task as scheduled.
+                    (*(raw.header as *mut Header)).state = state | SCHEDULED;
+                    if state & RUNNING == 0 {
+                        // Schedule the task.
+                        Self::schedule(ptr);
                     }
                 }
             }
+        }
+    }
+
+    /// Wakes a waker.
+    unsafe fn wake(ptr: *const ()) {
+        dbg_context!(ptr, "wake", {
+            Self::do_wake(ptr);
             Self::drop_waker(ptr);
         });
     }
@@ -246,33 +251,7 @@ where
     /// Wakes a waker by reference.
     unsafe fn wake_by_ref(ptr: *const ()) {
         dbg_context!(ptr, "wake_by_ref", {
-            let raw = Self::from_ptr(ptr);
-
-            if Self::thread_id() != Some(raw.my_id()) {
-                dbg_context!(ptr, "foreign", {
-                    let notifier = raw.notifier();
-                    notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
-                    return;
-                });
-            }
-
-            let state = (*raw.header).state;
-
-            // If the task is completed or closed, it can't be woken up.
-            if state & (COMPLETED | CLOSED) != 0 {
-                return;
-            }
-
-            // If the task is already scheduled, we just need to synchronize with the thread
-            // that will run the task by "publishing" our current view of the
-            // memory.
-            if state & SCHEDULED == 0 {
-                (*(raw.header as *mut Header)).state |= SCHEDULED;
-
-                if state & RUNNING == 0 {
-                    Self::schedule(ptr);
-                }
-            }
+            Self::do_wake(ptr);
         });
     }
 
@@ -289,14 +268,14 @@ where
     #[track_caller]
     fn increment_references(header: &mut Header) {
         let refs = header.references.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(refs, i16::max_value());
+        assert_ne!(refs, i16::MAX, "Waker invariant broken: {:?}", header);
     }
 
     #[inline]
     #[track_caller]
     fn decrement_references(header: &mut Header) -> i16 {
         let refs = header.references.fetch_sub(1, Ordering::Relaxed);
-        assert_ne!(refs, 0);
+        assert_ne!(refs, 0, "Waker invariant broken: {:?}", header);
         refs - 1
     }
 
