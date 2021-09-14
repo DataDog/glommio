@@ -10,7 +10,6 @@ mod ref_count {
     use futures_lite::future::{yield_now, Future};
 
     use crate::{channels::shared_channel, prelude::*, task::debugging::TaskDebugger};
-    use std::ptr::null;
 
     struct Inner {
         n: usize,
@@ -37,7 +36,7 @@ mod ref_count {
     impl Future for WakeN {
         type Output = ();
 
-        fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
+        fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
             let mut inner = self.inner.borrow_mut();
             if inner.n > 0 {
                 inner.n -= 1;
@@ -127,7 +126,7 @@ mod ref_count {
     fn wake() {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let mut task = WakeN::new(1);
+            let task = WakeN::new(1);
             TaskDebugger::set_label("wake");
             let handle = Local::local(task.clone()).detach();
             yield_now().await;
@@ -144,7 +143,7 @@ mod ref_count {
     fn wake_completed_task() {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let mut task = WakeN::new(1);
+            let task = WakeN::new(1);
             TaskDebugger::set_label("wake");
             let handle = Local::local(task.clone()).detach();
             drop(handle);
@@ -163,7 +162,7 @@ mod ref_count {
     fn drop_waker_of_completed_task() {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let mut task = WakeN::new(1);
+            let task = WakeN::new(1);
             TaskDebugger::set_label("wake");
             let handle = Local::local(task.clone()).detach();
             drop(handle);
@@ -182,7 +181,7 @@ mod ref_count {
     fn wake_by_ref() {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let mut task = WakeN::new(1);
+            let task = WakeN::new(1);
             TaskDebugger::set_label("wake_by_ref");
             let handle = Local::local(task.clone()).detach();
             yield_now().await;
@@ -206,7 +205,7 @@ mod ref_count {
         let results = vec![
             LocalExecutorBuilder::new().spawn(move || async move {
                 let sender = sender.connect().await;
-                let mut task = WakeN::new(1);
+                let task = WakeN::new(1);
                 TaskDebugger::set_label("foreign_wake");
                 let handle = Local::local(task.clone()).detach();
                 yield_now().await;
@@ -237,7 +236,7 @@ mod ref_count {
         let results = vec![
             LocalExecutorBuilder::new().spawn(move || async move {
                 let sender = sender.connect().await;
-                let mut task = WakeN::new(1);
+                let task = WakeN::new(1);
                 TaskDebugger::set_label("foreign_wake_by_ref");
                 let handle = Local::local(task.clone()).detach();
                 yield_now().await;

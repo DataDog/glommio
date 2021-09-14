@@ -54,7 +54,7 @@ macro_rules! block_property {
             let bdev = map.entry(key).or_insert_with(|| BlockDevice::new(key));
 
             bdev.$property.clone()
-        });
+        })
     };
 }
 

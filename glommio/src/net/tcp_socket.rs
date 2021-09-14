@@ -1204,7 +1204,7 @@ mod tests {
                     let mut buf = [0u8; 64];
                     // try to overflow the amount of wakers possible
                     for _ in 0..64_000 {
-                        if let Poll::Ready(_) = Pin::new(&mut stream).poll_read(cx, &mut buf) {
+                        if Pin::new(&mut stream).poll_read(cx, &mut buf).is_ready() {
                             panic!("should be pending");
                         }
                     }
