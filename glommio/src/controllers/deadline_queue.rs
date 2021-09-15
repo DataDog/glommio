@@ -9,7 +9,6 @@ use crate::{
     enclose,
     task,
     Latency,
-    Local,
     Shares,
     SharesManager,
     TaskQueueHandle,
@@ -406,7 +405,7 @@ impl<T: 'static> DeadlineQueue<T> {
             }
         };
 
-        let tq = Local::create_task_queue(Shares::Dynamic(queue.clone()), lat, name);
+        let tq = crate::executor().create_task_queue(Shares::Dynamic(queue.clone()), lat, name);
         let (sender, receiver): (LocalSender<QueueItem<T>>, LocalReceiver<QueueItem<T>>) =
             local_channel::new_bounded(1);
 

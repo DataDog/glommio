@@ -10,7 +10,6 @@ use crate::{
     reactor::Reactor,
     sys::{self, SleepNotifier},
     GlommioError,
-    Local,
     ResourceType,
 };
 use futures_lite::{future, stream::Stream};
@@ -167,7 +166,7 @@ impl<T: 'static + Send + Sized> SharedSender<T> {
     /// [`ConnectedSender`]: struct.ConnectedSender.html
     pub async fn connect(mut self) -> ConnectedSender<T> {
         let state = self.state.take().unwrap();
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         state.buffer.connect(reactor.id());
         let id = reactor.register_shared_channel(Box::new(enclose! {(state) move || {
             if state.buffer.consumer_disconnected() {
@@ -323,7 +322,7 @@ impl<T: 'static + Send + Sized> SharedReceiver<T> {
     ///
     /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
     pub async fn connect(mut self) -> ConnectedReceiver<T> {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let state = self.state.take().unwrap();
         state.buffer.connect(reactor.id());
         let id = reactor.register_shared_channel(Box::new(enclose! { (state) move || {
@@ -439,7 +438,7 @@ impl<T: Send + Sized> Drop for SharedSender<T> {
             let id = state.buffer.peer_id();
             if let Some(notifier) = sys::get_sleep_notifier_for(id) {
                 if let Some(fd) = notifier.must_notify() {
-                    Local::get_reactor().notify(fd);
+                    crate::executor().reactor().notify(fd);
                 }
             }
         }
@@ -454,7 +453,7 @@ impl<T: Send + Sized> Drop for SharedReceiver<T> {
             let id = state.buffer.peer_id();
             if let Some(notifier) = sys::get_sleep_notifier_for(id) {
                 if let Some(fd) = notifier.must_notify() {
-                    Local::get_reactor().notify(fd);
+                    crate::executor().reactor().notify(fd);
                 }
             }
         }

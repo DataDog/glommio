@@ -414,7 +414,7 @@ macro_rules! wait_on_cond {
             if *($var.borrow()) == $val {
                 break;
             }
-            Local::later().await;
+            crate::executor().later().await;
         }
     };
     ($var:expr, $val:expr, $instantval:expr) => {
@@ -427,7 +427,7 @@ macro_rules! wait_on_cond {
             if start.elapsed().as_secs() > $instantval {
                 panic!("test timed out");
             }
-            Local::later().await;
+            crate::executor().later().await;
         }
     };
 }
@@ -478,11 +478,13 @@ pub use crate::{
         Result,
     },
     executor::{
+        executor,
         local,
         local_into,
         scoped_local,
         scoped_local_into,
         CpuSet,
+        ExecutorProxy,
         ExecutorStats,
         LocalExecutor,
         LocalExecutorBuilder,
@@ -506,15 +508,14 @@ pub mod prelude {
     #[doc(no_inline)]
     pub use crate::{
         error::GlommioError,
+        executor,
         local,
         local_into,
-        scoped_local,
-        scoped_local_into,
         ByteSliceExt,
         ByteSliceMutExt,
+        ExecutorProxy,
         IoStats,
         Latency,
-        Local,
         LocalExecutor,
         LocalExecutorBuilder,
         LocalExecutorPoolBuilder,
@@ -525,17 +526,6 @@ pub mod prelude {
         TaskQueueHandle,
     };
 }
-
-/// Local is an ergonomic way to access the local executor.
-/// The local is executed through a Task type, but the Task type has a type
-/// parameter consisting of the return type of the future encapsulated by this
-/// task.
-///
-/// However for associated functions without a self parameter, like `local()`
-/// and `local_into()`, the type is always `()` and Rust is not able to elide.
-///
-/// Writing `Task::<()>::function()` works, but it is not very ergonomic.
-pub type Local = Task<()>;
 
 /// An attribute of a [`TaskQueue`], passed during its creation.
 ///

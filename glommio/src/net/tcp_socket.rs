@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::stream::GlommioStream;
-use crate::{net::yolo_accept, reactor::Reactor, GlommioError, Local};
+use crate::{net::yolo_accept, reactor::Reactor, GlommioError};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
@@ -111,7 +111,7 @@ impl TcpListener {
         let listener = sk.into_tcp_listener();
 
         Ok(TcpListener {
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
             listener,
         })
     }
@@ -402,7 +402,7 @@ impl TcpStream {
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<TcpStream> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let (addr, socket) = make_tcp_socket(&addr)?;
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
 
@@ -499,7 +499,7 @@ impl TcpStream {
 
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let (addr, socket) = make_tcp_socket(&addr)?;
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let source = reactor.connect_timeout(socket.as_raw_fd(), addr, duration);
 
         // connect_timeout submits two sqes to io_uring: a connect sqe soft-linked
@@ -773,7 +773,7 @@ mod tests {
             }});
 
             while coord.get() != 1 {
-                Local::later().await;
+                crate::executor().later().await;
             }
             let stream = TcpStream::connect(addr).await.unwrap();
             assert_eq!(listener_handle.await.unwrap(), stream.local_addr().unwrap());
@@ -876,7 +876,7 @@ mod tests {
             }});
 
             while coord.get() != 1 {
-                Local::later().await;
+                crate::executor().later().await;
             }
             let mut handles = Vec::with_capacity(4);
             for _ in 0..4 {
@@ -949,7 +949,7 @@ mod tests {
             .detach();
 
             while coord.get() != 1 {
-                Local::later().await;
+                crate::executor().later().await;
             }
             let mut stream = TcpStream::connect(addr).await.unwrap();
 

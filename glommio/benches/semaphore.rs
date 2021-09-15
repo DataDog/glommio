@@ -30,7 +30,7 @@ fn main() {
                 let mut expected : u32 = 0;
                 while expected != runs {
                     while expected != acquisitions.get() {
-                        Local::later().await;
+                        crate::executor().later().await;
                     }
                     s.signal(1);
                     expected += 1;

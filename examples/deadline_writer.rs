@@ -45,7 +45,7 @@ impl IntWriter {
     }
 
     async fn write_int(self: Rc<Self>) -> Duration {
-        let my_handle = Local::current_task_queue();
+        let my_handle = glommio::executor().current_task_queue();
 
         loop {
             let me = self.count.get();
@@ -55,11 +55,11 @@ impl IntWriter {
             }
             self.count.set(me + 1);
             if elapsed > self.next_print.get() {
-                let tq_stats = Local::task_queue_stats(my_handle).unwrap();
+                let tq_stats = glommio::executor().task_queue_stats(my_handle).unwrap();
 
                 let tq_runtime = tq_stats.runtime();
                 let tq_delta = tq_runtime - self.last_tq_runtime.get();
-                let ex_runtime = Local::executor_stats().total_runtime();
+                let ex_runtime = glommio::executor().executor_stats().total_runtime();
                 let ex_delta = ex_runtime - self.last_ex_runtime.get();
 
                 let ratio = self.count.get() as f64 / self.count_target as f64 * 100.0;
@@ -86,7 +86,7 @@ impl IntWriter {
             }
 
             burn_cpu(Duration::from_micros(500));
-            Local::later().await;
+            glommio::executor().later().await;
         }
     }
 }
@@ -119,7 +119,7 @@ fn competing_cpu_hog(
         async move {
             while !stop.get() {
                 burn_cpu(Duration::from_micros(500));
-                Local::later().await;
+                glommio::executor().later().await;
             }
         },
         cpuhog_tq,
@@ -130,7 +130,8 @@ fn competing_cpu_hog(
 
 async fn static_writer(how_many: usize, shares: usize, cpuhog_tq: TaskQueueHandle) -> Duration {
     let name = format!("shares-{}", shares);
-    let tq = Local::create_task_queue(Shares::Static(shares), Latency::NotImportant, &name);
+    let tq =
+        glommio::executor().create_task_queue(Shares::Static(shares), Latency::NotImportant, &name);
 
     let stop = Rc::new(Cell::new(false));
     let hog = competing_cpu_hog(stop.clone(), cpuhog_tq);
@@ -164,8 +165,11 @@ fn main() {
     let handle = LocalExecutorBuilder::new()
         .pin_to_cpu(0)
         .spawn(|| async move {
-            let cpuhog_tq =
-                Local::create_task_queue(Shares::Static(1000), Latency::NotImportant, "cpuhog");
+            let cpuhog_tq = glommio::executor().create_task_queue(
+                Shares::Static(1000),
+                Latency::NotImportant,
+                "cpuhog",
+            );
 
             println!(
                 "{}",
@@ -229,7 +233,7 @@ fn main() {
             loop {
                 let stop = Rc::new(Cell::new(false));
                 let hog = competing_cpu_hog(stop.clone(), cpuhog_tq);
-                Local::later().await;
+                glommio::executor().later().await;
 
                 let deadline = DeadlineQueue::new("example", Duration::from_millis(250));
                 let test = IntWriter::new(to_write, Duration::from_secs(duration as u64));

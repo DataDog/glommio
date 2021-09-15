@@ -6,7 +6,6 @@
 use crate::{
     sys::{self, DmaBuffer, Source, SourceType},
     ByteSliceMutExt,
-    Local,
     Reactor,
 };
 use nix::sys::socket::MsgFlags;
@@ -47,7 +46,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> From<socket2::Socket> for G
     fn from(socket: socket2::Socket) -> GlommioDatagram<S> {
         let socket = socket.into();
         GlommioDatagram {
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
             socket,
             tx_yolo: Cell::new(true),
             rx_yolo: Cell::new(true),

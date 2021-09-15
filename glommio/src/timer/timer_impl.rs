@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{reactor::Reactor, task::JoinHandle, GlommioError, Local, TaskQueueHandle};
+use crate::{reactor::Reactor, task::JoinHandle, GlommioError, TaskQueueHandle};
 use pin_project_lite::pin_project;
 use std::{
     cell::RefCell,
@@ -96,7 +96,7 @@ impl Timer {
     /// });
     /// ```
     pub fn new(dur: Duration) -> Timer {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         Timer {
             inner: Rc::new(RefCell::new(Inner {
                 id: reactor.register_timer(),
@@ -115,7 +115,7 @@ impl Timer {
                 id,
                 is_charged: false,
                 when: Instant::now() + dur,
-                reactor: Rc::downgrade(&Local::get_reactor()),
+                reactor: Rc::downgrade(&crate::executor().reactor()),
             })),
         }
     }
@@ -239,7 +239,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     pub fn do_in(when: Duration, action: impl Future<Output = T> + 'static) -> TimerActionOnce<T> {
-        Self::do_in_into(when, action, Local::current_task_queue()).unwrap()
+        Self::do_in_into(when, action, crate::executor().current_task_queue()).unwrap()
     }
 
     /// Creates a [`TimerActionOnce`] that will execute the associated future
@@ -281,7 +281,7 @@ impl<T: 'static> TimerActionOnce<T> {
         action: impl Future<Output = T> + 'static,
         tq: TaskQueueHandle,
     ) -> Result<TimerActionOnce<T>> {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let timer_id = reactor.register_timer();
         let timer = Timer::from_id(timer_id, when);
         let inner = timer.inner.clone();
@@ -331,7 +331,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
     /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     pub fn do_at(when: Instant, action: impl Future<Output = T> + 'static) -> TimerActionOnce<T> {
-        Self::do_at_into(when, action, Local::current_task_queue()).unwrap()
+        Self::do_at_into(when, action, crate::executor().current_task_queue()).unwrap()
     }
 
     /// Creates a [`TimerActionOnce`] that will execute the associated future
@@ -579,7 +579,7 @@ impl TimerActionRepeat {
         G: Fn() -> F + 'static,
         F: Future<Output = Option<Duration>> + 'static,
     {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let timer_id = reactor.register_timer();
 
         let task = crate::local_into(
@@ -632,7 +632,7 @@ impl TimerActionRepeat {
         G: Fn() -> F + 'static,
         F: Future<Output = Option<Duration>> + 'static,
     {
-        Self::repeat_into(action_gen, Local::current_task_queue()).unwrap()
+        Self::repeat_into(action_gen, crate::executor().current_task_queue()).unwrap()
     }
 
     /// Cancel an existing [`TimerActionRepeat`] and waits for it to return
@@ -893,7 +893,7 @@ mod test {
                 *(exec1.borrow_mut()) = 1;
             });
 
-            Local::later().await;
+            crate::executor().later().await;
             assert_eq!(*(exec2.borrow()), 1);
         });
     }
@@ -1000,7 +1000,7 @@ mod test {
             });
             // Force this to go into the task queue to make the test more
             // realistic
-            Local::later().await;
+            crate::executor().later().await;
             action.cancel().await;
 
             Timer::new(Duration::from_millis(100)).await;

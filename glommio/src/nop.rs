@@ -5,7 +5,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::{reactor::Reactor, Local};
+use crate::reactor::Reactor;
 
 /// Submit no-op operations to io_uring.
 ///
@@ -32,7 +32,7 @@ impl NopSubmitter {
 
 impl Default for NopSubmitter {
     fn default() -> Self {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let reactor = Rc::downgrade(&reactor);
         Self { reactor }
     }

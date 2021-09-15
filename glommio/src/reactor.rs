@@ -44,7 +44,6 @@ use crate::{
     IoRequirements,
     IoStats,
     Latency,
-    Local,
     TaskQueueHandle,
 };
 
@@ -236,7 +235,7 @@ impl Reactor {
             raw,
             stype,
             stats_collection,
-            Some(Local::current_task_queue()),
+            Some(crate::executor().current_task_queue()),
         )
     }
 

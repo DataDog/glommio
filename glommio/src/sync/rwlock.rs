@@ -534,17 +534,19 @@ impl<T> RwLock<T> {
     /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
-    ///     let first_reader = Local::local(async move {
-    ///         let n = lock.read().await.unwrap();
-    ///         assert_eq!(*n, 1);
-    ///     })
-    ///     .detach();
+    ///     let first_reader = crate::executor()
+    ///         .local(async move {
+    ///             let n = lock.read().await.unwrap();
+    ///             assert_eq!(*n, 1);
+    ///         })
+    ///         .detach();
     ///
-    ///     let second_reader = Local::local(async move {
-    ///         let r = c_lock.read().await;
-    ///         assert!(r.is_ok());
-    ///     })
-    ///     .detach();
+    ///     let second_reader = crate::executor()
+    ///         .local(async move {
+    ///             let r = c_lock.read().await;
+    ///             assert!(r.is_ok());
+    ///         })
+    ///         .detach();
     ///
     ///     join(first_reader, second_reader).await;
     /// });
@@ -740,26 +742,28 @@ impl<T> RwLock<T> {
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///     let closer = Local::local(async move {
-    ///         //await till read lock will be acquired
-    ///         c_semaphore.acquire(1).await.unwrap();
-    ///         c_lock.close();
+    ///     let closer = crate::executor()
+    ///         .local(async move {
+    ///             //await till read lock will be acquired
+    ///             c_semaphore.acquire(1).await.unwrap();
+    ///             c_lock.close();
     ///
-    ///         assert!(c_lock.try_write().is_err());
-    ///     })
-    ///     .detach();
+    ///             assert!(c_lock.try_write().is_err());
+    ///         })
+    ///         .detach();
     ///
-    ///     let dead_locker = Local::local(async move {
-    ///         let _r = lock.read().await.unwrap();
+    ///     let dead_locker = crate::executor()
+    ///         .local(async move {
+    ///             let _r = lock.read().await.unwrap();
     ///
-    ///         //allow another fiber close RwLock
-    ///         semaphore.signal(1);
+    ///             //allow another fiber close RwLock
+    ///             semaphore.signal(1);
     ///
-    ///         // this situation leads to deadlock unless lock is closed
-    ///         let lock_result = lock.write().await;
-    ///         assert!(lock_result.is_err());
-    ///     })
-    ///     .detach();
+    ///             // this situation leads to deadlock unless lock is closed
+    ///             let lock_result = lock.write().await;
+    ///             assert!(lock_result.is_err());
+    ///         })
+    ///         .detach();
     ///
     ///     dead_locker.await;
     /// });
@@ -930,7 +934,7 @@ mod test {
     use crate::{sync::rwlock::RwLock, timer::Timer, LocalExecutor};
     use std::time::Duration;
 
-    use crate::{sync::Semaphore, Local};
+    use crate::sync::Semaphore;
     use std::{cell::RefCell, rc::Rc};
 
     #[derive(Eq, PartialEq, Debug)]
@@ -1055,10 +1059,10 @@ mod test {
                 let mut lock = rc2.write().await.unwrap();
 
                 for _ in 0..10 {
-                    Local::later().await;
+                    crate::executor().later().await;
                     let tmp = *lock;
                     *lock -= 1;
-                    Local::later().await;
+                    crate::executor().later().await;
                     *lock = tmp + 1;
                 }
 
@@ -1072,7 +1076,7 @@ mod test {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock == 0 || *lock == 10);
 
-                    Local::later().await;
+                    crate::executor().later().await;
                 }));
             }
 
@@ -1099,7 +1103,7 @@ mod test {
                     let tmp = *lock;
                     *lock -= 1;
 
-                    Local::later().await;
+                    crate::executor().later().await;
 
                     *lock = tmp + 1;
                 }
@@ -1114,7 +1118,7 @@ mod test {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock >= 0);
 
-                    Local::later().await;
+                    crate::executor().later().await;
                 }));
             }
 
@@ -1140,7 +1144,7 @@ mod test {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    Local::later().await;
+                    crate::executor().later().await;
 
                     let mut lock = ball2.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1163,7 +1167,7 @@ mod test {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    Local::later().await;
+                    crate::executor().later().await;
 
                     let mut lock = ball3.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1191,7 +1195,7 @@ mod test {
                     let mut prev = -1;
                     loop {
                         //give a room for other fibers to participate
-                        Local::later().await;
+                        crate::executor().later().await;
                         let lock = ball.read().await.unwrap();
 
                         if *lock == ITERATIONS {
