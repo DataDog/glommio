@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use glommio::{enclose, Local, LocalExecutor};
+use glommio::{enclose, LocalExecutor};
 use std::{cell::RefCell, rc::Rc};
 
 fn main() {
@@ -22,7 +22,7 @@ fn main() {
                         println!("reset");
                         *(right.borrow_mut()) = true
                     }
-                    Local::yield_if_needed().await;
+                    glommio::executor().yield_if_needed().await;
 
                 }
             }
@@ -37,7 +37,7 @@ fn main() {
                         println!("right");
                         *(right.borrow_mut()) = true
                     }
-                    Local::yield_if_needed().await;
+                    glommio::executor().yield_if_needed().await;
                 }
             }
         }(left.clone(), right.clone()))

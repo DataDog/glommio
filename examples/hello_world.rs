@@ -10,10 +10,10 @@ use std::io::Result;
 async fn hello() {
     let mut tasks = vec![];
     for t in 0..5 {
-        tasks.push(crate::local(async move {
-            println!("{}: Hello {} ...", Local::id(), t);
-            Local::later().await;
-            println!("{}: ... {} World!", Local::id(), t);
+        tasks.push(glommio::local(async move {
+            println!("{}: Hello {} ...", glommio::executor().id(), t);
+            glommio::executor().later().await;
+            println!("{}: ... {} World!", glommio::executor().id(), t);
         }));
     }
     join_all(tasks).await;

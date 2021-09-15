@@ -8,7 +8,6 @@ use futures_lite::Future;
 use crate::{
     channels::local_channel::{self, LocalSender},
     GlommioError,
-    Local,
     ResourceType,
     Task,
     TaskQueueHandle,
@@ -67,7 +66,7 @@ impl Gate {
         &self,
         future: impl Future<Output = T> + 'static,
     ) -> Result<Task<T>, GlommioError<()>> {
-        self.spawn_into(future, Local::current_task_queue())
+        self.spawn_into(future, crate::executor().current_task_queue())
     }
 
     /// Spawn a task for which the gate will wait on closing
@@ -204,7 +203,7 @@ mod tests {
             println!("Main: closing gate");
             let close_future =
                 crate::local(enclose!((gate) async move { gate.close().await })).detach();
-            Local::later().await;
+            crate::executor().later().await;
             assert!(!gate.is_open());
             assert!(gate.spawn(async {}).is_err());
 

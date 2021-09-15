@@ -246,7 +246,7 @@ impl BufferedFile {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{io::dma_file::test::make_test_directories, Local};
+    use crate::io::dma_file::test::make_test_directories;
 
     macro_rules! buffered_file_test {
         ( $name:ident, $dir:ident, $kind:ident, $code:block) => {
@@ -290,7 +290,7 @@ mod test {
 
         std::assert!(path.join("testfile").exists());
 
-        let stats = Local::io_stats();
+        let stats = crate::executor().io_stats();
         assert_eq!(stats.all_rings().files_opened(), 2);
         assert_eq!(stats.all_rings().files_closed(), 2);
     });
@@ -329,7 +329,7 @@ mod test {
         writer.close().await.unwrap();
         reader.close().await.unwrap();
 
-        let stats = Local::io_stats();
+        let stats = crate::executor().io_stats();
         assert_eq!(stats.all_rings().files_opened(), 2);
         assert_eq!(stats.all_rings().files_closed(), 2);
         assert_eq!(stats.all_rings().file_buffered_reads(), (3, 15));

@@ -10,7 +10,6 @@ use crate::{
     ByteSliceExt,
     ByteSliceMutExt,
     GlommioError,
-    Local,
     ResourceType,
 };
 use ahash::AHashMap;
@@ -1055,7 +1054,8 @@ impl Drop for DmaStreamWriter {
         }
         if state.must_truncate() {
             let file = self.file.take().unwrap();
-            Local::get_reactor()
+            crate::executor()
+                .reactor()
                 .sys
                 .async_truncate(file.as_raw_fd(), state.flushed_pos());
         }

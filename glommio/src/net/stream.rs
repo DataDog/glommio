@@ -7,7 +7,6 @@ use crate::{
     reactor::Reactor,
     sys::{self, DmaBuffer, Source, SourceType},
     ByteSliceMutExt,
-    Local,
 };
 use futures_lite::ready;
 use nix::sys::socket::MsgFlags;
@@ -77,7 +76,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> From<socket2::Socket> for G
     fn from(socket: socket2::Socket) -> GlommioStream<S> {
         let stream = socket.into();
         GlommioStream {
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
             stream,
             source_tx: None,
             source_rx: None,

@@ -7,7 +7,6 @@ use crate::{
     io::{BufferedFile, ScheduledSource},
     reactor::Reactor,
     sys::{IoBuffer, Source},
-    Local,
 };
 use futures_lite::{
     io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom},
@@ -83,7 +82,7 @@ pub fn stdin() -> Stdin {
     Stdin {
         source: None,
         buffer: Buffer::new(128),
-        reactor: Rc::downgrade(&Local::get_reactor()),
+        reactor: Rc::downgrade(&crate::executor().reactor()),
     }
 }
 
@@ -216,7 +215,7 @@ impl StreamReader {
             io_source: None,
             seek_source: None,
             buffer: Buffer::new(builder.buffer_size),
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
         }
     }
 }
@@ -364,7 +363,7 @@ impl StreamWriter {
             file_pos: 0,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
         }
     }
 

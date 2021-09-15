@@ -14,7 +14,6 @@ use std::sync::{Arc, RwLock};
 use crate::{
     channels::shared_channel::{self, *},
     GlommioError,
-    Local,
     Result,
 };
 
@@ -169,7 +168,7 @@ struct Peer {
 impl Peer {
     fn new(sender: Option<SharedSender<bool>>, role: Role) -> Self {
         Self {
-            executor_id: Local::id(),
+            executor_id: crate::executor().id(),
             notifier: sender,
             role,
         }
@@ -342,7 +341,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         }
 
         let index = peers
-            .binary_search_by(|n| n.executor_id.cmp(&Local::id()))
+            .binary_search_by(|n| n.executor_id.cmp(&crate::executor().id()))
             .expect_err("Should not join a mesh more than once.");
 
         if peers.len() == self.nr_peers - 1 {
@@ -388,7 +387,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         let (peer_id, role_id) = {
             let peers = self.peers.read().unwrap();
             let peer_id = peers
-                .binary_search_by(|n| n.executor_id.cmp(&Local::id()))
+                .binary_search_by(|n| n.executor_id.cmp(&crate::executor().id()))
                 .unwrap();
             let role_id = peers
                 .iter()

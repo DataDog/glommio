@@ -24,8 +24,6 @@
 //! those tasks on the same thread, no thread context switch is necessary when
 //! going between task execution and I/O.
 
-use crate::Local;
-
 use std::{
     fmt,
     panic::{RefUnwindSafe, UnwindSafe},
@@ -87,7 +85,7 @@ impl Inner {
     fn park(&self, timeout: Option<Duration>) -> bool {
         // If the timeout is zero, then there is no need to actually block.
         // Process available I/O events.
-        let _ = Local::get_reactor().react(timeout);
+        let _ = crate::executor().reactor().react(timeout);
         false
     }
 }

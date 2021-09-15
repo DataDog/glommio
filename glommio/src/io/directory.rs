@@ -7,7 +7,6 @@ use crate::{
     io::{dma_file::DmaFile, glommio_file::GlommioFile},
     sys,
     GlommioError,
-    Local,
 };
 use std::{
     cell::Ref,
@@ -53,7 +52,7 @@ impl Directory {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
         let flags = libc::O_DIRECTORY | libc::O_CLOEXEC;
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let source = reactor.open_at(-1, &path, flags, 0o755);
         let fd = source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(source, "Opening directory", Some(&path), None)
@@ -81,7 +80,7 @@ impl Directory {
     /// Similar to create() in the standard library, but returns a DMA file
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
-        let source = Local::get_reactor().create_dir(&*path, 0o777);
+        let source = crate::executor().reactor().create_dir(&*path, 0o777);
 
         enhanced_try!(
             match source.collect_rw().await {

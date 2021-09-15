@@ -756,7 +756,7 @@ impl<T> LocalReceiver<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{enclose, Local};
+    use crate::enclose;
     use futures_lite::stream::{self, StreamExt};
 
     #[test]
@@ -840,7 +840,7 @@ mod test {
 
             loop {
                 match sender.try_send(1) {
-                    Ok(_) => Local::later().await,
+                    Ok(_) => crate::executor().later().await,
                     err => {
                         matches!(err, Err(GlommioError::WouldBlock(ResourceType::Channel(1))));
                         break;

@@ -2,7 +2,6 @@ use crate::{
     io::glommio_file::Identity,
     sys::{Reactor, Source},
     IoRequirements,
-    Local,
 };
 use intrusive_collections::{intrusive_adapter, Bound, KeyAdapter, RBTree, RBTreeLink};
 use std::{
@@ -134,7 +133,7 @@ impl FileScheduler {
                     reused(&result, ring.io_stats_mut(), 1);
                     reused(
                         &result,
-                        ring.io_stats_for_task_queue_mut(Local::current_task_queue()),
+                        ring.io_stats_for_task_queue_mut(crate::executor().current_task_queue()),
                         1,
                     );
                 }
@@ -245,7 +244,6 @@ pub(crate) mod test {
     use crate::{
         io::{dma_file::test::make_test_directories, DmaFile, OpenOptions, ReadResult},
         sys::SourceType,
-        Local,
     };
     use futures::join;
     use std::rc::Rc;
@@ -389,7 +387,7 @@ pub(crate) mod test {
         }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 512 << 10);
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 0);
 
         new_file = Rc::new(
             OpenOptions::new()
@@ -402,26 +400,54 @@ pub(crate) mod test {
 
         let read_buf1 = read_some(new_file.clone(), 0..4096).await;
         // we expect one IO to have been performed at this point
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            0
+        );
 
         let read_buf2 = read_some(new_file.clone(), 0..4096).await;
         // should feed from the first buffer
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            1
+        );
 
         drop(read_buf1);
         let read_buf3 = read_some(new_file.clone(), 0..4096).await;
         // initial buffer lifetime should have been extended
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 2);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            2
+        );
 
         drop(read_buf2);
         drop(read_buf3);
         let _ = read_some(new_file.clone(), 0..4096).await;
         // all buffers are dead so this last read should trigger an IO request
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 2);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 2);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 2);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            2
+        );
 
         new_file.close_rc().await.expect("failed to close file");
     });
@@ -442,7 +468,7 @@ pub(crate) mod test {
         }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 512 << 10);
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 0);
 
         new_file = Rc::new(
             OpenOptions::new()
@@ -455,13 +481,20 @@ pub(crate) mod test {
 
         let read_buf1 = read_some(new_file.clone(), 0..4096);
         let read_buf2 = read_some(new_file.clone(), 0..4096);
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 0);
 
         join!(read_buf1, read_buf2);
 
         // should feed from the first buffer
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            1
+        );
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -481,7 +514,7 @@ pub(crate) mod test {
         }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 512 << 10);
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 0);
 
         new_file = Rc::new(
             OpenOptions::new()
@@ -494,13 +527,27 @@ pub(crate) mod test {
 
         let _first = read_some(new_file.clone(), 0..16384).await;
         // we expect one IO to have been performed at this point
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            0
+        );
 
         let _second = read_some(new_file.clone(), 67..578).await;
         // should feed from the first buffer
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            1
+        );
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -520,7 +567,7 @@ pub(crate) mod test {
         }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 512 << 10);
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 0);
 
         new_file = Rc::new(
             OpenOptions::new()
@@ -531,11 +578,18 @@ pub(crate) mod test {
         );
 
         let _first = read_some(new_file.clone(), 0..4096).await;
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
 
         let _second = read_some(new_file.clone(), 0..4096).await;
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 2);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 2);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            0
+        );
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -567,7 +621,7 @@ pub(crate) mod test {
         }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 512 << 10);
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 0);
 
         new_file = Rc::new(
             OpenOptions::new()
@@ -580,12 +634,19 @@ pub(crate) mod test {
 
         let _first = read_some(new_file.clone(), 0..4096).await;
         // we expect one IO to have been performed at this point
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
 
         let _second = read_some(linked_file.clone(), 0..4096).await;
         // should feed from the first buffer
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            1
+        );
         new_file.close_rc().await.expect("failed to close file");
         linked_file.close_rc().await.expect("failed to close file");
     });
@@ -618,7 +679,7 @@ pub(crate) mod test {
         }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, 512 << 10);
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 0);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 0);
 
         new_file = Rc::new(
             OpenOptions::new()
@@ -631,12 +692,19 @@ pub(crate) mod test {
 
         let _first = read_some(new_file.clone(), 0..4096).await;
         // we expect one IO to have been performed at this point
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
 
         let _second = read_some(linked_file.clone(), 0..4096).await;
         // should feed from the first buffer
-        assert_eq!(Local::io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(Local::io_stats().all_rings().file_deduped_reads().0, 1);
+        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
+        assert_eq!(
+            crate::executor()
+                .io_stats()
+                .all_rings()
+                .file_deduped_reads()
+                .0,
+            1
+        );
         new_file.close_rc().await.expect("failed to close file");
         linked_file.close_rc().await.expect("failed to close file");
     });

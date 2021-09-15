@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::{datagram::GlommioDatagram, stream::GlommioStream};
-use crate::{reactor::Reactor, Local};
+use crate::reactor::Reactor;
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
@@ -97,7 +97,7 @@ impl UnixListener {
         let listener = sk.into_unix_listener();
 
         Ok(UnixListener {
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
             listener,
         })
     }
@@ -316,7 +316,7 @@ impl UnixStream {
     /// })
     /// ```
     pub async fn connect<A: AsRef<Path>>(addr: A) -> Result<UnixStream> {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
 
         let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
         let addr = SockAddr::new_unix(addr.as_ref())
@@ -751,7 +751,7 @@ mod tests {
         .detach();
 
         while coord.get() != 1 {
-            Local::later().await;
+            crate::executor().later().await;
         }
         UnixStream::connect(&addr).await.unwrap();
         listener_handle.await.unwrap();

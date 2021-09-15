@@ -57,7 +57,11 @@ fn main() {
         .pin_to_cpu(0)
         .spawn(|| async move {
             let runs: u32 = 10_000_000;
-            let tq1 = Local::create_task_queue(Shares::Static(1000), Latency::NotImportant, "tq1");
+            let tq1 = crate::executor().create_task_queue(
+                Shares::Static(1000),
+                Latency::NotImportant,
+                "tq1",
+            );
             let t = Instant::now();
             for _ in 0..runs {
                 crate::local_into(async {}, tq1).unwrap().await;
