@@ -1707,14 +1707,14 @@ impl<T> Future for Task<T> {
 /// # Examples
 ///
 /// ```
-/// use glommio::{LocalExecutor, ScopedTask};
+/// use glommio::LocalExecutor;
 ///
 /// let ex = LocalExecutor::default();
 ///
 /// ex.run(async {
 ///     let a = 2;
 ///     let task = unsafe {
-///         ScopedTask::local(async {
+///         crate::scoped_local(async {
 ///             println!("Hello from a task!");
 ///             1 + a // this is a reference, and it works just fine
 ///         })
@@ -1727,13 +1727,13 @@ impl<T> Future for Task<T> {
 /// reference to a variable just fine:
 ///
 /// ```
-/// # use glommio::{LocalExecutor, ScopedTask};
+/// # use glommio::{LocalExecutor};
 /// #
 /// # let ex = LocalExecutor::default();
 /// # ex.run(async {
 /// let mut a = 2;
 /// let task = unsafe {
-///     ScopedTask::local(async {
+///     crate::scoped_local(async {
 ///         a = 3;
 ///     })
 /// };
@@ -1746,13 +1746,13 @@ impl<T> Future for Task<T> {
 /// longer immutably reference it:
 ///
 /// ```compile_fail
-/// # use glommio::{LocalExecutor, ScopedTask};
+/// # use glommio::LocalExecutor;
 /// #
 /// # let ex = LocalExecutor::default();
 /// # ex.run(async {
 /// let mut a = 2;
 /// let task = unsafe {
-///     ScopedTask::local(async {
+///     crate::scoped_local(async {
 ///         a = 3;
 ///     })
 /// };
@@ -1767,14 +1767,14 @@ impl<T> Future for Task<T> {
 /// changed (as with any interior mutability)
 ///
 /// ```
-/// # use glommio::{LocalExecutor, ScopedTask};
+/// # use glommio::{LocalExecutor};
 /// # use std::cell::Cell;
 /// #
 /// # let ex = LocalExecutor::default();
 /// # ex.run(async {
 /// let a = Cell::new(2);
 /// let task = unsafe {
-///     ScopedTask::local(async {
+///     crate::scoped_local(async {
 ///         a.set(3);
 ///     })
 /// };
@@ -1790,7 +1790,7 @@ impl<T> Future for Task<T> {
 /// executed
 ///
 /// ```no_run
-/// # use glommio::{LocalExecutor, ScopedTask};
+/// # use glommio::{LocalExecutor};
 /// # use std::cell::Cell;
 /// #
 /// # let ex = LocalExecutor::default();
@@ -1798,7 +1798,7 @@ impl<T> Future for Task<T> {
 /// {
 ///     let a = &mut "mayhem";
 ///     let task = unsafe {
-///         ScopedTask::local(async {
+///         crate::scoped_local(async {
 ///             *a = "doom";
 ///         })
 ///     };
@@ -1818,77 +1818,6 @@ impl<T> Future for Task<T> {
 pub struct ScopedTask<'a, T>(multitask::Task<T>, PhantomData<&'a T>);
 
 impl<'a, T> ScopedTask<'a, T> {
-    /// Spawns a task onto the current single-threaded executor.
-    ///
-    /// If called from a [`LocalExecutor`], the task is spawned on it.
-    ///
-    /// Otherwise, this method panics.
-    ///
-    /// # Safety
-    ///
-    /// `ScopedTask` depends on `drop` running or `.await` being called for
-    /// safety. See the struct [`ScopedTask`] for details.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::{LocalExecutor, ScopedTask};
-    ///
-    /// let local_ex = LocalExecutor::default();
-    ///
-    /// local_ex.run(async {
-    ///     let non_static = 2;
-    ///     let task = unsafe { ScopedTask::local(async { 1 + non_static }) };
-    ///     assert_eq!(task.await, 3);
-    /// });
-    /// ```
-    pub unsafe fn local(future: impl Future<Output = T> + 'a) -> Self {
-        LOCAL_EX.with(|local_ex| Self(local_ex.spawn(future), PhantomData))
-    }
-
-    /// Spawns a task onto the current single-threaded executor, in a particular
-    /// task queue
-    ///
-    /// If called from a [`LocalExecutor`], the task is spawned on it.
-    ///
-    /// Otherwise, this method panics.
-    ///
-    /// # Safety
-    ///
-    /// `ScopedTask` depends on `drop` running or `.await` being called for
-    /// safety. See the struct [`ScopedTask`] for details.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use glommio::{Local, LocalExecutor, ScopedTask, Shares};
-    ///
-    /// let local_ex = LocalExecutor::default();
-    /// local_ex.run(async {
-    ///     let handle = Local::create_task_queue(
-    ///         Shares::default(),
-    ///         glommio::Latency::NotImportant,
-    ///         "test_queue",
-    ///     );
-    ///     let non_static = 2;
-    ///     let task = unsafe {
-    ///         ScopedTask::<usize>::local_into(async { 1 + non_static }, handle)
-    ///             .expect("failed to spawn task")
-    ///     };
-    ///     assert_eq!(task.await, 3);
-    /// })
-    /// ```
-    pub unsafe fn local_into(
-        future: impl Future<Output = T> + 'a,
-        handle: TaskQueueHandle,
-    ) -> Result<Self> {
-        LOCAL_EX.with(|local_ex| {
-            local_ex
-                .spawn_into(future, handle)
-                .map(|x| Self(x, PhantomData))
-        })
-    }
-
     /// Cancels the task and waits for it to stop running.
     ///
     /// Returns the task's output if it was completed just before it got
@@ -1902,13 +1831,13 @@ impl<'a, T> ScopedTask<'a, T> {
     ///
     /// ```
     /// use futures_lite::future;
-    /// use glommio::{LocalExecutor, ScopedTask};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async {
     ///     let task = unsafe {
-    ///         ScopedTask::local(async {
+    ///         crate::scoped_local(async {
     ///             loop {
     ///                 println!("Even though I'm in an infinite loop, you can still cancel me!");
     ///                 future::yield_now().await;
@@ -1996,6 +1925,77 @@ where
     T: 'static,
 {
     LOCAL_EX.with(|local_ex| local_ex.spawn_into(future, handle).map(Task::<T>))
+}
+
+/// Spawns a task onto the current single-threaded executor.
+///
+/// If called from a [`LocalExecutor`], the task is spawned on it.
+///
+/// Otherwise, this method panics.
+///
+/// # Safety
+///
+/// `ScopedTask` depends on `drop` running or `.await` being called for
+/// safety. See the struct [`ScopedTask`] for details.
+///
+/// # Examples
+///
+/// ```
+/// use glommio::LocalExecutor;
+///
+/// let local_ex = LocalExecutor::default();
+///
+/// local_ex.run(async {
+///     let non_static = 2;
+///     let task = unsafe { glommio::scoped_local(async { 1 + non_static }) };
+///     assert_eq!(task.await, 3);
+/// });
+/// ```
+pub unsafe fn scoped_local<'a, T>(future: impl Future<Output = T> + 'a) -> ScopedTask<'a, T> {
+    LOCAL_EX.with(|local_ex| ScopedTask::<'a, T>(local_ex.spawn(future), PhantomData))
+}
+
+/// Spawns a task onto the current single-threaded executor, in a particular
+/// task queue
+///
+/// If called from a [`LocalExecutor`], the task is spawned on it.
+///
+/// Otherwise, this method panics.
+///
+/// # Safety
+///
+/// `ScopedTask` depends on `drop` running or `.await` being called for
+/// safety. See the struct [`ScopedTask`] for details.
+///
+/// # Examples
+///
+/// ```
+/// use glommio::{Local, LocalExecutor, Shares};
+///
+/// let local_ex = LocalExecutor::default();
+/// local_ex.run(async {
+///     let handle = Local::create_task_queue(
+///         Shares::default(),
+///         glommio::Latency::NotImportant,
+///         "test_queue",
+///     );
+///     let non_static = 2;
+///     let task = unsafe {
+///         glommio::scoped_local_into(async { 1 + non_static }, handle)
+///             .expect("failed to spawn task")
+///     };
+///     assert_eq!(task.await, 3);
+/// })
+/// ```
+pub unsafe fn scoped_local_into<'a, T>(
+    future: impl Future<Output = T> + 'a,
+    handle: TaskQueueHandle,
+) -> Result<ScopedTask<'a, T>> {
+    LOCAL_EX.with(|local_ex| {
+        local_ex
+            .spawn_into(future, handle)
+            .map(|x| ScopedTask::<'a, T>(x, PhantomData))
+    })
 }
 
 #[cfg(test)]
@@ -2933,7 +2933,7 @@ mod test {
         LocalExecutor::default().run(async {
             let mut a = 1;
             unsafe {
-                ScopedTask::local(async {
+                crate::scoped_local(async {
                     a = 2;
                 })
                 .await;
@@ -2943,7 +2943,7 @@ mod test {
 
             let mut a = 1;
             let do_later = unsafe {
-                ScopedTask::local(async {
+                crate::scoped_local(async {
                     a = 2;
                 })
             };
