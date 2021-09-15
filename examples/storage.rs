@@ -15,7 +15,6 @@ use glommio::{
         StreamReaderBuilder,
         StreamWriterBuilder,
     },
-    Local,
     LocalExecutorBuilder,
 };
 use pretty_bytes::converter;
@@ -208,7 +207,7 @@ async fn random_read<S: Into<String>>(
     let mut tasks = Vec::new();
     for _ in 0..parallelism {
         tasks.push(
-            Local::local(enclose! { (file, iops, expected) async move {
+            glommio::local(enclose! { (file, iops, expected) async move {
                 while time.elapsed() < Duration::from_secs(20) {
                     let pos = fastrand::u64(0..end);
                     file.read(pos * io_size, io_size as _, &expected).await;
@@ -258,7 +257,7 @@ async fn random_many_read<S: Into<String>>(
     let mut tasks = Vec::new();
     for _ in 0..parallelism {
         tasks.push(
-            Local::local(enclose! { (file, iops, expected) async move {
+            glommio::local(enclose! { (file, iops, expected) async move {
                 while time.elapsed() < Duration::from_secs(20) {
                     file.read_many((0..parallelism).map(|_| {
                         let pos = fastrand::u64(0..end);

@@ -927,7 +927,7 @@ impl<T> Drop for RwLock<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{sync::rwlock::RwLock, timer::Timer, LocalExecutor, Task};
+    use crate::{sync::rwlock::RwLock, timer::Timer, LocalExecutor};
     use std::time::Duration;
 
     use crate::{sync::Semaphore, Local};
@@ -960,7 +960,7 @@ mod test {
             for _ in 0..N {
                 let r = r.clone();
 
-                let f = Task::local(async move {
+                let f = crate::local(async move {
                     for _ in 0..M {
                         if fastrand::u32(0..N) == 0 {
                             drop(r.write().await.unwrap());
@@ -983,7 +983,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::local(async move {
                 let _lock = rc2.write().await.unwrap();
                 rc2.close();
             })
@@ -999,7 +999,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::local(async move {
                 let _lock = rc2.write().await.unwrap();
                 rc2.close();
             })
@@ -1015,7 +1015,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::local(async move {
                 let _lock = rc2.read().await.unwrap();
                 rc2.close();
             })
@@ -1031,7 +1031,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::local(async move {
                 let _lock = rc2.read().await.unwrap();
                 rc2.close();
             })
@@ -1051,7 +1051,7 @@ mod test {
             let s2 = s.clone();
 
             let mut fibers = Vec::new();
-            fibers.push(Task::local(async move {
+            fibers.push(crate::local(async move {
                 let mut lock = rc2.write().await.unwrap();
 
                 for _ in 0..10 {
@@ -1068,7 +1068,7 @@ mod test {
             for _ in 0..5 {
                 let rc3 = rc.clone();
 
-                fibers.push(Task::local(async move {
+                fibers.push(crate::local(async move {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock == 0 || *lock == 10);
 
@@ -1093,7 +1093,7 @@ mod test {
             let s2 = s.clone();
 
             let mut fibers = Vec::new();
-            fibers.push(Task::local(async move {
+            fibers.push(crate::local(async move {
                 for _ in 0..10 {
                     let mut lock = rc2.write().await.unwrap();
                     let tmp = *lock;
@@ -1110,7 +1110,7 @@ mod test {
             for _ in 0..5 {
                 let rc3 = rc.clone();
 
-                fibers.push(Task::local(async move {
+                fibers.push(crate::local(async move {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock >= 0);
 
@@ -1136,7 +1136,7 @@ mod test {
 
             let mut fibers = Vec::new();
 
-            let pinger = Task::local(async move {
+            let pinger = crate::local(async move {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
@@ -1159,7 +1159,7 @@ mod test {
                 }
             });
 
-            let ponger = Task::local(async move {
+            let ponger = crate::local(async move {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
@@ -1187,7 +1187,7 @@ mod test {
 
             for _ in 0..12 {
                 let ball = ball.clone();
-                let reader = Task::local(async move {
+                let reader = crate::local(async move {
                     let mut prev = -1;
                     loop {
                         //give a room for other fibers to participate
@@ -1318,7 +1318,7 @@ mod test {
         let c_semaphore = semaphore.clone();
 
         ex.run(async move {
-            Local::local(async move {
+            crate::local(async move {
                 c_semaphore.acquire(1).await.unwrap();
 
                 let _g = c_lock.read().await.unwrap();

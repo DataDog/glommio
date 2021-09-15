@@ -10,7 +10,6 @@ use crate::{
     channels::channel_mesh::{FullMesh, Senders},
     task::JoinHandle,
     GlommioError,
-    Local,
     ResourceType,
     Result,
 };
@@ -64,7 +63,7 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
         for (src_shard, stream) in receivers.streams() {
             let handler = handler.clone();
             let cur_shard = shard.shard_id;
-            let consumer = Local::local(async move {
+            let consumer = crate::local(async move {
                 while let Some(msg) = stream.recv().await {
                     handler.handle(msg, src_shard, cur_shard).await;
                 }
@@ -101,7 +100,7 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
             Err(GlommioError::Closed(ResourceType::Channel(messages)))
         } else {
             let shard = self.shard.clone();
-            let consumer = Local::local(async move { shard.handle(messages).await }).detach();
+            let consumer = crate::local(async move { shard.handle(messages).await }).detach();
             self.consumers.push(consumer);
             Ok(())
         }

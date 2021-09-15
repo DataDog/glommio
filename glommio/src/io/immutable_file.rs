@@ -533,12 +533,12 @@ mod test {
         immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
         let stream = immutable.seal().await.unwrap();
 
-        let task1 = Task::local(enclose! { (stream) async move {
+        let task1 = crate::local(enclose! { (stream) async move {
             let buf = stream.read_at(0, 6).await.unwrap();
             assert_eq!(&*buf, &[0, 1, 2, 3, 4, 5]);
         }});
 
-        let task2 = Task::local(enclose! { (stream) async move {
+        let task2 = crate::local(enclose! { (stream) async move {
             let buf = stream.read_at(0, 6).await.unwrap();
             assert_eq!(&*buf, &[0, 1, 2, 3, 4, 5]);
         }});
