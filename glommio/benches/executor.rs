@@ -46,7 +46,7 @@ fn main() {
             let runs: u32 = 10_000_000;
             let t = Instant::now();
             for _ in 0..runs {
-                Local::local(async {}).await;
+                crate::local(async {}).await;
             }
             println!("cost to run task no task queue: {:#?}", t.elapsed() / runs);
         })
@@ -60,7 +60,7 @@ fn main() {
             let tq1 = Local::create_task_queue(Shares::Static(1000), Latency::NotImportant, "tq1");
             let t = Instant::now();
             for _ in 0..runs {
-                Local::local_into(async {}, tq1).unwrap().await;
+                crate::local_into(async {}, tq1).unwrap().await;
             }
             println!("cost to run task in task queue: {:#?}", t.elapsed() / runs);
         })

@@ -10,7 +10,7 @@ use std::io::Result;
 async fn hello() {
     let mut tasks = vec![];
     for t in 0..5 {
-        tasks.push(Local::local(async move {
+        tasks.push(crate::local(async move {
             println!("{}: Hello {} ...", Local::id(), t);
             Local::later().await;
             println!("{}: ... {} World!", Local::id(), t);

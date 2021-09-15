@@ -13,7 +13,7 @@ fn main() {
 
     ex.run(async {
         // Nice and short way to say a closure needs to capture vars clones.
-        let first = Local::local(enclose! { (left, right)
+        let first = glommio::local(enclose! { (left, right)
             async move {
                 loop {
                     if *(right.borrow()) {
@@ -30,7 +30,7 @@ fn main() {
         .detach();
 
         // What would you write if there were no enclose! macro.
-        let second = Local::local(|_left: Rc<RefCell<bool>>, right: Rc<RefCell<bool>>| -> _ {
+        let second = glommio::local(|_left: Rc<RefCell<bool>>, right: Rc<RefCell<bool>>| -> _ {
             async move {
                 loop {
                     if !(*(right.borrow())) {

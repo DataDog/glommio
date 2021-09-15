@@ -289,7 +289,7 @@
 //! });
 //! ```
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
-#![cfg_attr(doc, deny(broken_intra_doc_links))]
+#![cfg_attr(doc, deny(rustdoc::broken_intra_doc_links))]
 #[macro_use]
 extern crate nix;
 extern crate alloc;
@@ -383,14 +383,14 @@ macro_rules! to_io_error {
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
-    use crate::executor::{LocalExecutor, Task};
+    use crate::executor::{LocalExecutor};
     use futures::future::join_all;
 
     let local_ex = LocalExecutor::default();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(
-            joins.push(Task::local($fut));
+            joins.push(crate::local($fut));
         )*
         join_all(joins).await;
     });
@@ -414,7 +414,7 @@ macro_rules! wait_on_cond {
             if *($var.borrow()) == $val {
                 break;
             }
-            Task::<()>::later().await;
+            Local::later().await;
         }
     };
     ($var:expr, $val:expr, $instantval:expr) => {
@@ -427,7 +427,7 @@ macro_rules! wait_on_cond {
             if start.elapsed().as_secs() > $instantval {
                 panic!("test timed out");
             }
-            Task::<()>::later().await;
+            Local::later().await;
         }
     };
 }
@@ -478,6 +478,8 @@ pub use crate::{
         Result,
     },
     executor::{
+        local,
+        local_into,
         CpuSet,
         ExecutorStats,
         LocalExecutor,
@@ -502,6 +504,8 @@ pub mod prelude {
     #[doc(no_inline)]
     pub use crate::{
         error::GlommioError,
+        local,
+        local_into,
         ByteSliceExt,
         ByteSliceMutExt,
         IoStats,

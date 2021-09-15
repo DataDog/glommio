@@ -744,7 +744,7 @@ mod tests {
         let addr = addr.as_pathname().unwrap();
         let coord = Rc::new(Cell::new(0));
 
-        let listener_handle = Task::local(enclose! { (coord) async move {
+        let listener_handle = crate::local(enclose! { (coord) async move {
             coord.set(1);
             listener.accept().await.unwrap();
         }})
@@ -773,11 +773,11 @@ mod tests {
 
         let listener = UnixListener::bind(&file).unwrap();
 
-        let listener_handle = Task::<io::Result<usize>>::local(async move {
+        let listener_handle = crate::local(async move {
             let mut stream = listener.accept().await?;
             let mut buf = Vec::new();
             stream.read_until(10, &mut buf).await?;
-            Ok(buf.len())
+            io::Result::Ok(buf.len())
         })
         .detach();
 

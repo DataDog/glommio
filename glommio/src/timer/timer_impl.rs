@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{reactor::Reactor, task::JoinHandle, GlommioError, Local, Task, TaskQueueHandle};
+use crate::{reactor::Reactor, task::JoinHandle, GlommioError, Local, TaskQueueHandle};
 use pin_project_lite::pin_project;
 use std::{
     cell::RefCell,
@@ -286,7 +286,7 @@ impl<T: 'static> TimerActionOnce<T> {
         let timer = Timer::from_id(timer_id, when);
         let inner = timer.inner.clone();
 
-        let task = Task::local_into(
+        let task = crate::local_into(
             async move {
                 timer.await;
                 action.await
@@ -582,7 +582,7 @@ impl TimerActionRepeat {
         let reactor = Local::get_reactor();
         let timer_id = reactor.register_timer();
 
-        let task = Task::local_into(
+        let task = crate::local_into(
             async move {
                 while let Some(period) = action_gen().await {
                     Timer::from_id(timer_id, period).await;
@@ -1055,7 +1055,7 @@ mod test {
 
         test_executor!(async move {
             let action = TimerActionOnce::do_in(Duration::from_millis(10), async move {
-                Local::local(async move {
+                crate::local(async move {
                     *(exec1.borrow_mut()) = 1;
                     // Test that if we had already started the action, it will run to completion.
                     for _ in 0..10 {

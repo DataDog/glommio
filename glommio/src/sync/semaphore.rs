@@ -436,7 +436,7 @@ impl Semaphore {
     /// ex.run(async move {
     ///     {
     ///         let permit = sem.acquire_static_permit(1).await.unwrap();
-    ///         Local::local(async move {
+    ///         crate::local(async move {
     ///             let _guard = permit;
     ///             sleep(Duration::from_secs(1)).await;
     ///         })
@@ -719,20 +719,20 @@ mod test {
             let sem = Rc::new(Semaphore::new(0));
             let exec = Rc::new(Cell::new(0));
 
-            let t1 = Local::local(enclose! { (sem, exec) async move {
+            let t1 = crate::local(enclose! { (sem, exec) async move {
                 exec.set(exec.get() + 1);
                 let _g = sem.acquire_permit(1).await.unwrap();
             }});
-            let t2 = Task::local(enclose! { (sem, exec) async move {
+            let t2 = crate::local(enclose! { (sem, exec) async move {
                 exec.set(exec.get() + 1);
                 let _g = sem.acquire_permit(1).await.unwrap();
             }});
 
             // For this last one, use the static version. Move around and sleep a bit first
-            let t3 = Local::local(enclose! { (sem, exec) async move {
+            let t3 = crate::local(enclose! { (sem, exec) async move {
                 exec.set(exec.get() + 1);
                 let g = sem.acquire_static_permit(1).await.unwrap();
-                Local::local(async move {
+                crate::local(async move {
                     let _g = g;
                     sleep(Duration::from_secs(1)).await;
                 }).await
@@ -934,7 +934,7 @@ mod test {
         let semaphore_c = semaphore.clone();
 
         ex.run(async move {
-            Local::local(async move {
+            crate::local(async move {
                 for _ in 0..100 {
                     Timer::new(Duration::from_micros(100)).await;
                 }
@@ -970,14 +970,14 @@ mod test {
         let state_c3 = state.clone();
 
         ex.run(async move {
-            let t1 = Local::local(async move {
+            let t1 = crate::local(async move {
                 *state_c1.borrow_mut() = 1;
                 let _g = semaphore_c1.acquire_permit(1).await.unwrap();
                 assert_eq!(*state_c1.borrow(), 3);
                 *state_c1.borrow_mut() = 4;
             });
 
-            let t2 = Local::local(async move {
+            let t2 = crate::local(async move {
                 while *state_c2.borrow() != 1 {
                     Local::later().await;
                 }
@@ -988,7 +988,7 @@ mod test {
                 *state_c2.borrow_mut() = 5;
             });
 
-            let t3 = Local::local(async move {
+            let t3 = crate::local(async move {
                 while *state_c3.borrow() != 2 {
                     Local::later().await;
                 }
@@ -998,7 +998,7 @@ mod test {
                 assert_eq!(*state_c3.borrow(), 5);
             });
 
-            Local::local(async move {
+            crate::local(async move {
                 while *state.borrow() != 3 {
                     Local::later().await;
                 }

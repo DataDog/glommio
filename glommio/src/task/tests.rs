@@ -66,7 +66,7 @@ mod ref_count {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             TaskDebugger::set_label("foreground_task");
-            let task = Local::local(async {
+            let task = crate::local(async {
                 assert_eq!(2, TaskDebugger::task_count());
             });
             assert_eq!(2, TaskDebugger::task_count());
@@ -81,7 +81,7 @@ mod ref_count {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             TaskDebugger::set_label("background_task");
-            let handle = Local::local(async {
+            let handle = crate::local(async {
                 assert_eq!(2, TaskDebugger::task_count());
             })
             .detach();
@@ -98,7 +98,7 @@ mod ref_count {
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             TaskDebugger::set_label("drop_join_handle_before_completion");
             assert_eq!(1, TaskDebugger::task_count());
-            let handle = Local::local(async {
+            let handle = crate::local(async {
                 yield_now().await;
             })
             .detach();
@@ -116,7 +116,7 @@ mod ref_count {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             TaskDebugger::set_label("drop_join_handle_after_completion");
-            let handle = Local::local(async {}).detach();
+            let handle = crate::local(async {}).detach();
             assert_eq!(2, TaskDebugger::task_count());
             yield_now().await;
             assert_eq!(2, TaskDebugger::task_count());
@@ -132,7 +132,7 @@ mod ref_count {
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             let task = WakeN::new(1);
             TaskDebugger::set_label("wake");
-            let handle = Local::local(task.clone()).detach();
+            let handle = crate::local(task.clone()).detach();
             yield_now().await;
             task.take_waker().unwrap().wake();
             yield_now().await;
@@ -149,7 +149,7 @@ mod ref_count {
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             let task = WakeN::new(1);
             TaskDebugger::set_label("wake");
-            let handle = Local::local(task.clone()).detach();
+            let handle = crate::local(task.clone()).detach();
             drop(handle);
             yield_now().await;
             let waker = task.take_waker().unwrap();
@@ -168,7 +168,7 @@ mod ref_count {
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             let task = WakeN::new(1);
             TaskDebugger::set_label("wake");
-            let handle = Local::local(task.clone()).detach();
+            let handle = crate::local(task.clone()).detach();
             drop(handle);
             yield_now().await;
             let waker = task.take_waker().unwrap();
@@ -187,7 +187,7 @@ mod ref_count {
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             let task = WakeN::new(1);
             TaskDebugger::set_label("wake_by_ref");
-            let handle = Local::local(task.clone()).detach();
+            let handle = crate::local(task.clone()).detach();
             yield_now().await;
             let waker = task.take_waker().unwrap();
             waker.wake_by_ref();
@@ -211,7 +211,7 @@ mod ref_count {
                 let sender = sender.connect().await;
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("foreign_wake");
-                let handle = Local::local(task.clone()).detach();
+                let handle = crate::local(task.clone()).detach();
                 yield_now().await;
                 let waker = task.take_waker().unwrap();
                 sender.send(waker).await.unwrap();
@@ -242,7 +242,7 @@ mod ref_count {
                 let sender = sender.connect().await;
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("foreign_wake_by_ref");
-                let handle = Local::local(task.clone()).detach();
+                let handle = crate::local(task.clone()).detach();
                 yield_now().await;
                 let waker = task.take_waker().unwrap();
                 sender.send(waker).await.unwrap();

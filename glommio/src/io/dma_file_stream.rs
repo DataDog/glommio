@@ -77,7 +77,7 @@ impl DmaStreamReaderBuilder {
     ///     let _reader = DmaStreamReaderBuilder::from_rc(file.clone()).build();
     ///
     ///     // issue random I/O now, even though a stream is open.
-    ///     Local::local(async move {
+    ///     crate::local(async move {
     ///         file.read_at(0, 8).await.unwrap();
     ///     })
     ///     .await;
@@ -221,7 +221,7 @@ impl DmaStreamReaderState {
             return;
         }
 
-        let pending = Local::local(async move {
+        let pending = crate::local(async move {
             futures_lite::future::yield_now().await;
 
             if read_state.borrow().error.is_some() {
@@ -932,7 +932,7 @@ impl DmaStreamWriterState {
         let final_pos = self.current_pos();
         self.flush_padded(state.clone(), file.clone());
         let mut pending = self.take_pending_handles();
-        Local::local(async move {
+        crate::local(async move {
             futures_lite::future::yield_now().await;
 
             defer! {
@@ -1021,7 +1021,7 @@ impl DmaStreamWriterState {
     fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let aligned_pos = self.aligned_pos;
         let flush_pos = self.current_pos();
-        let handle = Local::local(async move {
+        let handle = crate::local(async move {
             let res = file.write_at(buffer, aligned_pos).await;
             let mut state = state.borrow_mut();
             if !collect_error!(state, res) {
@@ -2073,7 +2073,7 @@ mod test {
     #[test]
     fn flushstate() {
         test_executor!(async move {
-            let handle_gen = || Local::local(async move {}).detach();
+            let handle_gen = || crate::local(async move {}).detach();
             let mut state = DmaStreamWriterFlushState::new(4);
 
             state.on_start(8, handle_gen());
