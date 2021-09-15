@@ -480,6 +480,8 @@ pub use crate::{
     executor::{
         local,
         local_into,
+        scoped_local,
+        scoped_local_into,
         CpuSet,
         ExecutorStats,
         LocalExecutor,
@@ -506,6 +508,8 @@ pub mod prelude {
         error::GlommioError,
         local,
         local_into,
+        scoped_local,
+        scoped_local_into,
         ByteSliceExt,
         ByteSliceMutExt,
         IoStats,
