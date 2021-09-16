@@ -49,7 +49,7 @@ impl<V: IoVec> IoVec for MergedIOVecs<V> {
 }
 
 impl<V: IoVec> MergedIOVecs<V> {
-    fn combine(&mut self, mut other: Self) -> Option<Self> {
+    fn deduplicate(&mut self, mut other: Self) -> Option<Self> {
         if self.pos() == other.pos() && self.size() == other.size() {
             self.coalesced_user_iovecs
                 .append(&mut other.coalesced_user_iovecs);
@@ -188,12 +188,16 @@ impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReads<V,
         };
 
         let next_inner = |this: &mut Self, cx: &mut Context<'_>| {
+            // pull IO requests from the underlying stream and attempt to merge them with
+            // the previous ones, if any
             while let Some(io) = ready!(this.iter.poll_next(cx)) {
                 if let Some(merged) = this.merger.as_mut().unwrap().merge(io) {
                     return Poll::Ready(Some(merged));
                 }
             }
 
+            // the underlying stream is closed so pull out of the merger whatever is there,
+            // if anything
             Poll::Ready(if let Some(merger) = this.merger.take() {
                 merger.flush()
             } else {
@@ -202,14 +206,16 @@ impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReads<V,
         };
 
         let this = self.get_mut();
-
         while let Some(mut inner) = ready!(next_inner(this, cx)) {
             if let Some(alignment) = this.alignment {
                 inner = align(inner, alignment);
             }
 
+            // two subsequent merged IO requests may ask for the exact same data (because we
+            // align then up and down after merging) so there is one more opportunity to
+            // deduplicate here
             if let Some(last) = &mut this.last {
-                if let Some(last) = last.combine(inner) {
+                if let Some(last) = last.deduplicate(inner) {
                     return Poll::Ready(Some(last));
                 }
             } else {
@@ -220,7 +226,10 @@ impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReads<V,
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
+        match self.iter.size_hint() {
+            (low, Some(hi)) => (low.min(1), Some(hi)),
+            (low, None) => (low.min(1), None),
+        }
     }
 }
 
@@ -229,15 +238,20 @@ pub(crate) struct OrderedBulkIo<U: Unpin, S: Stream<Item = (ScheduledSource, U)>
     file: Rc<DmaFile>,
     iovs: S,
 
-    last: Option<(ScheduledSource, U)>,
+    inflight: VecDeque<(ScheduledSource, U)>,
+    cap: usize,
+    terminated: bool,
 }
 
 impl<U: Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> OrderedBulkIo<U, S> {
-    pub(crate) fn new(file: Rc<DmaFile>, iovs: S) -> OrderedBulkIo<U, S> {
+    pub(crate) fn new(file: Rc<DmaFile>, concurrency: usize, iovs: S) -> OrderedBulkIo<U, S> {
+        assert!(concurrency > 0);
         OrderedBulkIo {
             file,
             iovs,
-            last: None,
+            inflight: VecDeque::with_capacity(concurrency),
+            cap: concurrency,
+            terminated: false,
         }
     }
 }
@@ -247,32 +261,61 @@ impl<U: Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> Stream for Ordere
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        if let Some((source, data)) = this.last.take() {
-            if source.result().is_some() {
-                Poll::Ready(Some((source, data)))
+
+        // Poll the underlying stream and insert the resulting source, if any, in the
+        // local buffer
+        let poll_inner = |this: &mut Self, cx: &mut Context<'_>| match this.iovs.poll_next(cx) {
+            Poll::Ready(Some(res)) => this.inflight.push_front(res),
+            Poll::Ready(None) => this.terminated = true,
+            _ => {}
+        };
+
+        // poll the local buffer for a fulfilled source, if any, and replace it with a
+        // new one from the underlying stream
+        let poll_buffer = |this: &mut Self, cx: &mut Context<'_>| {
+            if this.inflight.back_mut().unwrap().0.result().is_some() {
+                // we have a source with a result in the buffer so we take it out and replace it
+                // with a new from the stream, if any, to keep the buffer full
+                let ret = this.inflight.pop_back().unwrap();
+                if !this.terminated {
+                    poll_inner(this, cx);
+                }
+                Poll::Ready(Some(ret))
             } else {
-                source.add_waiter_many(cx.waker().clone());
-                this.last = Some((source, data));
+                // we have a source in the buffer but it's not ready yet to we register the
+                // buffer and return
+                this.inflight
+                    .back_mut()
+                    .unwrap()
+                    .0
+                    .add_waiter_many(cx.waker().clone());
                 Poll::Pending
             }
+        };
+
+        if this.inflight.len() == this.cap || (this.terminated && !this.inflight.is_empty()) {
+            // The internal buffer is full so we consume them instead of creating new ones
+            poll_buffer(this, cx)
         } else {
-            match ready!(this.iovs.poll_next(cx)) {
-                Some(next) => {
-                    if next.0.result().is_none() {
-                        next.0.add_waiter_many(cx.waker().clone());
-                        this.last = Some(next);
-                        Poll::Pending
-                    } else {
-                        Poll::Ready(Some(next))
-                    }
-                }
-                None => Poll::Ready(None),
+            // fill the internal buffer as much as possible
+            while this.inflight.len() < this.cap && !this.terminated {
+                poll_inner(this, cx);
+            }
+
+            // if there is anything we can return immediately, do so
+            if !this.terminated || !this.inflight.is_empty() {
+                poll_buffer(this, cx)
+            } else {
+                Poll::Ready(None)
             }
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iovs.size_hint()
+        match self.iovs.size_hint() {
+            (low, Some(hi)) => (low + self.inflight.len(), Some(hi + self.inflight.len())),
+            (low, None) => (low + self.inflight.len(), None),
+        }
     }
 }
 
