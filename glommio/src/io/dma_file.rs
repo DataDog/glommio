@@ -323,7 +323,7 @@ impl DmaFile {
             )
         });
         ReadManyResult {
-            inner: OrderedBulkIo::new(self.clone(), it),
+            inner: OrderedBulkIo::new(self.clone(), 128, it),
             current: Default::default(),
         }
     }
