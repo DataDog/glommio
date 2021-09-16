@@ -296,35 +296,27 @@ impl DmaFile {
         max_merged_buffer_size: usize,
         max_read_amp: Option<usize>,
     ) -> ReadManyResult<V> {
-        let mut last: Option<(u64, usize)> = None;
-        let it = CoalescedReads::new(iovs, max_merged_buffer_size, max_read_amp)
-            .map(|iov| {
-                let eff_pos = self.align_down(iov.1.0);
-                let b = (iov.1.0 - eff_pos) as usize;
-                let eff_size = self.align_up((iov.1.1 + b) as u64) as usize;
-                (iov.0, (eff_pos, eff_size))
-            })
-            .map(|iov| {
-                let args = ReadManyArgs {
-                    user_read: iov.0,
-                    system_read: iov.1,
-                };
-
-                if let Some(l) = &last {
-                    if l.0 == iov.1.0 && l.1 == iov.1.1 {
-                        return (None, args);
-                    }
-                }
-                let source = self.file.reactor.upgrade().unwrap().read_dma(
+        let it = CoalescedReads::new(
+            iovs,
+            max_merged_buffer_size,
+            max_read_amp,
+            Some(self.o_direct_alignment),
+        )
+        .map(|iov| {
+            (
+                self.file.reactor.upgrade().unwrap().read_dma(
                     self.as_raw_fd(),
                     iov.1.0,
                     iov.1.1,
                     self.pollable,
                     self.file.scheduler.borrow().as_ref(),
-                );
-                last = Some((iov.1.0, iov.1.1));
-                (Some(source), args)
-            });
+                ),
+                ReadManyArgs {
+                    user_reads: iov.0,
+                    system_read: iov.1,
+                },
+            )
+        });
         ReadManyResult {
             inner: OrderedBulkIo::new(self.clone(), it),
             current: Default::default(),
@@ -425,7 +417,6 @@ pub(crate) mod test {
     use crate::{enclose, test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
     use futures::join;
     use futures_lite::StreamExt;
-    use itertools::Itertools;
     use rand::{seq::SliceRandom, thread_rng};
     use std::{cell::RefCell, path::PathBuf, time::Duration};
 
@@ -820,7 +811,7 @@ pub(crate) mod test {
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));
 
-        let mut iovs = (0..512).map(|x| (x * 8, 8)).collect_vec();
+        let mut iovs: Vec<(u64, usize)> = (0..512).map(|x| (x * 8, 8)).collect();
         iovs.shuffle(&mut thread_rng());
         new_file
             .read_many(iovs.into_iter(), 4096, None)
@@ -851,7 +842,7 @@ pub(crate) mod test {
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));
 
-        let mut iovs = (0..511).map(|x| (x * 8 + 1, 7)).collect_vec();
+        let mut iovs: Vec<(u64, usize)> = (0..511).map(|x| (x * 8 + 1, 7)).collect();
         iovs.shuffle(&mut thread_rng());
         new_file
             .read_many(iovs.into_iter(), 4096, None)
