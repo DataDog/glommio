@@ -35,7 +35,6 @@ ahash = "0.5.7"
 intrusive-collections = "0.9.0"
 lockfree = "0.5"
 membarrier = "0.2.2"
-itertools = "0.10.0"
 tracing = "0.1"
 crossbeam = "0.8"
 
