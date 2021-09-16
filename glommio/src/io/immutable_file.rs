@@ -4,6 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::{
+    bulk_io::ReadManyArgs,
     open_options::OpenOptions,
     DmaStreamReaderBuilder,
     DmaStreamWriter,
@@ -11,9 +12,9 @@ use crate::io::{
     IoVec,
     ReadManyResult,
     ReadResult,
+    ScheduledSource,
 };
-
-use futures_lite::{future::poll_fn, io::AsyncWrite};
+use futures_lite::{future::poll_fn, io::AsyncWrite, Stream};
 use std::{
     cell::Ref,
     io,
@@ -394,15 +395,15 @@ impl ImmutableFile {
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match.
-    pub fn read_many<V, S: Iterator<Item = V>>(
+    pub fn read_many<V, S>(
         &self,
         iovs: S,
         max_merged_buffer_size: usize,
         max_read_amp: Option<usize>,
-    ) -> ReadManyResult<V>
+    ) -> ReadManyResult<V, impl Stream<Item = (ScheduledSource, ReadManyArgs<V>)>>
     where
         V: IoVec + Unpin,
-        S: Iterator<Item = V>,
+        S: Stream<Item = V> + Unpin,
     {
         self.stream_builder
             .file
@@ -558,7 +559,7 @@ mod test {
 
         {
             let iovs = vec![(0, 1), (3, 1)];
-            let mut bufs = stream.read_many(iovs.into_iter(), 0, None);
+            let mut bufs = stream.read_many(stream::iter(iovs.into_iter()), 0, None);
             let next_buffer = bufs.next().await.unwrap();
             assert_eq!(next_buffer.unwrap().1.len(), 1);
             let next_buffer = bufs.next().await.unwrap();

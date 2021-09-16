@@ -187,7 +187,7 @@ impl<'a> KeyAdapter<'a> for ScheduledSourceAdapter {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ScheduledSource {
+pub struct ScheduledSource {
     inner: Rc<ScheduledSourceInner>,
     file: Weak<FileSchedulerInner>,
     offseted_range: Range<u64>,

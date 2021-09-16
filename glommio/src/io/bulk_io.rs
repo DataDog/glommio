@@ -32,12 +32,27 @@ impl IoVec for (u64, usize) {
     }
 }
 
-pub(crate) struct MergedIOVecs<V: IoVec>(pub(crate) VecDeque<V>, pub(crate) (u64, usize));
+pub(crate) struct MergedIOVecs<V: IoVec> {
+    pub(crate) coalesced_user_iovecs: VecDeque<V>,
+    pub(crate) pos: u64,
+    pub(crate) size: usize,
+}
+
+impl<V: IoVec> IoVec for MergedIOVecs<V> {
+    fn pos(&self) -> u64 {
+        self.pos
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}
 
 impl<V: IoVec> MergedIOVecs<V> {
     fn combine(&mut self, mut other: Self) -> Option<Self> {
-        if self.1 == other.1 {
-            self.0.append(&mut other.0);
+        if self.pos() == other.pos() && self.size() == other.size() {
+            self.coalesced_user_iovecs
+                .append(&mut other.coalesced_user_iovecs);
             None
         } else {
             Some(std::mem::replace(self, other))
@@ -49,15 +64,16 @@ impl<V: IoVec> Iterator for MergedIOVecs<V> {
     type Item = (V, (u64, usize));
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(io) = self.0.pop_front() {
-            Some((io, self.1))
-        } else {
-            None
-        }
+        self.coalesced_user_iovecs
+            .pop_front()
+            .map(|io| (io, (self.pos(), self.size())))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.0.len(), Some(self.0.len()))
+        (
+            self.coalesced_user_iovecs.len(),
+            Some(self.coalesced_user_iovecs.len()),
+        )
     }
 }
 
@@ -84,10 +100,15 @@ impl<V: IoVec> IOVecMerger<V> {
                     if u64::saturating_sub(cur.pos(), pos) > gap as u64
                         || u64::saturating_sub(pos, cur.pos() + cur.size() as u64) > gap as u64
                     {
-                        return Some(MergedIOVecs(
-                            std::mem::replace(&mut self.merged, VecDeque::from(vec![io])),
-                            self.current.replace((pos, size)).unwrap(),
-                        ));
+                        let (pos, size) = self.current.replace((pos, size)).unwrap();
+                        return Some(MergedIOVecs {
+                            coalesced_user_iovecs: std::mem::replace(
+                                &mut self.merged,
+                                VecDeque::from(vec![io]),
+                            ),
+                            pos,
+                            size,
+                        });
                     }
                 }
                 let merged: (u64, u64) = (
@@ -96,10 +117,15 @@ impl<V: IoVec> IOVecMerger<V> {
                 );
                 if merged.1 - merged.0 > self.max_merged_buffer_size as u64 {
                     // if the merged buffer is too large, don't merge
-                    return Some(MergedIOVecs(
-                        std::mem::replace(&mut self.merged, VecDeque::from(vec![io])),
-                        self.current.replace((pos, size)).unwrap(),
-                    ));
+                    let (pos, size) = self.current.replace((pos, size)).unwrap();
+                    return Some(MergedIOVecs {
+                        coalesced_user_iovecs: std::mem::replace(
+                            &mut self.merged,
+                            VecDeque::from(vec![io]),
+                        ),
+                        pos,
+                        size,
+                    });
                 }
                 self.merged.push_back(io);
                 self.current = Some((merged.0, (merged.1 - merged.0) as usize));
@@ -109,11 +135,15 @@ impl<V: IoVec> IOVecMerger<V> {
     }
 
     pub(super) fn flush(self) -> Option<MergedIOVecs<V>> {
-        self.current.map(|x| MergedIOVecs(self.merged, x))
+        self.current.map(|x| MergedIOVecs {
+            coalesced_user_iovecs: self.merged,
+            pos: x.pos(),
+            size: x.size(),
+        })
     }
 }
 
-pub(crate) struct CoalescedReads<V: IoVec, S: Iterator<Item = V>> {
+pub(crate) struct CoalescedReads<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> {
     iter: S,
     merger: Option<IOVecMerger<V>>,
     alignment: Option<u64>,
@@ -121,12 +151,12 @@ pub(crate) struct CoalescedReads<V: IoVec, S: Iterator<Item = V>> {
     last: Option<MergedIOVecs<V>>,
 }
 
-impl<V: IoVec, S: Iterator<Item = V>> CoalescedReads<V, S> {
+impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> CoalescedReads<V, S> {
     pub(crate) fn new(
-        iter: S,
         max_merged_buffer_size: usize,
         max_read_amp: Option<usize>,
         alignment: Option<u64>,
+        iter: S,
     ) -> CoalescedReads<V, S> {
         CoalescedReads {
             iter,
@@ -142,48 +172,51 @@ impl<V: IoVec, S: Iterator<Item = V>> CoalescedReads<V, S> {
     }
 }
 
-impl<V: IoVec, S: Iterator<Item = V>> Iterator for CoalescedReads<V, S> {
+impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReads<V, S> {
     // CoalescedReads returns the original (offset, size) and the (offset, size) it
     // was merged in
     type Item = MergedIOVecs<V>;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let align = |mut merged_iovec: MergedIOVecs<V>, alignment: u64| {
-            let (pos, size) = (merged_iovec.1.0, merged_iovec.1.1);
+            let (pos, size) = (merged_iovec.pos(), merged_iovec.size());
             let eff_pos = align_down(pos, alignment);
             let b = (pos - eff_pos) as usize;
-            merged_iovec.1 = (eff_pos, align_up((size + b) as u64, alignment) as usize);
+            merged_iovec.pos = eff_pos;
+            merged_iovec.size = align_up((size + b) as u64, alignment) as usize;
             merged_iovec
         };
 
-        let next_inner = |this: &mut Self| {
-            for io in &mut this.iter {
+        let next_inner = |this: &mut Self, cx: &mut Context<'_>| {
+            while let Some(io) = ready!(this.iter.poll_next(cx)) {
                 if let Some(merged) = this.merger.as_mut().unwrap().merge(io) {
-                    return Some(merged);
+                    return Poll::Ready(Some(merged));
                 }
             }
 
-            if let Some(merger) = this.merger.take() {
+            Poll::Ready(if let Some(merger) = this.merger.take() {
                 merger.flush()
             } else {
                 None
-            }
+            })
         };
 
-        while let Some(mut inner) = next_inner(self) {
-            if let Some(alignment) = self.alignment {
+        let this = self.get_mut();
+
+        while let Some(mut inner) = ready!(next_inner(this, cx)) {
+            if let Some(alignment) = this.alignment {
                 inner = align(inner, alignment);
             }
 
-            if let Some(last) = &mut self.last {
+            if let Some(last) = &mut this.last {
                 if let Some(last) = last.combine(inner) {
-                    return Some(last);
+                    return Poll::Ready(Some(last));
                 }
             } else {
-                self.last = Some(inner);
+                this.last = Some(inner);
             }
         }
-        self.last.take()
+        Poll::Ready(this.last.take())
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -192,51 +225,59 @@ impl<V: IoVec, S: Iterator<Item = V>> Iterator for CoalescedReads<V, S> {
 }
 
 #[derive(Debug)]
-pub(crate) struct OrderedBulkIo<U> {
+pub(crate) struct OrderedBulkIo<U: Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
     file: Rc<DmaFile>,
-    iovs: VecDeque<(ScheduledSource, U)>,
+    iovs: S,
+
+    last: Option<(ScheduledSource, U)>,
 }
 
-impl<U: Unpin> OrderedBulkIo<U> {
-    pub(crate) fn new<S: Iterator<Item = (ScheduledSource, U)>>(
-        file: Rc<DmaFile>,
-        iovs: S,
-    ) -> OrderedBulkIo<U> {
+impl<U: Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> OrderedBulkIo<U, S> {
+    pub(crate) fn new(file: Rc<DmaFile>, iovs: S) -> OrderedBulkIo<U, S> {
         OrderedBulkIo {
             file,
-            iovs: iovs.collect(),
+            iovs,
+            last: None,
         }
     }
 }
 
-impl<U: Unpin> Stream for OrderedBulkIo<U> {
+impl<U: Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> Stream for OrderedBulkIo<U, S> {
     type Item = (ScheduledSource, U);
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.iovs.front_mut() {
-            None => Poll::Ready(None),
-            Some((source, _)) => {
-                let res = if source.result().is_some() {
-                    Poll::Ready(Some(self.iovs.pop_front().unwrap()))
-                } else {
-                    Poll::Pending
-                };
-
-                if let Some((source, _)) = self.iovs.front_mut() {
-                    source.add_waiter_many(cx.waker().clone());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some((source, data)) = this.last.take() {
+            if source.result().is_some() {
+                Poll::Ready(Some((source, data)))
+            } else {
+                source.add_waiter_many(cx.waker().clone());
+                this.last = Some((source, data));
+                Poll::Pending
+            }
+        } else {
+            match ready!(this.iovs.poll_next(cx)) {
+                Some(next) => {
+                    if next.0.result().is_none() {
+                        next.0.add_waiter_many(cx.waker().clone());
+                        this.last = Some(next);
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(Some(next))
+                    }
                 }
-                res
+                None => Poll::Ready(None),
             }
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.iovs.len(), Some(self.iovs.len()))
+        self.iovs.size_hint()
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ReadManyArgs<V: IoVec + Unpin> {
+pub struct ReadManyArgs<V: IoVec + Unpin> {
     pub(crate) user_reads: VecDeque<V>,
     pub(crate) system_read: (u64, usize),
 }
@@ -245,12 +286,17 @@ pub(crate) struct ReadManyArgs<V: IoVec + Unpin> {
 ///
 /// See [`DmaFile::read_many`] for more information
 #[derive(Debug)]
-pub struct ReadManyResult<V: IoVec + Unpin> {
-    pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>>,
+pub struct ReadManyResult<
+    V: IoVec + Unpin,
+    S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin,
+> {
+    pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>, S>,
     pub(crate) current: Option<(ScheduledSource, ReadManyArgs<V>)>,
 }
 
-impl<V: IoVec + Unpin> Stream for ReadManyResult<V> {
+impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin> Stream
+    for ReadManyResult<V, S>
+{
     type Item = super::Result<(V, ReadResult)>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -286,154 +332,197 @@ impl<V: IoVec + Unpin> Stream for ReadManyResult<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_lite::{stream, StreamExt};
+
+    async fn collect_iovecs<V: IoVec, S: Stream<Item = MergedIOVecs<V>> + Unpin>(
+        stream: S,
+    ) -> Vec<(V, (u64, usize))> {
+        stream
+            .collect::<Vec<S::Item>>()
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
+    }
 
     #[test]
     fn monotonic_iovec_merging() {
-        let reads: Vec<(u64, usize)> =
-            vec![(0, 64), (0, 256), (32, 4064), (4095, 10), (8192, 4096)];
-        let merged: Vec<((u64, usize), (u64, usize))> =
-            CoalescedReads::new(reads.iter().copied(), 4096, None, None)
-                .flatten()
-                .collect();
+        test_executor!(async move {
+            let reads: Vec<(u64, usize)> =
+                vec![(0, 64), (0, 256), (32, 4064), (4095, 10), (8192, 4096)];
+            let merged = collect_iovecs(CoalescedReads::new(
+                4096,
+                None,
+                None,
+                stream::iter(reads.iter().copied()),
+            ))
+            .await;
 
-        assert_eq!(
-            merged,
-            [
-                ((0, 64), (0, 4096)),
-                ((0, 256), (0, 4096)),
-                ((32, 4064), (0, 4096)),
-                ((4095, 10), (4095, 10)),
-                ((8192, 4096), (8192, 4096))
-            ]
-        );
+            assert_eq!(
+                merged,
+                [
+                    ((0, 64), (0, 4096)),
+                    ((0, 256), (0, 4096)),
+                    ((32, 4064), (0, 4096)),
+                    ((4095, 10), (4095, 10)),
+                    ((8192, 4096), (8192, 4096))
+                ]
+            );
+        });
     }
 
     #[test]
     fn large_input_passthrough() {
-        let reads: Vec<(u64, usize)> =
-            vec![(0, 64), (0, 256), (32, 4064), (4095, 10), (8192, 4096)];
-        let merged: Vec<((u64, usize), (u64, usize))> =
-            CoalescedReads::new(reads.iter().copied(), 500, None, None)
-                .flatten()
-                .collect();
+        test_executor!(async move {
+            let reads: Vec<(u64, usize)> =
+                vec![(0, 64), (0, 256), (32, 4064), (4095, 10), (8192, 4096)];
+            let merged = collect_iovecs(CoalescedReads::new(
+                500,
+                None,
+                None,
+                stream::iter(reads.iter().copied()),
+            ))
+            .await;
 
-        assert_eq!(
-            merged,
-            [
-                ((0, 64), (0, 256)),
-                ((0, 256), (0, 256)),
-                ((32, 4064), (32, 4064)),
-                ((4095, 10), (4095, 10)),
-                ((8192, 4096), (8192, 4096))
-            ]
-        );
+            assert_eq!(
+                merged,
+                [
+                    ((0, 64), (0, 256)),
+                    ((0, 256), (0, 256)),
+                    ((32, 4064), (32, 4064)),
+                    ((4095, 10), (4095, 10)),
+                    ((8192, 4096), (8192, 4096))
+                ]
+            );
 
-        let merged: Vec<((u64, usize), (u64, usize))> =
-            CoalescedReads::new(reads.iter().copied(), 0, None, None)
-                .flatten()
-                .collect();
+            let merged = collect_iovecs(CoalescedReads::new(
+                0,
+                None,
+                None,
+                stream::iter(reads.iter().copied()),
+            ))
+            .await;
 
-        assert_eq!(
-            merged,
-            [
-                ((0, 64), (0, 64)),
-                ((0, 256), (0, 256)),
-                ((32, 4064), (32, 4064)),
-                ((4095, 10), (4095, 10)),
-                ((8192, 4096), (8192, 4096))
-            ]
-        );
+            assert_eq!(
+                merged,
+                [
+                    ((0, 64), (0, 64)),
+                    ((0, 256), (0, 256)),
+                    ((32, 4064), (32, 4064)),
+                    ((4095, 10), (4095, 10)),
+                    ((8192, 4096), (8192, 4096))
+                ]
+            );
+        });
     }
 
     #[test]
     fn nonmonotonic_iovec_merging() {
-        let reads: Vec<(u64, usize)> = vec![(64, 256), (32, 4064), (4095, 10), (8192, 4096)];
-        let merged: Vec<((u64, usize), (u64, usize))> =
-            CoalescedReads::new(reads.iter().copied(), 4096, None, None)
-                .flatten()
-                .collect();
+        test_executor!(async move {
+            let reads: Vec<(u64, usize)> = vec![(64, 256), (32, 4064), (4095, 10), (8192, 4096)];
+            let merged = collect_iovecs(CoalescedReads::new(
+                4096,
+                None,
+                None,
+                stream::iter(reads.iter().copied()),
+            ))
+            .await;
 
-        assert_eq!(
-            merged,
-            [
-                ((64, 256), (32, 4073)),
-                ((32, 4064), (32, 4073)),
-                ((4095, 10), (32, 4073)),
-                ((8192, 4096), (8192, 4096))
-            ]
-        );
+            assert_eq!(
+                merged,
+                [
+                    ((64, 256), (32, 4073)),
+                    ((32, 4064), (32, 4073)),
+                    ((4095, 10), (32, 4073)),
+                    ((8192, 4096), (8192, 4096))
+                ]
+            );
+        });
     }
 
     #[test]
     fn read_amplification_limit() {
-        let reads: Vec<(u64, usize)> = vec![
-            (128, 128),
-            (128, 1),
-            (160, 96),
-            (96, 160),
-            (64, 192),
-            (0, 256),
-        ];
-        let merged: Vec<((u64, usize), (u64, usize))> =
-            CoalescedReads::new(reads.iter().copied(), 4096, Some(0), None)
-                .flatten()
-                .collect();
+        test_executor!(async move {
+            let reads: Vec<(u64, usize)> = vec![
+                (128, 128),
+                (128, 1),
+                (160, 96),
+                (96, 160),
+                (64, 192),
+                (0, 256),
+            ];
+            let merged = collect_iovecs(CoalescedReads::new(
+                4096,
+                Some(0),
+                None,
+                stream::iter(reads.iter().copied()),
+            ))
+            .await;
 
-        assert_eq!(
-            merged,
-            [
-                ((128, 128), (128, 128)),
-                ((128, 1), (128, 128)),
-                ((160, 96), (128, 128)),
-                ((96, 160), (96, 160)),
-                ((64, 192), (64, 192)),
-                ((0, 256), (0, 256)),
-            ]
-        );
+            assert_eq!(
+                merged,
+                [
+                    ((128, 128), (128, 128)),
+                    ((128, 1), (128, 128)),
+                    ((160, 96), (128, 128)),
+                    ((96, 160), (96, 160)),
+                    ((64, 192), (64, 192)),
+                    ((0, 256), (0, 256)),
+                ]
+            );
 
-        let merged: Vec<((u64, usize), (u64, usize))> =
-            CoalescedReads::new(reads.iter().copied(), 4096, Some(32), None)
-                .flatten()
-                .collect();
+            let merged = collect_iovecs(CoalescedReads::new(
+                4096,
+                Some(32),
+                None,
+                stream::iter(reads.iter().copied()),
+            ))
+            .await;
 
-        assert_eq!(
-            merged,
-            [
-                ((128, 128), (64, 192)),
-                ((128, 1), (64, 192)),
-                ((160, 96), (64, 192)),
-                ((96, 160), (64, 192)),
-                ((64, 192), (64, 192)),
-                ((0, 256), (0, 256)),
-            ]
-        );
+            assert_eq!(
+                merged,
+                [
+                    ((128, 128), (64, 192)),
+                    ((128, 1), (64, 192)),
+                    ((160, 96), (64, 192)),
+                    ((96, 160), (64, 192)),
+                    ((64, 192), (64, 192)),
+                    ((0, 256), (0, 256)),
+                ]
+            );
+        });
     }
 
     #[test]
     fn read_no_coalescing() {
-        let reads: Vec<(u64, usize)> = vec![
-            (128, 128),
-            (128, 1),
-            (160, 96),
-            (96, 160),
-            (64, 192),
-            (0, 256),
-        ];
-        let merged: Vec<((u64, usize), (u64, usize))> =
-            CoalescedReads::new(reads.iter().copied(), 0, Some(0), None)
-                .flatten()
-                .collect();
+        test_executor!(async move {
+            let reads: Vec<(u64, usize)> = vec![
+                (128, 128),
+                (128, 1),
+                (160, 96),
+                (96, 160),
+                (64, 192),
+                (0, 256),
+            ];
+            let merged = collect_iovecs(CoalescedReads::new(
+                0,
+                Some(0),
+                None,
+                stream::iter(reads.iter().copied()),
+            ))
+            .await;
 
-        assert_eq!(
-            merged,
-            [
-                ((128, 128), (128, 128)),
-                ((128, 1), (128, 1)),
-                ((160, 96), (160, 96)),
-                ((96, 160), (96, 160)),
-                ((64, 192), (64, 192)),
-                ((0, 256), (0, 256)),
-            ]
-        );
+            assert_eq!(
+                merged,
+                [
+                    ((128, 128), (128, 128)),
+                    ((128, 1), (128, 1)),
+                    ((160, 96), (160, 96)),
+                    ((96, 160), (96, 160)),
+                    ((64, 192), (64, 192)),
+                    ((0, 256), (0, 256)),
+                ]
+            );
+        });
     }
 }
