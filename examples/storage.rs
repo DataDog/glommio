@@ -167,7 +167,7 @@ impl Reader {
     ) {
         match &self {
             Reader::Direct(file) => {
-                file.read_many(iovs, max_buffer_size, None)
+                file.read_many(futures_lite::stream::iter(iovs), max_buffer_size, None)
                     .for_each(|_| {})
                     .await;
             }
@@ -318,7 +318,7 @@ fn main() {
     let mut dir = PathBuf::from(path);
     assert!(dir.exists());
     dir.push("benchfiles");
-    assert!(!dir.exists());
+    assert!(!dir.exists(), "{:?} already exists", dir);
     let dir = BenchDirectory::new(dir);
 
     let total_memory = sys_info::mem_info().unwrap().total << 10;
