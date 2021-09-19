@@ -1167,18 +1167,21 @@ impl LocalExecutor {
 
                 let (need_repush, last_vruntime) = {
                     let mut state = queue.borrow_mut();
-                    // we consider a queue to be stalling the system if it returned more than a
-                    // millisecond after it should have. i.e. a task queue has 1ms after
-                    // `need_preempt()`returns true to yield.
-                    let stall_threshold = self
-                        .preempt_timer_duration()
-                        .saturating_add(Duration::from_millis(1))
-                        .max(Duration::from_millis(5));
-                    if runtime > stall_threshold {
-                        warn!(
-                            "Reactor stall! {} : {} {:?} > {:?}",
-                            &self.id, &state.name, runtime, stall_threshold
-                        );
+
+                    if cfg!(feature = "stall-detection") {
+                        // we consider a queue to be stalling the system if it returned more than a
+                        // millisecond after it should have. i.e. a task queue has 1ms after
+                        // `need_preempt()`returns true to yield.
+                        let stall_threshold = self
+                            .preempt_timer_duration()
+                            .saturating_add(Duration::from_millis(1))
+                            .max(Duration::from_millis(5));
+                        if runtime > stall_threshold {
+                            warn!(
+                                "Reactor stall! {} : {} {:?} > {:?}",
+                                &self.id, &state.name, runtime, stall_threshold
+                            );
+                        }
                     }
 
                     let last_vruntime = state.account_vruntime(runtime);
