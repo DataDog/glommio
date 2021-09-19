@@ -134,9 +134,9 @@ impl<V: IoVec> IOVecMerger<V> {
         }
     }
 
-    pub(super) fn flush(self) -> Option<MergedIOVecs<V>> {
+    pub(super) fn flush(&mut self) -> Option<MergedIOVecs<V>> {
         self.current.map(|x| MergedIOVecs {
-            coalesced_user_iovecs: self.merged,
+            coalesced_user_iovecs: std::mem::take(&mut self.merged),
             pos: x.pos(),
             size: x.size(),
         })
@@ -189,16 +189,30 @@ impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReads<V,
 
         let next_inner = |this: &mut Self, cx: &mut Context<'_>| {
             // pull IO requests from the underlying stream and attempt to merge them with
-            // the previous ones, if any
-            while let Some(io) = ready!(this.iter.poll_next(cx)) {
-                if let Some(merged) = this.merger.as_mut().unwrap().merge(io) {
-                    return Poll::Ready(Some(merged));
+            // the previous ones, if any.
+            // To avoid adding undo latency, we flush whatever is in the merger if the
+            // underlying stream returns Poll::Pending.
+            loop {
+                match this.iter.poll_next(cx) {
+                    Poll::Ready(Some(io)) => {
+                        if let Some(merged) = this.merger.as_mut().unwrap().merge(io) {
+                            return Poll::Ready(Some(merged));
+                        }
+                    }
+                    Poll::Pending => {
+                        return if let Some(merged) = this.merger.as_mut().unwrap().flush() {
+                            Poll::Ready(Some(merged))
+                        } else {
+                            Poll::Pending
+                        };
+                    }
+                    _ => break,
                 }
             }
 
             // the underlying stream is closed so pull out of the merger whatever is there,
             // if anything
-            Poll::Ready(if let Some(merger) = this.merger.take() {
+            Poll::Ready(if let Some(mut merger) = this.merger.take() {
                 merger.flush()
             } else {
                 None
