@@ -5,7 +5,7 @@
 
 use crate::{
     io::{BufferedFile, ScheduledSource},
-    parking::Reactor,
+    reactor::Reactor,
     sys::{IoBuffer, Source},
     Local,
 };

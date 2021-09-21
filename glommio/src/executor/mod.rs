@@ -57,6 +57,7 @@ use scoped_tls::scoped_thread_local;
 use crate::{
     error::BuilderErrorKind,
     parking,
+    reactor,
     sys,
     task::{self, waker_fn::dummy_waker},
     GlommioError,
@@ -852,7 +853,7 @@ pub struct LocalExecutor {
     queues: Rc<RefCell<ExecutorQueues>>,
     parker: parking::Parker,
     id: usize,
-    reactor: Rc<parking::Reactor>,
+    reactor: Rc<reactor::Reactor>,
 }
 
 impl LocalExecutor {
@@ -899,7 +900,7 @@ impl LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
-            reactor: Rc::new(parking::Reactor::new(notifier, io_memory)),
+            reactor: Rc::new(reactor::Reactor::new(notifier, io_memory)),
         })
     }
 
@@ -1389,7 +1390,7 @@ impl<T> Task<T> {
     }
 
     #[inline]
-    pub(crate) fn get_reactor() -> Rc<parking::Reactor> {
+    pub(crate) fn get_reactor() -> Rc<reactor::Reactor> {
         LOCAL_EX.with(|local_ex| local_ex.get_reactor())
     }
 

@@ -7,7 +7,7 @@
 use crate::{
     channels::spsc_queue::{make, BufferHalf, Consumer, Producer},
     enclose,
-    parking::Reactor,
+    reactor::Reactor,
     sys::{self, SleepNotifier},
     GlommioError,
     Local,

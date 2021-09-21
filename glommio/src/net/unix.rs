@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::{datagram::GlommioDatagram, stream::GlommioStream};
-use crate::{parking::Reactor, Local};
+use crate::{reactor::Reactor, Local};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
