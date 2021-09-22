@@ -407,14 +407,10 @@ impl DmaFile {
     }
 
     /// Convenience method that closes a DmaFile wrapped inside an Rc
-    pub async fn close_rc(self: Rc<DmaFile>) -> Result<()> {
+    pub async fn close_rc(self: Rc<DmaFile>) -> Result<bool> {
         match Rc::try_unwrap(self) {
-            Err(file) => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("{} references to file still held", Rc::strong_count(&file)),
-            )
-            .into()),
-            Ok(file) => file.close().await,
+            Err(_) => Ok(false),
+            Ok(file) => file.close().await.map(|_| true),
         }
     }
 }

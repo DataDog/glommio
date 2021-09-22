@@ -428,10 +428,9 @@ impl ImmutableFile {
     }
 
     /// Closes this [`ImmutableFile`]
-    /// Note that this method returns an error if other entities hold references
-    /// to the underlying file, such as read streams.
     pub async fn close(self) -> Result<()> {
-        self.stream_builder.file.close_rc().await
+        self.stream_builder.file.close_rc().await?;
+        Ok(())
     }
 
     /// Creates a [`DmaStreamReaderBuilder`] from this `ImmutableFile`.
