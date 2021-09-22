@@ -406,7 +406,9 @@ impl DmaFile {
         self.file.path()
     }
 
-    /// Convenience method that closes a DmaFile wrapped inside an Rc
+    /// Convenience method that closes a DmaFile wrapped inside an Rc.
+    ///
+    /// Returns whether the file is actually closed, or just dropped an Rc.
     pub async fn close_rc(self: Rc<DmaFile>) -> Result<bool> {
         match Rc::try_unwrap(self) {
             Err(_) => Ok(false),
