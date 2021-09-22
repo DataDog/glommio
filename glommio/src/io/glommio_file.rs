@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
-use crate::{io::sched::FileScheduler, parking::Reactor, sys, GlommioError, Local};
+use crate::{io::sched::FileScheduler, reactor::Reactor, sys, GlommioError, Local};
 use log::debug;
 use std::{
     cell::{Ref, RefCell},

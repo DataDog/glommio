@@ -5,7 +5,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::{parking::Reactor, Local};
+use crate::{reactor::Reactor, Local};
 
 /// Submit no-op operations to io_uring.
 ///

@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::stream::GlommioStream;
-use crate::{net::yolo_accept, parking::Reactor, GlommioError, Local};
+use crate::{net::yolo_accept, reactor::Reactor, GlommioError, Local};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
