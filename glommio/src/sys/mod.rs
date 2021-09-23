@@ -5,7 +5,6 @@
 //
 use crate::{to_io_error, uring_sys};
 use ahash::AHashMap;
-use lockfree::channel::mpsc;
 use log::debug;
 use std::{
     fmt,
@@ -17,7 +16,6 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
-        Mutex,
         RwLock,
     },
     task::Waker,
@@ -278,8 +276,8 @@ pub(crate) struct SleepNotifier {
     id: usize,
     eventfd: std::fs::File,
     memory: AtomicUsize,
-    foreign_wakes: Mutex<mpsc::Receiver<Waker>>,
-    waker_sender: mpsc::Sender<Waker>,
+    foreign_wakes: crossbeam::channel::Receiver<Waker>,
+    waker_sender: crossbeam::channel::Sender<Waker>,
 }
 
 lazy_static! {
@@ -305,14 +303,14 @@ pub(crate) fn get_sleep_notifier_for(id: usize) -> Option<Arc<SleepNotifier>> {
 impl SleepNotifier {
     pub(crate) fn new(id: usize) -> io::Result<Arc<Self>> {
         let eventfd = unsafe { std::fs::File::from_raw_fd(create_eventfd()?) };
-        let (waker_sender, foreign_wakes) = mpsc::create();
+        let (waker_sender, foreign_wakes) = crossbeam::channel::unbounded();
 
         Ok(Arc::new(Self {
             eventfd,
             id,
             memory: AtomicUsize::new(0),
             waker_sender,
-            foreign_wakes: Mutex::new(foreign_wakes),
+            foreign_wakes,
         }))
     }
 
@@ -348,9 +346,7 @@ impl SleepNotifier {
     }
 
     pub(crate) fn get_foreign_notifier(&self) -> Option<Waker> {
-        let mut fw = self.foreign_wakes.try_lock().unwrap();
-
-        match fw.recv() {
+        match self.foreign_wakes.try_recv() {
             Ok(x) => Some(x),
             // possible errors:
             //  - channel disconnected, so we won't ever have another notification
