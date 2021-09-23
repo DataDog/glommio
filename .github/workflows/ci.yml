@@ -84,8 +84,5 @@ jobs:
       - name: Cache setup
         uses: ./.github/actions/cache-setup
 
-      - name: Set limits
-        run: ulimit -Sl 512; ulimit -Hl 512
-
       - name: Test all targets
-        run: cargo test --all-features
+        run: sudo bash -c "ulimit -Sl 512 && ulimit -Hl 512 && PATH=$PATH:/usr/share/rust/.cargo/bin && RUSTUP_TOOLCHAIN=stable cargo test --all-features"
