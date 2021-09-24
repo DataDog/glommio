@@ -1,0 +1,30 @@
+name: Cache setup
+
+description: Setups up the cache for Rust-based steps
+
+inputs: {}
+outputs: {}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Version information
+      run: rustc --version; cargo --version; rustup --version
+      shell: bash
+
+    - name: Calculate dependencies
+      run: cargo generate-lockfile
+      shell: bash
+
+    - name: Cache
+      uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/debug/.fingerprint
+          target/debug/build
+          target/debug/dep
+        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
