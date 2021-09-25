@@ -55,6 +55,8 @@ use pq_tree::{
     Node,
 };
 use std::{
+    collections::hash_map::RandomState,
+    collections::hash_set::{Difference, Intersection, Iter, SymmetricDifference, Union},
     collections::HashSet,
     convert::TryInto,
     iter::FromIterator,
@@ -268,6 +270,54 @@ impl CpuSet {
     /// Consumes the `CpuSet` and returns the [`CpuLocation`]s.
     fn take(mut self) -> Vec<CpuLocation> {
         self.0.drain().collect()
+    }
+
+    // Delegate Set implementation
+    /// Returns `true` if the `CpuSet` contains a `CpuLocation`.
+    pub fn contains(&self, value: &CpuLocation) -> bool {
+        self.0.contains(value)
+    }
+
+    /// Visits the [`CpuLocation`]s representing the difference, i.e., the values that are in self but not in
+    /// other.
+    pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, CpuLocation, RandomState> {
+        self.0.difference(&other.0)
+    }
+
+    /// Visits the [`CpuLocation`]s representing the intersection, i.e., the values that are both in self and
+    /// other.
+    pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, CpuLocation, RandomState> {
+        self.0.intersection(&other.0)
+    }
+
+    /// Returns true if self has no [`CpuLocation`]s in common with other. This is equivalent to checking
+    /// for an empty intersection.
+    pub fn is_disjoint(&self, other: &Self) -> bool {
+        self.0.is_disjoint(&other.0)
+    }
+
+    /// Returns true if this `CpuSet` is a subset of another, i.e., other contains at least all the
+    /// values in self.
+    pub fn is_subset(&self, other: &Self) -> bool {
+        self.0.is_subset(&other.0)
+    }
+
+    /// Returns true if this `CpuSet` is a superset of another, i.e., self contains at least all the
+    /// values in other.
+    pub fn is_superset(&self, other: &Self) -> bool {
+        self.0.is_superset(&other.0)
+    }
+
+    /// Visits the [`CpuLocation`]s representing the symmetric difference, i.e., the values that are in self
+    /// or in other but not in both.
+    pub fn symmetric_difference<'a>(&'a self, other: &'a Self) -> SymmetricDifference<'a, CpuLocation, RandomState> {
+        self.0.symmetric_difference(&other.0)
+    }
+
+    /// Visits the [`CpuLocation`]s representing the union, i.e., all the values in self or other, without
+    /// duplicates.
+    pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, CpuLocation, RandomState> {
+        self.0.union(&other.0)
     }
 }
 
@@ -905,5 +955,306 @@ mod test {
             let p = Placement::Custom(vec![set1, set2, set3]);
             assert!(CpuSetGenerator::new(p, 3).is_err());
         }
+    }
+
+    // Set API
+    #[test]
+    fn cpuset_disjoint() {
+        let xs = CpuSet::from_iter(vec![]);
+        let ys = CpuSet::from_iter(vec![]);
+        assert!(xs.is_disjoint(&ys));
+        assert!(ys.is_disjoint(&xs));
+
+        let xs = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+        ]);
+        let ys = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+        ]);
+        assert!(xs.is_disjoint(&ys));
+        assert!(ys.is_disjoint(&xs));
+
+        let xs = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+        let ys = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(1, 1, 1, 3),
+        ]);
+        assert!(xs.is_disjoint(&ys));
+        assert!(ys.is_disjoint(&xs));
+    }
+
+    #[test]
+    fn cpuset_subset_and_superset() {
+        let xs = CpuSet::from_iter(vec![]);
+        let ys = CpuSet::from_iter(vec![]);
+        assert!(xs.is_subset(&ys));
+        assert!(xs.is_superset(&ys));
+        assert!(ys.is_subset(&xs));
+        assert!(ys.is_superset(&xs));
+
+        let xs = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+        ]);
+        let ys = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+        ]);
+        assert!(!xs.is_subset(&ys));
+        assert!(!xs.is_superset(&ys));
+        assert!(!ys.is_subset(&xs));
+        assert!(!ys.is_superset(&xs));
+
+        let xs = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+        let ys = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+        assert!(!xs.is_subset(&ys));
+        assert!(!xs.is_superset(&ys));
+        assert!(!ys.is_subset(&xs));
+        assert!(!ys.is_superset(&xs));
+
+        let xs = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+        ]);
+        let ys = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(1, 1, 1, 5),
+        ]);
+        assert!(xs.is_subset(&ys));
+        assert!(!xs.is_superset(&ys));
+        assert!(!ys.is_subset(&xs));
+        assert!(ys.is_superset(&xs));
+
+        let xs = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 2),
+        ]);
+        let ys = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+        ]);
+        assert!(!xs.is_subset(&ys));
+        assert!(xs.is_superset(&ys));
+        assert!(ys.is_subset(&xs));
+        assert!(!ys.is_superset(&xs));
+    }
+
+    #[test]
+    fn cpuset_iterate() {
+        let a = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+        let mut observed: u32 = 0;
+        for _ in &a {
+            observed += 1
+        }
+        assert_eq!(observed, 4);
+    }
+
+    #[test]
+    fn cpuset_intersection() {
+        let a = CpuSet::from_iter(vec![]);
+        let b = CpuSet::from_iter(vec![]);
+        assert!(a.intersection(&b).next().is_none());
+
+        let a = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+        let b = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+
+        let mut i = 0;
+        let expected = [
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 1),
+        ];
+        for x in a.intersection(&b) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
+
+        // make a bigger than b
+        let a = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(0, 0, 0, 4),
+        ]);
+        let b = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+
+        i = 0;
+        for x in a.intersection(&b) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
+
+        i = 0;
+        for x in b.intersection(&a) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
+    }
+
+    #[test]
+    fn cpuset_difference() {
+        let a = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(0, 0, 0, 4),
+        ]);
+        let b = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+        ]);
+
+        let mut i = 0;
+        let expected = [
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 4),
+        ];
+        for x in a.difference(&b) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
+    }
+
+    #[test]
+    fn cpuset_symmetric_difference() {
+        let a = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(0, 0, 0, 4),
+        ]);
+        let b = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(1, 1, 1, 3),
+        ]);
+
+        let mut i = 0;
+        let expected = [
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 4),
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(1, 1, 1, 3),
+        ];
+        for x in a.symmetric_difference(&b) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
+    }
+
+    #[test]
+    fn cpuset_union() {
+        let a = CpuSet::from_iter(vec![]);
+        let b = CpuSet::from_iter(vec![]);
+        assert!(a.union(&b).next().is_none());
+        assert!(b.union(&a).next().is_none());
+        let a = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(0, 0, 0, 4),
+        ]);
+        let b = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(1, 1, 1, 3),
+        ]);
+
+        let mut i = 0;
+        let expected = [
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(0, 0, 0, 4),
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(1, 1, 1, 3),
+        ];
+        for x in a.union(&b) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
+
+        // make a bigger than b
+        let a = CpuSet::from_iter(vec![
+            cpu_loc(0, 0, 0, 2),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(0, 0, 0, 3),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(0, 0, 0, 4),
+            cpu_loc(1, 1, 1, 3),
+        ]);
+        let b = CpuSet::from_iter(vec![
+            cpu_loc(1, 1, 1, 5),
+            cpu_loc(0, 0, 0, 0),
+            cpu_loc(1, 1, 1, 4),
+            cpu_loc(0, 0, 0, 1),
+            cpu_loc(1, 1, 1, 3),
+        ]);
+
+
+        i = 0;
+        for x in a.union(&b) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
+
+        i = 0;
+        for x in b.union(&a) {
+            assert!(expected.contains(x));
+            i += 1
+        }
+        assert_eq!(i, expected.len());
     }
 }
