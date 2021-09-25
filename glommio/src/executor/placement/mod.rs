@@ -590,8 +590,7 @@ mod test {
         let set = set.filter(|_| false);
         assert_eq!(0, set.len());
         assert!(set.is_empty());
-        let v: Vec<_> = set.into_iter().collect();
-        assert_eq!(0, v.len());
+        assert_eq!(0, set.into_iter().count());
     }
 
     #[test]
