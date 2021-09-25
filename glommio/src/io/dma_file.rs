@@ -303,6 +303,7 @@ impl DmaFile {
         S: Stream<Item = V> + Unpin,
     {
         let file = self.clone();
+        let reactor = file.file.reactor.upgrade().unwrap();
         let it = CoalescedReads::new(
             max_merged_buffer_size,
             max_read_amp,
@@ -310,7 +311,6 @@ impl DmaFile {
             iovs,
         )
         .map(move |iov| {
-            let reactor = file.file.reactor.upgrade().unwrap();
             let fd = file.as_raw_fd();
             let pollable = file.pollable;
             let scheduler = file.file.scheduler.borrow();
