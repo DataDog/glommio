@@ -1822,10 +1822,24 @@ mod test {
     });
 
     #[track_caller]
-    fn expect_specific_error<T>(op: std::result::Result<T, io::Error>, expected_err: &'static str) {
+    fn expect_specific_error<T>(
+        op: std::result::Result<T, io::Error>,
+        expected_kind: Option<io::ErrorKind>,
+        expected_err: &'static str,
+    ) {
         match op {
             Ok(_) => panic!("should have failed"),
             Err(err) => {
+                if let Some(expected_kind) = expected_kind {
+                    assert_eq!(
+                        expected_kind,
+                        err.kind(),
+                        "expected {:?}, got {:?}",
+                        expected_kind,
+                        err.kind()
+                    );
+                }
+
                 let x = format!("{}", err.into_inner().unwrap());
                 assert!(
                     x.starts_with(expected_err),
@@ -1845,7 +1859,7 @@ mod test {
             .build();
 
         let mut buf = [0u8; 2000];
-        expect_specific_error(reader.read_exact(&mut buf).await, "Bad file descriptor (os error 9)");
+        expect_specific_error(reader.read_exact(&mut buf).await, None, "Bad file descriptor (os error 9)");
         reader.close().await.unwrap();
     });
 
@@ -1906,7 +1920,11 @@ mod test {
             .build();
 
         writer.close().await.unwrap();
-        expect_specific_error(writer.close().await, "Bad file descriptor (os error 9)");
+        expect_specific_error(
+            writer.close().await,
+            None,
+            "Bad file descriptor (os error 9)",
+        );
     });
 
     file_stream_write_test!(write_no_write_behind, path, _k, filename, file, {
@@ -1975,7 +1993,11 @@ mod test {
             writer.write_all(&[i as u8]).await.unwrap();
         }
 
-        expect_specific_error(writer.close().await, "Bad file descriptor (os error 9)");
+        expect_specific_error(
+            writer.close().await,
+            None,
+            "Bad file descriptor (os error 9)",
+        );
     });
 
     file_stream_write_test!(flushed_position_small_buffer, path, _k, filename, file, {
