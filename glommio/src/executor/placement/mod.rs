@@ -80,7 +80,7 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 /// [`LocalExecutorPoolBuilder::on_all_shards`] would return an `Err` when using
 /// `MaxSpread`.
 ///
-/// ```
+/// ```no_run
 /// use glommio::{CpuSet, LocalExecutorPoolBuilder, Placement};
 ///
 /// let cpus = CpuSet::online()
