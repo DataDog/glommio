@@ -1,6 +1,6 @@
 # glommio
 
-[![docs.rs](https://docs.rs/glommio/badge.svg)](https://docs.rs/glommio/latest/glommio/) [![CircleCI](https://circleci.com/gh/DataDog/glommio.svg?style=svg)](https://circleci.com/gh/DataDog/glommio)
+[![docs.rs](https://docs.rs/glommio/badge.svg)](https://docs.rs/glommio/latest/glommio/) [![CI](https://github.com/DataDog/glommio/workflows/CI/badge.svg)](https://github.com/DataDog/glommio/actions?query=workflow%3A%22CI%22)
 
 ## Join our Zulip community!
 
