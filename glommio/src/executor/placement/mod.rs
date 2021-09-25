@@ -189,17 +189,7 @@ pub struct CpuSet(HashSet<CpuLocation>);
 impl FromIterator<CpuLocation> for CpuSet
 {
     fn from_iter<I: IntoIterator<Item = CpuLocation>>(cpus: I) -> Self {
-        let iter = cpus.into_iter();
-        let (_, size) = iter.size_hint();
-        let mut set = if let Some(size) = size {
-            HashSet::with_capacity(size)
-        } else {
-            HashSet::new()
-        };
-        for cpu in iter {
-            set.insert(cpu);
-        }
-        Self(set)
+        Self(HashSet::<CpuLocation>::from_iter(cpus.into_iter()))
     }
 }
 
