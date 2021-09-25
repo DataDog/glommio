@@ -545,8 +545,8 @@ mod test {
     fn placement_custom_clone() {
         let set1 = CpuSet::online().unwrap();
         let set2 = CpuSet::online().unwrap();
-        assert!(set1.is_empty());
-        assert!(set2.is_empty());
+        assert!(!set1.is_empty());
+        assert!(!set2.is_empty());
         let vec_set = vec![set1, set2];
         let placement = Placement::Custom(vec_set);
         assert_eq!(placement.clone(), placement);
