@@ -246,12 +246,6 @@ impl CpuSet {
         self
     }
 
-    /// Returns a reference to the [`CpuLocation`]s currently included in the
-    /// `CpuSet`.
-    pub fn as_vec(&self) -> Vec<&CpuLocation> {
-        self.0.iter().collect()
-    }
-
     /// Checks whether the `CpuSet` is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -265,11 +259,6 @@ impl CpuSet {
     /// Returns the number of CPUs included in the `CpuSet`.
     pub fn len(&self) -> usize {
         self.0.len()
-    }
-
-    /// Consumes the `CpuSet` and returns the [`CpuLocation`]s.
-    fn take(mut self) -> Vec<CpuLocation> {
-        self.0.drain().collect()
     }
 
     // Delegate Set implementation
@@ -437,9 +426,13 @@ impl CpuSetGenerator {
             Self::Fenced(cpus) => CpuIter::from_vec(cpus.clone().into_iter().collect()),
             Self::MaxSpread(it) => CpuIter::from_option(it.next()),
             Self::MaxPack(it) => CpuIter::from_option(it.next()),
-            Self::Custom(cpu_sets) => {
-                CpuIter::Multi(cpu_sets.pop().expect("insufficient cpu sets").take())
-            }
+            Self::Custom(cpu_sets) => CpuIter::Multi(
+                cpu_sets
+                    .pop()
+                    .expect("insufficient cpu sets")
+                    .into_iter()
+                    .collect(),
+            ),
         }
     }
 }
