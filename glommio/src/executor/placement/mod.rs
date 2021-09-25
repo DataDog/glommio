@@ -56,7 +56,7 @@ use pq_tree::{
 };
 use std::{
     collections::hash_map::RandomState,
-    collections::hash_set::{Difference, Intersection, Iter, SymmetricDifference, Union},
+    collections::hash_set::{Difference, Intersection, IntoIter, Iter, SymmetricDifference, Union},
     collections::HashSet,
     convert::TryInto,
     iter::FromIterator,
@@ -199,7 +199,17 @@ impl<'a> IntoIterator for &'a CpuSet {
 
     #[inline]
     fn into_iter(self) -> Iter<'a, CpuLocation> {
-        self.iter()
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for CpuSet {
+    type Item = CpuLocation;
+    type IntoIter = IntoIter<CpuLocation>;
+
+    #[inline]
+    fn into_iter(self) -> IntoIter<CpuLocation> {
+        self.0.into_iter()
     }
 }
 
@@ -424,7 +434,7 @@ impl CpuSetGenerator {
     pub fn next(&mut self) -> CpuIter {
         match self {
             Self::Unbound => CpuIter::Unbound,
-            Self::Fenced(cpus) => CpuIter::from_vec(cpus.as_vec().into_iter().cloned().collect()),
+            Self::Fenced(cpus) => CpuIter::from_vec(cpus.clone().into_iter().collect()),
             Self::MaxSpread(it) => CpuIter::from_option(it.next()),
             Self::MaxPack(it) => CpuIter::from_option(it.next()),
             Self::Custom(cpu_sets) => {
@@ -466,7 +476,7 @@ where
     T: Priority,
 {
     fn from_cpu_set(cpus: CpuSet) -> Self {
-        Self::from_topology(cpus.take())
+        Self::from_topology(cpus.into_iter().collect())
     }
 
     /// Construct a `TopologyIter` from a `Vec<CpuLocation>`.  The tree of
@@ -579,7 +589,7 @@ mod test {
         let set = set.filter(|_| false);
         assert_eq!(0, set.len());
         assert!(set.is_empty());
-        let v: Vec<_> = set.take();
+        let v: Vec<_> = set.into_iter().collect();
         assert_eq!(0, v.len());
     }
 
