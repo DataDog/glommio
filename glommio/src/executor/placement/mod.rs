@@ -54,7 +54,11 @@ use pq_tree::{
     Level,
     Node,
 };
-use std::{collections::HashSet, convert::TryInto};
+use std::{
+    collections::HashSet,
+    convert::TryInto,
+    iter::FromIterator,
+};
 
 type Result<T> = crate::Result<T, ()>;
 
@@ -178,14 +182,42 @@ impl Default for Placement {
 /// understand how `CpuSet` restrictions apply to each variant.  CPUs are
 /// identified via their [`CpuLocation`].
 #[derive(Clone, Debug, PartialEq)]
-pub struct CpuSet(Vec<CpuLocation>);
+pub struct CpuSet(HashSet<CpuLocation>);
+
+impl FromIterator<CpuLocation> for CpuSet
+{
+    fn from_iter<I: IntoIterator<Item = CpuLocation>>(cpus: I) -> Self {
+        let iter = cpus.into_iter();
+        let (_, size) = iter.size_hint();
+        let mut set = if let Some(size) = size {
+            HashSet::with_capacity(size)
+        } else {
+            HashSet::new()
+        };
+        for cpu in iter {
+            set.insert(cpu);
+        }
+        Self(set)
+    }
+}
+
+impl<'a> IntoIterator for &'a CpuSet {
+    type Item = &'a CpuLocation;
+    type IntoIter = Iter<'a, CpuLocation>;
+
+    #[inline]
+    fn into_iter(self) -> Iter<'a, CpuLocation> {
+        self.iter()
+    }
+}
 
 impl CpuSet {
     /// Creates a `CpuSet` representing all CPUs that are online.
     /// The function will return an `Err` if the hardware topology could not
     /// be obtained from this machine.
     pub fn online() -> Result<Self> {
-        Ok(Self(hardware_topology::get_machine_topology_unsorted()?))
+        let topo = hardware_topology::get_machine_topology_unsorted()?;
+        Ok(Self::from_iter(topo))
     }
 
     /// This method can be used to restrict the CPUs held by `CpuSet`.  The
@@ -214,23 +246,28 @@ impl CpuSet {
 
     /// Returns a reference to the [`CpuLocation`]s currently included in the
     /// `CpuSet`.
-    pub fn as_vec(&self) -> &Vec<CpuLocation> {
-        &self.0
+    pub fn as_vec(&self) -> Vec<&CpuLocation> {
+        self.0.iter().collect()
     }
 
     /// Checks whether the `CpuSet` is empty.
     pub fn is_empty(&self) -> bool {
-        self.as_vec().is_empty()
+        self.0.is_empty()
+    }
+
+    /// An iterator visiting all [`CpuLocation`]s in this CpuSet in arbitrary order.
+    pub fn iter(&self) -> Iter<'_, CpuLocation> {
+        self.0.iter()
     }
 
     /// Returns the number of CPUs included in the `CpuSet`.
     pub fn len(&self) -> usize {
-        self.as_vec().len()
+        self.0.len()
     }
 
     /// Consumes the `CpuSet` and returns the [`CpuLocation`]s.
-    fn take(self) -> Vec<CpuLocation> {
-        self.0
+    fn take(mut self) -> Vec<CpuLocation> {
+        self.0.drain().collect()
     }
 }
 
@@ -347,7 +384,7 @@ impl CpuSetGenerator {
     pub fn next(&mut self) -> CpuIter {
         match self {
             Self::Unbound => CpuIter::Unbound,
-            Self::Fenced(cpus) => CpuIter::from_vec(cpus.as_vec().clone()),
+            Self::Fenced(cpus) => CpuIter::from_vec(cpus.as_vec().into_iter().cloned().collect()),
             Self::MaxSpread(it) => CpuIter::from_option(it.next()),
             Self::MaxPack(it) => CpuIter::from_option(it.next()),
             Self::Custom(cpu_sets) => {
@@ -827,19 +864,19 @@ mod test {
 
     #[test]
     fn custom_placement() {
-        let set1 = CpuSet(vec![
+        let set1 = CpuSet::from_iter(vec![
             cpu_loc(0, 0, 0, 2),
             cpu_loc(0, 0, 0, 0),
             cpu_loc(0, 0, 0, 3),
             cpu_loc(0, 0, 0, 1),
         ]);
-        let set2 = CpuSet(vec![
+        let set2 = CpuSet::from_iter(vec![
             cpu_loc(1, 1, 1, 5),
             cpu_loc(0, 0, 0, 0),
             cpu_loc(1, 1, 1, 4),
             cpu_loc(0, 0, 0, 1),
         ]);
-        let set3 = CpuSet(vec![]);
+        let set3 = CpuSet::from_iter(vec![]);
 
         {
             let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
