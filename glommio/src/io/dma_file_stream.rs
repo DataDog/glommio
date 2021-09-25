@@ -1826,14 +1826,13 @@ mod test {
         match op {
             Ok(_) => panic!("should have failed"),
             Err(err) => {
-                let kind = err.kind();
-                match kind {
-                    io::ErrorKind::Other => {
-                        let x = format!("{}", err.into_inner().unwrap());
-                        assert!(x.starts_with(expected_err));
-                    }
-                    _ => panic!("Wrong error"),
-                }
+                let x = format!("{}", err.into_inner().unwrap());
+                assert!(
+                    x.starts_with(expected_err),
+                    "expected {} got {}",
+                    expected_err,
+                    x
+                );
             }
         }
     }
