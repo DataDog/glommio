@@ -97,7 +97,11 @@ mod ref_count {
         init_logger();
         let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
             TaskDebugger::set_label("drop_join_handle_before_completion");
-            let handle = Local::local(async {}).detach();
+            assert_eq!(1, TaskDebugger::task_count());
+            let handle = Local::local(async {
+                yield_now().await;
+            })
+            .detach();
             assert_eq!(2, TaskDebugger::task_count());
             drop(handle);
             assert_eq!(2, TaskDebugger::task_count());
