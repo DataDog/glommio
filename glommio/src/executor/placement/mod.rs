@@ -938,10 +938,16 @@ mod test {
                     .cpu_binding()
                     .unwrap()
                     .into_iter()
-                    .collect::<Vec<_>>();
+                    .collect::<HashSet<_>>();
                 bindings.push(v);
             }
-            assert_eq!(bindings, vec![vec![1, 4, 0, 5], vec![1, 3, 0, 2]]);
+            assert_eq!(
+                bindings,
+                vec![
+                    HashSet::from_iter(vec![1, 4, 0, 5]),
+                    HashSet::from_iter(vec![1, 3, 0, 2])
+                ]
+            );
         }
         {
             let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
