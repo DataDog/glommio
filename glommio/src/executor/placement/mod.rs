@@ -55,9 +55,11 @@ use pq_tree::{
     Node,
 };
 use std::{
-    collections::hash_map::RandomState,
-    collections::hash_set::{Difference, Intersection, IntoIter, Iter, SymmetricDifference, Union},
-    collections::HashSet,
+    collections::{
+        hash_map::RandomState,
+        hash_set::{Difference, Intersection, IntoIter, Iter, SymmetricDifference, Union},
+        HashSet,
+    },
     convert::TryInto,
     iter::FromIterator,
 };
@@ -186,8 +188,7 @@ impl Default for Placement {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CpuSet(HashSet<CpuLocation>);
 
-impl FromIterator<CpuLocation> for CpuSet
-{
+impl FromIterator<CpuLocation> for CpuSet {
     fn from_iter<I: IntoIterator<Item = CpuLocation>>(cpus: I) -> Self {
         Self(HashSet::<CpuLocation>::from_iter(cpus.into_iter()))
     }
@@ -251,7 +252,8 @@ impl CpuSet {
         self.0.is_empty()
     }
 
-    /// An iterator visiting all [`CpuLocation`]s in this CpuSet in arbitrary order.
+    /// An iterator visiting all [`CpuLocation`]s in this CpuSet in arbitrary
+    /// order.
     pub fn iter(&self) -> Iter<'_, CpuLocation> {
         self.0.iter()
     }
@@ -267,44 +269,50 @@ impl CpuSet {
         self.0.contains(value)
     }
 
-    /// Visits the [`CpuLocation`]s representing the difference, i.e., the values that are in self but not in
-    /// other.
+    /// Visits the [`CpuLocation`]s representing the difference, i.e., the
+    /// values that are in self but not in other.
     pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, CpuLocation, RandomState> {
         self.0.difference(&other.0)
     }
 
-    /// Visits the [`CpuLocation`]s representing the intersection, i.e., the values that are both in self and
-    /// other.
-    pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, CpuLocation, RandomState> {
+    /// Visits the [`CpuLocation`]s representing the intersection, i.e., the
+    /// values that are both in self and other.
+    pub fn intersection<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> Intersection<'a, CpuLocation, RandomState> {
         self.0.intersection(&other.0)
     }
 
-    /// Returns true if self has no [`CpuLocation`]s in common with other. This is equivalent to checking
-    /// for an empty intersection.
+    /// Returns true if self has no [`CpuLocation`]s in common with other. This
+    /// is equivalent to checking for an empty intersection.
     pub fn is_disjoint(&self, other: &Self) -> bool {
         self.0.is_disjoint(&other.0)
     }
 
-    /// Returns true if this `CpuSet` is a subset of another, i.e., other contains at least all the
-    /// values in self.
+    /// Returns true if this `CpuSet` is a subset of another, i.e., other
+    /// contains at least all the values in self.
     pub fn is_subset(&self, other: &Self) -> bool {
         self.0.is_subset(&other.0)
     }
 
-    /// Returns true if this `CpuSet` is a superset of another, i.e., self contains at least all the
-    /// values in other.
+    /// Returns true if this `CpuSet` is a superset of another, i.e., self
+    /// contains at least all the values in other.
     pub fn is_superset(&self, other: &Self) -> bool {
         self.0.is_superset(&other.0)
     }
 
-    /// Visits the [`CpuLocation`]s representing the symmetric difference, i.e., the values that are in self
-    /// or in other but not in both.
-    pub fn symmetric_difference<'a>(&'a self, other: &'a Self) -> SymmetricDifference<'a, CpuLocation, RandomState> {
+    /// Visits the [`CpuLocation`]s representing the symmetric difference, i.e.,
+    /// the values that are in self or in other but not in both.
+    pub fn symmetric_difference<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> SymmetricDifference<'a, CpuLocation, RandomState> {
         self.0.symmetric_difference(&other.0)
     }
 
-    /// Visits the [`CpuLocation`]s representing the union, i.e., all the values in self or other, without
-    /// duplicates.
+    /// Visits the [`CpuLocation`]s representing the union, i.e., all the values
+    /// in self or other, without duplicates.
     pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, CpuLocation, RandomState> {
         self.0.union(&other.0)
     }
@@ -958,12 +966,8 @@ mod test {
         assert!(xs.is_disjoint(&ys));
         assert!(ys.is_disjoint(&xs));
 
-        let xs = CpuSet::from_iter(vec![
-            cpu_loc(0, 0, 0, 2),
-        ]);
-        let ys = CpuSet::from_iter(vec![
-            cpu_loc(1, 1, 1, 5),
-        ]);
+        let xs = CpuSet::from_iter(vec![cpu_loc(0, 0, 0, 2)]);
+        let ys = CpuSet::from_iter(vec![cpu_loc(1, 1, 1, 5)]);
         assert!(xs.is_disjoint(&ys));
         assert!(ys.is_disjoint(&xs));
 
@@ -990,12 +994,8 @@ mod test {
         assert!(ys.is_subset(&xs));
         assert!(ys.is_superset(&xs));
 
-        let xs = CpuSet::from_iter(vec![
-            cpu_loc(0, 0, 0, 2),
-        ]);
-        let ys = CpuSet::from_iter(vec![
-            cpu_loc(1, 1, 1, 5),
-        ]);
+        let xs = CpuSet::from_iter(vec![cpu_loc(0, 0, 0, 2)]);
+        let ys = CpuSet::from_iter(vec![cpu_loc(1, 1, 1, 5)]);
         assert!(!xs.is_subset(&ys));
         assert!(!xs.is_superset(&ys));
         assert!(!ys.is_subset(&xs));
@@ -1018,25 +1018,15 @@ mod test {
         assert!(!ys.is_subset(&xs));
         assert!(!ys.is_superset(&xs));
 
-        let xs = CpuSet::from_iter(vec![
-            cpu_loc(0, 0, 0, 2),
-        ]);
-        let ys = CpuSet::from_iter(vec![
-            cpu_loc(0, 0, 0, 2),
-            cpu_loc(1, 1, 1, 5),
-        ]);
+        let xs = CpuSet::from_iter(vec![cpu_loc(0, 0, 0, 2)]);
+        let ys = CpuSet::from_iter(vec![cpu_loc(0, 0, 0, 2), cpu_loc(1, 1, 1, 5)]);
         assert!(xs.is_subset(&ys));
         assert!(!xs.is_superset(&ys));
         assert!(!ys.is_subset(&xs));
         assert!(ys.is_superset(&xs));
 
-        let xs = CpuSet::from_iter(vec![
-            cpu_loc(1, 1, 1, 5),
-            cpu_loc(0, 0, 0, 2),
-        ]);
-        let ys = CpuSet::from_iter(vec![
-            cpu_loc(1, 1, 1, 5),
-        ]);
+        let xs = CpuSet::from_iter(vec![cpu_loc(1, 1, 1, 5), cpu_loc(0, 0, 0, 2)]);
+        let ys = CpuSet::from_iter(vec![cpu_loc(1, 1, 1, 5)]);
         assert!(!xs.is_subset(&ys));
         assert!(xs.is_superset(&ys));
         assert!(ys.is_subset(&xs));
@@ -1078,10 +1068,7 @@ mod test {
         ]);
 
         let mut i = 0;
-        let expected = [
-            cpu_loc(0, 0, 0, 0),
-            cpu_loc(0, 0, 0, 1),
-        ];
+        let expected = [cpu_loc(0, 0, 0, 0), cpu_loc(0, 0, 0, 1)];
         for x in a.intersection(&b) {
             assert!(expected.contains(x));
             i += 1
@@ -1234,7 +1221,6 @@ mod test {
             cpu_loc(0, 0, 0, 1),
             cpu_loc(1, 1, 1, 3),
         ]);
-
 
         i = 0;
         for x in a.union(&b) {
