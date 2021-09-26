@@ -23,6 +23,16 @@ use std::{
 
 pub(super) type Result<T> = crate::Result<T, ()>;
 
+/// Close result of [`DmaFile::close_rc()`]. Indicates which operation is
+/// performed on close.
+#[derive(Debug)]
+pub enum CloseResult {
+    /// The file is closed.
+    Closed,
+    /// There are other references existing, only removed this one.
+    Unreferenced,
+}
+
 pub(crate) fn align_up(v: u64, align: u64) -> u64 {
     (v + align - 1) & !(align - 1)
 }
@@ -408,11 +418,11 @@ impl DmaFile {
 
     /// Convenience method that closes a DmaFile wrapped inside an Rc.
     ///
-    /// Returns whether the file is actually closed, or just dropped an Rc.
-    pub async fn close_rc(self: Rc<DmaFile>) -> Result<bool> {
+    /// Returns [CloseResult] to indicate which operation was performed.
+    pub async fn close_rc(self: Rc<DmaFile>) -> Result<CloseResult> {
         match Rc::try_unwrap(self) {
-            Err(_) => Ok(false),
-            Ok(file) => file.close().await.map(|_| true),
+            Err(_) => Ok(CloseResult::Unreferenced),
+            Ok(file) => file.close().await.map(|_| CloseResult::Closed),
         }
     }
 }
