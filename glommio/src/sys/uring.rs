@@ -58,6 +58,7 @@ use nix::sys::{
 };
 
 const MSG_ZEROCOPY: i32 = 0x4000000;
+pub(crate) const RING_SUBMISSION_DEPTH: usize = 128;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -1196,8 +1197,14 @@ impl Reactor {
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
         let registry = vec![allocator.as_bytes()];
 
-        let mut main_ring = SleepableRing::new(128, "main", allocator.clone(), source_map.clone())?;
-        let poll_ring = PollRing::new(128, allocator.clone(), source_map.clone())?;
+        let mut main_ring = SleepableRing::new(
+            RING_SUBMISSION_DEPTH,
+            "main",
+            allocator.clone(),
+            source_map.clone(),
+        )?;
+        let poll_ring =
+            PollRing::new(RING_SUBMISSION_DEPTH, allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
@@ -1218,8 +1225,12 @@ impl Reactor {
             },
         }
 
-        let latency_ring =
-            SleepableRing::new(128, "latency", allocator.clone(), source_map.clone())?;
+        let latency_ring = SleepableRing::new(
+            RING_SUBMISSION_DEPTH,
+            "latency",
+            allocator.clone(),
+            source_map.clone(),
+        )?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(
