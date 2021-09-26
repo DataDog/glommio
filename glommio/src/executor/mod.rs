@@ -1074,6 +1074,7 @@ impl LocalExecutor {
 
                 let (need_repush, last_vruntime) = {
                     let mut state = queue.borrow_mut();
+                    state.ex.make_fair();
                     let last_vruntime = state.account_vruntime(runtime);
                     (state.is_active(), last_vruntime)
                 };
@@ -2089,32 +2090,6 @@ mod test {
             if task.is_ok() {
                 unreachable!("Should have failed");
             }
-        });
-    }
-
-    #[test]
-    fn ten_yielding_queues() {
-        let local_ex = LocalExecutor::default();
-
-        // 0 -> no one
-        // 1 -> t1
-        // 2 -> t2...
-        let executed_last = Rc::new(RefCell::new(0));
-        local_ex.run(async {
-            let mut joins = Vec::with_capacity(10);
-            for id in 1..11 {
-                let exec = executed_last.clone();
-                joins.push(Task::local(async move {
-                    for _ in 0..10_000 {
-                        let mut last = exec.borrow_mut();
-                        assert_ne!(id, *last);
-                        *last = id;
-                        drop(last);
-                        Local::later().await;
-                    }
-                }));
-            }
-            futures::future::join_all(joins).await;
         });
     }
 
