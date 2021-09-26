@@ -125,16 +125,20 @@ impl Task {
         })
     }
 
+    /// Behave like ['run'] but schedule the tak immediately
     pub(crate) fn run_right_away(self) -> bool {
         let ptr = self.raw_task.as_ptr();
-        let header = ptr as *const Header;
-        mem::forget(self);
-
-        unsafe {
-            let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
-            assert_ne!(refs, i16::max_value());
-            ((*header).vtable.run)(ptr)
-        }
+        dbg_context!(ptr, "run_right_away", {
+            let header = ptr as *const Header;
+            mem::forget(self);
+            #[cfg(feature = "debugging")]
+            TaskDebugger::set_current_task(ptr);
+            unsafe {
+                let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
+                assert_ne!(refs, i16::max_value());
+                ((*header).vtable.run)(ptr)
+            }
+        })
     }
 }
 
