@@ -203,7 +203,7 @@ mod tests {
             println!("Main: closing gate");
             let close_future =
                 crate::spawn_local(enclose!((gate) async move { gate.close().await })).detach();
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
             assert!(!gate.is_open());
             assert!(gate.spawn(async {}).is_err());
 

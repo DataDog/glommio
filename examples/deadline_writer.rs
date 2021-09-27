@@ -86,7 +86,7 @@ impl IntWriter {
             }
 
             burn_cpu(Duration::from_micros(500));
-            glommio::executor().later().await;
+            glommio::executor().yield_task_queue_now().await;
         }
     }
 }
@@ -119,7 +119,7 @@ fn competing_cpu_hog(
         async move {
             while !stop.get() {
                 burn_cpu(Duration::from_micros(500));
-                glommio::executor().later().await;
+                glommio::executor().yield_task_queue_now().await;
             }
         },
         cpuhog_tq,
@@ -233,7 +233,7 @@ fn main() {
             loop {
                 let stop = Rc::new(Cell::new(false));
                 let hog = competing_cpu_hog(stop.clone(), cpuhog_tq);
-                glommio::executor().later().await;
+                glommio::executor().yield_task_queue_now().await;
 
                 let deadline = DeadlineQueue::new("example", Duration::from_millis(250));
                 let test = IntWriter::new(to_write, Duration::from_secs(duration as u64));

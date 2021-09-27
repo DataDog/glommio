@@ -773,7 +773,7 @@ mod tests {
             }});
 
             while coord.get() != 1 {
-                crate::executor().later().await;
+                crate::executor().yield_task_queue_now().await;
             }
             let stream = TcpStream::connect(addr).await.unwrap();
             assert_eq!(listener_handle.await.unwrap(), stream.local_addr().unwrap());
@@ -876,7 +876,7 @@ mod tests {
             }});
 
             while coord.get() != 1 {
-                crate::executor().later().await;
+                crate::executor().yield_task_queue_now().await;
             }
             let mut handles = Vec::with_capacity(4);
             for _ in 0..4 {
@@ -951,7 +951,7 @@ mod tests {
             .detach();
 
             while coord.get() != 1 {
-                crate::executor().later().await;
+                crate::executor().yield_task_queue_now().await;
             }
             let mut stream = TcpStream::connect(addr).await.unwrap();
 

@@ -751,7 +751,7 @@ mod tests {
         .detach();
 
         while coord.get() != 1 {
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
         }
         UnixStream::connect(&addr).await.unwrap();
         listener_handle.await.unwrap();

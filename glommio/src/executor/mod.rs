@@ -1294,7 +1294,7 @@ impl<T> Task<T> {
     ///     glommio::spawn_local(async {
     ///         loop {
     ///             println!("I'm a background task looping forever.");
-    ///             glommio::executor().later().await;
+    ///             glommio::executor().yield_task_queue_now().await;
     ///         }
     ///     })
     ///     .detach();
@@ -1535,6 +1535,26 @@ impl<'a, T> Future for ScopedTask<'a, T> {
     }
 }
 
+/// Conditionally yields the current task queue. The scheduler may then
+/// process other task queues according to their latency requirements.
+/// If a call to this function results in the current queue to yield,
+/// then the calling task is moved to the back of the yielded task
+/// queue.
+///
+/// Under which condition this function yield is an implementation detail
+/// subject to changes, but it will always be somehow related to the latency
+/// guarantees that the task queues want to uphold in their
+/// `Latency::Matters` parameter (or `Latency::NotImportant`).
+///
+/// This function is the central mechanism of task cooperation in Glommio
+/// and should be preferred over unconditional yielding methods like
+/// [`ExecutorProxy::yield_now`] and
+/// [`ExecutorProxy::yield_task_queue_now`].
+#[inline]
+pub async fn yield_if_needed() {
+    executor().yield_if_needed().await
+}
+
 /// Spawns a task onto the current single-threaded executor.
 ///
 /// If called from a [`LocalExecutor`], the task is spawned on it.
@@ -1676,7 +1696,8 @@ pub unsafe fn spawn_scoped_local_into<'a, T>(
     executor().spawn_scoped_local_into(future, handle)
 }
 
-/// A proxy struct to the underlying [`LocalExecutor`]
+/// A proxy struct to the underlying [`LocalExecutor`]. It is accessible from
+/// anywhere within a Glommio context using [`executor()`].
 #[derive(Debug)]
 pub struct ExecutorProxy {}
 
@@ -1699,14 +1720,7 @@ impl ExecutorProxy {
         }
     }
 
-    /// Unconditionally yields the current task, moving it back to the end of
-    /// its queue. It is not possible to yield futures that are not spawn'd,
-    /// as they don't have a task associated with them.
-    pub async fn later(&self) {
-        Self::cond_yield(|_| true).await
-    }
-
-    /// checks if this task has ran for too long and need to be preempted. This
+    /// Checks if this task has ran for too long and need to be preempted. This
     /// is useful for situations where we can't call .await, for instance,
     /// if a [`RefMut`] is held. If this tests true, then the user is
     /// responsible for making any preparations necessary for calling .await
@@ -1758,11 +1772,44 @@ impl ExecutorProxy {
         LOCAL_EX.with(|local_ex| local_ex.need_preempt())
     }
 
-    /// Conditionally yields the current task, moving it back to the end of its
-    /// queue, if the task has run for too long
+    /// Conditionally yields the current task queue. The scheduler may then
+    /// process other task queues according to their latency requirements.
+    /// If a call to this function results in the current queue to yield,
+    /// then the calling task is moved to the back of the yielded task
+    /// queue.
+    ///
+    /// Under which condition this function yield is an implementation detail
+    /// subject to changes, but it will always be somehow related to the latency
+    /// guarantees that the task queues want to uphold in their
+    /// `Latency::Matters` parameter (or `Latency::NotImportant`).
+    ///
+    /// This function is the central mechanism of task cooperation in Glommio
+    /// and should be preferred over unconditional yielding methods like
+    /// [`ExecutorProxy::yield_now`] and
+    /// [`ExecutorProxy::yield_task_queue_now`].
     #[inline]
     pub async fn yield_if_needed(&self) {
         Self::cond_yield(|local_ex| local_ex.need_preempt()).await;
+    }
+
+    /// Unconditionally yields the current task and forces the scheduler
+    /// to poll another task within the current task queue.
+    /// Calling this wakes the current task and returns [`Poll::Pending`] once.
+    ///
+    /// Unless you know you need to yield right now, using
+    /// [`ExecutorProxy::yield_if_needed`] instead is the better choice.
+    pub async fn yield_now(&self) {
+        futures_lite::future::yield_now().await
+    }
+
+    /// Unconditionally yields the current task queue and forces the scheduler
+    /// to poll another queue. Use [`ExecutorProxy::yield_now`] to yield within
+    /// a queue.
+    ///
+    /// Unless you know you need to yield right now, using
+    /// [`ExecutorProxy::yield_if_needed`] instead is the better choice.
+    pub async fn yield_task_queue_now(&self) {
+        Self::cond_yield(|_| true).await
     }
 
     #[inline]
@@ -2293,7 +2340,7 @@ mod test {
                         assert_ne!(id, *last);
                         *last = id;
                         drop(last);
-                        crate::executor().later().await;
+                        crate::executor().yield_task_queue_now().await;
                     }
                 }));
             }
@@ -2338,7 +2385,7 @@ mod test {
                                 if start.elapsed().as_secs() > 1 {
                                     panic!("Never received preempt signal");
                                 }
-                                crate::executor().yield_if_needed().await;
+                                crate::yield_if_needed().await;
                             }
                         }
                     },
@@ -2353,7 +2400,7 @@ mod test {
                             // In case we are executed first, yield to the the other task
                             loop {
                                 if !(*(nolat_started.borrow())) {
-                                    crate::executor().later().await;
+                                    crate::executor().yield_task_queue_now().await;
                                 } else {
                                     break;
                                 }
@@ -2442,7 +2489,7 @@ mod test {
                                 if *(second_status.borrow()) {
                                     panic!("I was preempted but should not have been");
                                 }
-                                crate::executor().yield_if_needed().await;
+                                crate::yield_if_needed().await;
                             }
                         }
                     },
@@ -2457,7 +2504,7 @@ mod test {
                             // In case we are executed first, yield to the the other task
                             loop {
                                 if !(*(first_started.borrow())) {
-                                    crate::executor().later().await;
+                                    crate::executor().yield_task_queue_now().await;
                                 } else {
                                     break;
                                 }
@@ -2480,7 +2527,7 @@ mod test {
         ex.run(async {
             crate::spawn_local(async {
                 loop {
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }
             })
             .detach();
@@ -2575,7 +2622,7 @@ mod test {
 
             let now = Instant::now();
             while now.elapsed().as_millis() < 200 {}
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
             assert!(
                 crate::executor().executor_stats().total_runtime() >= Duration::from_millis(200),
                 "expected runtime on LE0 {:#?} is greater than 200 ms",
@@ -2606,7 +2653,7 @@ mod test {
 
                 let now = Instant::now();
                 while now.elapsed().as_millis() < 200 {}
-                crate::executor().later().await;
+                crate::executor().yield_task_queue_now().await;
                 assert!(
                     crate::executor().executor_stats().total_runtime()
                         >= Duration::from_millis(200),
@@ -2629,7 +2676,7 @@ mod test {
     async fn work_quanta() {
         let now = Instant::now();
         while now.elapsed().as_millis() < 2 {}
-        crate::executor().later().await;
+        crate::executor().yield_task_queue_now().await;
     }
 
     macro_rules! test_static_shares {
@@ -2758,7 +2805,7 @@ mod test {
                             break;
                         }
                         (*tq1_count.borrow_mut())[secs as usize] += 1;
-                        crate::executor().later().await;
+                        crate::executor().yield_task_queue_now().await;
                     }
                 }},
                 tq1,
@@ -2775,7 +2822,7 @@ mod test {
                         }
                         bm.tick(elapsed.as_millis() as u64);
                         (*tq2_count.borrow_mut())[secs as usize] += 1;
-                        crate::executor().later().await;
+                        crate::executor().yield_task_queue_now().await;
                     }
                 }},
                 tq2,
@@ -3141,7 +3188,7 @@ mod test {
                 })
                 .await;
             }
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
             assert_eq!(a, 2);
 
             let mut a = 1;
@@ -3151,7 +3198,7 @@ mod test {
                 })
             };
 
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
             do_later.await;
             assert_eq!(a, 2);
         });

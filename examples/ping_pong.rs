@@ -22,7 +22,7 @@ fn main() {
                         println!("reset");
                         *(right.borrow_mut()) = true
                     }
-                    glommio::executor().yield_if_needed().await;
+                    glommio::yield_if_needed().await;
 
                 }
             }
@@ -38,7 +38,7 @@ fn main() {
                             println!("right");
                             *(right.borrow_mut()) = true
                         }
-                        glommio::executor().yield_if_needed().await;
+                        glommio::yield_if_needed().await;
                     }
                 }
             }(left.clone(), right.clone()))

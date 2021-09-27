@@ -416,7 +416,7 @@ macro_rules! wait_on_cond {
             if *($var.borrow()) == $val {
                 break;
             }
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
         }
     };
     ($var:expr, $val:expr, $instantval:expr) => {
@@ -429,7 +429,7 @@ macro_rules! wait_on_cond {
             if start.elapsed().as_secs() > $instantval {
                 panic!("test timed out");
             }
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
         }
     };
 }
@@ -485,6 +485,7 @@ pub use crate::{
         spawn_local_into,
         spawn_scoped_local,
         spawn_scoped_local_into,
+        yield_if_needed,
         CpuSet,
         ExecutorProxy,
         ExecutorStats,
@@ -513,6 +514,7 @@ pub mod prelude {
         executor,
         spawn_local,
         spawn_local_into,
+        yield_if_needed,
         ByteSliceExt,
         ByteSliceMutExt,
         ExecutorProxy,

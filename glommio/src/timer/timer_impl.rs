@@ -905,7 +905,7 @@ mod test {
                 *(exec1.borrow_mut()) = 1;
             });
 
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
             assert_eq!(*(exec2.borrow()), 1);
         });
     }
@@ -1012,7 +1012,7 @@ mod test {
             });
             // Force this to go into the task queue to make the test more
             // realistic
-            crate::executor().later().await;
+            crate::executor().yield_task_queue_now().await;
             action.cancel().await;
 
             Timer::new(Duration::from_millis(100)).await;
