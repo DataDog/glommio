@@ -173,7 +173,7 @@ impl TaskQueue {
         self.active
     }
 
-    fn get_task(&mut self) -> Option<multitask::Runnable> {
+    fn get_task(&self) -> Option<multitask::Runnable> {
         self.ex.get_task()
     }
 
@@ -1062,7 +1062,7 @@ impl LocalExecutor {
 
                 let mut tasks_executed_this_loop = 0;
                 loop {
-                    let mut queue_ref = queue.borrow_mut();
+                    let queue_ref = queue.borrow();
                     if self.need_preempt() || queue_ref.yielded() {
                         break;
                     }
