@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{parking::Reactor, task::JoinHandle, GlommioError, Local, Task, TaskQueueHandle};
+use crate::{reactor::Reactor, task::JoinHandle, GlommioError, Local, Task, TaskQueueHandle};
 use pin_project_lite::pin_project;
 use std::{
     cell::RefCell,

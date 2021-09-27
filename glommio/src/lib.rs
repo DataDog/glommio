@@ -298,7 +298,7 @@ extern crate lazy_static;
 #[macro_use(defer)]
 extern crate scopeguard;
 
-use crate::parking::Reactor;
+use crate::reactor::Reactor;
 use std::{fmt::Debug, time::Duration};
 
 /// Call `Waker::wake()` and log to `error` if panicked.
@@ -319,6 +319,7 @@ mod free_list;
 #[allow(clippy::upper_case_acronyms)]
 mod iou;
 mod parking;
+mod reactor;
 mod sys;
 pub mod task;
 

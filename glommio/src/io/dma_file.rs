@@ -9,9 +9,11 @@ use crate::{
         glommio_file::GlommioFile,
         open_options::OpenOptions,
         read_result::ReadResult,
+        ScheduledSource,
     },
-    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
+    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus, RING_SUBMISSION_DEPTH},
 };
+use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
 use std::{
     cell::Ref,
@@ -289,7 +291,7 @@ impl DmaFile {
     /// request. This is transparent for the consumer, you will still
     /// receive individual ReadResults corresponding to what you asked for.
     ///
-    /// The first argument is an iterator of [`IoVec`]. The last two
+    /// The first argument is a stream of [`IoVec`]. The last two
     /// arguments control how aggressive the IO coalescing should be:
     /// * `max_merged_buffer_size` controls how large a merged IO request can
     ///   be. A value of 0 disables merging completely.
@@ -300,43 +302,38 @@ impl DmaFile {
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match.
-    pub fn read_many<V: IoVec + Unpin, S: Iterator<Item = V>>(
+    pub fn read_many<V, S>(
         self: &Rc<DmaFile>,
         iovs: S,
         max_merged_buffer_size: usize,
         max_read_amp: Option<usize>,
-    ) -> ReadManyResult<V> {
-        let mut last: Option<(u64, usize)> = None;
-        let it = CoalescedReads::new(iovs, max_merged_buffer_size, max_read_amp)
-            .map(|iov| {
-                let eff_pos = self.align_down(iov.1.0);
-                let b = (iov.1.0 - eff_pos) as usize;
-                let eff_size = self.align_up((iov.1.1 + b) as u64) as usize;
-                (iov.0, (eff_pos, eff_size))
-            })
-            .map(|iov| {
-                let args = ReadManyArgs {
-                    user_read: iov.0,
-                    system_read: iov.1,
-                };
-
-                if let Some(l) = &last {
-                    if l.0 == iov.1.0 && l.1 == iov.1.1 {
-                        return (None, args);
-                    }
-                }
-                let source = self.file.reactor.upgrade().unwrap().read_dma(
-                    self.as_raw_fd(),
-                    iov.1.0,
-                    iov.1.1,
-                    self.pollable,
-                    self.file.scheduler.borrow().as_ref(),
-                );
-                last = Some((iov.1.0, iov.1.1));
-                (Some(source), args)
-            });
+    ) -> ReadManyResult<V, impl Stream<Item = (ScheduledSource, ReadManyArgs<V>)>>
+    where
+        V: IoVec + Unpin,
+        S: Stream<Item = V> + Unpin,
+    {
+        let file = self.clone();
+        let reactor = file.file.reactor.upgrade().unwrap();
+        let it = CoalescedReads::new(
+            max_merged_buffer_size,
+            max_read_amp,
+            Some(self.o_direct_alignment),
+            iovs,
+        )
+        .map(move |iov| {
+            let fd = file.as_raw_fd();
+            let pollable = file.pollable;
+            let scheduler = file.file.scheduler.borrow();
+            (
+                reactor.read_dma(fd, iov.pos(), iov.size(), pollable, scheduler.as_ref()),
+                ReadManyArgs {
+                    user_reads: iov.coalesced_user_iovecs,
+                    system_read: (iov.pos, iov.size),
+                },
+            )
+        });
         ReadManyResult {
-            inner: OrderedBulkIo::new(self.clone(), it),
+            inner: OrderedBulkIo::new(self.clone(), RING_SUBMISSION_DEPTH, it),
             current: Default::default(),
         }
     }
@@ -432,8 +429,7 @@ pub(crate) mod test {
     use super::*;
     use crate::{enclose, test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
     use futures::join;
-    use futures_lite::StreamExt;
-    use itertools::Itertools;
+    use futures_lite::{stream, StreamExt};
     use rand::{seq::SliceRandom, thread_rng};
     use std::{cell::RefCell, path::PathBuf, time::Duration};
 
@@ -828,10 +824,10 @@ pub(crate) mod test {
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));
 
-        let mut iovs = (0..512).map(|x| (x * 8, 8)).collect_vec();
+        let mut iovs: Vec<(u64, usize)> = (0..512).map(|x| (x * 8, 8)).collect();
         iovs.shuffle(&mut thread_rng());
         new_file
-            .read_many(iovs.into_iter(), 4096, None)
+            .read_many(stream::iter(iovs.into_iter()), 4096, None)
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
@@ -859,10 +855,10 @@ pub(crate) mod test {
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));
 
-        let mut iovs = (0..511).map(|x| (x * 8 + 1, 7)).collect_vec();
+        let mut iovs: Vec<(u64, usize)> = (0..511).map(|x| (x * 8 + 1, 7)).collect();
         iovs.shuffle(&mut thread_rng());
         new_file
-            .read_many(iovs.into_iter(), 4096, None)
+            .read_many(stream::iter(iovs.into_iter()), 4096, None)
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
@@ -891,7 +887,7 @@ pub(crate) mod test {
         let last_read = Rc::new(RefCell::new(-1));
 
         new_file
-            .read_many((0..511).map(|x| (x * 8 + 1, 7)), 0, Some(0))
+            .read_many(stream::iter((0..511).map(|x| (x * 8 + 1, 7))), 0, Some(0))
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;

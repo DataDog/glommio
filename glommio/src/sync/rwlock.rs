@@ -911,6 +911,12 @@ impl<T> RwLock<T> {
     }
 }
 
+impl<T: Default> Default for RwLock<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl<T> Drop for RwLock<T> {
     fn drop(&mut self) {
         self.close();
