@@ -10,7 +10,7 @@ use std::io::Result;
 async fn hello() {
     let mut tasks = vec![];
     for t in 0..5 {
-        tasks.push(glommio::local(async move {
+        tasks.push(glommio::spawn_local(async move {
             println!("{}: Hello {} ...", glommio::executor().id(), t);
             glommio::executor().later().await;
             println!("{}: ... {} World!", glommio::executor().id(), t);

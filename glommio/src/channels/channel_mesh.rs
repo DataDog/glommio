@@ -416,8 +416,8 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
             let sender = self.channels[peer_id][i].0.take();
             let receiver = self.channels[i][peer_id].1.take();
 
-            let sender = sender.map(|sender| crate::local(sender.connect()).detach());
-            let receiver = receiver.map(|receiver| crate::local(receiver.connect()).detach());
+            let sender = sender.map(|sender| crate::spawn_local(sender.connect()).detach());
+            let receiver = receiver.map(|receiver| crate::spawn_local(receiver.connect()).detach());
 
             match sender {
                 None => {
@@ -527,7 +527,7 @@ mod tests {
                 assert_eq!(nr_peers, receiver.nr_producers());
                 assert_eq!(receiver.peer_id, receiver.consumer_id.unwrap());
 
-                crate::local(async move {
+                crate::spawn_local(async move {
                     for peer in 0..sender.nr_consumers() {
                         if peer != sender.peer_id() {
                             sender.send_to(peer, (sender.peer_id(), peer)).await.unwrap();

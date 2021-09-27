@@ -46,7 +46,7 @@ pub struct LocalSender<T> {
 /// ex.run(async move {
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
 ///
-///     let h = glommio::local(async move {
+///     let h = glommio::spawn_local(async move {
 ///         let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
 ///         assert_eq!(sum, 45);
 ///     })
@@ -442,7 +442,7 @@ impl<T> LocalChannel<T> {
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, receiver) = local_channel::new_unbounded();
-///     let h = glommio::local(async move {
+///     let h = glommio::spawn_local(async move {
 ///         assert_eq!(receiver.stream().next().await.unwrap(), 0);
 ///     })
 ///     .detach();
@@ -764,7 +764,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_unbounded();
 
-            let handle = crate::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -785,7 +785,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_unbounded();
 
-            let handle = crate::local(async move {
+            let handle = crate::spawn_local(async move {
                 let mut sum = 0;
                 receiver
                     .stream()
@@ -817,7 +817,7 @@ mod test {
             }
             drop(sender);
 
-            let handle = crate::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -832,7 +832,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_unbounded();
 
-            let handle = crate::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().take(3).fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 3);
             })
@@ -877,7 +877,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_bounded(1);
 
-            let handle = crate::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -896,13 +896,13 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_bounded(1);
 
-            let s = crate::local(async move {
+            let s = crate::spawn_local(async move {
                 sender.try_send(0).unwrap();
                 sender.send(0).await.unwrap_err();
             })
             .detach();
 
-            let r = crate::local(async move {
+            let r = crate::spawn_local(async move {
                 receiver.stream().next().await.unwrap();
                 drop(receiver);
             })
@@ -917,13 +917,13 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_bounded(1);
 
-            let s = crate::local(async move {
+            let s = crate::spawn_local(async move {
                 sender.try_send(0).unwrap();
                 sender.send(0).await.unwrap_err();
             })
             .detach();
 
-            let r = crate::local(async move {
+            let r = crate::spawn_local(async move {
                 receiver.recv().await.unwrap();
                 drop(receiver);
             })
@@ -941,7 +941,7 @@ mod test {
 
             let mut ret = Vec::new();
             for _ in 0..10 {
-                ret.push(crate::local(enclose! {(receiver) async move {
+                ret.push(crate::spawn_local(enclose! {(receiver) async move {
                     receiver.recv().await.unwrap();
                 }}));
             }

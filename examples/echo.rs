@@ -32,7 +32,7 @@ async fn server(conns: usize) -> Result<()> {
     for _ in 0..conns {
         let l = listener.clone();
         servers.push(
-            local(async move {
+            spawn_local(async move {
                 let mut stream = l.accept().await.unwrap();
                 loop {
                     let mut buf = [0u8; 1];
@@ -64,7 +64,7 @@ async fn client(clients: usize) -> Result<()> {
     let now = Instant::now();
     let mut tasks = vec![];
     for _ in 0..clients {
-        tasks.push(crate::local(async move {
+        tasks.push(crate::spawn_local(async move {
             let mut stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
             for _ in 0..msg_per_client {
                 stream.write(b"a").await?;

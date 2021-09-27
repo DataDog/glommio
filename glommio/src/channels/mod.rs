@@ -45,7 +45,7 @@ pub mod spsc_queue;
 ///     );
 ///
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
-///     let h = glommio::local_into(
+///     let h = glommio::spawn_local_into(
 ///         async move {
 ///             assert_eq!(receiver.stream().next().await.unwrap(), 0);
 ///         },
@@ -201,7 +201,7 @@ pub mod shared_channel;
 /// let executors = (0..nr_peers).map(|_| {
 ///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
 ///         let (sender, receiver) = mesh_builder.join().await.unwrap();
-///         glommio::local(async move {
+///         glommio::spawn_local(async move {
 ///             for peer in 0..sender.nr_consumers() {
 ///                 if peer != sender.peer_id() {
 ///                     sender.send_to(peer, (sender.peer_id(), peer)).await.unwrap();

@@ -414,7 +414,7 @@ impl<T: 'static> DeadlineQueue<T> {
 
         let queue_weak = Rc::downgrade(&queue);
 
-        let handle = crate::local_into(
+        let handle = crate::spawn_local_into(
             enclose! { (queue_weak) async move {
                 let response = Rc::new(response_sender);
                 let mut stream = receiver.stream();
@@ -610,7 +610,7 @@ mod test {
     fn deadline_queue_does_not_accept_non_monotonic_durations() {
         test_executor!(async move {
             let queue = Rc::new(DeadlineQueue::new("example", Duration::from_millis(1)));
-            let tq = crate::local(enclose! { (queue) async move {
+            let tq = crate::spawn_local(enclose! { (queue) async move {
                 let test = DeadlineSourceTest::new(Duration::from_secs(2_u64), 1);
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
@@ -663,7 +663,7 @@ mod test {
                 Duration::from_millis(1),
             ));
             let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
-            let tq = crate::local(enclose! { (queue, test) async move {
+            let tq = crate::spawn_local(enclose! { (queue, test) async move {
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
             }})
@@ -685,7 +685,7 @@ mod test {
                 Duration::from_millis(1),
             ));
             let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
-            let tq = crate::local(enclose! { (queue, test) async move {
+            let tq = crate::spawn_local(enclose! { (queue, test) async move {
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
             }})
@@ -705,7 +705,7 @@ mod test {
                 Duration::from_millis(10),
             ));
             let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
-            let tq = crate::local(enclose! { (queue, test) async move {
+            let tq = crate::spawn_local(enclose! { (queue, test) async move {
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
             }})
@@ -738,7 +738,7 @@ mod test {
     fn deadline_queue_second_queued_item_increases_slope() {
         test_executor!(async move {
             let queue = Rc::new(DeadlineQueue::new("example", Duration::from_millis(1)));
-            let tq = crate::local(enclose! { (queue) async move {
+            let tq = crate::spawn_local(enclose! { (queue) async move {
                 let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1);
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);
@@ -747,7 +747,7 @@ mod test {
 
             Timer::new(Duration::from_millis(2)).await;
             let shares_first = queue.queue.shares();
-            let tq2 = crate::local(enclose! { (queue) async move {
+            let tq2 = crate::spawn_local(enclose! { (queue) async move {
                 let test = DeadlineSourceTest::new(Duration::from_secs(1_u64), 1000);
                 let res = queue.push_work(test).await.unwrap();
                 assert_eq!(res, 0);

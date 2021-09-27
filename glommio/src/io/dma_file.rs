@@ -699,7 +699,7 @@ pub(crate) mod test {
         for i in 0..200 {
             let path = p.clone();
             handles.push(
-                crate::local(async move {
+                crate::spawn_local(async move {
                     let mut path = path.join("testfile");
                     path.set_extension(i.to_string());
                     let file = DmaFile::create(&path).await.expect("failed to create file");
@@ -787,9 +787,9 @@ pub(crate) mod test {
             "q2",
         );
         let task1 =
-            crate::local_into(read_write(path.join("q1")), q1).expect("failed to spawn task");
+            crate::spawn_local_into(read_write(path.join("q1")), q1).expect("failed to spawn task");
         let task2 =
-            crate::local_into(read_write(path.join("q2")), q2).expect("failed to spawn task");
+            crate::spawn_local_into(read_write(path.join("q2")), q2).expect("failed to spawn task");
 
         join!(task1, task2);
 

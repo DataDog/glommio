@@ -76,7 +76,7 @@ impl Gate {
         handle: TaskQueueHandle,
     ) -> Result<Task<T>, GlommioError<()>> {
         let pass = self.enter()?;
-        crate::local_into(
+        crate::spawn_local_into(
             async move {
                 let result = future.await;
                 drop(pass);
@@ -202,7 +202,7 @@ mod tests {
 
             println!("Main: closing gate");
             let close_future =
-                crate::local(enclose!((gate) async move { gate.close().await })).detach();
+                crate::spawn_local(enclose!((gate) async move { gate.close().await })).detach();
             crate::executor().later().await;
             assert!(!gate.is_open());
             assert!(gate.spawn(async {}).is_err());

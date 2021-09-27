@@ -766,7 +766,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle = crate::local(enclose! { (coord) async move {
+            let listener_handle = crate::spawn_local(enclose! { (coord) async move {
                 coord.set(1);
                 let stream = listener.accept().await?;
                 stream.peer_addr()
@@ -868,7 +868,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle = crate::local(enclose! { (coord) async move {
+            let listener_handle = crate::spawn_local(enclose! { (coord) async move {
                 coord.set(1);
                 listener.incoming().take(4).try_for_each(|addr| {
                     addr.map(|_| ())
@@ -880,7 +880,9 @@ mod tests {
             }
             let mut handles = Vec::with_capacity(4);
             for _ in 0..4 {
-                handles.push(crate::local(async move { TcpStream::connect(addr).await }).detach());
+                handles.push(
+                    crate::spawn_local(async move { TcpStream::connect(addr).await }).detach(),
+                );
             }
 
             for handle in handles.drain(..) {
@@ -904,7 +906,7 @@ mod tests {
 
             for _ in 0..128 {
                 handles.push(
-                    crate::local(enclose! { (listener) async move {
+                    crate::spawn_local(enclose! { (listener) async move {
                         let _accept = listener.accept().await.unwrap();
                     }})
                     .detach(),
@@ -918,7 +920,7 @@ mod tests {
             // accept
             for _ in 0..128 {
                 handles.push(
-                    crate::local(async move {
+                    crate::spawn_local(async move {
                         let _stream = TcpStream::connect(addr).await.unwrap();
                     })
                     .detach(),
@@ -938,7 +940,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle = crate::local(enclose! { (coord) async move {
+            let listener_handle = crate::spawn_local(enclose! { (coord) async move {
                 coord.set(1);
                 let mut stream = listener.accept().await?;
                 let mut byte = [0u8; 1];
@@ -966,7 +968,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = crate::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = Vec::new();
                 stream.read_until(10, &mut buf).await?;
@@ -989,7 +991,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = crate::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = String::new();
                 stream.read_line(&mut buf).await?;
@@ -1011,7 +1013,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = crate::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let stream = listener.accept().await?;
                 io::Result::Ok(stream.lines().count().await)
             })
@@ -1032,7 +1034,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = crate::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 // likely both messages were coalesced together
@@ -1064,7 +1066,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = crate::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf.len(), 4);
@@ -1089,7 +1091,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = crate::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf, b"msg1");
@@ -1116,7 +1118,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = crate::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = [0u8; 64];
                 for _ in 0..10 {
@@ -1169,7 +1171,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let ltask = crate::local(async move {
+            let ltask = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
@@ -1197,7 +1199,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let ltask = crate::local(async move {
+            let ltask = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 poll_fn(|cx| {
                     let mut buf = [0u8; 64];
@@ -1224,7 +1226,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let ltask = crate::local(async move {
+            let ltask = crate::spawn_local(async move {
                 let stream = listener.accept().await?;
                 stream
                     .set_write_timeout(Some(Duration::from_nanos(0)))
@@ -1248,7 +1250,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let peer_addr = crate::local(async move {
+            let peer_addr = crate::spawn_local(async move {
                 let accepted = listener.shared_accept().await.unwrap();
                 let peer_addr = accepted.peer_addr().unwrap();
                 let stream = accepted.bind_to_executor();

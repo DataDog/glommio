@@ -22,13 +22,13 @@ fn main() {
     let _server_ex = LocalExecutorBuilder::new()
         .pin_to_cpu(0)
         .spawn(move || async move {
-            let bw = glommio::local(async move {
+            let bw = glommio::spawn_local(async move {
                 let mut handles = Vec::new();
                 let listener = TcpListener::bind("127.0.0.1:8002").unwrap();
                 for _ in 0..101 {
                     let mut stream = listener.accept().await.unwrap();
                     handles.push(
-                        glommio::local(async move {
+                        glommio::spawn_local(async move {
                             let mut byte = vec![0u8; 8192];
                             loop {
                                 let read = stream.read(&mut byte).await.unwrap();
@@ -46,7 +46,7 @@ fn main() {
             })
             .detach();
 
-            let rr = glommio::local(async move {
+            let rr = glommio::spawn_local(async move {
                 let listener = TcpListener::bind("127.0.0.1:8001").unwrap();
                 let mut stream = listener.accept().await.unwrap();
 
@@ -92,7 +92,7 @@ fn main() {
             let mut handles = Vec::with_capacity(runs as usize);
             for _ in 0..100 {
                 handles.push(
-                    glommio::local(async move {
+                    glommio::spawn_local(async move {
                         for _ in 0..(runs / 100) {
                             TcpStream::connect("127.0.0.1:8000").await.unwrap();
                         }
@@ -138,7 +138,7 @@ fn main() {
             let total = Rc::new(Cell::new(0.0));
             for _ in 0..100 {
                 handles.push(
-                    glommio::local(enclose! { (total) async move {
+                    glommio::spawn_local(enclose! { (total) async move {
                         let t = Instant::now();
                         let mut stream = TcpStream::connect("127.0.0.1:8002").await.unwrap();
                         let byte = vec![65u8; 8192];

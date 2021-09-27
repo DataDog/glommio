@@ -83,7 +83,7 @@ async fn run_bench_tasks(num_tasks: u32, num_events: u32) -> Measurement {
 
     let mut handles = vec![];
     for _ in 0..num_tasks {
-        let handle = glommio::local(async move {
+        let handle = glommio::spawn_local(async move {
             let start_time = Instant::now();
             let submitter = glommio::nop::NopSubmitter::new();
             for _ in 0..num_ops_per_task {

@@ -290,7 +290,7 @@ impl<T: 'static> TimerActionOnce<T> {
         let timer = Timer::from_id(timer_id, when);
         let inner = timer.inner.clone();
 
-        let task = crate::local_into(
+        let task = crate::spawn_local_into(
             async move {
                 timer.await;
                 action.await
@@ -594,7 +594,7 @@ impl TimerActionRepeat {
         let reactor = crate::executor().reactor();
         let timer_id = reactor.register_timer();
 
-        let task = crate::local_into(
+        let task = crate::spawn_local_into(
             async move {
                 while let Some(period) = action_gen().await {
                     Timer::from_id(timer_id, period).await;
@@ -1067,7 +1067,7 @@ mod test {
 
         test_executor!(async move {
             let action = TimerActionOnce::do_in(Duration::from_millis(10), async move {
-                crate::local(async move {
+                crate::spawn_local(async move {
                     *(exec1.borrow_mut()) = 1;
                     // Test that if we had already started the action, it will run to completion.
                     for _ in 0..10 {

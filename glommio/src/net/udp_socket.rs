@@ -558,7 +558,7 @@ mod tests {
         test_executor!(async move {
             let (receiver, sender) = connected_pair!();
 
-            let recv_handle = crate::local(async move {
+            let recv_handle = crate::spawn_local(async move {
                 let mut buf = [0u8; 10];
                 // try to receive 10 bytes, but will assert that none comes back.
                 let sz = receiver.recv(&mut buf).await.unwrap();
@@ -578,7 +578,7 @@ mod tests {
         test_executor!(async move {
             let (receiver, sender) = connected_pair!();
 
-            let receiver_handle = crate::local(async move {
+            let receiver_handle = crate::spawn_local(async move {
                 for _ in 0..10 {
                     let mut buf = [0u8; 40];
                     let sz = receiver.peek(&mut buf).await.unwrap();
@@ -625,7 +625,7 @@ mod tests {
 
             let addr = receiver.local_addr().unwrap();
 
-            let receive_handle = crate::local(async move {
+            let receive_handle = crate::spawn_local(async move {
                 let mut buf = [0u8; 1];
                 for _ in 0..10 {
                     let (sz, _) = receiver
@@ -683,7 +683,7 @@ mod tests {
 
             let addr = receiver.local_addr().unwrap();
 
-            let receive_handle = crate::local(async move {
+            let receive_handle = crate::spawn_local(async move {
                 let mut buf = [0u8; 1];
                 let (sz, from) = receiver
                     .socket
