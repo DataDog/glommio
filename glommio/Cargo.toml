@@ -100,3 +100,7 @@ harness = false
 [[bench]]
 name = "spsc_queue"
 harness = false
+
+[[bench]]
+name = "noise"
+harness = false
