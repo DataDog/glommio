@@ -34,15 +34,18 @@ pub mod spsc_queue;
 ///
 /// ```
 /// use futures_lite::stream::StreamExt;
-/// use glommio::{channels::local_channel, Latency, Local, LocalExecutor, Shares};
+/// use glommio::{channels::local_channel, Latency, LocalExecutor, Shares};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
-///     let task_queue =
-///         Local::create_task_queue(Shares::default(), Latency::NotImportant, "example");
+///     let task_queue = glommio::executor().create_task_queue(
+///         Shares::default(),
+///         Latency::NotImportant,
+///         "example",
+///     );
 ///
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
-///     let h = Local::local_into(
+///     let h = glommio::local_into(
 ///         async move {
 ///             assert_eq!(receiver.stream().next().await.unwrap(), 0);
 ///         },
@@ -120,7 +123,7 @@ pub mod local_channel;
 /// # Examples
 ///
 /// ```
-/// use glommio::{channels::shared_channel, Local, LocalExecutorBuilder};
+/// use glommio::{channels::shared_channel, LocalExecutorBuilder};
 ///
 /// // creates both ends of the channel. This is done outside the executors
 /// // and we will not pass the sender to ex1 and the receiver to ex2
@@ -198,7 +201,7 @@ pub mod shared_channel;
 /// let executors = (0..nr_peers).map(|_| {
 ///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
 ///         let (sender, receiver) = mesh_builder.join().await.unwrap();
-///         Local::local(async move {
+///         glommio::local(async move {
 ///             for peer in 0..sender.nr_consumers() {
 ///                 if peer != sender.peer_id() {
 ///                     sender.send_to(peer, (sender.peer_id(), peer)).await.unwrap();

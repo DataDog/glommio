@@ -254,12 +254,16 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{timer::TimerActionOnce, Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{timer::TimerActionOnce, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         let tq = glommio::executor().create_task_queue(
+    ///             Shares::default(),
+    ///             Latency::NotImportant,
+    ///             "test",
+    ///         );
     ///         let action = TimerActionOnce::do_in_into(
     ///             Duration::from_millis(100),
     ///             async move {
@@ -346,12 +350,16 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{timer::TimerActionOnce, Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{timer::TimerActionOnce, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::{Duration, Instant};
     ///
     /// let handle = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         let tq = glommio::executor().create_task_queue(
+    ///             Shares::default(),
+    ///             Latency::NotImportant,
+    ///             "test",
+    ///         );
     ///         let when = Instant::now()
     ///             .checked_add(Duration::from_millis(100))
     ///             .unwrap();
@@ -552,12 +560,16 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::{timer::TimerActionRepeat, Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{timer::TimerActionRepeat, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         let tq = glommio::executor().create_task_queue(
+    ///             Shares::default(),
+    ///             Latency::NotImportant,
+    ///             "test",
+    ///         );
     ///         let action = TimerActionRepeat::repeat_into(
     ///             || async move {
     ///                 println!("Execute this!");

@@ -525,7 +525,7 @@ impl<T> RwLock<T> {
     ///
     /// ```
     /// use futures::future::join;
-    /// use glommio::{sync::RwLock, Local, LocalExecutor};
+    /// use glommio::{sync::RwLock, LocalExecutor};
     /// use std::rc::Rc;
     ///
     /// let lock = Rc::new(RwLock::new(1));
@@ -534,19 +534,17 @@ impl<T> RwLock<T> {
     /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
-    ///     let first_reader = crate::executor()
-    ///         .local(async move {
-    ///             let n = lock.read().await.unwrap();
-    ///             assert_eq!(*n, 1);
-    ///         })
-    ///         .detach();
+    ///     let first_reader = glommio::local(async move {
+    ///         let n = lock.read().await.unwrap();
+    ///         assert_eq!(*n, 1);
+    ///     })
+    ///     .detach();
     ///
-    ///     let second_reader = crate::executor()
-    ///         .local(async move {
-    ///             let r = c_lock.read().await;
-    ///             assert!(r.is_ok());
-    ///         })
-    ///         .detach();
+    ///     let second_reader = glommio::local(async move {
+    ///         let r = c_lock.read().await;
+    ///         assert!(r.is_ok());
+    ///     })
+    ///     .detach();
     ///
     ///     join(first_reader, second_reader).await;
     /// });
@@ -729,7 +727,6 @@ impl<T> RwLock<T> {
     /// ```
     /// use glommio::{
     ///     sync::{RwLock, Semaphore},
-    ///     Local,
     ///     LocalExecutor,
     /// };
     /// use std::{cell::RefCell, rc::Rc};
@@ -742,28 +739,26 @@ impl<T> RwLock<T> {
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///     let closer = crate::executor()
-    ///         .local(async move {
-    ///             //await till read lock will be acquired
-    ///             c_semaphore.acquire(1).await.unwrap();
-    ///             c_lock.close();
+    ///     let closer = glommio::local(async move {
+    ///         //await till read lock will be acquired
+    ///         c_semaphore.acquire(1).await.unwrap();
+    ///         c_lock.close();
     ///
-    ///             assert!(c_lock.try_write().is_err());
-    ///         })
-    ///         .detach();
+    ///         assert!(c_lock.try_write().is_err());
+    ///     })
+    ///     .detach();
     ///
-    ///     let dead_locker = crate::executor()
-    ///         .local(async move {
-    ///             let _r = lock.read().await.unwrap();
+    ///     let dead_locker = glommio::local(async move {
+    ///         let _r = lock.read().await.unwrap();
     ///
-    ///             //allow another fiber close RwLock
-    ///             semaphore.signal(1);
+    ///         //allow another fiber close RwLock
+    ///         semaphore.signal(1);
     ///
-    ///             // this situation leads to deadlock unless lock is closed
-    ///             let lock_result = lock.write().await;
-    ///             assert!(lock_result.is_err());
-    ///         })
-    ///         .detach();
+    ///         // this situation leads to deadlock unless lock is closed
+    ///         let lock_result = lock.write().await;
+    ///         assert!(lock_result.is_err());
+    ///     })
+    ///     .detach();
     ///
     ///     dead_locker.await;
     /// });

@@ -40,13 +40,13 @@ pub struct LocalSender<T> {
 ///
 /// ```
 /// use futures_lite::StreamExt;
-/// use glommio::{channels::local_channel, Local, LocalExecutor};
+/// use glommio::{channels::local_channel, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
 ///
-///     let h = crate::local(async move {
+///     let h = glommio::local(async move {
 ///         let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
 ///         assert_eq!(sum, 45);
 ///     })
@@ -437,12 +437,12 @@ impl<T> LocalChannel<T> {
 /// # Examples
 /// ```
 /// use futures_lite::StreamExt;
-/// use glommio::{channels::local_channel, Local, LocalExecutor};
+/// use glommio::{channels::local_channel, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, receiver) = local_channel::new_unbounded();
-///     let h = crate::local(async move {
+///     let h = glommio::local(async move {
 ///         assert_eq!(receiver.stream().next().await.unwrap(), 0);
 ///     })
 ///     .detach();
@@ -460,7 +460,7 @@ pub fn new_unbounded<T>() -> (LocalSender<T>, LocalReceiver<T>) {
 /// # Examples
 /// ```
 /// use futures_lite::StreamExt;
-/// use glommio::{channels::local_channel, Local, LocalExecutor};
+/// use glommio::{channels::local_channel, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
@@ -488,7 +488,7 @@ impl<T> LocalSender<T> {
     /// # Examples
     /// ```
     /// use futures_lite::StreamExt;
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -522,7 +522,7 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -542,7 +542,7 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -563,7 +563,7 @@ impl<T> LocalSender<T> {
     /// # Examples
     /// ```
     /// use futures_lite::StreamExt;
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -711,7 +711,7 @@ impl<T> LocalReceiver<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {

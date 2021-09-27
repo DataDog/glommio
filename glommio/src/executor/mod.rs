@@ -515,7 +515,7 @@ impl LocalExecutorBuilder {
     ///
     /// The indirection of `fut_gen()` here (instead of taking a `Future`)
     /// allows for futures that may not be `Send`-able once started. As this
-    /// executor is thread-local, it can guarantee that the futures will not
+    /// executor is thread- it can guarantee that the futures will not
     /// be Sent once started.
     ///
     /// # Panics
@@ -593,11 +593,11 @@ impl Default for LocalExecutorBuilder {
 /// # Example
 ///
 /// ```
-/// use glommio::{Local, LocalExecutorPoolBuilder};
+/// use glommio::LocalExecutorPoolBuilder;
 ///
 /// let handles = LocalExecutorPoolBuilder::new(4)
 ///     .on_all_shards(|| async move {
-///         let id = crate::executor().id();
+///         let id = glommio::executor().id();
 ///         println!("hello from executor {}", id);
 ///     })
 ///     .unwrap();
@@ -1287,14 +1287,14 @@ impl<T> Task<T> {
     ///
     /// ```
     /// use futures_lite::future;
-    /// use glommio::{timer::Timer, Local, LocalExecutor};
+    /// use glommio::{timer::Timer, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async {
     ///     glommio::local(async {
     ///         loop {
     ///             println!("I'm a background task looping forever.");
-    ///             crate::executor().later().await;
+    ///             glommio::executor().later().await;
     ///         }
     ///     })
     ///     .detach();
@@ -1318,7 +1318,7 @@ impl<T> Task<T> {
     ///
     /// ```
     /// use futures_lite::future;
-    /// use glommio::{Local, LocalExecutor};
+    /// use glommio::LocalExecutor;
     ///
     /// let ex = LocalExecutor::default();
     ///
@@ -1388,7 +1388,7 @@ impl<T> Future for Task<T> {
 /// ex.run(async {
 ///     let a = 2;
 ///     let task = unsafe {
-///         crate::scoped_local(async {
+///         glommio::scoped_local(async {
 ///             println!("Hello from a task!");
 ///             1 + a // this is a reference, and it works just fine
 ///         })
@@ -1407,7 +1407,7 @@ impl<T> Future for Task<T> {
 /// # ex.run(async {
 /// let mut a = 2;
 /// let task = unsafe {
-///     crate::scoped_local(async {
+///     glommio::scoped_local(async {
 ///         a = 3;
 ///     })
 /// };
@@ -1426,7 +1426,7 @@ impl<T> Future for Task<T> {
 /// # ex.run(async {
 /// let mut a = 2;
 /// let task = unsafe {
-///     crate::scoped_local(async {
+///     glommio::scoped_local(async {
 ///         a = 3;
 ///     })
 /// };
@@ -1448,7 +1448,7 @@ impl<T> Future for Task<T> {
 /// # ex.run(async {
 /// let a = Cell::new(2);
 /// let task = unsafe {
-///     crate::scoped_local(async {
+///     glommio::scoped_local(async {
 ///         a.set(3);
 ///     })
 /// };
@@ -1472,7 +1472,7 @@ impl<T> Future for Task<T> {
 /// {
 ///     let a = &mut "mayhem";
 ///     let task = unsafe {
-///         crate::scoped_local(async {
+///         glommio::scoped_local(async {
 ///             *a = "doom";
 ///         })
 ///     };
@@ -1511,7 +1511,7 @@ impl<'a, T> ScopedTask<'a, T> {
     ///
     /// ex.run(async {
     ///     let task = unsafe {
-    ///         crate::scoped_local(async {
+    ///         glommio::scoped_local(async {
     ///             loop {
     ///                 println!("Even though I'm in an infinite loop, you can still cancel me!");
     ///                 future::yield_now().await;
@@ -1582,11 +1582,11 @@ where
 /// # Examples
 ///
 /// ```
-/// # use glommio::{Local, LocalExecutor, Shares, Task};
+/// # use glommio::{ LocalExecutor, Shares, Task};
 ///
 /// # let local_ex = LocalExecutor::default();
 /// # local_ex.run(async {
-/// let handle = crate::executor().create_task_queue(
+/// let handle = glommio::executor().create_task_queue(
 ///     Shares::default(),
 ///     glommio::Latency::NotImportant,
 ///     "test_queue",
@@ -1652,11 +1652,11 @@ pub unsafe fn scoped_local<'a, T>(future: impl Future<Output = T> + 'a) -> Scope
 /// # Examples
 ///
 /// ```
-/// use glommio::{Local, LocalExecutor, Shares};
+/// use glommio::{LocalExecutor, Shares};
 ///
 /// let local_ex = LocalExecutor::default();
 /// local_ex.run(async {
-///     let handle = crate::executor().create_task_queue(
+///     let handle = glommio::executor().create_task_queue(
 ///         Shares::default(),
 ///         glommio::Latency::NotImportant,
 ///         "test_queue",
@@ -1715,12 +1715,12 @@ impl ExecutorProxy {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{Local, LocalExecutorBuilder};
+    /// use glommio::LocalExecutorBuilder;
     ///
     /// let ex = LocalExecutorBuilder::new()
     ///     .spawn(|| async {
     ///         loop {
-    ///             if crate::executor().need_preempt() {
+    ///             if glommio::executor().need_preempt() {
     ///                 break;
     ///             }
     ///         }
@@ -1784,7 +1784,7 @@ impl ExecutorProxy {
     /// let local_ex = LocalExecutor::default();
     ///
     /// local_ex.run(async {
-    ///     println!("my ID: {}", Task::<()>::id());
+    ///     println!("my ID: {}", glommio::executor().id());
     /// });
     /// ```
     pub fn id(&self) -> usize {
@@ -1803,12 +1803,12 @@ impl ExecutorProxy {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{Latency, Local, LocalExecutor, Shares};
+    /// use glommio::{Latency, LocalExecutor, Shares};
     /// use std::time::Duration;
     ///
     /// let local_ex = LocalExecutor::default();
     /// local_ex.run(async move {
-    ///     let task_queue = crate::executor().create_task_queue(
+    ///     let task_queue = glommio::executor().create_task_queue(
     ///         Shares::default(),
     ///         Latency::Matters(Duration::from_secs(1)),
     ///         "my_tq",
@@ -1842,12 +1842,12 @@ impl ExecutorProxy {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{Latency, Local, LocalExecutor, LocalExecutorBuilder, Shares};
+    /// use glommio::{Latency, LocalExecutor, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let original_tq = crate::executor().current_task_queue();
-    ///         let new_tq = crate::executor().create_task_queue(
+    ///         let original_tq = glommio::executor().current_task_queue();
+    ///         let new_tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
     ///             Latency::NotImportant,
     ///             "test",
@@ -1857,7 +1857,7 @@ impl ExecutorProxy {
     ///             async move {
     ///                 glommio::local_into(
     ///                     async move {
-    ///                         assert_eq!(crate::executor().current_task_queue(), original_tq);
+    ///                         assert_eq!(glommio::executor().current_task_queue(), original_tq);
     ///                     },
     ///                     original_tq,
     ///                 )
@@ -1882,18 +1882,18 @@ impl ExecutorProxy {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{Latency, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let new_tq = crate::executor().create_task_queue(
+    ///         let new_tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
     ///             Latency::NotImportant,
     ///             "test",
     ///         );
     ///         println!(
     ///             "Stats for test: {:?}",
-    ///             crate::executor().task_queue_stats(new_tq).unwrap()
+    ///             glommio::executor().task_queue_stats(new_tq).unwrap()
     ///         );
     ///     })
     ///     .unwrap();
@@ -1921,11 +1921,11 @@ impl ExecutorProxy {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{executor, Latency, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let new_tq = crate::executor().create_task_queue(
+    ///         let new_tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
     ///             Latency::NotImportant,
     ///             "test",
@@ -1933,7 +1933,7 @@ impl ExecutorProxy {
     ///         let v = Vec::new();
     ///         println!(
     ///             "Stats for all queues: {:?}",
-    ///             crate::executor().all_task_queue_stats(v)
+    ///             glommio::executor().all_task_queue_stats(v)
     ///         );
     ///     })
     ///     .unwrap();
@@ -1960,13 +1960,13 @@ impl ExecutorProxy {
     /// # Examples:
     ///
     /// ```
-    /// use glommio::{Local, LocalExecutorBuilder};
+    /// use glommio::{executor, LocalExecutorBuilder};
     ///
     /// let ex = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
     ///         println!(
     ///             "Stats for executor: {:?}",
-    ///             crate::executor().executor_stats()
+    ///             glommio::executor().executor_stats()
     ///         );
     ///     })
     ///     .unwrap();
@@ -1985,11 +1985,11 @@ impl ExecutorProxy {
     /// # Examples:
     ///
     /// ```
-    /// use glommio::{Local, LocalExecutorBuilder};
+    /// use glommio::LocalExecutorBuilder;
     ///
     /// let ex = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         println!("Stats for executor: {:?}", crate::executor().io_stats());
+    ///         println!("Stats for executor: {:?}", glommio::executor().io_stats());
     ///     })
     ///     .unwrap();
     ///
@@ -2007,18 +2007,18 @@ impl ExecutorProxy {
     /// # Examples:
     ///
     /// ```
-    /// use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{Latency, LocalExecutorBuilder, Shares};
     ///
     /// let ex = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let new_tq = crate::executor().create_task_queue(
+    ///         let new_tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
     ///             Latency::NotImportant,
     ///             "test",
     ///         );
     ///         println!(
     ///             "Stats for executor: {:?}",
-    ///             crate::executor().task_queue_io_stats(new_tq)
+    ///             glommio::executor().task_queue_io_stats(new_tq)
     ///         );
     ///     })
     ///     .unwrap();
@@ -2079,11 +2079,11 @@ impl ExecutorProxy {
     /// # Examples
     ///
     /// ```
-    /// # use glommio::{Local, LocalExecutor, Shares, Task};
+    /// # use glommio::{LocalExecutor, Shares, Task};
     ///
     /// # let local_ex = LocalExecutor::default();
     /// # local_ex.run(async {
-    /// let handle = crate::executor().create_task_queue(
+    /// let handle = glommio::executor().create_task_queue(
     ///     Shares::default(),
     ///     glommio::Latency::NotImportant,
     ///     "test_queue",
@@ -2151,11 +2151,11 @@ impl ExecutorProxy {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{Local, LocalExecutor, Shares};
+    /// use glommio::{LocalExecutor, Shares};
     ///
     /// let local_ex = LocalExecutor::default();
     /// local_ex.run(async {
-    ///     let handle = crate::executor().create_task_queue(
+    ///     let handle = glommio::executor().create_task_queue(
     ///         Shares::default(),
     ///         glommio::Latency::NotImportant,
     ///         "test_queue",
