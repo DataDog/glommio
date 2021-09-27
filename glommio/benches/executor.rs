@@ -46,7 +46,7 @@ fn main() {
             let runs: u32 = 10_000_000;
             let t = Instant::now();
             for _ in 0..runs {
-                crate::local(async {}).await;
+                crate::spawn_local(async {}).await;
             }
             println!("cost to run task no task queue: {:#?}", t.elapsed() / runs);
         })
@@ -64,7 +64,7 @@ fn main() {
             );
             let t = Instant::now();
             for _ in 0..runs {
-                crate::local_into(async {}, tq1).unwrap().await;
+                crate::spawn_local_into(async {}, tq1).unwrap().await;
             }
             println!("cost to run task in task queue: {:#?}", t.elapsed() / runs);
         })

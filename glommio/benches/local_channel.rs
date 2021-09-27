@@ -8,7 +8,7 @@ fn main() {
         .spawn(|| async move {
             let runs: u32 = 10_000_000;
             let (sender, receiver) = local_channel::new_bounded(1);
-            let receiver = crate::local(async move {
+            let receiver = crate::spawn_local(async move {
                 receiver.stream().fold(0, |acc, x| acc + x).await;
             })
             .detach();
@@ -32,7 +32,7 @@ fn main() {
         .spawn(|| async move {
             let runs: u32 = 10_000_000;
             let (sender, receiver) = local_channel::new_bounded(10_000_000);
-            let receiver = crate::local(async move {
+            let receiver = crate::spawn_local(async move {
                 receiver.stream().fold(0, |acc, x| acc + x).await;
             })
             .detach();

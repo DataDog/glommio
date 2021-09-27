@@ -86,14 +86,14 @@
 //!             executor().create_task_queue(Shares::Static(2), Latency::NotImportant, "test1");
 //!         let tq2 =
 //!             executor().create_task_queue(Shares::Static(1), Latency::NotImportant, "test2");
-//!         let t1 = glommio::local_into(
+//!         let t1 = glommio::spawn_local_into(
 //!             async move {
 //!                 // your code here
 //!             },
 //!             tq1,
 //!         )
 //!         .unwrap();
-//!         let t2 = glommio::local_into(
+//!         let t2 = glommio::spawn_local_into(
 //!             async move {
 //!                 // your code here
 //!             },
@@ -392,7 +392,7 @@ macro_rules! test_executor {
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(
-            joins.push(crate::local($fut));
+            joins.push(crate::spawn_local($fut));
         )*
         join_all(joins).await;
     });
@@ -481,10 +481,10 @@ pub use crate::{
     },
     executor::{
         executor,
-        local,
-        local_into,
-        scoped_local,
-        scoped_local_into,
+        spawn_local,
+        spawn_local_into,
+        spawn_scoped_local,
+        spawn_scoped_local_into,
         CpuSet,
         ExecutorProxy,
         ExecutorStats,
@@ -511,8 +511,8 @@ pub mod prelude {
     pub use crate::{
         error::GlommioError,
         executor,
-        local,
-        local_into,
+        spawn_local,
+        spawn_local_into,
         ByteSliceExt,
         ByteSliceMutExt,
         ExecutorProxy,

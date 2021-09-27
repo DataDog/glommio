@@ -46,7 +46,7 @@ fn main() {
             let shared_value = Rc::new(RefCell::new(0u64));
 
             let value = shared_value.clone();
-            let j1 = glommio::local_into(
+            let j1 = glommio::spawn_local_into(
                 async move {
                     let start = Instant::now();
                     let mut lap = start;
@@ -64,7 +64,7 @@ fn main() {
             .unwrap();
 
             let value = shared_value.clone();
-            let j2 = glommio::local_into(
+            let j2 = glommio::spawn_local_into(
                 async move {
                     let start = Instant::now();
                     let mut lap = start;

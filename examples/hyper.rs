@@ -31,7 +31,7 @@ mod hyper_compat {
         F::Output: 'static,
     {
         fn execute(&self, fut: F) {
-            glommio::local(fut).detach();
+            glommio::spawn_local(fut).detach();
         }
     }
 
@@ -91,7 +91,7 @@ mod hyper_compat {
                 }
                 Ok(stream) => {
                     let addr = stream.local_addr().unwrap();
-                    glommio::local(enclose!{(conn_control) async move {
+                    glommio::spawn_local(enclose!{(conn_control) async move {
                         let _permit = conn_control.acquire_permit(1).await;
                         if let Err(x) = Http::new().with_executor(HyperExecutor).serve_connection(HyperStream(stream), service_fn(service)).await {
                             if !x.is_incomplete_message() {

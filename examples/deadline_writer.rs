@@ -115,7 +115,7 @@ fn competing_cpu_hog(
     stop: Rc<Cell<bool>>,
     cpuhog_tq: TaskQueueHandle,
 ) -> glommio::task::JoinHandle<()> {
-    glommio::local_into(
+    glommio::spawn_local_into(
         async move {
             while !stop.get() {
                 burn_cpu(Duration::from_micros(500));
@@ -136,7 +136,7 @@ async fn static_writer(how_many: usize, shares: usize, cpuhog_tq: TaskQueueHandl
     let stop = Rc::new(Cell::new(false));
     let hog = competing_cpu_hog(stop.clone(), cpuhog_tq);
 
-    let writer = glommio::local_into(
+    let writer = glommio::spawn_local_into(
         async move {
             // Last parameter is bogus outside the queue, but we're just reusing the same
             // writer
