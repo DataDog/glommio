@@ -65,7 +65,6 @@ impl DmaStreamReaderBuilder {
     /// ```no_run
     /// use glommio::{
     ///     io::{DmaFile, DmaStreamReaderBuilder},
-    ///     Local,
     ///     LocalExecutor,
     /// };
     /// use std::rc::Rc;
@@ -76,7 +75,7 @@ impl DmaStreamReaderBuilder {
     ///     let _reader = DmaStreamReaderBuilder::from_rc(file.clone()).build();
     ///
     ///     // issue random I/O now, even though a stream is open.
-    ///     crate::local(async move {
+    ///     glommio::local(async move {
     ///         file.read_at(0, 8).await.unwrap();
     ///     })
     ///     .await;

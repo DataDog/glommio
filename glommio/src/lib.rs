@@ -77,21 +77,23 @@
 //! controllers:
 //!
 //! ```
-//! use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
+//! use glommio::{executor, Latency, LocalExecutorBuilder, Shares};
 //!
 //! LocalExecutorBuilder::new()
 //!     .pin_to_cpu(0)
 //!     .spawn(|| async move {
-//!         let tq1 = Local::create_task_queue(Shares::Static(2), Latency::NotImportant, "test1");
-//!         let tq2 = Local::create_task_queue(Shares::Static(1), Latency::NotImportant, "test2");
-//!         let t1 = Local::local_into(
+//!         let tq1 =
+//!             executor().create_task_queue(Shares::Static(2), Latency::NotImportant, "test1");
+//!         let tq2 =
+//!             executor().create_task_queue(Shares::Static(1), Latency::NotImportant, "test2");
+//!         let t1 = glommio::local_into(
 //!             async move {
 //!                 // your code here
 //!             },
 //!             tq1,
 //!         )
 //!         .unwrap();
-//!         let t2 = Local::local_into(
+//!         let t2 = glommio::local_into(
 //!             async move {
 //!                 // your code here
 //!             },

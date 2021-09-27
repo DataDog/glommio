@@ -427,7 +427,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{sync::Semaphore, timer::sleep, Local, LocalExecutor};
+    /// use glommio::{sync::Semaphore, timer::sleep, LocalExecutor};
     /// use std::{rc::Rc, time::Duration};
     ///
     /// let sem = Rc::new(Semaphore::new(1));
@@ -436,7 +436,7 @@ impl Semaphore {
     /// ex.run(async move {
     ///     {
     ///         let permit = sem.acquire_static_permit(1).await.unwrap();
-    ///         crate::local(async move {
+    ///         glommio::local(async move {
     ///             let _guard = permit;
     ///             sleep(Duration::from_secs(1)).await;
     ///         })
