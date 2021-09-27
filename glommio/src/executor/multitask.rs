@@ -36,6 +36,10 @@ use std::{
 /// the `Runnable` gets pushed into a task queue in an executor.
 pub(crate) type Runnable = task_impl::Task;
 
+/// An identity fingerprint of a runnable task; useful to compare two tasks for
+/// equality without keeping references
+pub(crate) type RunnableId = task_impl::TaskId;
+
 /// A spawned future.
 ///
 /// Tasks are also futures themselves and yield the output of the spawned
@@ -110,10 +114,32 @@ impl LocalQueue {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TaskQueueState {
+    /// The queue contains scheduled, active tasks. An active queue should not
+    /// be dropped, and its tasks should be executed ASAP.
+    Active,
+    /// The queue contains scheduled reentrant tasks.  A reentrant queue should
+    /// not be dropped. Although the user intends the scheduler to schedule
+    /// these tasks _eventually_, it is not a priority.
+    FullyReentrant,
+    /// This queue contains no scheduled task and should be dropped.
+    Exhausted,
+}
+
 /// A single-threaded executor.
 #[derive(Debug)]
 pub(crate) struct LocalExecutor {
-    local_queue: LocalQueue,
+    /// A local queue of schedulable tasks
+    active_queue: LocalQueue,
+    /// A local queue of reentrant tasks that yielded control to the executor
+    /// before preemption was needed; i.e., they would like to get CPU time
+    /// _eventually_. Once a task enters this queue, the executor will not
+    /// execute them until its next iteration
+    reentrant_queue: LocalQueue,
+    /// last_popped is the last runnable return by this executor
+    /// It is used to avoid placing the same task in run_next
+    last_popped: RefCell<Option<RunnableId>>,
 
     /// Make sure the type is `!Send` and `!Sync`.
     _marker: PhantomData<Rc<()>>,
@@ -127,7 +153,9 @@ impl LocalExecutor {
     /// Creates a new single-threaded executor.
     pub(crate) fn new() -> LocalExecutor {
         LocalExecutor {
-            local_queue: LocalQueue::new(),
+            active_queue: LocalQueue::new(),
+            reentrant_queue: LocalQueue::new(),
+            last_popped: RefCell::new(None),
             _marker: PhantomData,
         }
     }
@@ -147,9 +175,10 @@ impl LocalExecutor {
 
             if let Some(tq) = tq {
                 {
-                    let queue = tq.borrow();
-                    queue.ex.local_queue.push(runnable);
+                    let tq = tq.borrow();
+                    tq.ex.push_task(runnable, tq.yielded);
                 }
+
                 maybe_activate(tq);
             }
         };
@@ -159,6 +188,7 @@ impl LocalExecutor {
         task_impl::spawn_local(executor_id, future, schedule)
     }
 
+    /// Creates a [`Task`] for a given future and runs it immediately
     pub(crate) fn spawn_and_run<T>(
         &self,
         executor_id: usize,
@@ -170,6 +200,7 @@ impl LocalExecutor {
         Task(Some(handle))
     }
 
+    /// Creates a [`Task`] for a given future and schedules it to run eventually
     pub(crate) fn spawn_and_schedule<T>(
         &self,
         executor_id: usize,
@@ -185,10 +216,54 @@ impl LocalExecutor {
     ///
     /// Returns an option rapping the task.
     pub(crate) fn get_task(&self) -> Option<Runnable> {
-        self.local_queue.pop()
+        let ret = self.active_queue.pop();
+        self.last_popped.replace(ret.as_ref().map(RunnableId::from));
+        ret
     }
 
-    pub(crate) fn is_active(&self) -> bool {
-        !self.local_queue.queue.borrow().is_empty()
+    /// Reset the state of this [`LocalExecutor`] to be fair wrt scheduling
+    /// decisions and return the state of the queue.
+    pub(crate) fn make_fair(&self) -> TaskQueueState {
+        let any_active = !self.active_queue.queue.borrow().is_empty();
+        let any_reentrant = !self.reentrant_queue.queue.borrow().is_empty();
+        let ret = match (any_active, any_reentrant) {
+            (true, _) => TaskQueueState::Active,
+            (false, true) => TaskQueueState::FullyReentrant,
+            (false, false) => TaskQueueState::Exhausted,
+        };
+
+        // Put all the reentrant tasks at the back of the active queue such that we get
+        // to them next time the queue is polled.
+        self.active_queue
+            .queue
+            .borrow_mut()
+            .extend(self.reentrant_queue.queue.take());
+
+        ret
+    }
+
+    /// Schedule a given task for execution on this LocalExecutor
+    /// If next is false, runnable is added to the tail of the runnable queue.
+    /// If next is true, runnable is set as the immediate next task to run.
+    fn push_task(&self, runnable: Runnable, yielded: bool) {
+        // Check whether the task we try to schedule is the same that's currently
+        // running, if any. If so then the task is yielding voluntarily so we
+        // put it at the tail of the queue
+        let mut reentrant = self
+            .last_popped
+            .borrow()
+            .as_ref()
+            .map_or(false, |last| *last == RunnableId::from(&runnable));
+
+        // If the task scheduled itself back because of preemption, we don't consider
+        // it reentrant (it likely has more work to do, and we want to get to it during
+        // this executor tick).
+        reentrant &= !yielded;
+
+        if reentrant {
+            self.reentrant_queue.push(runnable)
+        } else {
+            self.active_queue.push(runnable)
+        }
     }
 }

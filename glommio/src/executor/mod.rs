@@ -56,6 +56,7 @@ use scoped_tls::scoped_thread_local;
 
 use crate::{
     error::BuilderErrorKind,
+    executor::multitask::TaskQueueState,
     parking,
     reactor,
     sys,
@@ -114,7 +115,7 @@ impl TaskQueueHandle {
 #[derive(Debug)]
 pub(crate) struct TaskQueue {
     pub(crate) ex: Rc<multitask::LocalExecutor>,
-    active: bool,
+    state: TaskQueueState,
     shares: Shares,
     vruntime: u64,
     io_requirements: IoRequirements,
@@ -158,7 +159,7 @@ impl TaskQueue {
     {
         Rc::new(RefCell::new(TaskQueue {
             ex: Rc::new(multitask::LocalExecutor::new()),
-            active: false,
+            state: TaskQueueState::Exhausted,
             stats: TaskQueueStats::new(index, shares.reciprocal_shares()),
             shares,
             vruntime: 0,
@@ -169,8 +170,8 @@ impl TaskQueue {
         }))
     }
 
-    fn is_active(&self) -> bool {
-        self.active
+    fn state(&self) -> TaskQueueState {
+        self.state
     }
 
     fn get_task(&self) -> Option<multitask::Runnable> {
@@ -195,7 +196,7 @@ impl TaskQueue {
         let delta_scaled = (self.stats.reciprocal_shares * (delta.as_nanos() as u64)) >> 12;
         self.stats.runtime += delta;
         self.stats.queue_selected += 1;
-        self.active = self.ex.is_active();
+        self.state = self.ex.make_fair();
 
         let vruntime = self.vruntime.checked_add(delta_scaled);
         if let Some(x) = vruntime {
@@ -320,8 +321,22 @@ impl TaskQueueStats {
 
 #[derive(Debug)]
 struct ExecutorQueues {
+    /// A list of task queues containing runnable tasks, sorted by virtual
+    /// runtime (min). Virtual runtime accounts for the time a queue has
+    /// been running, scaled according to the CPU share of the queue.
     active_executors: BinaryHeap<Rc<RefCell<TaskQueue>>>,
+
+    /// A list of task queues containing only reentrant tasks.
+    /// When the executor processes queues, this starts up empty. Once the
+    /// executor detects that a queue is fully reentrant, it is pushed here so
+    /// that the executor will ignore it until the next time the executor
+    /// returns to the reactor.
+    reentrant_executors: Vec<Rc<RefCell<TaskQueue>>>,
+
+    /// An exhaustive set of all task queues
     available_executors: AHashMap<usize, Rc<RefCell<TaskQueue>>>,
+
+    /// A reference to the task queue that is currently running if any.
     active_executing: Option<Rc<RefCell<TaskQueue>>>,
     executor_index: usize,
     last_vruntime: u64,
@@ -335,6 +350,7 @@ impl ExecutorQueues {
     fn new(preempt_timer_duration: Duration, spin_before_park: Option<Duration>) -> Self {
         ExecutorQueues {
             active_executors: BinaryHeap::new(),
+            reentrant_executors: Vec::new(),
             available_executors: AHashMap::new(),
             active_executing: None,
             executor_index: 1, // 0 is the default
@@ -360,9 +376,9 @@ impl ExecutorQueues {
 
     fn maybe_activate(&mut self, queue: Rc<RefCell<TaskQueue>>) {
         let mut state = queue.borrow_mut();
-        if !state.is_active() {
+        if !matches!(state.state(), TaskQueueState::Active) {
             state.vruntime = self.last_vruntime;
-            state.active = true;
+            state.state = TaskQueueState::Active;
             drop(state);
             self.active_executors.push(queue);
             self.reevaluate_preempt_timer();
@@ -862,6 +878,20 @@ pub struct LocalExecutor {
     reactor: Rc<reactor::Reactor>,
 }
 
+#[derive(Debug)]
+pub(crate) enum LocalExecutorRunResult {
+    /// The executor ran all the tasks from all the queues, and it's completely
+    /// out of work.
+    /// This signals to the reactor that, short of any external events coming
+    /// back to the executor isn't needed
+    Exhausted,
+    /// The executor ran all the tasks from all the queues, and it's out of work
+    /// However, there are reentrant runnable tasks remaining.
+    ExhaustedReentrant,
+    /// The executor still has work to get to but was preempted by the reactor.
+    Preempted,
+}
+
 impl LocalExecutor {
     fn get_reactor(&self) -> Rc<Reactor> {
         self.reactor.clone()
@@ -953,7 +983,7 @@ impl LocalExecutor {
         let queue_entry = queues.available_executors.entry(handle.index);
         if let Entry::Occupied(entry) = queue_entry {
             let tq = entry.get();
-            if tq.borrow().is_active() {
+            if !matches!(tq.borrow().state(), TaskQueueState::Exhausted) {
                 return Err(GlommioError::queue_still_active(handle.index));
             }
 
@@ -1029,18 +1059,32 @@ impl LocalExecutor {
         self.reactor.need_preempt()
     }
 
-    fn run_task_queues(&self) -> bool {
-        let mut ran = false;
-        while !self.need_preempt() {
-            if !self.run_one_task_queue() {
-                return false;
-            } else {
-                ran = true;
-            }
+    fn run_task_queues(&self) -> LocalExecutorRunResult {
+        while !self.need_preempt() && self.run_one_task_queue() {}
+
+        // add the reentrant queues back with the active one, so we get to them next
+        // time around.
+        let mut tq = self.queues.borrow_mut();
+        let reentrant_queues = std::mem::take(&mut tq.reentrant_executors);
+        let any_active_queues = !tq.active_executors.is_empty();
+        let any_reentrant_queues = !reentrant_queues.is_empty();
+        tq.active_executors.extend(reentrant_queues.into_iter());
+
+        match (any_active_queues, any_reentrant_queues) {
+            (false, false) => LocalExecutorRunResult::Exhausted,
+            (false, true) => LocalExecutorRunResult::ExhaustedReentrant,
+            (true, _) => LocalExecutorRunResult::Preempted,
         }
-        ran
     }
 
+    /// Run the next active task queue to completion or until:
+    /// * A task within the queue yielded;
+    /// * The scheduler preempted the queue
+    /// * All the tasks within the queue are reentrant (they wake themselves up)
+    ///
+    /// Exhausted queues are dropped from the executor, active queues are
+    /// pushed back and reentrant queues are pushed in a separate list that will
+    /// not be polled until we have polled IO.
     fn run_one_task_queue(&self) -> bool {
         let mut tq = self.queues.borrow_mut();
         let candidate = tq.active_executors.pop();
@@ -1078,10 +1122,10 @@ impl LocalExecutor {
 
                 let runtime = time.elapsed();
 
-                let (need_repush, last_vruntime) = {
+                let (queue_state, last_vruntime) = {
                     let mut state = queue.borrow_mut();
                     let last_vruntime = state.account_vruntime(runtime);
-                    (state.is_active(), last_vruntime)
+                    (state.state(), last_vruntime)
                 };
 
                 let mut tq = self.queues.borrow_mut();
@@ -1100,10 +1144,24 @@ impl LocalExecutor {
                     }
                 };
 
-                if need_repush {
-                    tq.active_executors.push(queue);
-                } else {
-                    tq.reevaluate_preempt_timer();
+                match queue_state {
+                    TaskQueueState::Active => {
+                        // queue is active, we want to keep polling from it if we can afford to do
+                        // so
+                        tq.active_executors.push(queue)
+                    }
+                    TaskQueueState::FullyReentrant => {
+                        // queue is reentrant, this has an impact on the preemption timer, so we
+                        // recompute it
+                        tq.reevaluate_preempt_timer();
+                        // queue need to be processed, but after a trip through the reactor
+                        tq.reentrant_executors.push(queue)
+                    }
+                    TaskQueueState::Exhausted => {
+                        // queue is exhausted, this has an impact on the preemption timer, so we
+                        // recompute it
+                        tq.reevaluate_preempt_timer()
+                    }
                 }
                 true
             }
@@ -1162,11 +1220,11 @@ impl LocalExecutor {
                 // the opportunity to install the timer.
                 let duration = self.preempt_timer_duration();
                 self.parker.poll_io(duration);
-                let run = self.run_task_queues();
+                let result = self.run_task_queues();
                 let cur_time = Instant::now();
                 self.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
                 pre_time = cur_time;
-                if !run {
+                if matches!(result, LocalExecutorRunResult::Exhausted) {
                     if let Poll::Ready(t) = future.as_mut().poll(cx) {
                         // It may be that we just became ready now that the task queue
                         // is exhausted. But if we sleep (park) we'll never know so we

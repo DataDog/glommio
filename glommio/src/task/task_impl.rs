@@ -176,3 +176,21 @@ impl fmt::Debug for Task {
             .finish()
     }
 }
+
+/// A TaskId contains the same information as [`Task`] but is typed such
+/// that it's unusable other than to compare two tasks for equality.
+/// Specifically, a [`TaskId`] doesn't count towards the task reference counter
+/// and dropping it is a no-op.
+#[derive(Debug, PartialEq)]
+pub struct TaskId {
+    /// A pointer to the heap-allocated task.
+    raw_task: NonNull<()>,
+}
+
+impl From<&Task> for TaskId {
+    fn from(task: &Task) -> Self {
+        Self {
+            raw_task: task.raw_task,
+        }
+    }
+}
