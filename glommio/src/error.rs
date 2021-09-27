@@ -115,8 +115,8 @@ pub enum BuilderErrorKind {
     /// with a number of [`CpuSet`](crate::CpuSet)s that does not match the
     /// number of shards requested.
     NrShards {
-        /// The number of [`CpuSet`](crate::CpuSet)s provided.
-        cpu_sets: usize,
+        /// The minimum number of shards that can be created
+        minimum: usize,
 
         /// The number of shards requested.
         shards: usize,
@@ -135,10 +135,10 @@ impl fmt::Display for BuilderErrorKind {
                 available,
                 required,
             } => write!(f, "found {} of {} required CPUs", available, required),
-            Self::NrShards { cpu_sets, shards } => write!(
+            Self::NrShards { minimum, shards } => write!(
                 f,
-                "provided {} CpuSet(s), requested {} shards",
-                cpu_sets, shards
+                "requested {} shards but a minimum of {} is required",
+                minimum, shards
             ),
             Self::ThreadPanic(_) => write!(f, "thread panicked"),
         }
@@ -419,9 +419,9 @@ impl<T> Debug for GlommioError<T> {
                     "InsufficientCpus {{ required: {}, available: {} }}",
                     required, available
                 )),
-                BuilderErrorKind::NrShards { cpu_sets, shards } => f.write_fmt(format_args!(
-                    "NrShards {{ cpu_sets: {}, shards: {} }}",
-                    cpu_sets, shards
+                BuilderErrorKind::NrShards { minimum, shards } => f.write_fmt(format_args!(
+                    "NrShards {{ minimum: {}, shards: {} }}",
+                    minimum, shards
                 )),
                 BuilderErrorKind::ThreadPanic(_) => write!(f, "Thread panicked {{ .. }}"),
             },

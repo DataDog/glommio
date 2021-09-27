@@ -126,8 +126,7 @@ fn main() {
 
     println!("Starting server on port 8000");
 
-    LocalExecutorPoolBuilder::new(num_cpus::get())
-        .placement(Placement::MaxSpread(CpuSet::online().ok()))
+    LocalExecutorPoolBuilder::new(Placement::MaxSpread(num_cpus::get(), CpuSet::online().ok()))
         .on_all_shards(|| async move {
             let id = glommio::executor().id();
             println!("Starting executor {}", id);
