@@ -739,7 +739,7 @@ mod test {
 
             // Wait for all permits to try and acquire, then unleash the gates.
             while exec.get() != 3 {
-                crate::executor().later().await;
+                crate::executor().yield_task_queue_now().await;
             }
             sem.signal(1);
 
@@ -978,7 +978,7 @@ mod test {
 
             let t2 = crate::spawn_local(async move {
                 while *state_c2.borrow() != 1 {
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }
 
                 *state_c2.borrow_mut() = 2;
@@ -989,7 +989,7 @@ mod test {
 
             let t3 = crate::spawn_local(async move {
                 while *state_c3.borrow() != 2 {
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }
 
                 *state_c3.borrow_mut() = 3;
@@ -999,7 +999,7 @@ mod test {
 
             crate::spawn_local(async move {
                 while *state.borrow() != 3 {
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }
 
                 semaphore.signal(1);

@@ -1054,10 +1054,10 @@ mod test {
                 let mut lock = rc2.write().await.unwrap();
 
                 for _ in 0..10 {
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                     let tmp = *lock;
                     *lock -= 1;
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                     *lock = tmp + 1;
                 }
 
@@ -1071,7 +1071,7 @@ mod test {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock == 0 || *lock == 10);
 
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }));
             }
 
@@ -1098,7 +1098,7 @@ mod test {
                     let tmp = *lock;
                     *lock -= 1;
 
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
 
                     *lock = tmp + 1;
                 }
@@ -1113,7 +1113,7 @@ mod test {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock >= 0);
 
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }));
             }
 
@@ -1139,7 +1139,7 @@ mod test {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
 
                     let mut lock = ball2.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1162,7 +1162,7 @@ mod test {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    crate::executor().later().await;
+                    crate::executor().yield_task_queue_now().await;
 
                     let mut lock = ball3.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1190,7 +1190,7 @@ mod test {
                     let mut prev = -1;
                     loop {
                         //give a room for other fibers to participate
-                        crate::executor().later().await;
+                        crate::executor().yield_task_queue_now().await;
                         let lock = ball.read().await.unwrap();
 
                         if *lock == ITERATIONS {

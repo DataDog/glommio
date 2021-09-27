@@ -16,16 +16,20 @@ fn main() {
     // explicitly yield control if they are going to do something that may take
     // too long (that is usually a loop!)
     //
-    // There are two ways of yielding control:
+    // There are three ways of yielding control:
     //
-    //  * glommio::executor().yield_if_needed(), which will yield if the task has
-    //    run for too long. What "too long" means is an implementation detail, but
-    //    it will be always somehow related to the latency guarantees that the task
-    //    queues want to uphold in their `Latency::Matters` parameter (or
-    //    Latency::NotImportant).
+    //  * glommio::executor().yield_if_needed(), which will yield if the current
+    //    task queue has run for too long. What "too long" means is an
+    //    implementation detail, but it will be always somehow related to the
+    //    latency guarantees that the task queues want to uphold in their
+    //    `Latency::Matters` parameter (or Latency::NotImportant).
     //
-    //  * glommio::executor().later(), which will yield immediately (execute the
-    //    rest of the function later).
+    //  * glommio::executor().yield_task_queue_now(), works like yield_if_needed()
+    //    but yields unconditionally.
+    //
+    //  * glommio::executor().yield_now(), which unconditional yield the current
+    //    task within the current task queue, forcing the scheduler to run another
+    //    task on the same task queue.
     //
     // Because yield_if_needed() returns a future that has to be .awaited, it cannot
     // be used in situations where .await is illegal. For instance, if we are
@@ -51,7 +55,7 @@ fn main() {
                     let start = Instant::now();
                     let mut lap = start;
                     while start.elapsed().as_millis() < 50 {
-                        glommio::executor().yield_if_needed().await;
+                        glommio::yield_if_needed().await;
                         if lap.elapsed().as_millis() > 1 {
                             lap = Instant::now();
                             println!("tq1: 1ms");
@@ -72,7 +76,7 @@ fn main() {
                         let mut v = value.borrow_mut();
                         if glommio::executor().need_preempt() {
                             drop(v);
-                            glommio::executor().later().await;
+                            glommio::executor().yield_task_queue_now().await;
                         } else {
                             *v += 1;
                         }

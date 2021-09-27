@@ -840,7 +840,7 @@ mod test {
 
             loop {
                 match sender.try_send(1) {
-                    Ok(_) => crate::executor().later().await,
+                    Ok(_) => crate::executor().yield_task_queue_now().await,
                     err => {
                         matches!(err, Err(GlommioError::WouldBlock(ResourceType::Channel(1))));
                         break;

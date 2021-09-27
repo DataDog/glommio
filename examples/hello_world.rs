@@ -12,7 +12,7 @@ async fn hello() {
     for t in 0..5 {
         tasks.push(glommio::spawn_local(async move {
             println!("{}: Hello {} ...", glommio::executor().id(), t);
-            glommio::executor().later().await;
+            glommio::executor().yield_task_queue_now().await;
             println!("{}: ... {} World!", glommio::executor().id(), t);
         }));
     }
