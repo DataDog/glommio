@@ -145,53 +145,54 @@ struct InnerQueue<T> {
 }
 
 impl<T> SharesManager for InnerQueue<T> {
-    // PI controller for shares.
-    //
-    // We are not dealing with the derivative constant here: it is too risky given
-    // the generic nature of the processes under control.
-    //
-    // The variable we are controlling is the speed at which the units are
-    // processed. Also because we don't know what units are and different items
-    // in the queue may have different magnitudes we need to work with
-    // normalized units.
-    //
-    // The error is the difference between our effective speed and the desired
-    // speed:
-    //
-    //    e(t) = units_expected/delta_t -  units_processed/ delta_t,
-    //
-    //  and because we are normalizing:
-    //
-    //    e(t) = 1/delta_t * (1 - units_processed / units_expected)
-    //
-    //  The controller output is then:
-    //
-    //    u(t) = Kp * e(t) + Ki + Integral{0, t} e(t)
-    //
-    //  There are a couple of practical problems with that.
-    //
-    //  * The first is that the output of the controller would be zero if we there
-    //    is no error
-    //  * The second is that our integral term would accumulate errors that may not
-    //    be comparable as we accumulate artifacts of the delta_t calculation (as
-    //    we'll never in practice keep delta_t constant)
-    //
-    //  The way we'll solve this is by expressing an alternate error E(T) which is
-    //  essentially the integral of e(t) in time:
-    //
-    //    E(t) = 1 - units_processed / units_expected.
-    //
-    //  That is easy to compute, as it is essentially the total count of units for
-    //  all items in the queue, both processed and expected.
-    //
-    //  We can now express our output function as the derivative of U(t), the output
-    //  function for the integral of the error:
-    //
-    //    u(t) = d(U(t)) / dt = Kp * dE(t) /dt + Ki * E(t)
-    //
-    //  Now we are calculating how much shares should be added or removed to the
-    //  last output, and not how much the shares should be. It also eliminates any
-    //  dependency on time when calculating the error which increases resiliency.
+    /// PI controller for shares.
+    ///
+    /// We are not dealing with the derivative constant here: it is too risky
+    /// given the generic nature of the processes under control.
+    ///
+    /// The variable we are controlling is the speed at which the units are
+    /// processed. Also, because we don't know what units are and different
+    /// items in the queue may have different magnitudes we need to work
+    /// with normalized units.
+    ///
+    /// The error is the difference between our effective speed and the desired
+    /// speed:
+    ///
+    ///    e(t) = units_expected/delta_t -  units_processed/ delta_t,
+    ///
+    ///  and because we are normalizing:
+    ///
+    ///    e(t) = 1/delta_t * (1 - units_processed / units_expected)
+    ///
+    ///  The controller output is then:
+    ///
+    ///    u(t) = Kp * e(t) + Ki + Integral{0, t} e(t)
+    ///
+    ///  There are a couple of practical problems with that.
+    ///
+    ///  * The first is that the output of the controller would be zero if we
+    ///    there are no error
+    ///  * The second is that our integral term would accumulate errors that may
+    ///    not be comparable as we accumulate artifacts of the delta_t
+    ///    calculation (as we'll never in practice keep delta_t constant)
+    ///
+    ///  The way we'll solve this is by expressing an alternate error E(T) which
+    /// is  essentially the integral of e(t) in time:
+    ///
+    ///    E(t) = 1 - units_processed / units_expected.
+    ///
+    ///  That is easy to compute, as it is essentially the total count of units
+    /// for  all items in the queue, both processed and expected.
+    ///
+    ///  We can now express our output function as the derivative of U(t), the
+    /// output  function for the integral of the error:
+    ///
+    ///    u(t) = d(U(t)) / dt = Kp * dE(t) /dt + Ki * E(t)
+    ///
+    ///  Now we are calculating how many shares should be added or removed to
+    /// the  last output, and not how much the shares should be. It also
+    /// eliminates any  dependency on time when calculating the error which
+    /// increases resiliency.
     fn shares(&self) -> usize {
         if let ControllerStatus::Disabled(shares) = self.state.get() {
             return shares;
@@ -240,7 +241,7 @@ impl<T> SharesManager for InnerQueue<T> {
         //  * physically, Ki can be expressed as Kp / Tau where Tau is a time constant,
         //    roughly equivalent to how many periods need to pass for the integral term
         //    to generate the same gain as the proportional term. We set that to 6 so
-        //    the controller is not too slugish, which is around 1.5 seconds on the
+        //    the controller is not too sluggish, which is around 1.5 seconds on the
         //    default 250ms adjustment period.
         //
         //  We can then write X + X/6 = 1000, and solving for X we have the constants
@@ -313,7 +314,7 @@ impl<T> InnerQueue<T> {
 /// were to run at full speed, it would rob us of precious resources that we'd
 /// rather dedicate to the rest of the application.
 ///
-/// However we don't want it to to run too slowly either, as it may never
+/// However, we don't want it to run too slowly either, as it may never
 /// complete.
 ///
 /// The "right amount" of shares is not even application dependent: it is time
@@ -329,14 +330,14 @@ impl<T> InnerQueue<T> {
 /// 10min because you have an agent that copies files every 10 minutes. You name
 /// it!
 ///
-/// Controlling processes is tricky and you should keep some things in mind for
+/// Controlling processes is tricky, and you should keep some things in mind for
 /// best results:
 ///
 /// * Control loops have a set time. It takes a while for the system to
 ///   stabilize so this is better suited for long processes (Deadline is much
 ///   higher than the adjustment period)
 /// * Control loops add overhead, so setting the adjustment period too low may
-///   not be the best way to make sure that the dealine is much higher than the
+///   not be the best way to make sure that the deadline is much higher than the
 ///   adjustment period =)
 /// * Control loops have *dead time*. In control theory, dead time is the time
 ///   that passes between the application of the control decision and its
@@ -344,8 +345,8 @@ impl<T> InnerQueue<T> {
 ///   long time, especially if the shares are low.
 /// * Control loops work better the faster and smoother the response is. Let's
 ///   use an example flushing a file: you may be moving data to the file
-///   internal buffers but they are not *flushed* to the media. When the data is
-///   finally flushed a giant bubble is inserted into the control loop. The
+///   internal buffers, but they are not *flushed* to the media. When the data
+///   is finally flushed a giant bubble is inserted into the control loop. The
 ///   characteristics of the system will radically change. Contract that for
 ///   instance with O_DIRECT files, where writing to the file means writing to
 ///   the media: smooth and fast feedback!
@@ -354,7 +355,7 @@ impl<T> InnerQueue<T> {
 ///    * do not use this with buffered files or other buffered sinks where the
 ///      real physical response is delayed
 ///    * do not set the adjustment period too low
-///    * do not use this very short lived processes.
+///    * do not use this very short-lived processes.
 ///
 /// To calculate the speed of the process, the needs of all elements in the
 /// queue are considered.
@@ -421,8 +422,7 @@ impl<T: 'static> DeadlineQueue<T> {
                 while let Some(request) = stream.next().await {
                     let res = request.action().await;
                     // now that we have executed the action, pop it from
-                    // the queue. We must do it regardless of whether or not
-                    // we succeeded.
+                    // the queue. We must do it regardless of whether we succeeded.
                     //
                     // It is legal for the queue not to be present anymore in
                     // case the DeadlineQueue itself was destroyed after the action
@@ -524,8 +524,8 @@ impl<T: 'static> DeadlineQueue<T> {
 
     /// Disables the controller.
     ///
-    /// Instead the process being controlled will now have static shares defined
-    /// by the `shares` argument (between 1 and 1000).
+    /// Instead, the process being controlled will now have static shares
+    /// defined by the `shares` argument (between 1 and 1000).
     pub fn disable(&self, mut shares: usize) {
         shares = std::cmp::min(shares, 1000);
         shares = std::cmp::max(shares, 1);

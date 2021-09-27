@@ -30,7 +30,7 @@
 //! note how this works with io_uring.
 //!
 //! A timeout is submitted as an additional IO event which completes after the
-//! specified time. Therefore when you create a timeout, all that happens is
+//! specified time. Therefore, when you create a timeout, all that happens is
 //! that a completion event will appear after that specified time. This also
 //! means that when processing completion events, you need to be prepared for
 //! the possibility that the completion represents a timeout and not a normal IO
@@ -82,7 +82,7 @@ bitflags::bitflags! {
     /// [`IoUring`] initialization flags for advanced use cases.
     ///
     pub struct SetupFlags: u32 {
-        /// Poll the IO context instead of defaulting to interrupts.
+        /// Poll the IO context instead of defaulting to interrupt.
         const IOPOLL    = 1 << 0;   /* io_context is polled */
         /// Assign a kernel thread to poll the submission queue. Requires elevated privileges to set.
         const SQPOLL    = 1 << 1;   /* SQ poll thread */

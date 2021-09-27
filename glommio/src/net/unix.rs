@@ -502,7 +502,7 @@ impl UnixDatagram {
     /// the [`send`] and [`recv`] methods to be used to send data and also
     /// applies filters to only receive data from the specified address.
     ///
-    /// If addr yields multiple addresses, connect will be attempted with each
+    /// If `addr` yields multiple addresses, connect will be attempted with each
     /// of the addresses until the underlying OS function returns no error.
     /// Note that usually, a successful connect call does not specify that
     /// there is a remote server listening on the port, rather, such an
@@ -577,7 +577,7 @@ impl UnixDatagram {
         self.socket.peek(buf).await.map_err(Into::into)
     }
 
-    ///Receives a single datagram message on the socket, without removing it
+    /// Receives a single datagram message on the socket, without removing it
     /// from the queue. On success, returns the number of bytes read and the
     /// origin.
     ///

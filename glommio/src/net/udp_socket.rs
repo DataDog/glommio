@@ -87,7 +87,7 @@ impl UdpSocket {
     /// [`recv`] methods to be used to send data and also applies filters to
     /// only receive data from the specified address.
     ///
-    /// If addr yields multiple addresses, connect will be attempted with each
+    /// If `addr` yields multiple addresses, connect will be attempted with each
     /// of the addresses until the underlying OS function returns no error.
     /// Note that usually, a successful connect call does not specify that
     /// there is a remote server listening on the port, rather, such an
@@ -342,8 +342,8 @@ impl UdpSocket {
     /// Sends data on the socket to the given address. On success, returns the
     /// number of bytes written. Address type can be any implementor of
     /// [`ToSocketAddrs`] trait. See its documentation for concrete examples.
-    /// It is possible for addr to yield multiple addresses, but send_to will
-    /// only send data to the first address yielded by addr.
+    /// It is possible for `addr` to yield multiple addresses, but send_to will
+    /// only send data to the first address yielded by `addr`.
     ///
     /// # Examples
     ///

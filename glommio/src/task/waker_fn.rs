@@ -7,7 +7,7 @@ use core::task::{RawWaker, RawWakerVTable, Waker};
 
 /// Creates a waker that does nothing.
 ///
-/// This `Waker` is useful for polling a `Future` to check whether it is
+/// This [`Waker`] is useful for polling a `Future` to check whether it is
 /// `Ready`, without doing any additional work.
 pub(crate) fn dummy_waker() -> Waker {
     fn raw_waker() -> RawWaker {

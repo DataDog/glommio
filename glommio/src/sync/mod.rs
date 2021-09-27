@@ -3,7 +3,7 @@
 
 //! Set of synchronization primitives.
 //!
-//! This create provides set of synchronization primitives which are optimized
+//! This crate provides a set of synchronization primitives which are optimized
 //! to be used inside of fibers which are driven by single-thread bounded
 //! executor.
 //!

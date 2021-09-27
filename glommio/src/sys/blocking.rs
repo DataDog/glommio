@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 
-// so hard to copy/clone io::Error, plus need to send between threads. Best to
+// So hard to copy/clone io::Error, plus need to send between threads. Best to
 // do all i64.
 macro_rules! raw_syscall {
     ($fn:ident $args:tt) => {{

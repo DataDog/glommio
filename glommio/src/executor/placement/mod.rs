@@ -71,7 +71,7 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 
 /// Specifies a policy by which [`LocalExecutorPoolBuilder`] selects CPUs.
 ///
-/// `Placement` is use to bind [`LocalExecutor`]s to a set of CPUs via
+/// `Placement` is used to bind [`LocalExecutor`]s to a set of CPUs via
 /// preconfigured policies designed to address a variety of use cases.  The
 /// default is `Unbound`.
 ///
@@ -130,7 +130,7 @@ pub enum Placement {
     /// Err`.
     Fenced(CpuSet),
     /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
-    /// that the set of all CPUs selected has a high degree of sepration.
+    /// that the set of all CPUs selected has a high degree of separation.
     /// The selection proceeds from all CPUs that are online in a
     /// non-deterministic manner.  The `Option<CpuSet>` parameter may be used to
     /// restrict the [`CpuSet`] from which CPUs are selected; specifying `None`
@@ -144,7 +144,7 @@ pub enum Placement {
     /// Err`.
     MaxSpread(Option<CpuSet>),
     /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
-    /// that the set of all CPUs selected has a low degree of sepration.
+    /// that the set of all CPUs selected has a low degree of separation.
     /// The selection proceeds from all CPUs that are online in a
     /// non-deterministic manner.  The `Option<CpuSet>` parameter may be used to
     /// restrict the [`CpuSet`] from which CPUs are selected; specifying `None`
@@ -270,7 +270,7 @@ impl CpuSet {
     }
 
     /// Visits the [`CpuLocation`]s representing the difference, i.e., the
-    /// values that are in self but not in other.
+    /// values that are in self but not in the other.
     pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, CpuLocation, RandomState> {
         self.0.difference(&other.0)
     }
@@ -284,8 +284,8 @@ impl CpuSet {
         self.0.intersection(&other.0)
     }
 
-    /// Returns true if self has no [`CpuLocation`]s in common with other. This
-    /// is equivalent to checking for an empty intersection.
+    /// Returns true if self has no [`CpuLocation`]s in common with the other.
+    /// This is equivalent to checking for an empty intersection.
     pub fn is_disjoint(&self, other: &Self) -> bool {
         self.0.is_disjoint(&other.0)
     }
@@ -297,7 +297,7 @@ impl CpuSet {
     }
 
     /// Returns true if this `CpuSet` is a superset of another, i.e., self
-    /// contains at least all the values in other.
+    /// contains at least all the values in the other.
     pub fn is_superset(&self, other: &Self) -> bool {
         self.0.is_superset(&other.0)
     }

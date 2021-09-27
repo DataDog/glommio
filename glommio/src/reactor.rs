@@ -92,7 +92,7 @@ struct Timers {
     ///
     /// Timers are in the order in which they fire. The `usize` in this type is
     /// a timer ID used to distinguish timers that fire at the same time.
-    /// The `Waker` represents the task awaiting the timer.
+    /// The [`Waker`] represents the task awaiting the timer.
     timers: BTreeMap<(Instant, u64), Waker>,
 }
 
@@ -159,13 +159,13 @@ impl Timers {
 /// The reactor.
 ///
 /// Every async I/O handle and every timer is registered here. Invocations of
-/// [`run()`][`crate::run()`] poll the reactor to check for new events every now
-/// and then.
+/// [`run()`][`crate::run()`] poll the reactor to periodically check for new
+/// events
 ///
 /// There is only one global instance of this type, accessible by
 /// [`Local::get_reactor()`].
 pub(crate) struct Reactor {
-    /// Raw bindings to epoll/kqueue/wepoll.
+    /// Raw bindings to `epoll`/`kqueue`/`wepoll`.
     pub(crate) sys: sys::Reactor,
 
     timers: RefCell<Timers>,
@@ -177,12 +177,12 @@ pub(crate) struct Reactor {
     /// Whether there are events in the latency ring.
     ///
     /// There will be events if the head and tail of the CQ ring are different.
-    /// liburing has an inline function in its header to do this, but it becomes
-    /// a function call if I use through uring-sys. This is quite critical and
-    /// already more expensive than it should be (see comments for
-    /// need_preempt()), so implement this ourselves.
+    /// `liburing` has an inline function in its header to do this, but it
+    /// becomes a function call if I use through `uring-sys`. This is quite
+    /// critical and already more expensive than it should be (see comments
+    /// for need_preempt()), so implement this ourselves.
     ///
-    /// Also we don't want to acquire these addresses (which are behind a
+    /// Also, we don't want to acquire these addresses (which are behind a
     /// refcell) every time. Acquire during initialization
     preempt_ptr_head: *const u32,
     preempt_ptr_tail: *const AtomicU32,
@@ -376,8 +376,8 @@ impl Reactor {
             iov_base: buf.as_ptr() as *mut libc::c_void,
             iov_len: 1,
         };
-        // note that the iov and addresses we have above are stack addresses. We will
-        // leave it blank and the io_uring callee will fill that up
+        // Note that the iov and addresses we have above are stack addresses. We will
+        // leave it blank and the `io_uring` callee will fill that up
         let hdr = libc::msghdr {
             msg_name: std::ptr::null_mut(),
             msg_namelen: 0,
@@ -696,9 +696,9 @@ impl Reactor {
         Ok(())
     }
 
-    /// polls for I/O, but does not change any timer registration.
+    /// Polls for I/O, but does not change any timer registration.
     ///
-    /// This doesn't ever sleep, and does not touch the preempt timer.
+    /// This doesn't ever sleep, and does not touch the preemption timer.
     pub(crate) fn spin_poll_io(&self) -> io::Result<bool> {
         let mut woke = 0;
         // any duration, just so we land in the latency ring
@@ -741,7 +741,7 @@ impl Reactor {
             // The syscall was interrupted.
             Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),
 
-            // An actual error occureed.
+            // An actual error occurred.
             Err(err) => Err(err),
         }
     }

@@ -75,7 +75,7 @@ impl Latch {
 
     /// Cancels the latch.  Other threads will no longer wait.  If this call
     /// caused a Cancellation, it returns `Ok` with the previous counter value.
-    /// Otherwise it returns an `Err` with the `LatchState`.
+    /// Otherwise, it returns an `Err` with the `LatchState`.
     ///
     /// The method does not synchronize with other threads.
     pub fn cancel(&self) -> Result<usize, LatchState> {

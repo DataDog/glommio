@@ -107,7 +107,7 @@ fn main() -> Result<()> {
 
     // Congrats for getting to the end of this example!
     //
-    // Now can you adapt it so it uses multiple executors and all CPUs in your
+    // Now can you adapt it, so it uses multiple executors and all CPUs in your
     // system?
     server_handle.join().unwrap();
     Ok(())

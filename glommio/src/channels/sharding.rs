@@ -22,8 +22,8 @@ pub trait Handler<T>: Clone {
     /// Handle a message either received from an external stream of forwarded
     /// from another peer.
     /// * `msg` - The message to handle.
-    /// * `src_shard` - Id of the shard where the msg is from.
-    /// * `cur_shard` - Id of the local shard.
+    /// * `src_shard` - ID of the shard where the msg is from.
+    /// * `cur_shard` - ID of the local shard.
     fn handle(&self, msg: T, src_shard: usize, cur_shard: usize) -> HandlerResult;
 }
 
@@ -134,7 +134,7 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
 
     /// Close this [`Sharded`] and wait for all existing background tasks to
     /// finish. No more consuming task will be spawned, but incoming
-    /// messages from the streams consumed by existing back ground tasks
+    /// messages from the streams consumed by existing background tasks
     /// will not be rejected. So it would be important to truncate the streams
     /// from upstream before calling this method to prevent it from hanging.
     pub async fn close(&mut self) {

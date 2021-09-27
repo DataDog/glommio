@@ -70,7 +70,7 @@ use crate::{
 use ahash::AHashMap;
 
 /// Result type alias that removes the need to specify a type parameter
-/// that's only valid in the channel variants of the error. Otherwise it
+/// that's only valid in the channel variants of the error. Otherwise, it
 /// might be confused with the error (`E`) that a result usually has in
 /// the second type parameter.
 type Result<T> = crate::Result<T, ()>;
@@ -214,9 +214,10 @@ fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
     nix::sched::sched_setaffinity(pid, &cpuset).map_err(|e| Into::into(to_io_error!(e)))
 }
 
-// Dealing with references would imply getting an Rc, RefCells, and all of that
-// Stats should be copied unfrequently, and if you have enough stats to fill a
-// Kb of data from a single source, maybe you should rethink your life choices.
+// Dealing with references would imply getting a Rc, RefCells, and all of that
+// Stats should be copied Infrequently, and if you have enough stats to fill a
+// Kb with data from a single source, maybe you should rethink your life
+// choices.
 #[derive(Debug, Copy, Clone)]
 /// Allows information about the current state of this executor to be consumed
 /// by applications.
@@ -311,7 +312,7 @@ impl TaskQueueStats {
 
     /// Returns the number of times this queue was selected to be executed. In
     /// conjunction with the runtime, you can extract an average of the
-    /// amount of time this queue tends to runs for
+    /// amount of time this queue tends to run for
     pub fn queue_selected(&self) -> u64 {
         self.queue_selected
     }
@@ -412,8 +413,8 @@ pub struct LocalExecutorBuilder {
     name: String,
     /// Amount of memory to reserve for storage I/O. This will be preallocated
     /// and registered with io_uring. It is still possible to use more than
-    /// that but it will come from the standard allocator and performance
-    /// will suffer. Defaults to 10MB.
+    /// that, but it will come from the standard allocator and performance
+    /// will suffer. Defaults to 10 MiB.
     io_memory: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
@@ -447,7 +448,7 @@ impl LocalExecutorBuilder {
         self
     }
 
-    /// Names the thread-to-be. Currently the name is used for identification
+    /// Names the thread-to-be. Currently, the name is used for identification
     /// only in panic messages.
     pub fn name(mut self, name: &str) -> LocalExecutorBuilder {
         self.name = String::from(name);
@@ -456,11 +457,11 @@ impl LocalExecutorBuilder {
 
     /// Amount of memory to reserve for storage I/O. This will be preallocated
     /// and registered with io_uring. It is still possible to use more than
-    /// that but it will come from the standard allocator and performance
+    /// that, but it will come from the standard allocator and performance
     /// will suffer.
     ///
-    /// The system will always try to allocate at least 64kB for I/O memory, and
-    /// the default is 10MB.
+    /// The system will always try to allocate at least 64 kiB for I/O memory,
+    /// and the default is 10 MiB.
     pub fn io_memory(mut self, io_memory: usize) -> LocalExecutorBuilder {
         self.io_memory = io_memory;
         self
@@ -616,8 +617,8 @@ pub struct LocalExecutorPoolBuilder {
     name: String,
     /// Amount of memory to reserve for storage I/O. This will be preallocated
     /// and registered with io_uring. It is still possible to use more than
-    /// that but it will come from the standard allocator and performance
-    /// will suffer. Defaults to 10MB.
+    /// that, but it will come from the standard allocator and performance
+    /// will suffer. Defaults to 10 MiB.
     io_memory: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
@@ -1245,7 +1246,7 @@ impl Default for LocalExecutor {
 /// task runs, as that is an implementation detail.
 ///
 /// In particular, acquiring a borrow and holding across a task spawning may
-/// work sometimes but panic depending on scheduling decisions, so it is still
+/// sometimes work but panic depending on scheduling decisions, so it is still
 /// illegal.
 ///
 ///
@@ -1416,7 +1417,7 @@ impl<T> Future for Task<T> {
 /// # });
 /// ```
 ///
-/// But until the task completes, the reference is mutably held so we can no
+/// But until the task completes, the reference is mutably held, so we can no
 /// longer immutably reference it:
 ///
 /// ```compile_fail
@@ -1542,7 +1543,7 @@ impl<'a, T> Future for ScopedTask<'a, T> {
 /// queue.
 ///
 /// Under which condition this function yield is an implementation detail
-/// subject to changes, but it will always be somehow related to the latency
+/// subject to change, but it will always be somehow related to the latency
 /// guarantees that the task queues want to uphold in their
 /// `Latency::Matters` parameter (or `Latency::NotImportant`).
 ///
@@ -1720,7 +1721,7 @@ impl ExecutorProxy {
         }
     }
 
-    /// Checks if this task has ran for too long and need to be preempted. This
+    /// Checks if this task has run for too long and need to be preempted. This
     /// is useful for situations where we can't call .await, for instance,
     /// if a [`RefMut`] is held. If this tests true, then the user is
     /// responsible for making any preparations necessary for calling .await
@@ -1779,7 +1780,7 @@ impl ExecutorProxy {
     /// queue.
     ///
     /// Under which condition this function yield is an implementation detail
-    /// subject to changes, but it will always be somehow related to the latency
+    /// subject to change, but it will always be somehow related to the latency
     /// guarantees that the task queues want to uphold in their
     /// `Latency::Matters` parameter (or `Latency::NotImportant`).
     ///
@@ -1963,7 +1964,7 @@ impl ExecutorProxy {
     /// task queues in the system
     ///
     /// The collection can be anything that implements [`Extend`] and it is
-    /// initially passed by the user so they can control how allocations are
+    /// initially passed by the user, so they can control how allocations are
     /// done.
     ///
     /// # Examples

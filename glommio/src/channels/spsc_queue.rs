@@ -39,8 +39,8 @@ struct Slot<T> {
 
 /// The internal memory buffer used by the queue.
 ///
-/// Buffer holds a pointer to allocated memory which represents the bounded
-/// ring buffer, as well as a head and tail atomicUsize which the producer and
+/// `Buffer` holds a pointer to allocated memory which represents the bounded
+/// ring buffer, as well as a head and tail `AtomicUsize` which the producer and
 /// consumer use to track location in the ring.
 #[repr(C)]
 pub(crate) struct Buffer<T> {
@@ -129,7 +129,7 @@ impl<T> Buffer<T> {
     /// If the buffer is empty, this method will not block. Instead, it will
     /// return `None` signifying the buffer was empty. The caller may then
     /// decide what to do next (e.g. spin-wait, sleep, process something
-    /// else, etc)
+    /// else, etc.)
     fn try_pop(&self) -> Option<T> {
         let head = self.ccache.head.load(Ordering::Relaxed);
         let slot = unsafe { &*self.buffer_storage.add(head & self.mask) };
@@ -178,25 +178,25 @@ impl<T> Buffer<T> {
         None
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already
+    /// Disconnects the consumer, and returns whether it was already
     /// disconnected
     pub(crate) fn disconnect_consumer(&self) -> bool {
         self.pcache.consumer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already
+    /// Disconnects the consumer, and returns whether it was already
     /// disconnected
     pub(crate) fn disconnect_producer(&self) -> bool {
         self.ccache.producer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already
+    /// Disconnects the consumer, and returns whether it was already
     /// disconnected
     pub(crate) fn producer_disconnected(&self) -> bool {
         self.ccache.producer_id.load(Ordering::Acquire) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether or not it was already
+    /// Disconnects the consumer, and returns whether it was already
     /// disconnected
     pub(crate) fn consumer_disconnected(&self) -> bool {
         self.pcache.consumer_id.load(Ordering::Acquire) == usize::MAX
