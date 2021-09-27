@@ -178,7 +178,7 @@ pub enum GlommioError<T> {
     /// operation, path and file descriptor. It also contains the error
     /// from the source IO error from `std::io::*`.
     EnhancedIoError {
-        /// The source error from `std::io::Error`.
+        /// The source error from [`std::io::Error`].
         source: io::Error,
 
         /// The operation that was being attempted.
@@ -192,7 +192,7 @@ pub enum GlommioError<T> {
     },
 
     /// Executor error variant(s) for signaling certain error conditions
-    /// inside of the executor.
+    /// inside the executor.
     ExecutorError(ExecutorErrorKind),
 
     /// Error variant(s) produced when building executors.
@@ -351,7 +351,7 @@ impl fmt::Display for QueueErrorKind {
 
 /// Note this is a tricky impl in the sense that you will not get the
 /// information you expect from just using this display impl on a value. On the
-/// other hand the display impl for the entire error will give correct results..
+/// other hand the display impl for the entire error will give correct results.
 impl<T> fmt::Display for ResourceType<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fmt_str = match self {

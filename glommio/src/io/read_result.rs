@@ -76,7 +76,7 @@ impl ReadResult {
     }
 
     /// Creates a slice of this ReadResult with the given offset and length.
-    /// Similiar to [`ReadResult::slice`], but does not check if the offset and
+    /// Similar to [`ReadResult::slice`], but does not check if the offset and
     /// length are correct.
     ///
     /// # Safety

@@ -10,7 +10,7 @@ use std::{rc::Rc, time::Duration};
 /// [`TaskQueue`]
 ///
 /// In terms of behavior, a [`TaskQueue`] with static shares is the same as a
-/// `SharesManager` managed queue that always return the same value. However
+/// `SharesManager` managed queue that always return the same value. However,
 /// this is a bit more expensive to compute because it needs to be reevaluated
 /// constantly.
 ///

@@ -7,7 +7,7 @@
 //! abstractions.
 
 /// A single-producer, single-consumer lock-free queue, allowing two threads
-/// to efficently communicate.
+/// to efficiently communicate.
 pub mod spsc_queue;
 
 /// Allow data to be transmitted across two tasks in the same shard.

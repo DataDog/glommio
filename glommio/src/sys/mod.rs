@@ -120,7 +120,7 @@ pub(crate) unsafe fn ssptr_to_sockaddr(
     len: usize,
 ) -> io::Result<nix::sys::socket::SockAddr> {
     let storage = ss.assume_init();
-    // unnamed unix sockets have a len of 0. Technically we should make sure this
+    // Unnamed unix sockets have a len of 0. Technically we should make sure this
     // has family = AF_UNIX, but if len == 0 the OS may not have written
     // anything here. If this is not supposed to be unix, the upper layers will
     // complain.
@@ -209,7 +209,7 @@ pub(crate) struct ReactorGlobalState {
 
 impl ReactorGlobalState {
     fn new_local_state(&mut self) -> io::Result<Arc<SleepNotifier>> {
-        // note how this starts from 1. 0 means "no notifier present"
+        // Note how this starts from 1. 0 means "no notifier present"
         self.idgen += 1;
         let id = self.idgen;
         if id == 0 || id == usize::MAX {
@@ -348,7 +348,7 @@ impl SleepNotifier {
     pub(crate) fn get_foreign_notifier(&self) -> Option<Waker> {
         match self.foreign_wakes.try_recv() {
             Ok(x) => Some(x),
-            // possible errors:
+            // Possible errors:
             //  - channel disconnected, so we won't ever have another notification
             //  - no messages, so the iterator must stop.
             Err(_) => None,
@@ -356,7 +356,7 @@ impl SleepNotifier {
     }
 
     pub(super) fn prepare_to_sleep(&self) {
-        // This will allow this eventfd to be notified. This should not happen
+        // This will allow this `eventfd` to be notified. This should not happen
         // for the placeholder (disconnected) case.
         assert_ne!(self.id, usize::MAX);
         self.memory
@@ -372,7 +372,7 @@ impl Drop for SleepNotifier {
     fn drop(&mut self) {
         let mut state = REACTOR_GLOBAL_STATE.write().unwrap();
         // The other side may still be holding a reference in which case the notifier
-        // will be freed later. However we can't receive notifications anymore
+        // will be freed later. However, we can't receive notifications anymore
         // so memory must be zeroed here.
         self.wake_up();
         state.sleep_notifiers.remove(&self.id).unwrap();
@@ -402,15 +402,15 @@ pub(crate) enum DirectIo {
     Disabled,
 }
 
-// You can be NonPollable and Buffered: that is the case for a Direct I/O file
-// dispatched, say, on a RAID array (RAID do not currently support Poll, but it
-// happily supports Direct I/O). So this is a 2 x 2 = 4 Matrix of possibilibies
-// meaning we can't conflate Pollable and the buffer type.
+/// You can be NonPollable and Buffered: that is the case for a Direct I/O file
+/// dispatched, say, on a RAID array (RAID do not currently support Poll, but it
+/// happily supports Direct I/O). So this is a 2 x 2 = 4 Matrix of possibilities
+/// meaning we can't conflate Pollable and the buffer type.
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PollableStatus {
     // The pollable ring only supports Direct I/O, so always true.
     Pollable,
-    // Non pollable can go either way
+    // Non-pollable can go either way
     NonPollable(DirectIo),
 }
 

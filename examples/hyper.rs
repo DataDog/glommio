@@ -1,9 +1,9 @@
-// Example on how to use the Hyper server in !Send mode.
-// The clients are harder, see https://github.com/hyperium/hyper/issues/2341 for details
-//
-// Essentially what we do is we wrap our types around the Tokio traits. The
-// !Send limitation makes it harder to deal with high level hyper primitives but
-// it works in the end.
+/// Example on how to use the Hyper server in !Send mode.
+/// The clients are harder, see https://github.com/hyperium/hyper/issues/2341 for details
+///
+/// Essentially what we do is we wrap our types around the Tokio traits. The
+/// `!Send` limitation makes it harder to deal with high level hyper primitives,
+/// but it works in the end.
 mod hyper_compat {
     use futures_lite::{AsyncRead, AsyncWrite, Future};
     use hyper::service::service_fn;

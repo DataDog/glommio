@@ -36,9 +36,9 @@ struct WaiterNode {
     units: u64,
     waker: RefCell<Option<Waker>>,
 
-    //waiter node can not be Unpin so its pointer could be used inside of intrusive
-    //collection, it also can not outlive the container which is guaranteed by the
-    //Waiter lifetime bound to the Semaphore which is container of all Waiters.
+    // Waiter node can not be `Unpin` so its pointer could be used inside intrusive
+    // collections, it also can not outlive the container which is guaranteed by the
+    // Waiter lifetime bound to the Semaphore which is container of all Waiters.
     _p: PhantomPinned,
 }
 
@@ -91,7 +91,7 @@ unsafe impl Adapter for WaiterAdapter {
         }
 
         let ptr = (value as *const u8).add(offset_of!(WaiterNode, link));
-        //we call unchecked method because of safety check above
+        // We call unchecked method because of safety check above
         core::ptr::NonNull::new_unchecked(ptr as *mut _)
     }
 
@@ -150,7 +150,7 @@ impl<'a> Waiter<'a> {
         }
 
         sem_state.waiters_list.push_back(unsafe {
-            //it is safe to use unchecked call here because we convert passed in reference
+            // It is safe to use unchecked call here because we convert passed in reference
             // which can not be null
             NonNull::new_unchecked(Pin::into_inner_unchecked(waiter_node) as *mut _)
         });
@@ -160,8 +160,8 @@ impl<'a> Waiter<'a> {
 impl<'a> Drop for Waiter<'a> {
     fn drop(&mut self) {
         if self.node.link.is_linked() {
-            //if node is linked that is for sure is pinned so that is safe
-            //to make it pinned directly
+            // If node is linked that is for sure is pinned so that is safe
+            // to make it pinned directly
             let waiter_node = unsafe { Pin::new_unchecked(&mut self.node) };
             Self::remove_from_waiting_queue(waiter_node, &mut self.semaphore.state.borrow_mut())
         }
@@ -387,7 +387,7 @@ impl Semaphore {
     /// Similar to [`acquire_static_permit`], except that it requires the permit
     /// never to be passed to contexts that require a static lifetime. As
     /// this is cheaper than [`acquire_static_permit`], it is useful in
-    /// situations where the permit tracks an a asynchronous operation whose
+    /// situations where the permit tracks an asynchronous operation whose
     /// lifetime is simple and well-defined.
     ///
     /// # Examples
@@ -535,7 +535,7 @@ impl Semaphore {
     /// reducing the number of available units by the given amount.
     ///
     /// The [`Permit`] is bound to the lifetime of the current reference of this
-    /// semaphore. If you are need it to live longer, consider using
+    /// semaphore. If you need it to live longer, consider using
     /// [`try_acquire_static_permit`].
     ///
     /// If insufficient units are available then this method will return
@@ -581,11 +581,11 @@ impl Semaphore {
     }
 
     /// Acquires the given number of units, if they are available, and
-    /// returns immediately, with the RAAI guard,
+    /// returns immediately, with the RAII guard,
     /// reducing the number of available units by the given amount.
     ///
     /// This function returns a [`StaticPermit`]
-    /// and is suitable for `'static` contexts. If your lifetimes are simple
+    /// and is suitable for `'static` contexts. If your lifetimes are simple,
     /// and you don't need the permit to outlive your context, consider using
     /// [`try_acquire_permit`] instead.
     ///
@@ -634,8 +634,9 @@ impl Semaphore {
 
     /// Signals the semaphore to release the specified amount of units.
     ///
-    /// This needs to be paired with a call to acquire(). You should not
-    /// call this if the units were acquired with acquire_permit().
+    /// This needs to be paired with a call to [`Semaphore::acquire()`]. You
+    /// should not call this if the units were acquired with
+    /// [`Semaphore::acquire_permit()`].
     ///
     /// # Examples
     ///
@@ -657,7 +658,8 @@ impl Semaphore {
 
     /// Closes the semaphore
     ///
-    /// All existing waiters will return Err(), and no new waiters are allowed.
+    /// All existing waiters will return `Err()`, and no new waiters are
+    /// allowed.
     ///
     /// # Examples
     ///

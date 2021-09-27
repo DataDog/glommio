@@ -150,8 +150,8 @@ impl Drop for Timer {
         let inner = self.inner.borrow_mut();
         if inner.is_charged {
             // Deregister the timer from the reactor. Reactor can be dropped already
-            //if that is the case then reactor already removed the timer and we do not need
-            //to do anything
+            // if that is the case then reactor already removed the timer, and we do not
+            // need to do anything
             if let Some(reactor) = inner.reactor.upgrade() {
                 reactor.remove_timer(inner.id);
             }
@@ -188,8 +188,9 @@ impl Future for Timer {
 /// In practice [`Timer`] is hard to use because it will always block the
 /// current task queue. This is rarely what one wants.
 ///
-/// The TimerActionOnce creates a timer in the background and executes an action
-/// when the timer expires. It also provides a convenient way to cancel a timer.
+/// The [`TimerActionOnce`] creates a timer in the background and executes an
+/// action when the timer expires. It also provides a convenient way to cancel a
+/// timer.
 ///
 /// [`Timer`]: struct.Timer.html
 #[derive(Debug)]
@@ -199,8 +200,8 @@ pub struct TimerActionOnce<T> {
     reactor: Weak<Reactor>,
 }
 
-/// The TimerActionRepeat struct provides an ergonomic way to fire a repeated
-/// action at specified intervals, without having to fire new
+/// The [`TimerActionRepeat`] struct provides an ergonomic way to fire a
+/// repeated action at specified intervals, without having to fire new
 /// [`TimerActionOnce`] events
 ///
 /// [`TimerActionOnce`]: struct.TimerActionOnce.html
@@ -345,7 +346,7 @@ impl<T: 'static> TimerActionOnce<T> {
     ///
     /// * `when` an [`Instant`] that represents when to execute the action.
     /// * `action` a Future to be executed at time `when`.
-    /// * `tq` the [`TaskQueueHandle`] for the TaskQueue we want.
+    /// * `tq` the [`TaskQueueHandle`] for the task queue we want.
     ///
     /// # Examples
     ///
@@ -461,7 +462,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// Waits for a [`TimerActionOnce`] to return
     ///
     /// Returns an [`Option`] with value None if the task was canceled and Some
-    /// if the action finished successfuly
+    /// if the action finished successfully
     ///
     /// # Examples
     ///
@@ -710,7 +711,7 @@ impl TimerActionRepeat {
     /// Waits for a [`TimerActionRepeat`] to return
     ///
     /// Returns an [`Option`] with value None if the task was canceled and
-    /// Some(()) if the action finished successfuly
+    /// Some(()) if the action finished successfully
     ///
     /// # Examples
     ///

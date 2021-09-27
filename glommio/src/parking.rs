@@ -5,15 +5,15 @@
 //
 //! Thread parking
 //!
-//! This module exposes a similar API as [`parking`][docs-parking]. However it
+//! This module exposes a similar API as [`parking`][docs-parking]. However, it
 //! is adapted to be used in a thread-per-core environment. Because there is a
-//! single thread per reactor, there is no way to forceably unpark a parked
-//! reactor so we don't expose an unpark function.
+//! single thread per reactor, there is no way to forcibly unpark a parked
+//! reactor, so we don't expose an unpark function.
 //!
-//! Also, we expose a function called poll_io aside from park.
+//! Also, we expose a function called `poll_io` aside from park.
 //!
-//! poll_io will poll for I/O, but not ever sleep. This is useful when we know
-//! there are more events and are just doing I/O so we don't starve anybody.
+//! `poll_io` will poll for I/O, but not ever sleep. This is useful when we know
+//! there are more events and are just doing I/O, so we don't starve anybody.
 //!
 //! park() is different in that it may sleep if no new events arrive. It
 //! essentially means: "I, the executor, have nothing else to do. If you don't
@@ -49,16 +49,16 @@ impl Parker {
         }
     }
 
-    /// Blocks until notified and then goes back into unnotified state.
+    /// Blocks until notified and then goes back into sleeping state.
     pub(crate) fn park(&self) {
         self.inner.park(None);
     }
 
-    /// Performs non-sleepable pool and install a preempt timeout into the
+    /// Performs non-sleepable pool and install a preemption timeout into the
     /// ring with `Duration`. A value of zero means we are not interested in
-    /// installing a preempt timer. Tasks executing in the CPU right after this
-    /// will be able to check if the timer has elapsed and yield the CPU if that
-    /// is the case.
+    /// installing a preemption timer. Tasks executing in the CPU right after
+    /// this will be able to check if the timer has elapsed and yield the
+    /// CPU if that is the case.
     pub(crate) fn poll_io(&self, timeout: Duration) {
         self.inner.park(Some(timeout));
     }

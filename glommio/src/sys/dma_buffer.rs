@@ -142,7 +142,7 @@ impl DmaBuffer {
         self.size
     }
 
-    /// Indicates whether or not this buffer is empty. An empty buffer can be,
+    /// Indicates whether this buffer is empty. An empty buffer can be,
     /// for instance, the result of a read past the end of a file.
     pub fn is_empty(&self) -> bool {
         self.size == 0

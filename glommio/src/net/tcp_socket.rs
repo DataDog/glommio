@@ -625,7 +625,7 @@ impl TcpStream {
     ///
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing
-    /// MSG_PEEK as a flag to the underlying recv system call.
+    /// MSG_PEEK as a flag to the underlying `recv` system call.
     pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
         self.stream.peek(buf).await.map_err(Into::into)
     }

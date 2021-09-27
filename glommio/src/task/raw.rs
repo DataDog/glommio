@@ -281,7 +281,7 @@ where
 
     /// Drops a waker.
     ///
-    /// This function will decrement the reference count. If it drops down to
+    /// This function will decrement the reference count. If it drops to
     /// zero, the associated join handle has been dropped too, and the task
     /// has not been completed, then it will get scheduled one more time so
     /// that its future gets dropped by the executor.
@@ -328,7 +328,7 @@ where
 
     /// Drops a task.
     ///
-    /// This function will decrement the reference count. If it drops down to
+    /// This function will decrement the reference count. If it drops to
     /// zero and the associated join handle has been dropped too, then the
     /// task gets destroyed.
     #[inline]
@@ -550,10 +550,9 @@ where
                     (*(raw.header as *mut Header)).state =
                         ((*(raw.header)).state & !RUNNING & !SCHEDULED) | CLOSED;
 
-                    // drop tasks future, and drop the task reference.
-
+                    // Drop tasks future, and drop the task reference.
                     // The thread that closed the task didn't drop the future because it
-                    // was running so now it's our responsibility to do so.
+                    // was running, so now it's our responsibility to do so.
                     RawTask::<F, R, S>::drop_future(ptr);
 
                     // Notify the awaiter that the future has been dropped.

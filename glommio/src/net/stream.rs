@@ -110,7 +110,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
     ///
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing
-    /// MSG_PEEK as a flag to the underlying recv system call.
+    /// `MSG_PEEK` as a flag to the underlying `recv` system call.
     pub(crate) async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         let source = self.reactor.upgrade().unwrap().recv(
             self.stream.as_raw_fd(),
@@ -142,10 +142,10 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         }
     }
 
-    // io_uring has support for shutdown now but it is not in any released kernel.
-    // Even with my "let's use latest" policy it would be crazy to mandate a kernel
-    // that doesn't even exist. So in preparation for that we'll sync-emulate this
-    // but already on an async wrapper
+    /// io_uring has support for shutdown now, but it is not in any released
+    /// kernel. Even with my "let's use latest" policy it would be crazy to
+    /// mandate a kernel that doesn't even exist. So in preparation for that
+    /// we'll sync-emulate this but already on an async wrapper
     pub(crate) fn poll_shutdown(
         &self,
         _cx: &mut Context<'_>,

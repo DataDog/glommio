@@ -459,7 +459,7 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
     res.map(|x| x as usize) // iou standardized on u32, which is good for low level but for higher layers usize is
         // better
         .map_err(|x| {
-            // Convert CANCELED to TimedOut. This will be the case for linked sqes with a
+            // Convert CANCELED to TimedOut. This will be the case for linked `sqe`s with a
             // timeout, and if we wanted to be really strict we'd check. But if
             // the operation is truly cancelled no one will check the result,
             // and we have no other use case for cancel at the moment so keep it simple
@@ -505,7 +505,7 @@ where
     R: FnOnce(Ref<'_, InnerSource>, io::Result<usize>) -> io::Result<usize>,
 {
     if let Some(value) = cqe {
-        // No user data is POLL_REMOVE or CANCEL, we won't process.
+        // No user data is `POLL_REMOVE` or `CANCEL`, we won't process.
         if value.user_data() == 0 {
             return Some(false);
         }
@@ -617,12 +617,12 @@ trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
     fn needs_kernel_enter(&self) -> bool;
-    // None if it wasn't possible to acquire an sqe. Some(true) if it was possible
-    // and there was something to dispatch. Some(false) if there was nothing to
-    // dispatch
+    /// None if it wasn't possible to acquire an `sqe`. `Some(true)` if it was
+    /// possible and there was something to dispatch. `Some(false)` if there
+    /// was nothing to dispatch
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool>;
-    /// Return `None` if no event is completed, `Some(true)` for a task is woke
-    /// and `Some(false)` for not.
+    /// Return `None` if no event is completed, `Some(true)` for a task is woken
+    /// up and `Some(false)` for not.
     fn consume_one_event(&mut self) -> Option<bool>;
     fn name(&self) -> &'static str;
     fn registrar(&self) -> iou::Registrar<'_>;
@@ -650,8 +650,8 @@ trait UringCommon {
         }
     }
 
-    // We will not dispatch the cancellation queue unless we need to.
-    // Dispatches will come from the submission queue.
+    /// We will not dispatch the cancellation queue unless we need to.
+    /// Dispatches will come from the submission queue.
     fn consume_cancellation_queue(&mut self) -> io::Result<usize> {
         let q = self.submission_queue();
         let mut queue = q.borrow_mut();
@@ -679,13 +679,13 @@ trait UringCommon {
         completed
     }
 
-    // It is important to process cancellations as soon as we see them,
-    // which is why they go into a separate queue. The reason is that
-    // cancellations can be racy if they are left to their own devices.
-    //
-    // Imagine that you have a write request to fd 3 and wants to cancel it.
-    // But before the cancellation is run fd 3 gets closed and another file
-    // is opened with the same fd.
+    /// It is important to process cancellations as soon as we see them,
+    /// which is why they go into a separate queue. The reason is that
+    /// cancellations can be racy if they are left to their own devices.
+    ///
+    /// Imagine that you have a write request to fd 3 and wants to cancel it.
+    /// But before the cancellation is run fd 3 gets closed and another file
+    /// is opened with the same fd.
     fn flush_cancellations(&mut self, woke: &mut usize) {
         let mut cnt = 0;
         loop {
@@ -770,8 +770,8 @@ impl UringCommon for PollRing {
     }
 
     fn needs_kernel_enter(&self) -> bool {
-        // if we submitted anything, we will have the submission count
-        // differing from the completion count and can_sleep will be false.
+        // If we submitted anything, we will have the submission count differing from
+        // the completion count and can_sleep will be false.
         //
         // So only need to check for that.
         !self.can_sleep()
@@ -812,7 +812,7 @@ impl UringCommon for PollRing {
             return Some(false);
         }
 
-        // find position of first element without a link
+        // Find position of first element without a link
         let chain_len = match queue.iter().position(|sqe| {
             !sqe.flags
                 .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
@@ -920,7 +920,7 @@ impl SleepableRing {
             user_data: to_user_data(new_id),
         });
         // No need to submit, the next ring enter will submit for us. Because
-        // we just flushed and we got put in front of the queue we should get a SQE.
+        // we just flushed, and we got put in front of the queue we should get a `SQE`.
         // Still it would be nice to verify if we did.
         source
     }
@@ -930,7 +930,7 @@ impl SleepableRing {
 
         if let Some(mut sqe) = self.ring.prepare_sqe() {
             self.waiting_submission += 1;
-            // Now must wait on the eventfd in case someone wants to wake us up.
+            // Now must wait on the `eventfd` in case someone wants to wake us up.
             // If we can't then we can't sleep and will just bail immediately
             let op = UringDescriptor {
                 fd: eventfd_src.raw(),
@@ -988,7 +988,7 @@ impl SleepableRing {
                 &mut *self.source_map.borrow_mut(),
             );
         } else {
-            // Can't link rings because we ran out of CQEs. Just can't sleep.
+            // Can't link rings because we ran out of `CQE`s. Just can't sleep.
             // Submit what we have, once we're out of here we'll consume them
             // and at some point will be able to sleep again.
             return self.ring.submit_sqes().map(|x| x as usize);
@@ -997,16 +997,16 @@ impl SleepableRing {
         let res = eventfd_src.take_result();
         match res {
             None => {
-                // We already have the eventfd registered and nobody woke us up so far.
+                // We already have the `eventfd` registered and nobody woke us up so far.
                 // Just proceed to sleep
                 self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
             }
             Some(res) => {
                 if self.install_eventfd(eventfd_src) {
-                    // Do not expect any failures reading from eventfd. This will panic if we
+                    // Do not expect any failures reading from `eventfd`. This will panic if we
                     // failed.
                     res.unwrap();
-                    // Now must wait on the eventfd in case someone wants to wake us up.
+                    // Now must wait on the `eventfd` in case someone wants to wake us up.
                     // If we can't then we can't sleep and will just bail immediately
                     self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
                 } else {
@@ -1071,7 +1071,7 @@ impl UringCommon for SleepableRing {
             return Some(false);
         }
 
-        // find position of first element without a link
+        // Find position of first element without a link
         let chain_len = match queue.iter().position(|sqe| {
             !sqe.flags
                 .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
@@ -1121,7 +1121,7 @@ pub(crate) struct Reactor {
 
     link_fd: RawFd,
 
-    // This keeps the eventfd alive. Drop will close it when we're done
+    // This keeps the `eventfd` alive. Drop will close it when we're done
     notifier: Arc<sys::SleepNotifier>,
     // This is the source used to handle the notifications into the ring.
     // It is reused, unlike the timeout src, because it is possible and likely
@@ -1448,9 +1448,10 @@ impl Reactor {
         self.queue_standard_request(source, UringOpDescriptor::Nop)
     }
 
-    // io_uring can return EBUSY when the CQE queue is full and we try to push more
-    // requests. This is fine: we just need to make sure that we don't sleep and
-    // that we dont' failed rushed polls. So we just ignore this error
+    /// io_uring can return `EBUSY` when the CQE queue is full, and we try to
+    /// push more requests. This is fine: we just need to make sure that we
+    /// don't sleep and that we don't failed rushed polls. So we just ignore
+    /// this error
     fn busy_ok(x: std::io::Error) -> io::Result<usize> {
         match x.raw_os_error() {
             Some(libc::EBUSY) => Ok(0),
@@ -1459,13 +1460,13 @@ impl Reactor {
         }
     }
 
-    // We want to go to sleep but we can only go to sleep in one of the rings,
-    // as we only have one thread. There are more than one sleepable rings, so
-    // what we do is we take advantage of the fact that the ring's ring_fd is
-    // pollable and register a POLL_ADD event into the ring we will wait on.
-    //
-    // We may not be able to register an SQE at this point, so we return an Error
-    // and will just not sleep.
+    /// We want to go to sleep, but we can only go to sleep in one of the rings,
+    /// as we only have one thread. There are more than one sleepable rings, so
+    /// what we do is we take advantage of the fact that the ring's `ring_fd` is
+    /// pollable and register a `POLL_ADD` event into the ring we will wait on.
+    ///
+    /// We may not be able to register an `SQE` at this point, so we return an
+    /// Error and will just not sleep.
     fn link_rings_and_sleep(
         &self,
         ring: &mut SleepableRing,
@@ -1502,43 +1503,47 @@ impl Reactor {
         }
     }
 
-    // This function can be passed two timers. Because they play different roles we
-    // keep them separate instead of overloading the same parameter.
-    //
-    // * The first is the preempt timer. It is designed to take the current task
-    //   queue out of the cpu. If nothing else fires in the latency ring the preempt
-    //   timer will, making need_preempt return true. Currently we always install a
-    //   preempt timer in the upper layers but from the point of view of the
-    //   io_uring implementation it is optional: it is perfectly valid not to have
-    //   one. Preempt timers are installed by Glommio executor runtime.
-    //
-    // * The second is the user timer. It is installed per a user request when the
-    //   user creates a Timer (or TimerAction).
-    //
-    // At some level, those are both just timers and can be coalesced. And they
-    // certainly are: if there is a user timer that needs to fire in 1ms and we
-    // want the preempt_timer to also fire around 1ms, there is no need to
-    // register two timers. At the end of the day, all that matters is that the
-    // latency ring flares and that we leave the CPU. That is because unlike I/O, we
-    // don't have one Source per timer, and parking.rs just keeps them on a wheel
-    // and just tell us about what is the next expiration.
-    //
-    // However they are also different. The main source of difference is sleep and
-    // wake behavior:
-    //
-    // * When there is no more work to do and we go to sleep, we do not want to
-    //   register the preempt timer: it is designed to fire periodically to take us
-    //   out of the CPU and if there is no task queue running, we don't want to wake
-    //   up and spend power just for that. However if there is a user timer that
-    //   needs to fire in the future we must register it. Otherwise we will sleep
-    //   and never wake up.
-    //
-    // * The user timer point of expiration never changes. So once we register it we
-    //   don't need to rearm it until it fires. But the preempt timer has to be
-    //   rearmed every time. Moreover it needs to give every task queue a fair shot
-    //   at running. So it needs to be rearmed as close as possible to the point
-    //   where we *leave* this method. For instance: if we spin here for 3ms and the
-    //   preempt timer is 10ms that would leave the next task queue just 7ms to run.
+    /// This function can be passed two timers. Because they play different
+    /// roles we keep them separate instead of overloading the same
+    /// parameter.
+    ///
+    /// * The first is the preempt timer. It is designed to take the current
+    ///   task queue out of the cpu. If nothing else fires in the latency ring
+    ///   the preempt timer will, making need_preempt return true. Currently, we
+    ///   always install a preempt timer in the upper layers but from the point
+    ///   of view of the io_uring implementation it is optional: it is perfectly
+    ///   valid not to have one. Preempt timers are installed by Glommio
+    ///   executor runtime.
+    ///
+    /// * The second is the user timer. It is installed per a user request when
+    ///   the user creates a `Timer` (or `TimerAction`).
+    ///
+    /// At some level, those are both just timers and can be coalesced. And they
+    /// certainly are: if there is a user timer that needs to fire in 1ms, and
+    /// we want the preempt_timer to also fire around 1ms, there is no need
+    /// to register two timers. At the end of the day, all that matters is
+    /// that the latency ring flares and that we leave the CPU. That is
+    /// because unlike I/O, we don't have one Source per timer, and
+    /// parking.rs just keeps them on a wheel and just tell us about what is
+    /// the next expiration.
+    ///
+    /// However, they are also different. The main source of difference is sleep
+    /// and wake behavior:
+    ///
+    /// * When there is no more work to do, and we go to sleep, we do not want
+    ///   to register the preempt timer: it is designed to fire periodically to
+    ///   take us out of the CPU and if there is no task queue running, we don't
+    ///   want to wake up and spend power just for that. However, if there is a
+    ///   user timer that needs to fire in the future we must register it.
+    ///   Otherwise, we will sleep and never wake up.
+    ///
+    /// * The user timer point of expiration never changes. So once we register
+    ///   it we don't need to rearm it until it fires. But the preempt timer has
+    ///   to be rearmed every time. Moreover, it needs to give every task queue
+    ///   a fair shot at running. So it needs to be rearmed as close as possible
+    ///   to the point where we *leave* this method. For instance: if we spin
+    ///   here for 3ms and the preempt timer is 10ms that would leave the next
+    ///   task queue just 7ms to run.
     pub(crate) fn wait<F>(
         &self,
         preempt_timer: Option<Duration>,
@@ -1555,7 +1560,7 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        // Cancel the old timer regardless of whether or not we can sleep:
+        // Cancel the old timer regardless of whether we can sleep:
         // if we won't sleep, we will register the new timer with its new
         // value.
         //
@@ -1570,7 +1575,7 @@ impl Reactor {
             }
         };
 
-        // this will only dispatch if we run out of sqes. Which means until
+        // This will only dispatch if we run out of sqes. Which means until
         // flush_rings! nothing is really send to the kernel...
         flush_cancellations!(into &mut woke; main_ring, lat_ring, poll_ring);
         // ... which happens right here. If you ever reorder this code just
@@ -1594,23 +1599,23 @@ impl Reactor {
             // that opened up room. If if did we bail on sleep and go process it.
             self.notifier.prepare_to_sleep();
             // See https://www.scylladb.com/2018/02/15/memory-barriers-seastar-linux/ for
-            // details. This translates to sys_membarrier() /
-            // MEMBARRIER_CMD_PRIVATE_EXPEDITED
+            // details. This translates to `sys_membarrier()` /
+            // `MEMBARRIER_CMD_PRIVATE_EXPEDITED`
             membarrier::heavy();
             let events = process_remote_channels() + self.flush_syscall_thread();
             if events == 0 {
                 self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)
                     .expect("some error");
-                // woke up, so no need to notify us anymore.
+                // Woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
-                // may have new cancellations related to the link ring fd.
+                // May have new cancellations related to the link ring fd.
                 flush_cancellations!(into &mut 0; main_ring);
                 flush_rings!(main_ring)?;
                 consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
             }
         }
 
-        // A Note about need_preempt:
+        // A Note about `need_preempt`:
         //
         // If in the last call to consume_rings! some events completed, the tail and
         // head would have moved to match. So it does not matter that events were
@@ -1637,9 +1642,9 @@ impl Reactor {
         let _ = sys::truncate_file(fd, size);
     }
 
-    // RAII-close asynchronously files that were not closed explicitly.
-    // We can't do this through a Source, because the Source will be dropped when
-    // the file is dropped.
+    /// RAII-close asynchronously files that were not closed explicitly.
+    /// We can't do this through a Source, because the Source will be dropped
+    /// when the file is dropped.
     pub(crate) fn async_close(&self, fd: RawFd) {
         let q = self.main_ring.borrow_mut().submission_queue();
         let mut queue = q.borrow_mut();

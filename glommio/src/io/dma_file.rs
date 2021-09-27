@@ -188,7 +188,7 @@ impl DmaFile {
     ///
     /// It is expected that the buffer and the position be properly aligned
     /// for Direct I/O. In most platforms that means 4096 bytes. There is no
-    /// write_at_aligned, since a non aligned write would require a
+    /// write_at_aligned, since a nonaligned write would require a
     /// read-modify-write.
     ///
     /// Buffers should be allocated through [`alloc_dma_buffer`], which
@@ -352,8 +352,8 @@ impl DmaFile {
     /// host the file.
     ///
     /// If the extent is larger, that means many blocks are allocated at a time.
-    /// For instance, if the extent size is 1MB, that means that only 1 out
-    /// of 4 256kB writes will be turned synchronous. Combined with diligent
+    /// For instance, if the extent size is 1 MiB, that means that only 1 out
+    /// of 4 256 KiB writes will be turned synchronous. Combined with diligent
     /// use of `fallocate` we can greatly minimize context switches.
     ///
     /// It is important not to set the extent size too big. Writes can fail

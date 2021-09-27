@@ -700,14 +700,14 @@ impl<'a, T> Drop for ChannelStream<'a, T> {
 impl<T> LocalReceiver<T> {
     /// Receives data from this channel
     ///
-    /// If the sender is no longer available it returns [`None`]. Otherwise
+    /// If the sender is no longer available it returns [`None`]. Otherwise,
     /// block until an item is available and returns it wrapped in [`Some`]
     ///
     /// Notice that this is also available as a Stream. Whether to consume from
     /// a stream or `recv` is up to the application. The biggest difference
     /// is that [`StreamExt`]'s [`next`] method takes a mutable reference to
     /// self. If the LocalReceiver is, say, behind an [`Rc`] it may be more
-    /// ergonomic to recv.
+    /// ergonomic to `recv`.
     ///
     /// # Examples
     /// ```
