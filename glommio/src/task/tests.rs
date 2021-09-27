@@ -56,7 +56,7 @@ mod ref_count {
     fn root_task() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 assert_eq!(1, TaskDebugger::task_count());
             });
         result.unwrap().join_all()[0].as_ref().unwrap();
@@ -66,7 +66,7 @@ mod ref_count {
     fn foreground_task() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 TaskDebugger::set_label("foreground_task");
                 let task = crate::spawn_local(async {
                     assert_eq!(2, TaskDebugger::task_count());
@@ -82,7 +82,7 @@ mod ref_count {
     fn background_task() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 TaskDebugger::set_label("background_task");
                 let handle = crate::spawn_local(async {
                     assert_eq!(2, TaskDebugger::task_count());
@@ -99,7 +99,7 @@ mod ref_count {
     fn drop_join_handle_before_completion() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 TaskDebugger::set_label("drop_join_handle_before_completion");
                 assert_eq!(1, TaskDebugger::task_count());
                 let handle = crate::spawn_local(async {
@@ -119,7 +119,7 @@ mod ref_count {
     fn drop_join_handle_after_completion() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 TaskDebugger::set_label("drop_join_handle_after_completion");
                 let handle = crate::spawn_local(async {}).detach();
                 assert_eq!(2, TaskDebugger::task_count());
@@ -135,7 +135,7 @@ mod ref_count {
     fn wake() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("wake");
                 let handle = crate::spawn_local(task.clone()).detach();
@@ -153,7 +153,7 @@ mod ref_count {
     fn wake_completed_task() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("wake");
                 let handle = crate::spawn_local(task.clone()).detach();
@@ -173,7 +173,7 @@ mod ref_count {
     fn drop_waker_of_completed_task() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("wake");
                 let handle = crate::spawn_local(task.clone()).detach();
@@ -193,7 +193,7 @@ mod ref_count {
     fn wake_by_ref() {
         init_logger();
         let result =
-            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(1)).on_all_shards(|| async move {
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("wake_by_ref");
                 let handle = crate::spawn_local(task.clone()).detach();
