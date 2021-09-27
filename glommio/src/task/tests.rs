@@ -55,149 +55,158 @@ mod ref_count {
     #[test]
     fn root_task() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn foreground_task() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            TaskDebugger::set_label("foreground_task");
-            let task = crate::spawn_local(async {
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                TaskDebugger::set_label("foreground_task");
+                let task = crate::spawn_local(async {
+                    assert_eq!(2, TaskDebugger::task_count());
+                });
                 assert_eq!(2, TaskDebugger::task_count());
+                task.await;
+                assert_eq!(1, TaskDebugger::task_count());
             });
-            assert_eq!(2, TaskDebugger::task_count());
-            task.await;
-            assert_eq!(1, TaskDebugger::task_count());
-        });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn background_task() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            TaskDebugger::set_label("background_task");
-            let handle = crate::spawn_local(async {
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                TaskDebugger::set_label("background_task");
+                let handle = crate::spawn_local(async {
+                    assert_eq!(2, TaskDebugger::task_count());
+                })
+                .detach();
                 assert_eq!(2, TaskDebugger::task_count());
-            })
-            .detach();
-            assert_eq!(2, TaskDebugger::task_count());
-            handle.await.unwrap();
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+                handle.await.unwrap();
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn drop_join_handle_before_completion() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            TaskDebugger::set_label("drop_join_handle_before_completion");
-            assert_eq!(1, TaskDebugger::task_count());
-            let handle = crate::spawn_local(async {
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                TaskDebugger::set_label("drop_join_handle_before_completion");
+                assert_eq!(1, TaskDebugger::task_count());
+                let handle = crate::spawn_local(async {
+                    yield_now().await;
+                })
+                .detach();
+                assert_eq!(2, TaskDebugger::task_count());
+                drop(handle);
+                assert_eq!(2, TaskDebugger::task_count());
                 yield_now().await;
-            })
-            .detach();
-            assert_eq!(2, TaskDebugger::task_count());
-            drop(handle);
-            assert_eq!(2, TaskDebugger::task_count());
-            yield_now().await;
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn drop_join_handle_after_completion() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            TaskDebugger::set_label("drop_join_handle_after_completion");
-            let handle = crate::spawn_local(async {}).detach();
-            assert_eq!(2, TaskDebugger::task_count());
-            yield_now().await;
-            assert_eq!(2, TaskDebugger::task_count());
-            drop(handle);
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                TaskDebugger::set_label("drop_join_handle_after_completion");
+                let handle = crate::spawn_local(async {}).detach();
+                assert_eq!(2, TaskDebugger::task_count());
+                yield_now().await;
+                assert_eq!(2, TaskDebugger::task_count());
+                drop(handle);
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn wake() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let task = WakeN::new(1);
-            TaskDebugger::set_label("wake");
-            let handle = crate::spawn_local(task.clone()).detach();
-            yield_now().await;
-            task.take_waker().unwrap().wake();
-            yield_now().await;
-            assert_eq!(2, TaskDebugger::task_count());
-            drop(handle);
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                let task = WakeN::new(1);
+                TaskDebugger::set_label("wake");
+                let handle = crate::spawn_local(task.clone()).detach();
+                yield_now().await;
+                task.take_waker().unwrap().wake();
+                yield_now().await;
+                assert_eq!(2, TaskDebugger::task_count());
+                drop(handle);
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn wake_completed_task() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let task = WakeN::new(1);
-            TaskDebugger::set_label("wake");
-            let handle = crate::spawn_local(task.clone()).detach();
-            drop(handle);
-            yield_now().await;
-            let waker = task.take_waker().unwrap();
-            waker.clone().wake();
-            yield_now().await;
-            assert_eq!(2, TaskDebugger::task_count());
-            waker.wake();
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                let task = WakeN::new(1);
+                TaskDebugger::set_label("wake");
+                let handle = crate::spawn_local(task.clone()).detach();
+                drop(handle);
+                yield_now().await;
+                let waker = task.take_waker().unwrap();
+                waker.clone().wake();
+                yield_now().await;
+                assert_eq!(2, TaskDebugger::task_count());
+                waker.wake();
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn drop_waker_of_completed_task() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let task = WakeN::new(1);
-            TaskDebugger::set_label("wake");
-            let handle = crate::spawn_local(task.clone()).detach();
-            drop(handle);
-            yield_now().await;
-            let waker = task.take_waker().unwrap();
-            waker.clone().wake();
-            yield_now().await;
-            assert_eq!(2, TaskDebugger::task_count());
-            drop(waker);
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                let task = WakeN::new(1);
+                TaskDebugger::set_label("wake");
+                let handle = crate::spawn_local(task.clone()).detach();
+                drop(handle);
+                yield_now().await;
+                let waker = task.take_waker().unwrap();
+                waker.clone().wake();
+                yield_now().await;
+                assert_eq!(2, TaskDebugger::task_count());
+                drop(waker);
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 
     #[test]
     fn wake_by_ref() {
         init_logger();
-        let result = LocalExecutorPoolBuilder::new(1).on_all_shards(|| async move {
-            let task = WakeN::new(1);
-            TaskDebugger::set_label("wake_by_ref");
-            let handle = crate::spawn_local(task.clone()).detach();
-            yield_now().await;
-            let waker = task.take_waker().unwrap();
-            waker.wake_by_ref();
-            yield_now().await;
-            assert_eq!(2, TaskDebugger::task_count());
-            drop(handle);
-            assert_eq!(2, TaskDebugger::task_count());
-            drop(waker);
-            assert_eq!(1, TaskDebugger::task_count());
-        });
+        let result =
+            LocalExecutorPoolBuilder::new(Placement::Unbound(1)).on_all_shards(|| async move {
+                let task = WakeN::new(1);
+                TaskDebugger::set_label("wake_by_ref");
+                let handle = crate::spawn_local(task.clone()).detach();
+                yield_now().await;
+                let waker = task.take_waker().unwrap();
+                waker.wake_by_ref();
+                yield_now().await;
+                assert_eq!(2, TaskDebugger::task_count());
+                drop(handle);
+                assert_eq!(2, TaskDebugger::task_count());
+                drop(waker);
+                assert_eq!(1, TaskDebugger::task_count());
+            });
         result.unwrap().join_all()[0].as_ref().unwrap();
     }
 

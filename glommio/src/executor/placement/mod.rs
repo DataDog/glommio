@@ -72,8 +72,7 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 /// Specifies a policy by which [`LocalExecutorPoolBuilder`] selects CPUs.
 ///
 /// `Placement` is used to bind [`LocalExecutor`]s to a set of CPUs via
-/// preconfigured policies designed to address a variety of use cases.  The
-/// default is `Unbound`.
+/// preconfigured policies designed to address a variety of use cases.
 ///
 /// ## Example
 ///
@@ -96,8 +95,7 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 ///     .filter(|l| l.numa_node == 0)
 ///     .filter(|l| l.package % 2 == 0);
 ///
-/// let handles = LocalExecutorPoolBuilder::new(4)
-///     .placement(Placement::MaxSpread(Some(cpus)))
+/// let handles = LocalExecutorPoolBuilder::new(Placement::MaxSpread(4, Some(cpus)))
 ///     .on_all_shards(|| async move {
 ///         // ... important stuff ...
 ///     })
@@ -107,15 +105,14 @@ use super::{LocalExecutor, LocalExecutorPoolBuilder};
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub enum Placement {
-    /// For the `Unbound` variant, the [`LocalExecutor`]s created by a
-    /// [`LocalExecutorPoolBuilder`] are not bound to any CPU.  This is the
-    /// default placement.
+    /// The `Unbound` variant creates a specific number of
+    /// [`LocalExecutor`]s that are not bound to any CPU.
     ///
     /// [`LocalExecutor`]: super::LocalExecutor
     /// [`LocalExecutorPoolBuilder`]: super::LocalExecutorPoolBuilder
-    Unbound,
-    /// The `Fenced` variant binds each [`LocalExecutor`] to the set of
-    /// CPUs specified by [`CpuSet`].  With an unfiltered CPU
+    Unbound(usize),
+    /// The `Fenced` variant binds each [`LocalExecutor`] to create to the set
+    /// of CPUs specified by [`CpuSet`].  With an unfiltered CPU
     /// set returned by [`CpuSet::online`], this is similar to using `Unbound`
     /// with the distinction that bringing additional CPUs online will not
     /// allow the executors to run on the newly available CPUs.  The
@@ -128,13 +125,14 @@ pub enum Placement {
     /// If the provided [`CpuSet`] contains no CPUs, a call to
     /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
     /// Err`.
-    Fenced(CpuSet),
-    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
-    /// that the set of all CPUs selected has a high degree of separation.
-    /// The selection proceeds from all CPUs that are online in a
-    /// non-deterministic manner.  The `Option<CpuSet>` parameter may be used to
-    /// restrict the [`CpuSet`] from which CPUs are selected; specifying `None`
-    /// is equivalent to using `Some(CpuSet::online()?)`.
+    Fenced(usize, CpuSet),
+    /// Each [`LocalExecutor`] to create is pinned to a particular
+    /// [`CpuLocation`] such that the set of all CPUs selected has a high
+    /// degree of separation. The selection proceeds from all CPUs that are
+    /// online in a non-deterministic manner.  The `Option<CpuSet>`
+    /// parameter may be used to restrict the [`CpuSet`] from which CPUs are
+    /// selected; specifying `None` is equivalent to using
+    /// `Some(CpuSet::online()?)`.
     ///
     /// #### Errors
     ///
@@ -142,13 +140,14 @@ pub enum Placement {
     /// is greater than the number of CPUs available, then a call to
     /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
     /// Err`.
-    MaxSpread(Option<CpuSet>),
-    /// Each [`LocalExecutor`] is pinned to a particular [`CpuLocation`] such
-    /// that the set of all CPUs selected has a low degree of separation.
-    /// The selection proceeds from all CPUs that are online in a
-    /// non-deterministic manner.  The `Option<CpuSet>` parameter may be used to
-    /// restrict the [`CpuSet`] from which CPUs are selected; specifying `None`
-    /// is equivalent to using `Some(CpuSet::online()?)`.
+    MaxSpread(usize, Option<CpuSet>),
+    /// Each [`LocalExecutor`] to create is pinned to a particular
+    /// [`CpuLocation`] such that the set of all CPUs selected has a low
+    /// degree of separation. The selection proceeds from all CPUs that are
+    /// online in a non-deterministic manner.  The `Option<CpuSet>`
+    /// parameter may be used to restrict the [`CpuSet`] from which CPUs are
+    /// selected; specifying `None` is equivalent to using
+    /// `Some(CpuSet::online()?)`.
     ///
     /// #### Errors
     ///
@@ -156,7 +155,7 @@ pub enum Placement {
     /// is greater than the number of CPUs available, then a call to
     /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
     /// Err`.
-    MaxPack(Option<CpuSet>),
+    MaxPack(usize, Option<CpuSet>),
     /// One [`LocalExecutor`] is bound to each of the [`CpuSet`]s specified by
     /// `Custom`. The number of `CpuSet`s in the `Vec` should match the
     /// number of shards requested from the pool builder.
@@ -164,17 +163,21 @@ pub enum Placement {
     /// #### Errors
     ///
     /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::Err` if
-    /// either of the follow is true:
-    /// * The length of the vector does not match the number of shards requested
-    ///   in [`LocalExecutorPoolBuilder::new`].
-    /// * Any of the [`CpuSet`]s is empty.
+    /// either of the follow is any of the [`CpuSet`]s is empty.
     Custom(Vec<CpuSet>),
 }
 
-/// The default is `Placement::Unbound`
-impl Default for Placement {
-    fn default() -> Self {
-        Self::Unbound
+impl Placement {
+    /// Return the number of executor to create according to this placement
+    /// policy
+    pub fn executor_count(&self) -> usize {
+        match self {
+            Placement::Unbound(cpus) => *cpus,
+            Placement::Fenced(cpus, _) => *cpus,
+            Placement::MaxSpread(cpus, _) => *cpus,
+            Placement::MaxPack(cpus, _) => *cpus,
+            Placement::Custom(cpus) => cpus.len(),
+        }
     }
 }
 
@@ -372,14 +375,19 @@ pub(crate) enum CpuSetGenerator {
 }
 
 impl CpuSetGenerator {
-    pub fn new(placement: Placement, nr_shards: usize) -> Result<Self> {
+    pub fn new(placement: Placement) -> Result<Self> {
         let this = match placement {
-            Placement::Unbound => Self::Unbound,
-            Placement::Fenced(cpus) => {
+            Placement::Unbound(nr_shards) => {
+                Self::check_nr_executors(1, nr_shards)?;
+                Self::Unbound
+            }
+            Placement::Fenced(nr_shards, cpus) => {
+                Self::check_nr_executors(1, nr_shards)?;
                 Self::check_nr_cpus(1, &cpus)?;
                 Self::Fenced(cpus)
             }
-            Placement::MaxSpread(cpus) => {
+            Placement::MaxSpread(nr_shards, cpus) => {
+                Self::check_nr_executors(1, nr_shards)?;
                 let cpus = match cpus {
                     Some(cpus) => cpus,
                     None => CpuSet::online()?,
@@ -387,7 +395,8 @@ impl CpuSetGenerator {
                 Self::check_nr_cpus(nr_shards, &cpus)?;
                 Self::MaxSpread(MaxSpreader::from_cpu_set(cpus))
             }
-            Placement::MaxPack(cpus) => {
+            Placement::MaxPack(nr_shards, cpus) => {
+                Self::check_nr_executors(1, nr_shards)?;
                 let cpus = match cpus {
                     Some(cpus) => cpus,
                     None => CpuSet::online()?,
@@ -396,12 +405,6 @@ impl CpuSetGenerator {
                 Self::MaxPack(MaxPacker::from_cpu_set(cpus))
             }
             Placement::Custom(cpu_sets) => {
-                if cpu_sets.len() != nr_shards {
-                    return Err(GlommioError::BuilderError(BuilderErrorKind::NrShards {
-                        cpu_sets: cpu_sets.len(),
-                        shards: nr_shards,
-                    }));
-                }
                 for cpu_set in &cpu_sets {
                     Self::check_nr_cpus(1, cpu_set)?;
                 }
@@ -409,6 +412,17 @@ impl CpuSetGenerator {
             }
         };
         Ok(this)
+    }
+
+    fn check_nr_executors(minimum: usize, shards: usize) -> Result<()> {
+        if minimum <= shards {
+            Ok(())
+        } else {
+            Err(GlommioError::BuilderError(BuilderErrorKind::NrShards {
+                minimum,
+                shards,
+            }))
+        }
     }
 
     fn check_nr_cpus(required: usize, cpu_set: &CpuSet) -> Result<()> {
@@ -595,13 +609,13 @@ mod test {
 
     #[test]
     fn placement_unbound_clone() {
-        assert!(matches!(Placement::Unbound.clone(), Placement::Unbound));
+        assert_eq!(Placement::Unbound(5).clone(), Placement::Unbound(5));
     }
 
     #[test]
     fn placement_fenced_clone() {
         let set = CpuSet::online().unwrap();
-        let placement = Placement::Fenced(set);
+        let placement = Placement::Fenced(1, set);
         let placement_clone = placement.clone();
         assert_eq!(placement_clone, placement);
     }
@@ -609,10 +623,10 @@ mod test {
     #[test]
     fn placement_max_spread_clone() {
         let set = CpuSet::online().unwrap();
-        let some_placement = Placement::MaxSpread(Some(set));
+        let some_placement = Placement::MaxSpread(1, Some(set));
         let some_placement_clone = some_placement.clone();
         assert_eq!(some_placement_clone, some_placement);
-        let none_placement = Placement::MaxSpread(None);
+        let none_placement = Placement::MaxSpread(1, None);
         let none_placement_clone = none_placement.clone();
         assert_eq!(none_placement_clone, none_placement);
     }
@@ -620,10 +634,10 @@ mod test {
     #[test]
     fn placement_max_pack_clone() {
         let set = CpuSet::online().unwrap();
-        let some_placement = Placement::MaxPack(Some(set));
+        let some_placement = Placement::MaxPack(1, Some(set));
         let some_placement_clone = some_placement.clone();
         assert_eq!(some_placement_clone, some_placement);
-        let none_placement = Placement::MaxPack(None);
+        let none_placement = Placement::MaxPack(1, None);
         let none_placement_clone = none_placement.clone();
         assert_eq!(none_placement_clone, none_placement);
     }
@@ -926,41 +940,26 @@ mod test {
             cpu_loc(1, 1, 1, 4),
             cpu_loc(0, 0, 0, 1),
         ]);
-        let set3 = CpuSet::from_iter(vec![]);
 
-        {
-            let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
-            let mut gen = CpuSetGenerator::new(p, 2).unwrap();
-            let mut bindings = vec![];
-            for _ in 0..2 {
-                let v = gen
-                    .next()
-                    .cpu_binding()
-                    .unwrap()
-                    .into_iter()
-                    .collect::<HashSet<_>>();
-                bindings.push(v);
-            }
-            assert_eq!(
-                bindings,
-                vec![
-                    HashSet::from_iter(vec![1, 4, 0, 5]),
-                    HashSet::from_iter(vec![1, 3, 0, 2])
-                ]
-            );
+        let p = Placement::Custom(vec![set1, set2]);
+        let mut gen = CpuSetGenerator::new(p).unwrap();
+        let mut bindings = vec![];
+        for _ in 0..2 {
+            let v = gen
+                .next()
+                .cpu_binding()
+                .unwrap()
+                .into_iter()
+                .collect::<HashSet<_>>();
+            bindings.push(v);
         }
-        {
-            let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
-            assert!(CpuSetGenerator::new(p, 1).is_err());
-        }
-        {
-            let p = Placement::Custom(vec![set1.clone(), set2.clone()]);
-            assert!(CpuSetGenerator::new(p, 3).is_err());
-        }
-        {
-            let p = Placement::Custom(vec![set1, set2, set3]);
-            assert!(CpuSetGenerator::new(p, 3).is_err());
-        }
+        assert_eq!(
+            bindings,
+            vec![
+                HashSet::from_iter(vec![1, 4, 0, 5]),
+                HashSet::from_iter(vec![1, 3, 0, 2])
+            ]
+        );
     }
 
     // Set API
