@@ -102,7 +102,7 @@ impl fmt::Display for ExecutorErrorKind {
 /// Error types that can be created when building executors.
 #[derive(Debug)]
 pub enum BuilderErrorKind {
-    /// Error type for using a [`Placement`](crate::Placement) that requires
+    /// Error type for using a [`Placement`](crate::PoolPlacement) that requires
     /// more CPUs than available.
     InsufficientCpus {
         /// The number of CPUs required for success.
@@ -111,7 +111,7 @@ pub enum BuilderErrorKind {
         /// The number of CPUs available.
         available: usize,
     },
-    /// Error type for using [`Placement::Custom`](crate::Placement::Custom)
+    /// Error type for using [`Placement::Custom`](crate::PoolPlacement::Custom)
     /// with a number of [`CpuSet`](crate::CpuSet)s that does not match the
     /// number of shards requested.
     NrShards {

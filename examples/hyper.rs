@@ -105,7 +105,7 @@ mod hyper_compat {
     }
 }
 
-use glommio::{CpuSet, LocalExecutorPoolBuilder, Placement};
+use glommio::{CpuSet, LocalExecutorPoolBuilder, PoolPlacement};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use std::convert::Infallible;
 
@@ -126,14 +126,17 @@ fn main() {
 
     println!("Starting server on port 8000");
 
-    LocalExecutorPoolBuilder::new(Placement::MaxSpread(num_cpus::get(), CpuSet::online().ok()))
-        .on_all_shards(|| async move {
-            let id = glommio::executor().id();
-            println!("Starting executor {}", id);
-            hyper_compat::serve_http(([0, 0, 0, 0], 8000), hyper_demo, 1024)
-                .await
-                .unwrap();
-        })
-        .unwrap()
-        .join_all();
+    LocalExecutorPoolBuilder::new(PoolPlacement::MaxSpread(
+        num_cpus::get(),
+        CpuSet::online().ok(),
+    ))
+    .on_all_shards(|| async move {
+        let id = glommio::executor().id();
+        println!("Starting executor {}", id);
+        hyper_compat::serve_http(([0, 0, 0, 0], 8000), hyper_demo, 1024)
+            .await
+            .unwrap();
+    })
+    .unwrap()
+    .join_all();
 }
