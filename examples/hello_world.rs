@@ -23,10 +23,10 @@ fn main() -> Result<()> {
     // There are two ways to create an executor, demonstrated in this example.
     //
     // We can create it in the current thread, and run it separately later...
-    let ex = LocalExecutorBuilder::new().pin_to_cpu(0).make()?;
+    let ex = LocalExecutorBuilder::new(Placement::Fixed(0)).make()?;
 
     // Or we can spawn a new thread with an executor inside.
-    let builder = LocalExecutorBuilder::new().pin_to_cpu(1);
+    let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
     let handle = builder.name("hello").spawn(|| async move {
         hello().await;
     })?;

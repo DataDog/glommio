@@ -23,8 +23,7 @@ async fn server(conns: usize) -> Result<()> {
     // need for sleep or retry), but it also demonstrates how a more complex
     // application may not necessarily spawn all executors at once running
     // symmetrical code.
-    let client_handle = LocalExecutorBuilder::new()
-        .pin_to_cpu(2)
+    let client_handle = LocalExecutorBuilder::new(Placement::Fixed(2))
         .name("client")
         .spawn(move || async move { client(conns).await })?;
 
@@ -94,7 +93,7 @@ fn main() -> Result<()> {
     // Skip CPU0 because that is commonly used to host interrupts. That depends on
     // system configuration and most modern systems will balance it, but that it is
     // still common enough that it is worth excluding it in this benchmark
-    let builder = LocalExecutorBuilder::new().pin_to_cpu(1);
+    let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
     let server_handle = builder.name("server").spawn(|| async move {
         // If you try `top` during the execution of the first batch, you
         // will see that the CPUs should not be at 100%. A single connection will

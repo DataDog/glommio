@@ -162,8 +162,7 @@ async fn read_int() -> Result<usize, <usize as std::str::FromStr>::Err> {
 }
 
 fn main() {
-    let handle = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let handle = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(|| async move {
             let cpuhog_tq = glommio::executor().create_task_queue(
                 Shares::Static(1000),

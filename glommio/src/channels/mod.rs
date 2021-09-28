@@ -129,7 +129,7 @@ pub mod local_channel;
 /// // and we will not pass the sender to ex1 and the receiver to ex2
 /// let (sender, receiver) = shared_channel::new_bounded(1);
 ///
-/// let ex1 = LocalExecutorBuilder::new()
+/// let ex1 = LocalExecutorBuilder::default()
 ///     .spawn(move || async move {
 ///         // Before using we have to connect. Connecting this endpoint
 ///         // binds it this executor as the connected endpoint is not Send.
@@ -139,7 +139,7 @@ pub mod local_channel;
 ///     })
 ///     .unwrap();
 ///
-/// let ex2 = LocalExecutorBuilder::new()
+/// let ex2 = LocalExecutorBuilder::default()
 ///     .spawn(move || async move {
 ///         // much like the sender, the receiver also needs to be connected
 ///         let receiver = receiver.connect().await;
@@ -199,7 +199,7 @@ pub mod shared_channel;
 /// let mesh_builder = MeshBuilder::full(nr_peers, channel_size);
 ///
 /// let executors = (0..nr_peers).map(|_| {
-///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+///     LocalExecutorBuilder::default().spawn(enclose!((mesh_builder) move || async move {
 ///         let (sender, receiver) = mesh_builder.join().await.unwrap();
 ///         glommio::spawn_local(async move {
 ///             for peer in 0..sender.nr_consumers() {
@@ -234,7 +234,7 @@ pub mod shared_channel;
 /// let mesh_builder = MeshBuilder::partial(nr_producers + nr_consumers, channel_size);
 ///
 /// let producers = (0..nr_producers).map(|i| {
-///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+///     LocalExecutorBuilder::default().spawn(enclose!((mesh_builder) move || async move {
 ///         let (sender, receiver) = mesh_builder.join(Role::Producer).await.unwrap();
 ///         assert_eq!(nr_consumers, sender.nr_consumers());
 ///         assert_eq!(Some(i), sender.producer_id());
@@ -248,7 +248,7 @@ pub mod shared_channel;
 /// });
 ///
 /// let consumers = (0..nr_consumers).map(|i| {
-///     LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+///     LocalExecutorBuilder::default().spawn(enclose!((mesh_builder) move || async move {
 ///         let (sender, receiver) = mesh_builder.join(Role::Consumer).await.unwrap();
 ///         assert_eq!(0, sender.nr_consumers());
 ///         assert_eq!(None, sender.producer_id());
@@ -304,7 +304,7 @@ pub mod channel_mesh;
 /// let mesh = MeshBuilder::full(nr_shards, 1024);
 ///
 /// let shards = (0..nr_shards).map(|_| {
-///     LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+///     LocalExecutorBuilder::default().spawn(enclose!((mesh) move || async move {
 ///         let handler = RequestHandler { nr_shards };
 ///         let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
 ///         let me = sharded.shard_id();

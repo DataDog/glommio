@@ -102,6 +102,11 @@ impl fmt::Display for ExecutorErrorKind {
 /// Error types that can be created when building executors.
 #[derive(Debug)]
 pub enum BuilderErrorKind {
+    /// Error type for specifying a CPU that doesn't exist
+    NonExistentCpus {
+        /// The CPU that doesn't exist
+        cpu: usize,
+    },
     /// Error type for using a [`Placement`](crate::PoolPlacement) that requires
     /// more CPUs than available.
     InsufficientCpus {
@@ -131,6 +136,9 @@ pub enum BuilderErrorKind {
 impl fmt::Display for BuilderErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NonExistentCpus { cpu } => {
+                write!(f, "CPU {} doesn't exist on the host", cpu)
+            }
             Self::InsufficientCpus {
                 available,
                 required,
@@ -412,6 +420,9 @@ impl<T> Debug for GlommioError<T> {
                 }
             },
             GlommioError::BuilderError(kind) => match kind {
+                BuilderErrorKind::NonExistentCpus { cpu } => {
+                    f.write_fmt(format_args!("NonExistentCpus {{ cpu: {} }}", cpu))
+                }
                 BuilderErrorKind::InsufficientCpus {
                     required,
                     available,
@@ -469,7 +480,8 @@ impl<T> From<GlommioError<T>> for io::Error {
                 io::ErrorKind::InvalidInput,
                 format!("invalid executor id {}", id),
             ),
-            GlommioError::BuilderError(BuilderErrorKind::InsufficientCpus { .. })
+            GlommioError::BuilderError(BuilderErrorKind::NonExistentCpus { .. })
+            | GlommioError::BuilderError(BuilderErrorKind::InsufficientCpus { .. })
             | GlommioError::BuilderError(BuilderErrorKind::NrShards { .. })
             | GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(_)) => io::Error::new(
                 io::ErrorKind::Other,

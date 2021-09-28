@@ -30,7 +30,7 @@
 //!
 //! ```
 //! use glommio::LocalExecutorBuilder;
-//! LocalExecutorBuilder::new()
+//! LocalExecutorBuilder::default()
 //!     .spawn(|| async move {
 //!         // your code here
 //!     })
@@ -49,9 +49,8 @@
 //!
 //! ```
 //! /// This will now never leave CPU 0
-//! use glommio::LocalExecutorBuilder;
-//! LocalExecutorBuilder::new()
-//!     .pin_to_cpu(0)
+//! use glommio::{LocalExecutorBuilder, Placement};
+//! LocalExecutorBuilder::new(Placement::Fixed(0))
 //!     .spawn(|| async move {
 //!         // your code here
 //!     })
@@ -77,10 +76,9 @@
 //! controllers:
 //!
 //! ```
-//! use glommio::{executor, Latency, LocalExecutorBuilder, Shares};
+//! use glommio::{executor, Latency, LocalExecutorBuilder, Placement, Shares};
 //!
-//! LocalExecutorBuilder::new()
-//!     .pin_to_cpu(0)
+//! LocalExecutorBuilder::new(Placement::Fixed(0))
 //!     .spawn(|| async move {
 //!         let tq1 =
 //!             executor().create_task_queue(Shares::Static(2), Latency::NotImportant, "test1");
@@ -489,6 +487,7 @@ pub use crate::{
         LocalExecutor,
         LocalExecutorBuilder,
         LocalExecutorPoolBuilder,
+        Placement,
         PoolPlacement,
         PoolThreadHandles,
         ScopedTask,
@@ -520,6 +519,7 @@ pub mod prelude {
         LocalExecutor,
         LocalExecutorBuilder,
         LocalExecutorPoolBuilder,
+        Placement,
         PoolPlacement,
         PoolThreadHandles,
         RingIoStats,

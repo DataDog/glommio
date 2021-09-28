@@ -67,7 +67,7 @@ use std::{
 type Result<T> = crate::Result<T, ()>;
 
 #[cfg(doc)]
-use super::{LocalExecutor, LocalExecutorPoolBuilder};
+use super::{LocalExecutor, LocalExecutorBuilder, LocalExecutorPoolBuilder};
 
 /// Specifies a policy by which [`LocalExecutorPoolBuilder`] selects CPUs.
 ///
@@ -179,6 +179,63 @@ impl PoolPlacement {
             PoolPlacement::Custom(cpus) => cpus.len(),
         }
     }
+}
+
+/// Specifies a policy by which [`LocalExecutorBuilder`] selects CPUs.
+///
+/// `Placement` is used to bind [`LocalExecutor`]s to a set of CPUs via
+/// preconfigured policies designed to address a variety of use cases.
+///
+/// ## Example
+///
+/// Some `Placement`s allow manually filtering available CPUs via a
+/// [`CpuSet`], such as `MaxSpread`.  The following would place shards on four
+/// CPUs (a.k.a.  hyper-threads) that are on NUMA node 0 and have an even
+/// numbered package ID according to their [`CpuLocation`]. The selection aims
+/// to achieve a high degree of separation between the CPUs in terms of machine
+/// topology. Each [`LocalExecutor`] would be bound to a single CPU.
+///
+/// ```no_run
+/// use glommio::{CpuSet, LocalExecutorBuilder, Placement};
+///
+/// let cpus = CpuSet::online()
+///     .expect("Err: please file an issue with glommio")
+///     .filter(|l| l.numa_node == 0)
+///     .filter(|l| l.package % 2 == 0);
+///
+/// LocalExecutorBuilder::new(Placement::Fenced(cpus))
+///     .spawn(|| async move {
+///         // ... important stuff ...
+///     })
+///     .unwrap()
+///     .join();
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub enum Placement {
+    /// The `Unbound` variant creates a [`LocalExecutor`]s that are not bound to
+    /// any CPU.
+    ///
+    /// [`LocalExecutor`]: super::LocalExecutor
+    /// [`LocalExecutorBuilder`]: super::LocalExecutorBuilder
+    Unbound,
+    /// The `Fenced` variant binds the [`LocalExecutor`] to the set
+    /// of CPUs specified by [`CpuSet`].  With an unfiltered CPU
+    /// set returned by [`CpuSet::online`], this is similar to using `Unbound`
+    /// with the distinction that bringing additional CPUs online will not
+    /// allow the executor to run on the newly available CPUs.
+    ///
+    /// #### Errors
+    ///
+    /// If the provided [`CpuSet`] contains no CPUs, the builder will fail.
+    Fenced(CpuSet),
+    /// The [`LocalExecutor`] is bound to the CPU specified by
+    /// `Fixed`.
+    ///
+    /// #### Errors
+    ///
+    /// [`LocalExecutorBuilder`] will return `Result::Err` if the CPU doesn't
+    /// exist.
+    Fixed(usize),
 }
 
 /// Used to specify a set of permitted CPUs on which
@@ -414,6 +471,21 @@ impl CpuSetGenerator {
         Ok(this)
     }
 
+    pub fn one(placement: Placement) -> Result<Self> {
+        let this = match placement {
+            Placement::Unbound => Self::Unbound,
+            Placement::Fenced(cpus) => {
+                Self::check_nr_cpus(1, &cpus)?;
+                Self::Fenced(cpus)
+            }
+            Placement::Fixed(cpu) => {
+                Self::check_cpu(cpu)?;
+                Self::Custom(vec![CpuSet::online()?.filter(|x| x.cpu == cpu)])
+            }
+        };
+        Ok(this)
+    }
+
     fn check_nr_executors(minimum: usize, shards: usize) -> Result<()> {
         if minimum <= shards {
             Ok(())
@@ -436,6 +508,16 @@ impl CpuSetGenerator {
                     available,
                 },
             ))
+        }
+    }
+
+    fn check_cpu(id: usize) -> Result<()> {
+        if CpuSet::online()?.filter(|cpu| cpu.cpu == id).is_empty() {
+            Err(GlommioError::BuilderError(
+                BuilderErrorKind::NonExistentCpus { cpu: id },
+            ))
+        } else {
+            Ok(())
         }
     }
 

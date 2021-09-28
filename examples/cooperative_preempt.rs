@@ -39,7 +39,7 @@ use std::{
 /// [`need_preempt()`] which will tell you if yielding is needed, and
 /// then explicitly yield with [`yield_task_queue_now()`].
 fn main() {
-    let handle = LocalExecutorBuilder::new()
+    let handle = LocalExecutorBuilder::default()
         .spawn(|| async move {
             let tq1 = glommio::executor().create_task_queue(
                 Shares::default(),

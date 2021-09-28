@@ -481,16 +481,18 @@ mod tests {
         let builder2 = MeshBuilder::<usize, _>::full(nr_peers, channel_size);
 
         let executors = (0..nr_peers).map(|_| {
-            LocalExecutorBuilder::new().spawn(enclose!((builder1, builder2) move || async move {
-                let (sender1, receiver1) = builder1.join().await.unwrap();
-                assert_eq!(sender1.peer_id(), receiver1.peer_id());
+            LocalExecutorBuilder::default().spawn(
+                enclose!((builder1, builder2) move || async move {
+                    let (sender1, receiver1) = builder1.join().await.unwrap();
+                    assert_eq!(sender1.peer_id(), receiver1.peer_id());
 
-                let (sender2, receiver2) = builder2.join().await.unwrap();
-                assert_eq!(sender2.peer_id(), receiver2.peer_id());
+                    let (sender2, receiver2) = builder2.join().await.unwrap();
+                    assert_eq!(sender2.peer_id(), receiver2.peer_id());
 
-                assert_eq!(sender1.peer_id(), sender2.peer_id());
-                assert_eq!(receiver1.peer_id(), receiver2.peer_id());
-            }))
+                    assert_eq!(sender1.peer_id(), sender2.peer_id());
+                    assert_eq!(receiver1.peer_id(), receiver2.peer_id());
+                }),
+            )
         });
 
         for ex in executors.collect::<Vec<_>>() {
@@ -520,7 +522,7 @@ mod tests {
         let mesh_builder = MeshBuilder::full(nr_peers, channel_size);
 
         let executors = (0..nr_executors).map(|_| {
-            LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+            LocalExecutorBuilder::default().spawn(enclose!((mesh_builder) move || async move {
                 let (sender, receiver) = mesh_builder.join().await.unwrap();
                 assert_eq!(nr_peers, sender.nr_consumers());
                 assert_eq!(sender.peer_id, sender.producer_id.unwrap());
@@ -555,7 +557,7 @@ mod tests {
         let mesh_builder = MeshBuilder::partial(5, 100);
 
         let producers = (0..nr_producers).map(|i| {
-            LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+            LocalExecutorBuilder::default().spawn(enclose!((mesh_builder) move || async move {
                 let (sender, receiver) = mesh_builder.join(Role::Producer).await.unwrap();
                 assert_eq!(nr_consumers, sender.nr_consumers());
                 assert_eq!(Some(i), sender.producer_id());
@@ -569,7 +571,7 @@ mod tests {
         });
 
         let consumers = (0..nr_consumers).map(|i| {
-            LocalExecutorBuilder::new().spawn(enclose!((mesh_builder) move || async move {
+            LocalExecutorBuilder::default().spawn(enclose!((mesh_builder) move || async move {
                 let (sender, receiver) = mesh_builder.join(Role::Consumer).await.unwrap();
                 assert_eq!(0, sender.nr_consumers());
                 assert_eq!(None, sender.producer_id());

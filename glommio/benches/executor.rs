@@ -9,8 +9,7 @@ fn main() {
     let vec = Arc::new(Mutex::new(Vec::with_capacity(10)));
     for _ in 0..runs {
         let t = Instant::now();
-        let local_ex = LocalExecutorBuilder::new()
-            .pin_to_cpu(0)
+        let local_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
             .spawn(enclose! { (vec) move || async move {
                 let mut v = vec.lock().unwrap();
                 v.push(t.elapsed());
@@ -29,8 +28,7 @@ fn main() {
 
     let t = Instant::now();
     for _ in 0..runs {
-        let local_ex = LocalExecutorBuilder::new()
-            .pin_to_cpu(0)
+        let local_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
             .spawn(move || async move {})
             .unwrap();
         local_ex.join().unwrap();
@@ -40,8 +38,7 @@ fn main() {
         t.elapsed() / runs
     );
 
-    let local_ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let local_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(|| async move {
             let runs: u32 = 10_000_000;
             let t = Instant::now();
@@ -53,8 +50,7 @@ fn main() {
         .unwrap();
     local_ex.join().unwrap();
 
-    let local_ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let local_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(|| async move {
             let runs: u32 = 10_000_000;
             let tq1 = crate::executor().create_task_queue(

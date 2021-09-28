@@ -227,7 +227,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///             println!("Executed once");
@@ -258,7 +258,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
@@ -320,7 +320,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
     /// use std::time::{Duration, Instant};
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let when = Instant::now()
     ///             .checked_add(Duration::from_millis(100))
@@ -354,7 +354,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::{Duration, Instant};
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
@@ -407,7 +407,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///             println!("Will not execute this");
@@ -437,7 +437,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///             println!("Will not execute this");
@@ -470,7 +470,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///             println!("Execute this in 100ms");
@@ -495,7 +495,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///             println!("hello");
@@ -521,7 +521,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
     /// use std::time::{Duration, Instant};
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
     ///             println!("hello");
@@ -564,7 +564,7 @@ impl TimerActionRepeat {
     /// use glommio::{timer::TimerActionRepeat, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
@@ -627,7 +627,7 @@ impl TimerActionRepeat {
     /// use glommio::{timer::TimerActionRepeat, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionRepeat::repeat(|| async move {
     ///             println!("Execute this!");
@@ -659,7 +659,7 @@ impl TimerActionRepeat {
     /// use glommio::{timer::TimerActionRepeat, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action =
     ///             TimerActionRepeat::repeat(|| async move { Some(Duration::from_millis(100)) });
@@ -689,7 +689,7 @@ impl TimerActionRepeat {
     /// use glommio::{timer::TimerActionRepeat, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action =
     ///             TimerActionRepeat::repeat(|| async move { Some(Duration::from_millis(100)) });
@@ -719,7 +719,7 @@ impl TimerActionRepeat {
     /// use glommio::{timer::TimerActionRepeat, LocalExecutorBuilder};
     /// use std::time::Duration;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let action = TimerActionRepeat::repeat(|| async move { None });
     ///         let v = action.join().await;
@@ -1176,7 +1176,7 @@ mod test {
         // tasks. Previous versions of timer and executor caused abort of the
         // program at some cases.
 
-        let handle = LocalExecutorBuilder::new()
+        let handle = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 let action = TimerActionOnce::do_in(Duration::from_millis(100), async move {
                     println!("hello");

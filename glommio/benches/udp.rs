@@ -7,8 +7,7 @@ fn main() {
     let (server_sender, server_receiver) = shared_channel::new_bounded(1);
     let (client_sender, client_receiver) = shared_channel::new_bounded(1);
 
-    let server_ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let server_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(move || async move {
             let addr_sender = server_sender.connect().await;
             let addr_receiver = client_receiver.connect().await;
@@ -41,8 +40,7 @@ fn main() {
         })
         .unwrap();
 
-    let client_ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(1)
+    let client_ex = LocalExecutorBuilder::new(Placement::Fixed(1))
         .spawn(move || async move {
             let addr_receiver = server_receiver.connect().await;
             let addr_sender = client_sender.connect().await;
