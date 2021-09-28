@@ -48,7 +48,7 @@ jobs:
     # - name: Validate links
     #   run: cargo deadlinks --dir target/doc/glommio
 
-  licenses:
+  deny:
     runs-on: ubuntu-latest
 
     steps:
@@ -57,7 +57,8 @@ jobs:
       - name: Run license checks
         uses: EmbarkStudios/cargo-deny-action@v1
         with:
-          command: check license
+          command: check
+          arguments: --all-features
 
   clippy:
     runs-on: ubuntu-latest
