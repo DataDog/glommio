@@ -40,13 +40,13 @@ pub struct LocalSender<T> {
 ///
 /// ```
 /// use futures_lite::StreamExt;
-/// use glommio::{channels::local_channel, Local, LocalExecutor};
+/// use glommio::{channels::local_channel, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, mut receiver) = local_channel::new_unbounded();
 ///
-///     let h = Local::local(async move {
+///     let h = glommio::spawn_local(async move {
 ///         let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
 ///         assert_eq!(sum, 45);
 ///     })
@@ -437,12 +437,12 @@ impl<T> LocalChannel<T> {
 /// # Examples
 /// ```
 /// use futures_lite::StreamExt;
-/// use glommio::{channels::local_channel, Local, LocalExecutor};
+/// use glommio::{channels::local_channel, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
 ///     let (sender, receiver) = local_channel::new_unbounded();
-///     let h = Local::local(async move {
+///     let h = glommio::spawn_local(async move {
 ///         assert_eq!(receiver.stream().next().await.unwrap(), 0);
 ///     })
 ///     .detach();
@@ -460,7 +460,7 @@ pub fn new_unbounded<T>() -> (LocalSender<T>, LocalReceiver<T>) {
 /// # Examples
 /// ```
 /// use futures_lite::StreamExt;
-/// use glommio::{channels::local_channel, Local, LocalExecutor};
+/// use glommio::{channels::local_channel, LocalExecutor};
 ///
 /// let ex = LocalExecutor::default();
 /// ex.run(async move {
@@ -488,7 +488,7 @@ impl<T> LocalSender<T> {
     /// # Examples
     /// ```
     /// use futures_lite::StreamExt;
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -522,7 +522,7 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -542,7 +542,7 @@ impl<T> LocalSender<T> {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -563,7 +563,7 @@ impl<T> LocalSender<T> {
     /// # Examples
     /// ```
     /// use futures_lite::StreamExt;
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -700,18 +700,18 @@ impl<'a, T> Drop for ChannelStream<'a, T> {
 impl<T> LocalReceiver<T> {
     /// Receives data from this channel
     ///
-    /// If the sender is no longer available it returns [`None`]. Otherwise
+    /// If the sender is no longer available it returns [`None`]. Otherwise,
     /// block until an item is available and returns it wrapped in [`Some`]
     ///
     /// Notice that this is also available as a Stream. Whether to consume from
     /// a stream or `recv` is up to the application. The biggest difference
     /// is that [`StreamExt`]'s [`next`] method takes a mutable reference to
     /// self. If the LocalReceiver is, say, behind an [`Rc`] it may be more
-    /// ergonomic to recv.
+    /// ergonomic to `recv`.
     ///
     /// # Examples
     /// ```
-    /// use glommio::{channels::local_channel, Local, LocalExecutor};
+    /// use glommio::{channels::local_channel, LocalExecutor};
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
@@ -756,7 +756,7 @@ impl<T> LocalReceiver<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{enclose, Local};
+    use crate::enclose;
     use futures_lite::stream::{self, StreamExt};
 
     #[test]
@@ -764,7 +764,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_unbounded();
 
-            let handle = Local::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -785,7 +785,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_unbounded();
 
-            let handle = Local::local(async move {
+            let handle = crate::spawn_local(async move {
                 let mut sum = 0;
                 receiver
                     .stream()
@@ -817,7 +817,7 @@ mod test {
             }
             drop(sender);
 
-            let handle = Local::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -832,7 +832,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_unbounded();
 
-            let handle = Local::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().take(3).fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 3);
             })
@@ -840,7 +840,7 @@ mod test {
 
             loop {
                 match sender.try_send(1) {
-                    Ok(_) => Local::later().await,
+                    Ok(_) => crate::executor().yield_task_queue_now().await,
                     err => {
                         matches!(err, Err(GlommioError::WouldBlock(ResourceType::Channel(1))));
                         break;
@@ -877,7 +877,7 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_bounded(1);
 
-            let handle = Local::local(async move {
+            let handle = crate::spawn_local(async move {
                 let sum = receiver.stream().fold(0, |acc, x| acc + x).await;
                 assert_eq!(sum, 10);
             })
@@ -896,13 +896,13 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_bounded(1);
 
-            let s = Local::local(async move {
+            let s = crate::spawn_local(async move {
                 sender.try_send(0).unwrap();
                 sender.send(0).await.unwrap_err();
             })
             .detach();
 
-            let r = Local::local(async move {
+            let r = crate::spawn_local(async move {
                 receiver.stream().next().await.unwrap();
                 drop(receiver);
             })
@@ -917,13 +917,13 @@ mod test {
         test_executor!(async move {
             let (sender, receiver) = new_bounded(1);
 
-            let s = Local::local(async move {
+            let s = crate::spawn_local(async move {
                 sender.try_send(0).unwrap();
                 sender.send(0).await.unwrap_err();
             })
             .detach();
 
-            let r = Local::local(async move {
+            let r = crate::spawn_local(async move {
                 receiver.recv().await.unwrap();
                 drop(receiver);
             })
@@ -941,7 +941,7 @@ mod test {
 
             let mut ret = Vec::new();
             for _ in 0..10 {
-                ret.push(Local::local(enclose! {(receiver) async move {
+                ret.push(crate::spawn_local(enclose! {(receiver) async move {
                     receiver.recv().await.unwrap();
                 }}));
             }

@@ -20,7 +20,7 @@ use crate::{
 ///
 /// This header is stored right at the beginning of every heap-allocated task.
 pub(crate) struct Header {
-    /// ID of the executor to which task belongs to or in another words by which
+    /// ID of the executor to which task belongs to or in other words by which
     /// task was spawned by
     pub(crate) notifier: Arc<SleepNotifier>,
 

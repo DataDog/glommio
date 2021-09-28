@@ -4,7 +4,6 @@ use glommio::{
     enclose,
     prelude::*,
     sync::{Gate, Semaphore},
-    Task,
 };
 
 fn main() {
@@ -30,7 +29,7 @@ fn main() {
 
         println!("Main: closing gate");
         let close_future =
-            Task::<_>::local(enclose!((gate) async move { gate.close().await })).detach();
+            crate::spawn_local(enclose!((gate) async move { gate.close().await })).detach();
 
         tasks_to_complete.signal(nr_tasks);
         close_future.await.unwrap().unwrap();

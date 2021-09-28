@@ -171,8 +171,8 @@ where
     /// host the file.
     ///
     /// If the extent is larger, that means many blocks are allocated at a time.
-    /// For instance, if the extent size is 1MB, that means that only 1 out
-    /// of 4 256kB writes will be turned synchronous. Combined with diligent
+    /// For instance, if the extent size is 1 MiB, that means that only 1 out
+    /// of 4 256 KiB writes will be turned synchronous. Combined with diligent
     /// use of `fallocate` we can greatly minimize context switches.
     ///
     /// It is important not to set the extent size too big. Writes can fail
@@ -314,7 +314,7 @@ impl ImmutableFilePreSealSink {
     /// caches upon a restart until [`ImmutableFilePreSealSink::sync`] is called
     /// (Note that [`ImmutableFilePreSealSink::seal`] implies a sync).
     ///
-    /// However within the same session, new readers trying to read from any
+    /// However, within the same session, new readers trying to read from any
     /// position before what we return in this method will be guaranteed to
     /// read the data we just wrote.
     pub fn current_flushed_pos(&self) -> u64 {
@@ -532,12 +532,12 @@ mod test {
         immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
         let stream = immutable.seal().await.unwrap();
 
-        let task1 = Task::local(enclose! { (stream) async move {
+        let task1 = crate::spawn_local(enclose! { (stream) async move {
             let buf = stream.read_at(0, 6).await.unwrap();
             assert_eq!(&*buf, &[0, 1, 2, 3, 4, 5]);
         }});
 
-        let task2 = Task::local(enclose! { (stream) async move {
+        let task2 = crate::spawn_local(enclose! { (stream) async move {
             let buf = stream.read_at(0, 6).await.unwrap();
             assert_eq!(&*buf, &[0, 1, 2, 3, 4, 5]);
         }});

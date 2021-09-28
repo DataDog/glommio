@@ -76,9 +76,9 @@ struct WaiterNode {
     link: LinkedListLink,
     waker: RefCell<Option<Waker>>,
 
-    //waiter node can not be Unpin so its pointer could be used inside of intrusive
-    //collection, it also can not outlive the container which is guaranteed by the
-    //Waiter lifetime bound to the RwLock which is container of all Waiters.
+    // waiter node can not be `Unpin` so its pointer could be used inside intrusive
+    // collection, it also can not outlive the container which is guaranteed by the
+    // Waiter lifetime bound to the RwLock which is container of all Waiters.
     _p: PhantomPinned,
 }
 
@@ -111,7 +111,7 @@ impl WaiterAdapter {
     }
 }
 
-///adapter which converts pointer to link to the pointer to the object which is
+/// Adapter which converts pointer to link to the pointer to the object which is
 /// hold in collection and vice versa
 unsafe impl Adapter for WaiterAdapter {
     type LinkOps = LinkOps;
@@ -164,7 +164,7 @@ unsafe impl Adapter for WaiterAdapter {
 /// granted access in the order in which access to the lock was requested.
 ///
 /// Lock is not reentrant, yet. That means that two subsequent calls to request
-/// write access to the lock will lead to dead lock problem.
+/// write access to the lock will lead to deadlock problem.
 ///
 /// The type parameter `T` represents the data that this lock protects. The RAII
 /// guards returned from the locking methods implement [`Deref`] (and
@@ -200,21 +200,21 @@ unsafe impl Adapter for WaiterAdapter {
 #[derive(Debug)]
 pub struct RwLock<T> {
     state: RefCell<State>,
-    //option is needed only to implement into_inner method so that is absolutely safe
-    //to unwrap it by ref. during the execution
+    // Option is needed only to implement into_inner method so that is absolutely safe
+    // to unwrap it by ref. during the execution
     value: RefCell<Option<T>>,
 }
 
 #[derive(Debug)]
 struct State {
-    //number of granted write access
-    //there can be only single writer, but we use u32 type to support reentrancy fot the lock
-    //in future
+    // Number of granted write access
+    // There can be only single writer, but we use u32 type to support reentrancy fot the lock
+    // in future
     writers: u32,
-    //number of granted read accesses
+    // Number of granted read accesses
     readers: u32,
 
-    //number of queued requests to get write access
+    // Number of queued requests to get write access
     queued_writers: u32,
 
     waiters_queue: LinkedList<WaiterAdapter>,
@@ -263,7 +263,7 @@ impl<'a, T> Waiter<'a, T> {
             rw.queued_writers += 1;
         }
 
-        //it is safe to skip null check here because we use object reference
+        // It is safe to skip null check here because we use object reference
         rw.waiters_queue
             .push_back(unsafe { NonNull::new_unchecked(node.get_unchecked_mut()) });
     }
@@ -314,7 +314,7 @@ impl<'a, T> Future for Waiter<'a, T> {
 impl<'a, T> Drop for Waiter<'a, T> {
     fn drop(&mut self) {
         if self.node.link.is_linked() {
-            //if node is lined them future is already pinned
+            // If node is lined them future is already pinned
             let pinned_node = unsafe { Pin::new_unchecked(&mut self.node) };
             Self::remove_from_waiting_queue(pinned_node, &mut self.rw.state.borrow_mut())
         }
@@ -525,7 +525,7 @@ impl<T> RwLock<T> {
     ///
     /// ```
     /// use futures::future::join;
-    /// use glommio::{sync::RwLock, Local, LocalExecutor};
+    /// use glommio::{sync::RwLock, LocalExecutor};
     /// use std::rc::Rc;
     ///
     /// let lock = Rc::new(RwLock::new(1));
@@ -534,13 +534,13 @@ impl<T> RwLock<T> {
     /// let ex = LocalExecutor::default();
     ///
     /// ex.run(async move {
-    ///     let first_reader = Local::local(async move {
+    ///     let first_reader = glommio::spawn_local(async move {
     ///         let n = lock.read().await.unwrap();
     ///         assert_eq!(*n, 1);
     ///     })
     ///     .detach();
     ///
-    ///     let second_reader = Local::local(async move {
+    ///     let second_reader = glommio::spawn_local(async move {
     ///         let r = c_lock.read().await;
     ///         assert!(r.is_ok());
     ///     })
@@ -571,7 +571,7 @@ impl<T> RwLock<T> {
     }
 
     /// Locks this RwLock with exclusive write access, suspending the current
-    /// finber until RwLock can be acquired.
+    /// task until RwLock can be acquired.
     ///
     /// This function will not return while other writers or other readers
     /// currently have access to the lock.
@@ -699,7 +699,7 @@ impl<T> RwLock<T> {
         Err(GlommioError::WouldBlock(ResourceType::RwLock))
     }
 
-    ///Indicates whether current RwLock is closed. Once lock is closed all
+    /// Indicates whether current RwLock is closed. Once lock is closed all
     /// subsequent calls to the methods which requests lock access will
     /// return `Err`.
     ///
@@ -718,16 +718,15 @@ impl<T> RwLock<T> {
         self.state.borrow().closed
     }
 
-    ///Closes current RwLock. Once lock is closed all being hold accesses will
+    /// Closes current RwLock. Once lock is closed all being hold accesses will
     /// be released and all subsequent calls to the methods to request lock
     /// access will return `Err`.
     ///
     /// # Examples
     ///
-    /// ```
+    ///```
     /// use glommio::{
     ///     sync::{RwLock, Semaphore},
-    ///     Local,
     ///     LocalExecutor,
     /// };
     /// use std::{cell::RefCell, rc::Rc};
@@ -740,7 +739,7 @@ impl<T> RwLock<T> {
     ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///     let closer = Local::local(async move {
+    ///     let closer = glommio::spawn_local(async move {
     ///         //await till read lock will be acquired
     ///         c_semaphore.acquire(1).await.unwrap();
     ///         c_lock.close();
@@ -749,7 +748,7 @@ impl<T> RwLock<T> {
     ///     })
     ///     .detach();
     ///
-    ///     let dead_locker = Local::local(async move {
+    ///     let dead_locker = glommio::spawn_local(async move {
     ///         let _r = lock.read().await.unwrap();
     ///
     ///         //allow another fiber close RwLock
@@ -777,12 +776,12 @@ impl<T> RwLock<T> {
         Self::wake_up_fibers(&mut state);
     }
 
-    /// Consumes this `RwLock`, returning the underlying data.
+    /// Consumes this [`RwLock`], returning the underlying data.
     ///
     ///
     /// # Errors
     ///
-    /// This function will return an error if the ReadWritreLock is closed.
+    /// This function will return an error if the [`RwLock`] is closed.
     ///
     /// # Examples
     ///
@@ -816,37 +815,36 @@ impl<T> RwLock<T> {
     }
 
     fn wake_up_fibers(rw: &mut State) {
-        //created with assumption in mind that waker will trigger delayed execution of
-        // fibers such behaviour supports users intuition about fibers.
+        // Created with assumption in mind that waker will trigger delayed execution of
+        // fibers such behaviour supports users intuition about tasks.
 
-        //All fibers waked up in the fair order (in the order of acquiring of the lock)
+        // All tasks waked up in the fair order (in the order of acquiring of the lock)
         // if that matters. That allows to avoid lock starvation as much as
         // possible.
         if rw.readers == 0 && rw.writers == 0 {
             if rw.queued_writers == 0 {
-                //only readers are waiting in the queue and no one holding a lock
-                //wake up all of them
+                // Only readers are waiting in the queue and no one holding a lock
+                // wake up all of them
                 Self::wake_up_all_fibers(rw);
             } else {
-                //there are some writers waiting into the queue
-                //so wake up all readers and single writer
-                //no one holding the lock so likely they will be executed in order
-                //so all will have a chance to proceed
+                // There are some writers waiting into the queue so wake up all readers and
+                // single writer no one holding the lock, so likely they will be
+                // executed in order so all will have a chance to proceed
                 Self::wake_up_readers_and_first_writer(rw);
             }
         } else if rw.writers == 0 {
             if rw.queued_writers == 0 {
-                //only readers in the waiting queue and some readers holding the lock
-                //wake up all of them
+                // Only readers in the waiting queue and some readers holding the lock
+                // wake up all of them
                 Self::wake_up_all_fibers(rw);
             } else {
-                //there are both readers and writers in the queue
-                //so only readers are waken up
+                // There are both readers and writers in the queue
+                // so only readers are awakened
                 Self::wake_up_all_readers_till_first_writer(rw);
             }
         }
-        //the only option left that some writers still holding the lock
-        //so no reason to try to wake up any one.
+        // The only option left that some writers still holding the lock
+        // so no reason to try to wake up anyone.
     }
 
     fn wake_up_all_readers_till_first_writer(rw: &mut State) {
@@ -872,8 +870,8 @@ impl<T> RwLock<T> {
 
     fn wake_up_readers_and_first_writer(rw: &mut State) {
         let mut cursor = rw.waiters_queue.front_mut();
-        //we need to remove writer from the list too
-        //so we use flag instead of execution of break
+        // We need to remove writer from the list too,
+        // so we use flag instead of execution of break
         let mut only_readers = true;
 
         while !cursor.is_null() && only_readers {
@@ -927,10 +925,10 @@ impl<T> Drop for RwLock<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{sync::rwlock::RwLock, timer::Timer, LocalExecutor, Task};
+    use crate::{sync::rwlock::RwLock, timer::Timer, LocalExecutor};
     use std::time::Duration;
 
-    use crate::{sync::Semaphore, Local};
+    use crate::sync::Semaphore;
     use std::{cell::RefCell, rc::Rc};
 
     #[derive(Eq, PartialEq, Debug)]
@@ -960,7 +958,7 @@ mod test {
             for _ in 0..N {
                 let r = r.clone();
 
-                let f = Task::local(async move {
+                let f = crate::spawn_local(async move {
                     for _ in 0..M {
                         if fastrand::u32(0..N) == 0 {
                             drop(r.write().await.unwrap());
@@ -983,7 +981,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::spawn_local(async move {
                 let _lock = rc2.write().await.unwrap();
                 rc2.close();
             })
@@ -999,7 +997,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::spawn_local(async move {
                 let _lock = rc2.write().await.unwrap();
                 rc2.close();
             })
@@ -1015,7 +1013,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::spawn_local(async move {
                 let _lock = rc2.read().await.unwrap();
                 rc2.close();
             })
@@ -1031,7 +1029,7 @@ mod test {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
-            Task::local(async move {
+            crate::spawn_local(async move {
                 let _lock = rc2.read().await.unwrap();
                 rc2.close();
             })
@@ -1051,14 +1049,14 @@ mod test {
             let s2 = s.clone();
 
             let mut fibers = Vec::new();
-            fibers.push(Task::local(async move {
+            fibers.push(crate::spawn_local(async move {
                 let mut lock = rc2.write().await.unwrap();
 
                 for _ in 0..10 {
-                    Local::later().await;
+                    crate::executor().yield_task_queue_now().await;
                     let tmp = *lock;
                     *lock -= 1;
-                    Local::later().await;
+                    crate::executor().yield_task_queue_now().await;
                     *lock = tmp + 1;
                 }
 
@@ -1068,11 +1066,11 @@ mod test {
             for _ in 0..5 {
                 let rc3 = rc.clone();
 
-                fibers.push(Task::local(async move {
+                fibers.push(crate::spawn_local(async move {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock == 0 || *lock == 10);
 
-                    Local::later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }));
             }
 
@@ -1093,13 +1091,13 @@ mod test {
             let s2 = s.clone();
 
             let mut fibers = Vec::new();
-            fibers.push(Task::local(async move {
+            fibers.push(crate::spawn_local(async move {
                 for _ in 0..10 {
                     let mut lock = rc2.write().await.unwrap();
                     let tmp = *lock;
                     *lock -= 1;
 
-                    Local::later().await;
+                    crate::executor().yield_task_queue_now().await;
 
                     *lock = tmp + 1;
                 }
@@ -1110,11 +1108,11 @@ mod test {
             for _ in 0..5 {
                 let rc3 = rc.clone();
 
-                fibers.push(Task::local(async move {
+                fibers.push(crate::spawn_local(async move {
                     let lock = rc3.read().await.unwrap();
                     assert!(*lock >= 0);
 
-                    Local::later().await;
+                    crate::executor().yield_task_queue_now().await;
                 }));
             }
 
@@ -1136,11 +1134,11 @@ mod test {
 
             let mut fibers = Vec::new();
 
-            let pinger = Task::local(async move {
+            let pinger = crate::spawn_local(async move {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    Local::later().await;
+                    crate::executor().yield_task_queue_now().await;
 
                     let mut lock = ball2.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1159,11 +1157,11 @@ mod test {
                 }
             });
 
-            let ponger = Task::local(async move {
+            let ponger = crate::spawn_local(async move {
                 let mut prev = -1;
                 loop {
                     //give a room for other fibers to participate
-                    Local::later().await;
+                    crate::executor().yield_task_queue_now().await;
 
                     let mut lock = ball3.write().await.unwrap();
                     if *lock == ITERATIONS {
@@ -1187,11 +1185,11 @@ mod test {
 
             for _ in 0..12 {
                 let ball = ball.clone();
-                let reader = Task::local(async move {
+                let reader = crate::spawn_local(async move {
                     let mut prev = -1;
                     loop {
                         //give a room for other fibers to participate
-                        Local::later().await;
+                        crate::executor().yield_task_queue_now().await;
                         let lock = ball.read().await.unwrap();
 
                         if *lock == ITERATIONS {
@@ -1318,7 +1316,7 @@ mod test {
         let c_semaphore = semaphore.clone();
 
         ex.run(async move {
-            Local::local(async move {
+            crate::spawn_local(async move {
                 c_semaphore.acquire(1).await.unwrap();
 
                 let _g = c_lock.read().await.unwrap();

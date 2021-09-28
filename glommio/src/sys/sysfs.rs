@@ -306,7 +306,7 @@ impl ListIterator {
         io::Error::new(io::ErrorKind::InvalidData, msg)
     }
 
-    // returns the first error if any elements were errors, otherwise returns the
+    // Returns the first error if any elements were errors, otherwise returns the
     // collection of unwrapped elements
     #[cfg(test)]
     fn collect_ok<C>(self) -> io::Result<C>
@@ -496,7 +496,7 @@ pub(super) mod test_helpers {
         }
 
         fn set_on_deck(&mut self) -> Option<u64> {
-            // count unused bits (these are all equal to 0)
+            // Count unused bits (these are all equal to 0)
             self.bit_counter += self.n_bits_on_deck;
 
             self.s_end = 1 + self
@@ -509,7 +509,7 @@ pub(super) mod test_helpers {
                 .rfind(|c: char| !c.is_ascii_hexdigit())
                 .map_or(0, |ii| ii + 1);
 
-            // each hexadecimal char represents 4 bits and we only have space for 64 bits
+            // Each hexadecimal char represents 4 bits and we only have space for 64 bits
             if self.s_end - self.s_beg > 16 {
                 self.s_beg = self.s_end - 16;
             }

@@ -7,7 +7,6 @@ use crate::{
     io::{BufferedFile, ScheduledSource},
     reactor::Reactor,
     sys::{IoBuffer, Source},
-    Local,
 };
 use futures_lite::{
     io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom},
@@ -30,7 +29,7 @@ pin_project! {
     /// Provides linear read access to a [`BufferedFile`].
     ///
     /// The [`StreamReader`] implements [`AsyncRead`] and [`AsyncBufRead`], which can offer the user with a convenient
-    /// way of issuing reads. However note that this mandates a copy between the OS page cache and
+    /// way of issuing reads. However, note that this mandates a copy between the OS page cache and
     /// an intermediary buffer before it reaches the user-specified buffer
     ///
     /// [`BufferedFile`]: struct.BufferedFile.html
@@ -83,7 +82,7 @@ pub fn stdin() -> Stdin {
     Stdin {
         source: None,
         buffer: Buffer::new(128),
-        reactor: Rc::downgrade(&Local::get_reactor()),
+        reactor: Rc::downgrade(&crate::executor().reactor()),
     }
 }
 
@@ -144,7 +143,7 @@ struct Buffer {
 }
 
 // We can use the same implementation for reads and writes but need to
-// be careful: For writes, buffer_pos is how much we have written so
+// be careful: For writes, buffer_pos is how much we have written, so
 // we are always interested in returning 0 -> buffer_pos.
 //
 // For reads, buffer_pos means how much we have consumed, so we are
@@ -216,7 +215,7 @@ impl StreamReader {
             io_source: None,
             seek_source: None,
             buffer: Buffer::new(builder.buffer_size),
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
         }
     }
 }
@@ -329,7 +328,7 @@ impl StreamWriterBuilder {
         }
     }
 
-    /// Chooses whether or not to issue a sync operation when closing the file
+    /// Chooses whether to issue a sync operation when closing the file
     /// (default enabled). Disabling this is dangerous and in most cases may
     /// lead to data loss upon power failure.
     pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
@@ -364,7 +363,7 @@ impl StreamWriter {
             file_pos: 0,
             source: None,
             buffer: Buffer::new(builder.buffer_size),
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
         }
     }
 

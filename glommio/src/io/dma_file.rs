@@ -198,7 +198,7 @@ impl DmaFile {
     ///
     /// It is expected that the buffer and the position be properly aligned
     /// for Direct I/O. In most platforms that means 4096 bytes. There is no
-    /// write_at_aligned, since a non aligned write would require a
+    /// write_at_aligned, since a nonaligned write would require a
     /// read-modify-write.
     ///
     /// Buffers should be allocated through [`alloc_dma_buffer`], which
@@ -362,8 +362,8 @@ impl DmaFile {
     /// host the file.
     ///
     /// If the extent is larger, that means many blocks are allocated at a time.
-    /// For instance, if the extent size is 1MB, that means that only 1 out
-    /// of 4 256kB writes will be turned synchronous. Combined with diligent
+    /// For instance, if the extent size is 1 MiB, that means that only 1 out
+    /// of 4 256 KiB writes will be turned synchronous. Combined with diligent
     /// use of `fallocate` we can greatly minimize context switches.
     ///
     /// It is important not to set the extent size too big. Writes can fail
@@ -427,7 +427,7 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{enclose, test_utils::*, ByteSliceMutExt, Latency, Local, Shares};
+    use crate::{enclose, test_utils::*, ByteSliceMutExt, Latency, Shares};
     use futures::join;
     use futures_lite::{stream, StreamExt};
     use rand::{seq::SliceRandom, thread_rng};
@@ -618,7 +618,7 @@ pub(crate) mod test {
 
         new_file.close().await.expect("failed to close file");
 
-        let stats = Local::io_stats();
+        let stats = crate::executor().io_stats();
         assert_eq!(stats.all_rings().files_opened(), 2);
         assert_eq!(stats.all_rings().files_closed(), 2);
         assert_eq!(stats.all_rings().file_reads(), (2, 4608));
@@ -649,7 +649,10 @@ pub(crate) mod test {
             .await
             .expect_err("pre allocating read-only files should fail");
         new_file.close().await.expect("failed to close file");
-        assert_eq!(Local::io_stats().all_rings().file_writes(), (0, 0));
+        assert_eq!(
+            crate::executor().io_stats().all_rings().file_writes(),
+            (0, 0)
+        );
     });
 
     dma_file_test!(file_empty_read, path, _k, {
@@ -662,7 +665,7 @@ pub(crate) mod test {
         std::assert_eq!(buf.len(), 0);
         new_file.close().await.expect("failed to close file");
 
-        let stats = Local::io_stats();
+        let stats = crate::executor().io_stats();
         assert_eq!(stats.all_rings().files_opened(), 1);
         assert_eq!(stats.all_rings().files_closed(), 1);
         assert_eq!(stats.all_rings().file_reads(), (1, 0));
@@ -690,7 +693,7 @@ pub(crate) mod test {
         drop(all);
         file.close().await.unwrap();
 
-        let stats = Local::io_stats();
+        let stats = crate::executor().io_stats();
         assert_eq!(stats.all_rings().files_opened(), 1);
         assert_eq!(stats.all_rings().files_closed(), 1);
         assert_eq!(stats.all_rings().file_reads(), (0, 0));
@@ -704,7 +707,7 @@ pub(crate) mod test {
         for i in 0..200 {
             let path = p.clone();
             handles.push(
-                Local::local(async move {
+                crate::spawn_local(async move {
                     let mut path = path.join("testfile");
                     path.set_extension(i.to_string());
                     let file = DmaFile::create(&path).await.expect("failed to create file");
@@ -784,32 +787,37 @@ pub(crate) mod test {
     }
 
     dma_file_test!(per_queue_stats, path, _k, {
-        let q1 = Local::create_task_queue(Shares::default(), Latency::NotImportant, "q1");
-        let q2 = Local::create_task_queue(
+        let q1 =
+            crate::executor().create_task_queue(Shares::default(), Latency::NotImportant, "q1");
+        let q2 = crate::executor().create_task_queue(
             Shares::default(),
             Latency::Matters(Duration::from_millis(1)),
             "q2",
         );
         let task1 =
-            Local::local_into(read_write(path.join("q1")), q1).expect("failed to spawn task");
+            crate::spawn_local_into(read_write(path.join("q1")), q1).expect("failed to spawn task");
         let task2 =
-            Local::local_into(read_write(path.join("q2")), q2).expect("failed to spawn task");
+            crate::spawn_local_into(read_write(path.join("q2")), q2).expect("failed to spawn task");
 
         join!(task1, task2);
 
-        let stats = Local::io_stats();
+        let stats = crate::executor().io_stats();
         assert_eq!(stats.all_rings().files_opened(), 2);
         assert_eq!(stats.all_rings().files_closed(), 2);
         assert_eq!(stats.all_rings().file_reads().0, 4);
         assert_eq!(stats.all_rings().file_writes().0, 2);
 
-        let stats = Local::task_queue_io_stats(q1).expect("failed to retrieve task queue io stats");
+        let stats = crate::executor()
+            .task_queue_io_stats(q1)
+            .expect("failed to retrieve task queue io stats");
         assert_eq!(stats.all_rings().files_opened(), 1);
         assert_eq!(stats.all_rings().files_closed(), 1);
         assert_eq!(stats.all_rings().file_reads().0, 2);
         assert_eq!(stats.all_rings().file_writes().0, 1);
 
-        let stats = Local::task_queue_io_stats(q2).expect("failed to retrieve task queue io stats");
+        let stats = crate::executor()
+            .task_queue_io_stats(q2)
+            .expect("failed to retrieve task queue io stats");
         assert_eq!(stats.all_rings().files_opened(), 1);
         assert_eq!(stats.latency_ring.files_opened(), 1);
         assert_eq!(stats.all_rings().files_closed(), 1);
@@ -843,7 +851,7 @@ pub(crate) mod test {
             .await;
         assert_eq!(*total_reads.borrow(), 512);
         assert_eq!(
-            Local::io_stats().all_rings().file_reads().0,
+            crate::executor().io_stats().all_rings().file_reads().0,
             4096 / new_file.o_direct_alignment
         );
         new_file.close_rc().await.expect("failed to close file");
@@ -874,7 +882,7 @@ pub(crate) mod test {
             .await;
         assert_eq!(*total_reads.borrow(), 511);
         assert_eq!(
-            Local::io_stats().all_rings().file_reads().0,
+            crate::executor().io_stats().all_rings().file_reads().0,
             4096 / new_file.o_direct_alignment
         );
         new_file.close_rc().await.expect("failed to close file");
@@ -905,7 +913,7 @@ pub(crate) mod test {
 
         assert_eq!(*total_reads.borrow(), 511);
         assert_eq!(
-            Local::io_stats().all_rings().file_reads().0,
+            crate::executor().io_stats().all_rings().file_reads().0,
             4096 / new_file.o_direct_alignment
         );
         new_file.close_rc().await.expect("failed to close file");

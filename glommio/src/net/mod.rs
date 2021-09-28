@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-//! This module provide glommio's networking support.
+//! This module provides glommio's networking support.
 use crate::sys;
 use nix::sys::socket::MsgFlags;
 use std::{io, os::unix::io::RawFd};

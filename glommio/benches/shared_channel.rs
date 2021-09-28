@@ -152,7 +152,7 @@ fn test_mesh_mpmc(capacity: usize, peers: usize) {
 
                     let mut recvs = vec![];
                     for (_, recv) in receiver.streams() {
-                        recvs.push(Local::local(async move {
+                        recvs.push(crate::spawn_local(async move {
                             while recv.recv().await.is_some(){};
                         }));
                     }

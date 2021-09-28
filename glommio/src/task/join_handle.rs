@@ -117,7 +117,7 @@ impl<R> Drop for JoinHandle<R> {
                         ((*header).vtable.destroy)(ptr)
                     }
                 } else {
-                    // If this is the last reference to the task and it's not closed, then
+                    // If this is the last reference to the task, and it's not closed, then
                     // close it and schedule one more time so that its future gets dropped by
                     // the executor.
                     let new = if (refs == 0) & (state & CLOSED == 0) {

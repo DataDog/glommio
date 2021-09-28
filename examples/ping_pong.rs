@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use glommio::{enclose, Local, LocalExecutor};
+use glommio::{enclose, LocalExecutor};
 use std::{cell::RefCell, rc::Rc};
 
 fn main() {
@@ -13,7 +13,7 @@ fn main() {
 
     ex.run(async {
         // Nice and short way to say a closure needs to capture vars clones.
-        let first = Local::local(enclose! { (left, right)
+        let first = glommio::spawn_local(enclose! { (left, right)
             async move {
                 loop {
                     if *(right.borrow()) {
@@ -22,7 +22,7 @@ fn main() {
                         println!("reset");
                         *(right.borrow_mut()) = true
                     }
-                    Local::yield_if_needed().await;
+                    glommio::yield_if_needed().await;
 
                 }
             }
@@ -30,18 +30,19 @@ fn main() {
         .detach();
 
         // What would you write if there were no enclose! macro.
-        let second = Local::local(|_left: Rc<RefCell<bool>>, right: Rc<RefCell<bool>>| -> _ {
-            async move {
-                loop {
-                    if !(*(right.borrow())) {
-                        println!("right");
-                        *(right.borrow_mut()) = true
+        let second =
+            glommio::spawn_local(|_left: Rc<RefCell<bool>>, right: Rc<RefCell<bool>>| -> _ {
+                async move {
+                    loop {
+                        if !(*(right.borrow())) {
+                            println!("right");
+                            *(right.borrow_mut()) = true
+                        }
+                        glommio::yield_if_needed().await;
                     }
-                    Local::yield_if_needed().await;
                 }
-            }
-        }(left.clone(), right.clone()))
-        .detach();
+            }(left.clone(), right.clone()))
+            .detach();
 
         futures::join!(first, second);
     });

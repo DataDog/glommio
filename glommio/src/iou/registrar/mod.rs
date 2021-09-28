@@ -93,7 +93,7 @@ impl<'ring> Registrar<'ring> {
     }
 
     /// Unregister all currently registered buffers. An explicit call to this
-    /// method is often unecessary, because all buffers will be unregistered
+    /// method is often unnecessary, because all buffers will be unregistered
     /// automatically when the ring is dropped.
     pub fn unregister_buffers(&self) -> io::Result<()> {
         resultify(unsafe { uring_sys::io_uring_unregister_buffers(self.ring.as_ptr()) })?;
@@ -105,6 +105,7 @@ impl<'ring> Registrar<'ring> {
     /// raw file descriptors.
     ///
     /// # Errors
+    ///
     /// Returns an error if
     /// * there is a preexisting set of registered files,
     /// * the `files` slice was empty,
@@ -132,7 +133,9 @@ impl<'ring> Registrar<'ring> {
     /// efficient to reserve space for files before submitting events,
     /// because `IoUring` will wait until the submission queue is
     /// empty before registering files.
+    ///
     /// # Errors
+    ///
     /// Returns an error if
     /// * there isn't a registered fileset,
     /// * the `files` slice was empty,

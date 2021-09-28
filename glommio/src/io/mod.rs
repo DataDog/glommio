@@ -7,7 +7,7 @@
 //! File I/O in Glommio comes in two kinds: Buffered and Direct I/O.
 //!
 //! Ideally an application would pick one of them according to its needs and not
-//! mix both. However if you do want to mix both, it is recommended that you do
+//! mix both. However, if you do want to mix both, it is recommended that you do
 //! not do so in the same device: Kernel settings like I/O schedulers and merge
 //! settings that are beneficial to one of them can be detrimental to the
 //! others.
@@ -35,7 +35,7 @@
 //!  * Advanced features for io_uring like Non-interrupt mode, registered files,
 //!    registered buffers, will not work with Buffered I/O
 //!  * Read amplification for small random reads, as the OS is bounded by the
-//!    page size (usually 4kB), even though modern NVMe devices are perfectly
+//!    page size (usually 4 KiB), even though modern NVMe devices are perfectly
 //!    capable of issuing 512-byte I/O.
 //!
 //! The main structure to deal with Buffered I/O is the [`BufferedFile`] struct.
@@ -47,7 +47,7 @@
 //! Direct I/O will not use the Operating System page cache and will always
 //! touch the device directly. That will always work very well for stream-based
 //! workloads (scanning a file much larger than memory, writing a buffer that
-//! will not be read from in the near future, etc) but will require a
+//! will not be read from in the near future, etc.) but will require a
 //! user-provided cache for good random performance.
 //!
 //! There are advantages to using a user-provided cache: Files usually contain
@@ -83,7 +83,7 @@
 //!
 //! Often times, due to constraints of modern storage systems, files are
 //! immutable once written. To safely capture that pattern and provide useful
-//! otimizations, Glommio exposes an [`ImmutableFile`]: The [`ImmutableFile`]
+//! optimizations, Glommio exposes an [`ImmutableFile`]: The [`ImmutableFile`]
 //! can be written to once created, but once sealed it is assumed not to change.
 //! This allows Glommio to provide some optimizations, like basic caching, that
 //! should make Direct I/O more palatable.
@@ -131,14 +131,13 @@ mod open_options;
 mod read_result;
 mod sched;
 
-use crate::Local;
 use std::path::Path;
 
 pub(super) type Result<T> = crate::Result<T, ()>;
 
 /// rename an existing file.
 pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) -> Result<()> {
-    let reactor = Local::get_reactor();
+    let reactor = crate::executor().reactor();
     let source = reactor.rename(old_path.as_ref(), new_path.as_ref());
     source.collect_rw().await?;
     Ok(())
@@ -146,7 +145,7 @@ pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) ->
 
 /// remove an existing file given its name
 pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
-    let reactor = Local::get_reactor();
+    let reactor = crate::executor().reactor();
     let source = reactor.remove_file(path.as_ref());
     source.collect_rw().await?;
     Ok(())

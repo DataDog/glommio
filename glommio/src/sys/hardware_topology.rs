@@ -126,8 +126,8 @@ pub(crate) mod test_helpers {
     use super::{CpuLocation, HashMap};
 
     pub fn check_topolgy(mut topology: Vec<CpuLocation>) {
-        // check that we don't have a system where any hardware component has an id that
-        // is not unique system wide (e.g. both numa node 0 and 1 have a core
+        // Check that we don't have a system where any hardware component has an id that
+        // is not unique system-wide (e.g. both numa node 0 and 1 have a core
         // with id 0); this precondition is assumed throughout
         topology.sort_by_key(|l| (l.numa_node, l.package, l.core, l.cpu));
 
@@ -142,12 +142,10 @@ pub(crate) mod test_helpers {
             cpu_to_core
                 .entry(cpu.cpu)
                 .and_modify(|e| {
-                    assert!(
-                        *e == cpu.core,
+                    assert_eq!(
+                        *e, cpu.core,
                         "cpu {} in cores {} and {}",
-                        cpu.cpu,
-                        cpu.core,
-                        *e
+                        cpu.cpu, cpu.core, *e
                     )
                 })
                 .or_insert(cpu.core);
@@ -155,12 +153,10 @@ pub(crate) mod test_helpers {
             core_to_pkg
                 .entry(cpu.core)
                 .and_modify(|e| {
-                    assert!(
-                        *e == cpu.package,
+                    assert_eq!(
+                        *e, cpu.package,
                         "core {} in packages {} and {}",
-                        cpu.core,
-                        cpu.package,
-                        *e
+                        cpu.core, cpu.package, *e
                     )
                 })
                 .or_insert(cpu.package);
@@ -168,12 +164,10 @@ pub(crate) mod test_helpers {
             core_to_numa
                 .entry(cpu.core)
                 .and_modify(|e| {
-                    assert!(
-                        *e == cpu.numa_node,
+                    assert_eq!(
+                        *e, cpu.numa_node,
                         "core {} in numa_nodes {} and {}",
-                        cpu.core,
-                        cpu.numa_node,
-                        *e
+                        cpu.core, cpu.numa_node, *e
                     )
                 })
                 .or_insert(cpu.numa_node);

@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{reactor::Reactor, task::JoinHandle, GlommioError, Local, Task, TaskQueueHandle};
+use crate::{reactor::Reactor, task::JoinHandle, GlommioError, TaskQueueHandle};
 use pin_project_lite::pin_project;
 use std::{
     cell::RefCell,
@@ -96,7 +96,7 @@ impl Timer {
     /// });
     /// ```
     pub fn new(dur: Duration) -> Timer {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         Timer {
             inner: Rc::new(RefCell::new(Inner {
                 id: reactor.register_timer(),
@@ -115,7 +115,7 @@ impl Timer {
                 id,
                 is_charged: false,
                 when: Instant::now() + dur,
-                reactor: Rc::downgrade(&Local::get_reactor()),
+                reactor: Rc::downgrade(&crate::executor().reactor()),
             })),
         }
     }
@@ -150,8 +150,8 @@ impl Drop for Timer {
         let inner = self.inner.borrow_mut();
         if inner.is_charged {
             // Deregister the timer from the reactor. Reactor can be dropped already
-            //if that is the case then reactor already removed the timer and we do not need
-            //to do anything
+            // if that is the case then reactor already removed the timer, and we do not
+            // need to do anything
             if let Some(reactor) = inner.reactor.upgrade() {
                 reactor.remove_timer(inner.id);
             }
@@ -188,8 +188,9 @@ impl Future for Timer {
 /// In practice [`Timer`] is hard to use because it will always block the
 /// current task queue. This is rarely what one wants.
 ///
-/// The TimerActionOnce creates a timer in the background and executes an action
-/// when the timer expires. It also provides a convenient way to cancel a timer.
+/// The [`TimerActionOnce`] creates a timer in the background and executes an
+/// action when the timer expires. It also provides a convenient way to cancel a
+/// timer.
 ///
 /// [`Timer`]: struct.Timer.html
 #[derive(Debug)]
@@ -199,8 +200,8 @@ pub struct TimerActionOnce<T> {
     reactor: Weak<Reactor>,
 }
 
-/// The TimerActionRepeat struct provides an ergonomic way to fire a repeated
-/// action at specified intervals, without having to fire new
+/// The [`TimerActionRepeat`] struct provides an ergonomic way to fire a
+/// repeated action at specified intervals, without having to fire new
 /// [`TimerActionOnce`] events
 ///
 /// [`TimerActionOnce`]: struct.TimerActionOnce.html
@@ -239,7 +240,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// [`Duration`]: https://doc.rust-lang.org/std/time/struct.Duration.html
     /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     pub fn do_in(when: Duration, action: impl Future<Output = T> + 'static) -> TimerActionOnce<T> {
-        Self::do_in_into(when, action, Local::current_task_queue()).unwrap()
+        Self::do_in_into(when, action, crate::executor().current_task_queue()).unwrap()
     }
 
     /// Creates a [`TimerActionOnce`] that will execute the associated future
@@ -254,12 +255,16 @@ impl<T: 'static> TimerActionOnce<T> {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{timer::TimerActionOnce, Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{timer::TimerActionOnce, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         let tq = glommio::executor().create_task_queue(
+    ///             Shares::default(),
+    ///             Latency::NotImportant,
+    ///             "test",
+    ///         );
     ///         let action = TimerActionOnce::do_in_into(
     ///             Duration::from_millis(100),
     ///             async move {
@@ -281,12 +286,12 @@ impl<T: 'static> TimerActionOnce<T> {
         action: impl Future<Output = T> + 'static,
         tq: TaskQueueHandle,
     ) -> Result<TimerActionOnce<T>> {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let timer_id = reactor.register_timer();
         let timer = Timer::from_id(timer_id, when);
         let inner = timer.inner.clone();
 
-        let task = Task::local_into(
+        let task = crate::spawn_local_into(
             async move {
                 timer.await;
                 action.await
@@ -331,7 +336,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// [`Instant`]: https://doc.rust-lang.org/std/time/struct.Instant.html
     /// [`TimerActionOnce`]: struct.TimerActionOnce.html
     pub fn do_at(when: Instant, action: impl Future<Output = T> + 'static) -> TimerActionOnce<T> {
-        Self::do_at_into(when, action, Local::current_task_queue()).unwrap()
+        Self::do_at_into(when, action, crate::executor().current_task_queue()).unwrap()
     }
 
     /// Creates a [`TimerActionOnce`] that will execute the associated future
@@ -341,17 +346,21 @@ impl<T: 'static> TimerActionOnce<T> {
     ///
     /// * `when` an [`Instant`] that represents when to execute the action.
     /// * `action` a Future to be executed at time `when`.
-    /// * `tq` the [`TaskQueueHandle`] for the TaskQueue we want.
+    /// * `tq` the [`TaskQueueHandle`] for the task queue we want.
     ///
     /// # Examples
     ///
     /// ```
-    /// use glommio::{timer::TimerActionOnce, Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{timer::TimerActionOnce, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::{Duration, Instant};
     ///
     /// let handle = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         let tq = glommio::executor().create_task_queue(
+    ///             Shares::default(),
+    ///             Latency::NotImportant,
+    ///             "test",
+    ///         );
     ///         let when = Instant::now()
     ///             .checked_add(Duration::from_millis(100))
     ///             .unwrap();
@@ -453,7 +462,7 @@ impl<T: 'static> TimerActionOnce<T> {
     /// Waits for a [`TimerActionOnce`] to return
     ///
     /// Returns an [`Option`] with value None if the task was canceled and Some
-    /// if the action finished successfuly
+    /// if the action finished successfully
     ///
     /// # Examples
     ///
@@ -552,12 +561,16 @@ impl TimerActionRepeat {
     /// # Examples
     ///
     /// ```no_run
-    /// use glommio::{timer::TimerActionRepeat, Latency, Local, LocalExecutorBuilder, Shares};
+    /// use glommio::{timer::TimerActionRepeat, Latency, LocalExecutorBuilder, Shares};
     /// use std::time::Duration;
     ///
     /// let handle = LocalExecutorBuilder::new()
     ///     .spawn(|| async move {
-    ///         let tq = Local::create_task_queue(Shares::default(), Latency::NotImportant, "test");
+    ///         let tq = glommio::executor().create_task_queue(
+    ///             Shares::default(),
+    ///             Latency::NotImportant,
+    ///             "test",
+    ///         );
     ///         let action = TimerActionRepeat::repeat_into(
     ///             || async move {
     ///                 println!("Execute this!");
@@ -579,10 +592,10 @@ impl TimerActionRepeat {
         G: Fn() -> F + 'static,
         F: Future<Output = Option<Duration>> + 'static,
     {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let timer_id = reactor.register_timer();
 
-        let task = Task::local_into(
+        let task = crate::spawn_local_into(
             async move {
                 while let Some(period) = action_gen().await {
                     Timer::from_id(timer_id, period).await;
@@ -632,7 +645,7 @@ impl TimerActionRepeat {
         G: Fn() -> F + 'static,
         F: Future<Output = Option<Duration>> + 'static,
     {
-        Self::repeat_into(action_gen, Local::current_task_queue()).unwrap()
+        Self::repeat_into(action_gen, crate::executor().current_task_queue()).unwrap()
     }
 
     /// Cancel an existing [`TimerActionRepeat`] and waits for it to return
@@ -698,7 +711,7 @@ impl TimerActionRepeat {
     /// Waits for a [`TimerActionRepeat`] to return
     ///
     /// Returns an [`Option`] with value None if the task was canceled and
-    /// Some(()) if the action finished successfuly
+    /// Some(()) if the action finished successfully
     ///
     /// # Examples
     ///
@@ -893,7 +906,7 @@ mod test {
                 *(exec1.borrow_mut()) = 1;
             });
 
-            Local::later().await;
+            crate::executor().yield_task_queue_now().await;
             assert_eq!(*(exec2.borrow()), 1);
         });
     }
@@ -1000,7 +1013,7 @@ mod test {
             });
             // Force this to go into the task queue to make the test more
             // realistic
-            Local::later().await;
+            crate::executor().yield_task_queue_now().await;
             action.cancel().await;
 
             Timer::new(Duration::from_millis(100)).await;
@@ -1055,7 +1068,7 @@ mod test {
 
         test_executor!(async move {
             let action = TimerActionOnce::do_in(Duration::from_millis(10), async move {
-                Local::local(async move {
+                crate::spawn_local(async move {
                     *(exec1.borrow_mut()) = 1;
                     // Test that if we had already started the action, it will run to completion.
                     for _ in 0..10 {

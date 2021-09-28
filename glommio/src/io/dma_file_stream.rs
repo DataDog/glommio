@@ -10,7 +10,6 @@ use crate::{
     ByteSliceExt,
     ByteSliceMutExt,
     GlommioError,
-    Local,
     ResourceType,
 };
 use ahash::AHashMap;
@@ -66,7 +65,6 @@ impl DmaStreamReaderBuilder {
     /// ```no_run
     /// use glommio::{
     ///     io::{DmaFile, DmaStreamReaderBuilder},
-    ///     Local,
     ///     LocalExecutor,
     /// };
     /// use std::rc::Rc;
@@ -77,7 +75,7 @@ impl DmaStreamReaderBuilder {
     ///     let _reader = DmaStreamReaderBuilder::from_rc(file.clone()).build();
     ///
     ///     // issue random I/O now, even though a stream is open.
-    ///     Local::local(async move {
+    ///     glommio::spawn_local(async move {
     ///         file.read_at(0, 8).await.unwrap();
     ///     })
     ///     .await;
@@ -221,7 +219,7 @@ impl DmaStreamReaderState {
             return;
         }
 
-        let pending = Local::local(async move {
+        let pending = crate::spawn_local(async move {
             futures_lite::future::yield_now().await;
 
             if read_state.borrow().error.is_some() {
@@ -929,7 +927,7 @@ impl DmaStreamWriterState {
         let final_pos = self.current_pos();
         self.flush_padded(state.clone(), file.clone());
         let mut pending = self.take_pending_handles();
-        Local::local(async move {
+        crate::spawn_local(async move {
             futures_lite::future::yield_now().await;
 
             defer! {
@@ -1018,7 +1016,7 @@ impl DmaStreamWriterState {
     fn flush_one_buffer(&mut self, buffer: DmaBuffer, state: Rc<RefCell<Self>>, file: Rc<DmaFile>) {
         let aligned_pos = self.aligned_pos;
         let flush_pos = self.current_pos();
-        let handle = Local::local(async move {
+        let handle = crate::spawn_local(async move {
             let res = file.write_at(buffer, aligned_pos).await;
             let mut state = state.borrow_mut();
             if !collect_error!(state, res) {
@@ -1052,7 +1050,8 @@ impl Drop for DmaStreamWriter {
         }
         if state.must_truncate() {
             let file = self.file.take().unwrap();
-            Local::get_reactor()
+            crate::executor()
+                .reactor()
                 .sys
                 .async_truncate(file.as_raw_fd(), state.flushed_pos());
         }
@@ -2070,7 +2069,7 @@ mod test {
     #[test]
     fn flushstate() {
         test_executor!(async move {
-            let handle_gen = || Local::local(async move {}).detach();
+            let handle_gen = || crate::spawn_local(async move {}).detach();
             let mut state = DmaStreamWriterFlushState::new(4);
 
             state.on_start(8, handle_gen());

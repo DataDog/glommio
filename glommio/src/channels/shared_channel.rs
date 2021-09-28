@@ -10,7 +10,6 @@ use crate::{
     reactor::Reactor,
     sys::{self, SleepNotifier},
     GlommioError,
-    Local,
     ResourceType,
 };
 use futures_lite::{future, stream::Stream};
@@ -26,7 +25,7 @@ use std::{
 type Result<T, V> = crate::Result<T, V>;
 
 /// The `SharedReceiver` is the receiving end of the Shared Channel.
-/// It implements [`Send`] so it can be passed to any thread. However
+/// It implements [`Send`] so it can be passed to any thread. However,
 /// it doesn't implement any method: before it is used it must be changed
 /// into a [`ConnectedReceiver`], which then makes sure it will be used by
 /// at most one thread.
@@ -42,7 +41,7 @@ pub struct SharedReceiver<T: Send + Sized> {
 }
 
 /// The `SharedSender` is the sending end of the Shared Channel.
-/// It implements [`Send`] so it can be passed to any thread. However
+/// It implements [`Send`] so it can be passed to any thread. However,
 /// it doesn't implement any method: before it is used it must be changed
 /// into a [`ConnectedSender`], which then makes sure it will be used by
 /// at most one thread.
@@ -144,7 +143,7 @@ impl<T: BufferHalf + Clone> Future for Connector<T> {
     }
 }
 
-/// Creates a a new `shared_channel` returning its sender and receiver
+/// Creates a new `shared_channel` returning its sender and receiver
 /// endpoints.
 ///
 /// All shared channels must be bounded.
@@ -167,7 +166,7 @@ impl<T: 'static + Send + Sized> SharedSender<T> {
     /// [`ConnectedSender`]: struct.ConnectedSender.html
     pub async fn connect(mut self) -> ConnectedSender<T> {
         let state = self.state.take().unwrap();
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         state.buffer.connect(reactor.id());
         let id = reactor.register_shared_channel(Box::new(enclose! {(state) move || {
             if state.buffer.consumer_disconnected() {
@@ -323,7 +322,7 @@ impl<T: 'static + Send + Sized> SharedReceiver<T> {
     ///
     /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
     pub async fn connect(mut self) -> ConnectedReceiver<T> {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let state = self.state.take().unwrap();
         state.buffer.connect(reactor.id());
         let id = reactor.register_shared_channel(Box::new(enclose! { (state) move || {
@@ -349,14 +348,14 @@ impl<T: 'static + Send + Sized> SharedReceiver<T> {
 impl<T: Send + Sized> ConnectedReceiver<T> {
     /// Receives data from this channel
     ///
-    /// If the sender is no longer available it returns [`None`]. Otherwise
+    /// If the sender is no longer available it returns [`None`]. Otherwise,
     /// block until an item is available and returns it wrapped in [`Some`]
     ///
     /// Notice that this is also available as a Stream. Whether to consume from
     /// a stream or `recv` is up to the application. The biggest difference
     /// is that [`StreamExt`]'s [`next`] method takes a mutable reference to
     /// self. If the LocalReceiver is, say, behind an [`Rc`] it may be more
-    /// ergonomic to recv.
+    /// ergonomic to `recv`.
     ///
     /// # Examples
     /// ```
@@ -439,7 +438,7 @@ impl<T: Send + Sized> Drop for SharedSender<T> {
             let id = state.buffer.peer_id();
             if let Some(notifier) = sys::get_sleep_notifier_for(id) {
                 if let Some(fd) = notifier.must_notify() {
-                    Local::get_reactor().notify(fd);
+                    crate::executor().reactor().notify(fd);
                 }
             }
         }
@@ -454,7 +453,7 @@ impl<T: Send + Sized> Drop for SharedReceiver<T> {
             let id = state.buffer.peer_id();
             if let Some(notifier) = sys::get_sleep_notifier_for(id) {
                 if let Some(fd) = notifier.must_notify() {
-                    Local::get_reactor().notify(fd);
+                    crate::executor().reactor().notify(fd);
                 }
             }
         }

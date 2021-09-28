@@ -26,11 +26,11 @@ fn main() {
             let s = Rc::new(Semaphore::new(0));
             let acquisitions = Rc::new(Cell::new(0));
 
-            let signals = Local::local(enclose! { (acquisitions, s) async move {
+            let signals = crate::spawn_local(enclose! { (acquisitions, s) async move {
                 let mut expected : u32 = 0;
                 while expected != runs {
                     while expected != acquisitions.get() {
-                        Local::later().await;
+                        crate::executor().yield_task_queue_now().await;
                     }
                     s.signal(1);
                     expected += 1;

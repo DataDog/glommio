@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::{datagram::GlommioDatagram, stream::GlommioStream};
-use crate::{reactor::Reactor, Local};
+use crate::reactor::Reactor;
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
@@ -97,7 +97,7 @@ impl UnixListener {
         let listener = sk.into_unix_listener();
 
         Ok(UnixListener {
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
             listener,
         })
     }
@@ -316,7 +316,7 @@ impl UnixStream {
     /// })
     /// ```
     pub async fn connect<A: AsRef<Path>>(addr: A) -> Result<UnixStream> {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
 
         let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
         let addr = SockAddr::new_unix(addr.as_ref())
@@ -502,7 +502,7 @@ impl UnixDatagram {
     /// the [`send`] and [`recv`] methods to be used to send data and also
     /// applies filters to only receive data from the specified address.
     ///
-    /// If addr yields multiple addresses, connect will be attempted with each
+    /// If `addr` yields multiple addresses, connect will be attempted with each
     /// of the addresses until the underlying OS function returns no error.
     /// Note that usually, a successful connect call does not specify that
     /// there is a remote server listening on the port, rather, such an
@@ -577,7 +577,7 @@ impl UnixDatagram {
         self.socket.peek(buf).await.map_err(Into::into)
     }
 
-    ///Receives a single datagram message on the socket, without removing it
+    /// Receives a single datagram message on the socket, without removing it
     /// from the queue. On success, returns the number of bytes read and the
     /// origin.
     ///
@@ -744,14 +744,14 @@ mod tests {
         let addr = addr.as_pathname().unwrap();
         let coord = Rc::new(Cell::new(0));
 
-        let listener_handle = Task::local(enclose! { (coord) async move {
+        let listener_handle = crate::spawn_local(enclose! { (coord) async move {
             coord.set(1);
             listener.accept().await.unwrap();
         }})
         .detach();
 
         while coord.get() != 1 {
-            Local::later().await;
+            crate::executor().yield_task_queue_now().await;
         }
         UnixStream::connect(&addr).await.unwrap();
         listener_handle.await.unwrap();
@@ -773,11 +773,11 @@ mod tests {
 
         let listener = UnixListener::bind(&file).unwrap();
 
-        let listener_handle = Task::<io::Result<usize>>::local(async move {
+        let listener_handle = crate::spawn_local(async move {
             let mut stream = listener.accept().await?;
             let mut buf = Vec::new();
             stream.read_until(10, &mut buf).await?;
-            Ok(buf.len())
+            io::Result::Ok(buf.len())
         })
         .detach();
 

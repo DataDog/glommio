@@ -7,7 +7,7 @@ fn main() {
         .spawn(|| async move {
             let mut runs = 0;
             let t = Instant::now();
-            while !Local::need_preempt() {
+            while !crate::executor().need_preempt() {
                 runs += 1;
             }
 

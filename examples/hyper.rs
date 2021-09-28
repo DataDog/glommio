@@ -1,9 +1,9 @@
-// Example on how to use the Hyper server in !Send mode.
-// The clients are harder, see https://github.com/hyperium/hyper/issues/2341 for details
-//
-// Essentially what we do is we wrap our types around the Tokio traits. The
-// !Send limitation makes it harder to deal with high level hyper primitives but
-// it works in the end.
+/// Example on how to use the Hyper server in !Send mode.
+/// The clients are harder, see https://github.com/hyperium/hyper/issues/2341 for details
+///
+/// Essentially what we do is we wrap our types around the Tokio traits. The
+/// `!Send` limitation makes it harder to deal with high level hyper primitives,
+/// but it works in the end.
 mod hyper_compat {
     use futures_lite::{AsyncRead, AsyncWrite, Future};
     use hyper::service::service_fn;
@@ -17,8 +17,6 @@ mod hyper_compat {
         enclose,
         net::{TcpListener, TcpStream},
         sync::Semaphore,
-        Local,
-        Task,
     };
     use hyper::{server::conn::Http, Body, Request, Response};
     use std::{io, rc::Rc};
@@ -33,7 +31,7 @@ mod hyper_compat {
         F::Output: 'static,
     {
         fn execute(&self, fut: F) {
-            Task::local(fut).detach();
+            glommio::spawn_local(fut).detach();
         }
     }
 
@@ -93,7 +91,7 @@ mod hyper_compat {
                 }
                 Ok(stream) => {
                     let addr = stream.local_addr().unwrap();
-                    Local::local(enclose!{(conn_control) async move {
+                    glommio::spawn_local(enclose!{(conn_control) async move {
                         let _permit = conn_control.acquire_permit(1).await;
                         if let Err(x) = Http::new().with_executor(HyperExecutor).serve_connection(HyperStream(stream), service_fn(service)).await {
                             if !x.is_incomplete_message() {
@@ -107,7 +105,7 @@ mod hyper_compat {
     }
 }
 
-use glommio::{CpuSet, Local, LocalExecutorPoolBuilder, Placement};
+use glommio::{CpuSet, LocalExecutorPoolBuilder, Placement};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use std::convert::Infallible;
 
@@ -131,7 +129,7 @@ fn main() {
     LocalExecutorPoolBuilder::new(num_cpus::get())
         .placement(Placement::MaxSpread(CpuSet::online().ok()))
         .on_all_shards(|| async move {
-            let id = Local::id();
+            let id = glommio::executor().id();
             println!("Starting executor {}", id);
             hyper_compat::serve_http(([0, 0, 0, 0], 8000), hyper_demo, 1024)
                 .await

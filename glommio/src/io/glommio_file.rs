@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
-use crate::{io::sched::FileScheduler, reactor::Reactor, sys, GlommioError, Local};
+use crate::{io::sched::FileScheduler, reactor::Reactor, sys, GlommioError};
 use log::debug;
 use std::{
     cell::{Ref, RefCell},
@@ -73,7 +73,7 @@ impl FromRawFd for GlommioFile {
             inode: 0,
             dev_major: 0,
             dev_minor: 0,
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
             scheduler: RefCell::new(None),
         }
     }
@@ -86,7 +86,7 @@ impl GlommioFile {
         flags: libc::c_int,
         mode: libc::mode_t,
     ) -> io::Result<GlommioFile> {
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let path = if dir == -1 && path.is_relative() {
             let mut pbuf = std::fs::canonicalize(".")?;
             pbuf.push(path);
@@ -118,7 +118,8 @@ impl GlommioFile {
     pub(super) fn attach_scheduler(&self) {
         if self.scheduler.borrow().is_none() {
             self.scheduler.replace(Some(
-                Local::get_reactor()
+                crate::executor()
+                    .reactor()
                     .io_scheduler()
                     .get_file_scheduler(self.identity()),
             ));

@@ -110,7 +110,7 @@ impl OpenOptions {
     /// symlink. In this way, if the call succeeds, the file returned is
     /// guaranteed to be new.
     ///
-    /// This option is useful because it is atomic. Otherwise between checking
+    /// This option is useful because it is atomic. Otherwise, between checking
     /// whether a file exists and creating a new one, the file may have been
     /// created by another process (a TOCTOU race condition / attack).
     ///
@@ -124,7 +124,7 @@ impl OpenOptions {
         self
     }
 
-    /// Pass custom flags to the flags argument of `open_at`.
+    /// Pass custom flags to the flags' argument of `open_at`.
     pub fn custom_flags(&mut self, flags: i32) -> &mut Self {
         self.custom_flags = flags;
         self
@@ -171,7 +171,7 @@ impl OpenOptions {
         })
     }
 
-    /// Similiar to `OpenOptions::open()` in the standard library, but returns a
+    /// Similar to `OpenOptions::open()` in the standard library, but returns a
     /// DMA file
     pub async fn dma_open<P: AsRef<Path>>(&self, path: P) -> Result<DmaFile> {
         DmaFile::open_with_options(
@@ -187,7 +187,7 @@ impl OpenOptions {
         .await
     }
 
-    /// Similiar to `OpenOptions::open()` in the standard library, but returns a
+    /// Similar to `OpenOptions::open()` in the standard library, but returns a
     /// Buffered file
     pub async fn buffered_open<P: AsRef<Path>>(&self, path: P) -> Result<BufferedFile> {
         BufferedFile::open_with_options(

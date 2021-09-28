@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::stream::GlommioStream;
-use crate::{net::yolo_accept, reactor::Reactor, GlommioError, Local};
+use crate::{net::yolo_accept, reactor::Reactor, GlommioError};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
@@ -111,7 +111,7 @@ impl TcpListener {
         let listener = sk.into_tcp_listener();
 
         Ok(TcpListener {
-            reactor: Rc::downgrade(&Local::get_reactor()),
+            reactor: Rc::downgrade(&crate::executor().reactor()),
             listener,
         })
     }
@@ -402,7 +402,7 @@ impl TcpStream {
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<TcpStream> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let (addr, socket) = make_tcp_socket(&addr)?;
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
 
@@ -499,7 +499,7 @@ impl TcpStream {
 
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let (addr, socket) = make_tcp_socket(&addr)?;
-        let reactor = Local::get_reactor();
+        let reactor = crate::executor().reactor();
         let source = reactor.connect_timeout(socket.as_raw_fd(), addr, duration);
 
         // connect_timeout submits two sqes to io_uring: a connect sqe soft-linked
@@ -625,7 +625,7 @@ impl TcpStream {
     ///
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing
-    /// MSG_PEEK as a flag to the underlying recv system call.
+    /// MSG_PEEK as a flag to the underlying `recv` system call.
     pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
         self.stream.peek(buf).await.map_err(Into::into)
     }
@@ -766,15 +766,14 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle: Task<Result<SocketAddr>> =
-                Task::local(enclose! { (coord) async move {
-                    coord.set(1);
-                    let stream = listener.accept().await?;
-                    stream.peer_addr()
-                }});
+            let listener_handle = crate::spawn_local(enclose! { (coord) async move {
+                coord.set(1);
+                let stream = listener.accept().await?;
+                stream.peer_addr()
+            }});
 
             while coord.get() != 1 {
-                Local::later().await;
+                crate::executor().yield_task_queue_now().await;
             }
             let stream = TcpStream::connect(addr).await.unwrap();
             assert_eq!(listener_handle.await.unwrap(), stream.local_addr().unwrap());
@@ -869,7 +868,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle: Task<Result<()>> = Task::local(enclose! { (coord) async move {
+            let listener_handle = crate::spawn_local(enclose! { (coord) async move {
                 coord.set(1);
                 listener.incoming().take(4).try_for_each(|addr| {
                     addr.map(|_| ())
@@ -877,11 +876,13 @@ mod tests {
             }});
 
             while coord.get() != 1 {
-                Local::later().await;
+                crate::executor().yield_task_queue_now().await;
             }
             let mut handles = Vec::with_capacity(4);
             for _ in 0..4 {
-                handles.push(Task::local(async move { TcpStream::connect(addr).await }).detach());
+                handles.push(
+                    crate::spawn_local(async move { TcpStream::connect(addr).await }).detach(),
+                );
             }
 
             for handle in handles.drain(..) {
@@ -905,7 +906,7 @@ mod tests {
 
             for _ in 0..128 {
                 handles.push(
-                    Local::local(enclose! { (listener) async move {
+                    crate::spawn_local(enclose! { (listener) async move {
                         let _accept = listener.accept().await.unwrap();
                     }})
                     .detach(),
@@ -919,7 +920,7 @@ mod tests {
             // accept
             for _ in 0..128 {
                 handles.push(
-                    Local::local(async move {
+                    crate::spawn_local(async move {
                         let _stream = TcpStream::connect(addr).await.unwrap();
                     })
                     .detach(),
@@ -939,18 +940,18 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let coord = Rc::new(Cell::new(0));
 
-            let listener_handle = Task::<Result<u8>>::local(enclose! { (coord) async move {
+            let listener_handle = crate::spawn_local(enclose! { (coord) async move {
                 coord.set(1);
                 let mut stream = listener.accept().await?;
                 let mut byte = [0u8; 1];
                 let read = stream.read(&mut byte).await?;
                 assert_eq!(read, 1);
-                Ok(byte[0])
+                io::Result::Ok(byte[0])
             }})
             .detach();
 
             while coord.get() != 1 {
-                Local::later().await;
+                crate::executor().yield_task_queue_now().await;
             }
             let mut stream = TcpStream::connect(addr).await.unwrap();
 
@@ -967,11 +968,11 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<Result<usize>>::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = Vec::new();
                 stream.read_until(10, &mut buf).await?;
-                Ok(buf.len())
+                io::Result::Ok(buf.len())
             })
             .detach();
 
@@ -990,11 +991,11 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<Result<usize>>::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = String::new();
                 stream.read_line(&mut buf).await?;
-                Ok(buf.len())
+                io::Result::Ok(buf.len())
             })
             .detach();
 
@@ -1012,9 +1013,9 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<Result<usize>>::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let stream = listener.accept().await?;
-                Ok(stream.lines().count().await)
+                io::Result::Ok(stream.lines().count().await)
             })
             .detach();
 
@@ -1033,7 +1034,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<Result<()>>::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 // likely both messages were coalesced together
@@ -1044,7 +1045,7 @@ mod tests {
                 stream.consume(4);
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf.len(), 0);
-                Ok(())
+                io::Result::Ok(())
             })
             .detach();
 
@@ -1065,14 +1066,14 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<Result<()>>::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf.len(), 4);
                 stream.consume(100);
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf.len(), 0);
-                Ok(())
+                io::Result::Ok(())
             })
             .detach();
 
@@ -1090,7 +1091,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<Result<()>>::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf, b"msg1");
@@ -1099,7 +1100,7 @@ mod tests {
                 stream.consume(4);
                 let buf = stream.fill_buf().await?;
                 assert!(buf.is_empty());
-                Ok(())
+                io::Result::Ok(())
             })
             .detach();
 
@@ -1117,7 +1118,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let listener_handle = Task::<Result<usize>>::local(async move {
+            let listener_handle = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 let mut buf = [0u8; 64];
                 for _ in 0..10 {
@@ -1170,7 +1171,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let ltask = Task::<Result<usize>>::local(async move {
+            let ltask = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
@@ -1184,7 +1185,7 @@ mod tests {
                     }
                 };
                 assert!(now.elapsed().as_secs() >= 1);
-                Ok(0)
+                io::Result::Ok(0)
             });
 
             let _s = TcpStream::connect(addr).await.unwrap();
@@ -1198,7 +1199,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let ltask = Task::<Result<usize>>::local(async move {
+            let ltask = crate::spawn_local(async move {
                 let mut stream = listener.accept().await?;
                 poll_fn(|cx| {
                     let mut buf = [0u8; 64];
@@ -1211,7 +1212,7 @@ mod tests {
                     Poll::Ready(())
                 })
                 .await;
-                Ok(0)
+                io::Result::Ok(0)
             });
 
             let _s = TcpStream::connect(addr).await.unwrap();
@@ -1225,7 +1226,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let ltask = Task::<Result<usize>>::local(async move {
+            let ltask = crate::spawn_local(async move {
                 let stream = listener.accept().await?;
                 stream
                     .set_write_timeout(Some(Duration::from_nanos(0)))
@@ -1235,7 +1236,7 @@ mod tests {
                     .set_write_timeout(Some(Duration::from_secs(1)))
                     .unwrap();
                 assert_eq!(stream.write_timeout(), Some(Duration::from_secs(1)));
-                Ok(0)
+                io::Result::Ok(0)
             });
 
             let _s = TcpStream::connect(addr).await.unwrap();
@@ -1249,7 +1250,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
 
-            let peer_addr = Task::local(async move {
+            let peer_addr = crate::spawn_local(async move {
                 let accepted = listener.shared_accept().await.unwrap();
                 let peer_addr = accepted.peer_addr().unwrap();
                 let stream = accepted.bind_to_executor();

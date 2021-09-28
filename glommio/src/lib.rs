@@ -77,21 +77,23 @@
 //! controllers:
 //!
 //! ```
-//! use glommio::{Latency, Local, LocalExecutorBuilder, Shares};
+//! use glommio::{executor, Latency, LocalExecutorBuilder, Shares};
 //!
 //! LocalExecutorBuilder::new()
 //!     .pin_to_cpu(0)
 //!     .spawn(|| async move {
-//!         let tq1 = Local::create_task_queue(Shares::Static(2), Latency::NotImportant, "test1");
-//!         let tq2 = Local::create_task_queue(Shares::Static(1), Latency::NotImportant, "test2");
-//!         let t1 = Local::local_into(
+//!         let tq1 =
+//!             executor().create_task_queue(Shares::Static(2), Latency::NotImportant, "test1");
+//!         let tq2 =
+//!             executor().create_task_queue(Shares::Static(1), Latency::NotImportant, "test2");
+//!         let t1 = glommio::spawn_local_into(
 //!             async move {
 //!                 // your code here
 //!             },
 //!             tq1,
 //!         )
 //!         .unwrap();
-//!         let t2 = Local::local_into(
+//!         let t2 = glommio::spawn_local_into(
 //!             async move {
 //!                 // your code here
 //!             },
@@ -153,8 +155,8 @@
 //! a handful of corner case tasks.
 //!
 //! As atomic operations are costlier than their non-atomic counterparts, this
-//! improves efficiency by itself. However it comes with the added benefits that
-//! context switches are virtually non-existent (they only occur for kernel
+//! improves efficiency by itself. However, it comes with the added benefits
+//! that context switches are virtually non-existent (they only occur for kernel
 //! threads and interrupts) and no time is ever wasted in waiting on locks.
 //!
 //! ## Why is this a single monolith instead of many crates
@@ -164,14 +166,15 @@
 //! thread will unpark it. This allows one to effectively use that crate with
 //! very little need for anything else for the simpler cases. Combined with
 //! synchronization primitives like `Condvar`, and other thread-pool based
-//! future crates, it excels in conjunction with others but it is useful on its
+//! future crates, it excels in conjunction with others, but it is useful on its
 //! own.
 //!
 //! Now contrast that to the equivalent bits in this crate: once you `park()`
 //! the thread, you can't unpark it. I/O never gets dispatched without explicit
-//! calling into the reactor, which makes for a very weird programming model and
-//! it is very hard to integrate with the outside world since most external I/O
-//! related crates have threads that sooner or later will require `Send + Sync`.
+//! calling into the reactor, which makes for a very weird programming model,
+//! and it is very hard to integrate with the outside world since most external
+//! I/O related crates have threads that sooner or later will require [`Send`] +
+//! [`Sync`].
 //!
 //! A single crate is a way to minimize friction.
 //!
@@ -191,7 +194,7 @@
 //!    either complete or decide to yield, which means they can run for a very
 //!    long time before tasks that are latency sensitive have a chance to run.
 //!    Every time you fire a long-running operation (usually a loop) it is good
-//!    practice to check `yield_if_needed()` periodically (for example after x
+//!    practice to check [`yield_if_needed()`] periodically (for example after x
 //!    iterations of the loop). In particular, a when a new priority class is
 //!    registered, one can specify if it contains latency sensitive tasks or
 //!    not. And if the queue is marked as latency sensitive, the Latency enum
@@ -221,7 +224,7 @@
 //! *    soft    memlock        512
 //! ```
 //!
-//! To make the new limits effective, you need to login to the machine again.
+//! To make the new limits effective, you need to log in to the machine again.
 //! You can verify that the limits are updated by running the following:
 //!
 //! ```sh
@@ -238,17 +241,17 @@
 //!    here are based on the characteristics of NVMe storage. This allows us to
 //!    use io uring's poll ring for reads and writes which are interrupt free.
 //!    This also assumes that one is running either `XFS` or `Ext4` (an
-//!    assumption that Seastar also makes).
+//!    assumption that `Seastar` also makes).
 //!
 //!  - A corollary to the above is that the CPUs are likely to be the
 //!    bottleneck, so this crate has a CPU scheduler but lacks an I/O scheduler.
 //!    That, however, would be a welcome addition.
 //!
-//!  - A recent(at least 5.8) kernel is no impediment, as long as a fully
+//!  - A recent (at least 5.8) kernel is no impediment, as long as a fully
 //!    functional I/O uring is present. In fact, we require a kernel so recent
-//!    that it doesn't even exist: operations like `mkdir, ftruncate`, etc which
-//!    are not present in today's (5.8) `io_uring` are simply synchronous and
-//!    we'll live with the pain in the hopes that Linux will eventually add
+//!    that it doesn't even exist: operations like `mkdir, ftruncate`, etc.
+//!    which are not present in today's (5.8) `io_uring` are simply synchronous,
+//!    and we'll live with the pain in the hopes that Linux will eventually add
 //!    support for them.
 //!
 //! ## Missing features
@@ -260,10 +263,6 @@
 //!   achieving good performance in allocation-heavy workloads.
 //!
 //! * As mentioned, an I/O Scheduler.
-//!
-//! * Visibility: the crate exposes no metrics on its internals, and that should
-//!   change ASAP.
-//!
 //!
 //! ## Examples
 //!
@@ -289,7 +288,7 @@
 //! });
 //! ```
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
-#![cfg_attr(doc, deny(broken_intra_doc_links))]
+#![cfg_attr(doc, deny(rustdoc::broken_intra_doc_links))]
 #[macro_use]
 extern crate nix;
 extern crate alloc;
@@ -301,7 +300,7 @@ extern crate scopeguard;
 use crate::reactor::Reactor;
 use std::{fmt::Debug, time::Duration};
 
-/// Call `Waker::wake()` and log to `error` if panicked.
+/// Call [`Waker::wake()`] and log to `error` if panicked.
 macro_rules! wake {
     ($waker:expr $(,)?) => {
         use log::error;
@@ -331,9 +330,9 @@ mod uring_sys;
 #[doc(hidden)]
 pub mod nop;
 
-// unwraps a Result to Poll<T>: if error returns right away.
-//
-// usage is similar to future_lite::ready!
+/// Unwraps a Result to Poll<T>: if error returns right away.
+///
+/// Usage is similar to `future_lite::ready!`
 macro_rules! poll_err {
     ($e:expr $(,)?) => {
         match $e {
@@ -343,9 +342,9 @@ macro_rules! poll_err {
     };
 }
 
-// unwraps an Option to Poll<T>: if Some returns right away.
-//
-// usage is similar to future_lite::ready!
+/// Unwraps an Option to Poll<T>: if Some returns right away.
+///
+/// Usage is similar to `future_lite::ready!`
 macro_rules! poll_some {
     ($e:expr $(,)?) => {
         match $e {
@@ -383,30 +382,30 @@ macro_rules! to_io_error {
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
-    use crate::executor::{LocalExecutor, Task};
+    use crate::executor::{LocalExecutor};
     use futures::future::join_all;
 
     let local_ex = LocalExecutor::default();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(
-            joins.push(Task::local($fut));
+            joins.push(crate::spawn_local($fut));
         )*
         join_all(joins).await;
     });
     }
 }
 
-// Wait for a variable to acquire a specific value.
-// The variable is expected to be a Rc<RefCell>
-//
-// Alternatively it is possible to pass a timeout in seconds
-// (through an Instant object)
-//
-// Updates to the variable gating the condition can be done (if convenient)
-// through update_cond!() (below)
-//
-// Mostly useful for tests.
+/// Wait for a variable to acquire a specific value.
+/// The variable is expected to be a Rc<RefCell>
+///
+/// Alternatively it is possible to pass a timeout in seconds
+/// (through an Instant object)
+///
+/// Updates to the variable gating the condition can be done (if convenient)
+/// through update_cond!() (below)
+///
+/// Mostly useful for tests.
 #[cfg(test)]
 macro_rules! wait_on_cond {
     ($var:expr, $val:expr) => {
@@ -414,7 +413,7 @@ macro_rules! wait_on_cond {
             if *($var.borrow()) == $val {
                 break;
             }
-            Task::<()>::later().await;
+            crate::executor().yield_task_queue_now().await;
         }
     };
     ($var:expr, $val:expr, $instantval:expr) => {
@@ -427,7 +426,7 @@ macro_rules! wait_on_cond {
             if start.elapsed().as_secs() > $instantval {
                 panic!("test timed out");
             }
-            Task::<()>::later().await;
+            crate::executor().yield_task_queue_now().await;
         }
     };
 }
@@ -478,7 +477,14 @@ pub use crate::{
         Result,
     },
     executor::{
+        executor,
+        spawn_local,
+        spawn_local_into,
+        spawn_scoped_local,
+        spawn_scoped_local_into,
+        yield_if_needed,
         CpuSet,
+        ExecutorProxy,
         ExecutorStats,
         LocalExecutor,
         LocalExecutorBuilder,
@@ -502,11 +508,15 @@ pub mod prelude {
     #[doc(no_inline)]
     pub use crate::{
         error::GlommioError,
+        executor,
+        spawn_local,
+        spawn_local_into,
+        yield_if_needed,
         ByteSliceExt,
         ByteSliceMutExt,
+        ExecutorProxy,
         IoStats,
         Latency,
-        Local,
         LocalExecutor,
         LocalExecutorBuilder,
         LocalExecutorPoolBuilder,
@@ -518,20 +528,9 @@ pub mod prelude {
     };
 }
 
-/// Local is an ergonomic way to access the local executor.
-/// The local is executed through a Task type, but the Task type has a type
-/// parameter consisting of the return type of the future encapsulated by this
-/// task.
-///
-/// However for associated functions without a self parameter, like `local()`
-/// and `local_into()`, the type is always `()` and Rust is not able to elide.
-///
-/// Writing `Task::<()>::function()` works, but it is not very ergonomic.
-pub type Local = Task<()>;
-
 /// An attribute of a [`TaskQueue`], passed during its creation.
 ///
-/// This tells the executor whether or not tasks in this class are latency
+/// This tells the executor whether tasks in this class are latency
 /// sensitive. Latency sensitive tasks will be placed in their own I/O ring,
 /// and tasks in background classes can cooperatively preempt themselves in
 /// the faces of pending events for latency classes.
@@ -540,7 +539,8 @@ pub type Local = Task<()>;
 #[derive(Clone, Copy, Debug)]
 pub enum Latency {
     /// Tasks marked as `Latency::Matters` will cooperatively signal to other
-    /// tasks that they should preempt often
+    /// tasks that they should preempt often. The `Duration` argument
+    /// contributes to the rate of preemption of the scheduler.
     Matters(Duration),
 
     /// Tasks marked as `Latency::NotImportant` will not signal to other tasks

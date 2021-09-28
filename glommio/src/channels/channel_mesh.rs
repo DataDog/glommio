@@ -14,9 +14,7 @@ use std::sync::{Arc, RwLock};
 use crate::{
     channels::shared_channel::{self, *},
     GlommioError,
-    Local,
     Result,
-    Task,
 };
 
 /// Sender side
@@ -170,7 +168,7 @@ struct Peer {
 impl Peer {
     fn new(sender: Option<SharedSender<bool>>, role: Role) -> Self {
         Self {
-            executor_id: Local::id(),
+            executor_id: crate::executor().id(),
             notifier: sender,
             role,
         }
@@ -343,7 +341,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         }
 
         let index = peers
-            .binary_search_by(|n| n.executor_id.cmp(&Local::id()))
+            .binary_search_by(|n| n.executor_id.cmp(&crate::executor().id()))
             .expect_err("Should not join a mesh more than once.");
 
         if peers.len() == self.nr_peers - 1 {
@@ -389,7 +387,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         let (peer_id, role_id) = {
             let peers = self.peers.read().unwrap();
             let peer_id = peers
-                .binary_search_by(|n| n.executor_id.cmp(&Local::id()))
+                .binary_search_by(|n| n.executor_id.cmp(&crate::executor().id()))
                 .unwrap();
             let role_id = peers
                 .iter()
@@ -418,8 +416,8 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
             let sender = self.channels[peer_id][i].0.take();
             let receiver = self.channels[i][peer_id].1.take();
 
-            let sender = sender.map(|sender| Task::<_>::local(sender.connect()).detach());
-            let receiver = receiver.map(|receiver| Task::<_>::local(receiver.connect()).detach());
+            let sender = sender.map(|sender| crate::spawn_local(sender.connect()).detach());
+            let receiver = receiver.map(|receiver| crate::spawn_local(receiver.connect()).detach());
 
             match sender {
                 None => {
@@ -529,7 +527,7 @@ mod tests {
                 assert_eq!(nr_peers, receiver.nr_producers());
                 assert_eq!(receiver.peer_id, receiver.consumer_id.unwrap());
 
-                Local::local(async move {
+                crate::spawn_local(async move {
                     for peer in 0..sender.nr_consumers() {
                         if peer != sender.peer_id() {
                             sender.send_to(peer, (sender.peer_id(), peer)).await.unwrap();
