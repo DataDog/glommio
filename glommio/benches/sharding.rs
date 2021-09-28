@@ -35,24 +35,21 @@ fn main() {
 
     let n = 400_000_000;
 
-    let shards = (0..nr_shards).map(|i| {
-        LocalExecutorBuilder::new()
-            .pin_to_cpu(i)
-            .spin_before_park(Duration::from_millis(10))
-            .spawn(enclose!((mesh) move || async move {
-                let handler = RequestHandler { nr_shards };
-                let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
-                if sharded.shard_id() == 0 {
-                    sharded.handle(repeat(1).take(n)).unwrap();
-                }
-                sharded.close().await;
-            }))
-    });
+    let shards = LocalExecutorPoolBuilder::new(PoolPlacement::MaxSpread(nr_shards, None))
+        .spin_before_park(Duration::from_millis(10))
+        .on_all_shards(enclose!((mesh) move || async move {
+            let handler = RequestHandler { nr_shards };
+            let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
+            if sharded.shard_id() == 0 {
+                sharded.handle(repeat(1).take(n)).unwrap();
+            }
+            sharded.close().await;
+        }))
+        .unwrap();
 
     let t = Instant::now();
-    for s in shards.collect::<Vec<_>>() {
-        s.unwrap().join().unwrap();
-    }
+    shards.join_all();
+
     println!(
         "elapsed: {:?}, average cost: {:?}",
         t.elapsed(),

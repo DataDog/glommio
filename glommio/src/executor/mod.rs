@@ -13,18 +13,21 @@
 //! Run four single-threaded executors concurrently:
 //!
 //! ```
-//! use glommio::{timer::Timer, LocalExecutor, LocalExecutorBuilder};
+//! use glommio::{
+//!     timer::Timer,
+//!     LocalExecutor,
+//!     LocalExecutorBuilder,
+//!     LocalExecutorPoolBuilder,
+//!     PoolPlacement,
+//! };
 //!
-//! for i in 0..4 {
-//!     std::thread::spawn(move || {
-//!         let builder = LocalExecutorBuilder::new().pin_to_cpu(i);
-//!         let local_ex = builder.make().expect("failed to spawn local executor");
-//!         local_ex.run(async {
-//!             Timer::new(std::time::Duration::from_millis(100)).await;
-//!             println!("Hello world!");
-//!         });
-//!     });
-//! }
+//! LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(4))
+//!     .on_all_shards(move || async {
+//!         Timer::new(std::time::Duration::from_millis(100)).await;
+//!         println!("Hello world!");
+//!     })
+//!     .expect("failed to spawn local executors")
+//!     .join_all();
 //! ```
 
 #![warn(missing_docs, missing_debug_implementations)]
@@ -34,7 +37,7 @@ mod multitask;
 mod placement;
 
 use latch::{Latch, LatchState};
-pub use placement::{CpuSet, PoolPlacement};
+pub use placement::{CpuSet, Placement, PoolPlacement};
 use tracing::trace;
 
 use std::{
@@ -390,7 +393,7 @@ impl ExecutorQueues {
 /// ```
 /// use glommio::LocalExecutorBuilder;
 ///
-/// let builder = LocalExecutorBuilder::new();
+/// let builder = LocalExecutorBuilder::default();
 /// let ex = builder.make().unwrap();
 /// ```
 ///
@@ -404,8 +407,8 @@ impl ExecutorQueues {
 /// [`spawn`]: struct.LocalExecutorBuilder.html#method.spawn
 #[derive(Debug)]
 pub struct LocalExecutorBuilder {
-    /// The id of a CPU to bind the current (or yet to be created) thread
-    binding: Option<usize>,
+    /// The placement policy for the [`LocalExecutor`] to create
+    placement: Placement,
     /// Spin for duration before parking a reactor
     spin_before_park: Option<Duration>,
     /// A name for the thread-to-be (if any), for identification in panic
@@ -423,23 +426,17 @@ pub struct LocalExecutorBuilder {
 impl LocalExecutorBuilder {
     /// Generates the base configuration for spawning a [`LocalExecutor`], from
     /// which configuration methods can be chained.
-    pub fn new() -> LocalExecutorBuilder {
+    /// The method's only argument is the [`Placement`] policy by which the
+    /// [`LocalExecutor`] is bound to the machine's hardware topology. i.e.
+    /// how many and which CPUs to use.
+    pub fn new(placement: Placement) -> LocalExecutorBuilder {
         LocalExecutorBuilder {
-            binding: None,
+            placement,
             spin_before_park: None,
             name: String::from("unnamed"),
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
         }
-    }
-
-    /// Sets the new executor's affinity to the provided CPU.  The largest `cpu`
-    /// value [supported] by libc is 1023.
-    ///
-    /// [supported]: https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html#NOTES
-    pub fn pin_to_cpu(mut self, cpu: usize) -> LocalExecutorBuilder {
-        self.binding = Some(cpu);
-        self
     }
 
     /// Spin for duration before parking a reactor
@@ -490,15 +487,16 @@ impl LocalExecutorBuilder {
     /// ```
     /// use glommio::LocalExecutorBuilder;
     ///
-    /// let local_ex = LocalExecutorBuilder::new().make().unwrap();
+    /// let local_ex = LocalExecutorBuilder::default().make().unwrap();
     /// ```
     pub fn make(self) -> Result<LocalExecutor> {
         let notifier = sys::new_sleep_notifier()?;
+        let mut cpu_set_gen = placement::CpuSetGenerator::one(self.placement)?;
         let mut le = LocalExecutor::new(
             notifier,
             self.io_memory,
             self.preempt_timer_duration,
-            self.binding.map(Some),
+            cpu_set_gen.next().cpu_binding(),
             self.spin_before_park,
         )?;
         le.init();
@@ -530,7 +528,7 @@ impl LocalExecutorBuilder {
     /// ```
     /// use glommio::LocalExecutorBuilder;
     ///
-    /// let handle = LocalExecutorBuilder::new()
+    /// let handle = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         println!("hello");
     ///     })
@@ -556,16 +554,20 @@ impl LocalExecutorBuilder {
     {
         let notifier = sys::new_sleep_notifier()?;
         let name = format!("{}-{}", self.name, notifier.id());
+        let mut cpu_set_gen = placement::CpuSetGenerator::one(self.placement)?;
+        let io_memory = self.io_memory;
+        let preempt_timer_duration = self.preempt_timer_duration;
+        let spin_before_park = self.spin_before_park;
 
         Builder::new()
             .name(name)
             .spawn(move || {
                 let mut le = LocalExecutor::new(
                     notifier,
-                    self.io_memory,
-                    self.preempt_timer_duration,
-                    self.binding.map(Some),
-                    self.spin_before_park,
+                    io_memory,
+                    preempt_timer_duration,
+                    cpu_set_gen.next().cpu_binding(),
+                    spin_before_park,
                 )
                 .unwrap();
                 le.init();
@@ -579,7 +581,7 @@ impl LocalExecutorBuilder {
 
 impl Default for LocalExecutorBuilder {
     fn default() -> Self {
-        Self::new()
+        Self::new(Placement::Unbound)
     }
 }
 
@@ -1204,7 +1206,9 @@ impl LocalExecutor {
 /// ```
 impl Default for LocalExecutor {
     fn default() -> Self {
-        LocalExecutorBuilder::new().make().unwrap()
+        LocalExecutorBuilder::new(Placement::Unbound)
+            .make()
+            .unwrap()
     }
 }
 
@@ -1726,7 +1730,7 @@ impl ExecutorProxy {
     /// ```
     /// use glommio::LocalExecutorBuilder;
     ///
-    /// let ex = LocalExecutorBuilder::new()
+    /// let ex = LocalExecutorBuilder::default()
     ///     .spawn(|| async {
     ///         loop {
     ///             if glommio::executor().need_preempt() {
@@ -1886,7 +1890,7 @@ impl ExecutorProxy {
     /// ```
     /// use glommio::{Latency, LocalExecutor, LocalExecutorBuilder, Shares};
     ///
-    /// let ex = LocalExecutorBuilder::new()
+    /// let ex = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let original_tq = glommio::executor().current_task_queue();
     ///         let new_tq = glommio::executor().create_task_queue(
@@ -1926,7 +1930,7 @@ impl ExecutorProxy {
     /// ```
     /// use glommio::{Latency, LocalExecutorBuilder, Shares};
     ///
-    /// let ex = LocalExecutorBuilder::new()
+    /// let ex = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let new_tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
@@ -1965,7 +1969,7 @@ impl ExecutorProxy {
     /// ```
     /// use glommio::{executor, Latency, LocalExecutorBuilder, Shares};
     ///
-    /// let ex = LocalExecutorBuilder::new()
+    /// let ex = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let new_tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
@@ -2004,7 +2008,7 @@ impl ExecutorProxy {
     /// ```
     /// use glommio::{executor, LocalExecutorBuilder};
     ///
-    /// let ex = LocalExecutorBuilder::new()
+    /// let ex = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         println!(
     ///             "Stats for executor: {:?}",
@@ -2029,7 +2033,7 @@ impl ExecutorProxy {
     /// ```
     /// use glommio::LocalExecutorBuilder;
     ///
-    /// let ex = LocalExecutorBuilder::new()
+    /// let ex = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         println!("Stats for executor: {:?}", glommio::executor().io_stats());
     ///     })
@@ -2051,7 +2055,7 @@ impl ExecutorProxy {
     /// ```
     /// use glommio::{Latency, LocalExecutorBuilder, Shares};
     ///
-    /// let ex = LocalExecutorBuilder::new()
+    /// let ex = LocalExecutorBuilder::default()
     ///     .spawn(|| async move {
     ///         let new_tq = glommio::executor().create_task_queue(
     ///             Shares::default(),
@@ -2267,8 +2271,7 @@ mod test {
     fn create_fail_to_bind() {
         // If you have a system with 4 billion CPUs let me know and I will
         // update this test.
-        if LocalExecutorBuilder::new()
-            .pin_to_cpu(usize::MAX)
+        if LocalExecutorBuilder::new(Placement::Fixed(usize::MAX))
             .make()
             .is_ok()
         {
@@ -2288,7 +2291,7 @@ mod test {
 
     #[test]
     fn create_and_bind() {
-        if let Err(x) = LocalExecutorBuilder::new().pin_to_cpu(0).make() {
+        if let Err(x) = LocalExecutorBuilder::new(Placement::Fixed(0)).make() {
             panic!("got error {:?}", x);
         }
     }
@@ -2576,13 +2579,12 @@ mod test {
     #[test]
     fn test_spin() {
         let dur = Duration::from_secs(1);
-        let ex0 = LocalExecutorBuilder::new().make().unwrap();
+        let ex0 = LocalExecutorBuilder::default().make().unwrap();
         let ex0_ru_start = getrusage_utime();
         ex0.run(async { timer::sleep(dur).await });
         let ex0_ru_finish = getrusage_utime();
 
-        let ex = LocalExecutorBuilder::new()
-            .pin_to_cpu(0)
+        let ex = LocalExecutorBuilder::new(Placement::Fixed(0))
             .spin_before_park(Duration::from_millis(100))
             .make()
             .unwrap();
@@ -2607,7 +2609,7 @@ mod test {
     #[test]
     fn test_runtime_stats() {
         let dur = Duration::from_secs(2);
-        let ex0 = LocalExecutorBuilder::new().make().unwrap();
+        let ex0 = LocalExecutorBuilder::default().make().unwrap();
         ex0.run(async {
             assert!(
                 crate::executor().executor_stats().total_runtime() < Duration::from_nanos(10),
@@ -2632,8 +2634,7 @@ mod test {
             );
         });
 
-        let ex = LocalExecutorBuilder::new()
-            .pin_to_cpu(0)
+        let ex = LocalExecutorBuilder::new(Placement::Fixed(0))
             // ensure entire sleep should spin
             .spin_before_park(Duration::from_secs(5))
             .make()
@@ -2885,13 +2886,13 @@ mod test {
 
         let fut = TestFuture { w };
 
-        let ex1 = LocalExecutorBuilder::new()
+        let ex1 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 fut.await;
             })
             .unwrap();
 
-        let ex2 = LocalExecutorBuilder::new()
+        let ex2 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 loop {
                     sleep(Duration::from_secs(1)).await;
@@ -2915,13 +2916,13 @@ mod test {
 
         let fut = TestFuture { w };
 
-        let ex1 = LocalExecutorBuilder::new()
+        let ex1 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 fut.await;
             })
             .unwrap();
 
-        let ex2 = LocalExecutorBuilder::new()
+        let ex2 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 loop {
                     sleep(Duration::from_secs(1)).await;
@@ -2946,14 +2947,14 @@ mod test {
 
         let fut = TestFuture { w };
 
-        let ex1 = LocalExecutorBuilder::new()
+        let ex1 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 let x = crate::spawn_local(fut).detach();
                 x.await;
             })
             .unwrap();
 
-        let ex2 = LocalExecutorBuilder::new()
+        let ex2 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 loop {
                     sleep(Duration::from_secs(1)).await;
@@ -2979,13 +2980,13 @@ mod test {
 
         let fut = TestFuture { w };
 
-        let ex1 = LocalExecutorBuilder::new()
+        let ex1 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 let _drop = futures_lite::future::poll_once(fut).await;
             })
             .unwrap();
 
-        let ex2 = LocalExecutorBuilder::new()
+        let ex2 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 loop {
                     sleep(Duration::from_secs(1)).await;
@@ -3012,14 +3013,14 @@ mod test {
 
         let fut = TestFuture { w };
 
-        let ex1 = LocalExecutorBuilder::new()
+        let ex1 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 let _drop = futures_lite::future::poll_once(fut).await;
             })
             .unwrap();
         ex1.join().unwrap();
 
-        let ex2 = LocalExecutorBuilder::new()
+        let ex2 = LocalExecutorBuilder::default()
             .spawn(|| async move {
                 let w = t.lock().unwrap().clone().unwrap();
                 w.wake_by_ref();

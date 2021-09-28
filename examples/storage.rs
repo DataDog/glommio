@@ -16,6 +16,7 @@ use glommio::{
         StreamWriterBuilder,
     },
     LocalExecutorBuilder,
+    Placement,
 };
 use pretty_bytes::converter;
 use std::{
@@ -329,8 +330,7 @@ fn main() {
 
     let random = total_memory / 10;
 
-    let local_ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let local_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spin_before_park(Duration::from_millis(10))
         .spawn(move || async move {
             let mut dio_filename = dir.path.clone();

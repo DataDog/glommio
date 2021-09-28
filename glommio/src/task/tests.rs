@@ -216,7 +216,7 @@ mod ref_count {
         let (sender, receiver) = shared_channel::new_bounded(1);
 
         let results = vec![
-            LocalExecutorBuilder::new().spawn(move || async move {
+            LocalExecutorBuilder::default().spawn(move || async move {
                 let sender = sender.connect().await;
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("foreign_wake");
@@ -229,7 +229,7 @@ mod ref_count {
                 handle.await.unwrap();
                 assert_eq!(1, TaskDebugger::task_count());
             }),
-            LocalExecutorBuilder::new().spawn(move || async move {
+            LocalExecutorBuilder::default().spawn(move || async move {
                 let receiver = receiver.connect().await;
                 let waker = receiver.recv().await.unwrap();
                 waker.wake();
@@ -247,7 +247,7 @@ mod ref_count {
         let (sender, receiver) = shared_channel::new_bounded(1);
 
         let results = vec![
-            LocalExecutorBuilder::new().spawn(move || async move {
+            LocalExecutorBuilder::default().spawn(move || async move {
                 let sender = sender.connect().await;
                 let task = WakeN::new(1);
                 TaskDebugger::set_label("foreign_wake_by_ref");
@@ -260,7 +260,7 @@ mod ref_count {
                 handle.await.unwrap();
                 assert_eq!(1, TaskDebugger::task_count());
             }),
-            LocalExecutorBuilder::new().spawn(move || async move {
+            LocalExecutorBuilder::default().spawn(move || async move {
                 let receiver = receiver.connect().await;
                 let waker = receiver.recv().await.unwrap();
                 waker.wake_by_ref();

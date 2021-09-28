@@ -709,7 +709,7 @@ mod tests {
             let addr_picker = UdpSocket::bind("127.0.0.1:0").unwrap();
             let addr = addr_picker.local_addr().unwrap();
 
-            let ex1 = LocalExecutorBuilder::new()
+            let ex1 = LocalExecutorBuilder::default()
                 .spawn(move || async move {
                     let socket = UdpSocket::bind(addr).unwrap();
                     let mut buf = [0u8; 1];
@@ -721,7 +721,7 @@ mod tests {
                 })
                 .unwrap();
 
-            let ex2 = LocalExecutorBuilder::new()
+            let ex2 = LocalExecutorBuilder::default()
                 .spawn(move || async move {
                     let socket = UdpSocket::bind(addr).unwrap();
                     let mut buf = [0u8; 1];

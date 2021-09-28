@@ -6,8 +6,7 @@ fn test_spsc(capacity: usize) {
     let runs: u32 = 10_000_000;
     let (sender, receiver) = shared_channel::new_bounded(capacity);
 
-    let sender = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let sender = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(move || async move {
             let sender = sender.connect().await;
             let t = Instant::now();
@@ -23,8 +22,7 @@ fn test_spsc(capacity: usize) {
         })
         .unwrap();
 
-    let receiver = LocalExecutorBuilder::new()
-        .pin_to_cpu(1)
+    let receiver = LocalExecutorBuilder::new(Placement::Fixed(1))
         .spawn(move || async move {
             let receiver = receiver.connect().await;
             let t = Instant::now();
@@ -47,8 +45,7 @@ fn test_rust_std(capacity: usize) {
     let runs: u32 = 10_000_000;
     let (sender, receiver) = sync_channel::<u8>(capacity);
 
-    let sender = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let sender = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(move || async move {
             let t = Instant::now();
             for _ in 0..runs {
@@ -63,8 +60,7 @@ fn test_rust_std(capacity: usize) {
         })
         .unwrap();
 
-    let receiver = LocalExecutorBuilder::new()
-        .pin_to_cpu(1)
+    let receiver = LocalExecutorBuilder::new(Placement::Fixed(1))
         .spawn(move || async move {
             let t = Instant::now();
             for _ in 0..runs {
@@ -86,8 +82,7 @@ fn test_tokio_mpsc(capacity: usize) {
     let runs: u32 = 10_000_000;
     let (sender, mut receiver) = tokio::sync::mpsc::channel(capacity);
 
-    let sender = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let sender = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(move || async move {
             let t = Instant::now();
             for _ in 0..runs {
@@ -102,8 +97,7 @@ fn test_tokio_mpsc(capacity: usize) {
         })
         .unwrap();
 
-    let receiver = LocalExecutorBuilder::new()
-        .pin_to_cpu(1)
+    let receiver = LocalExecutorBuilder::new(Placement::Fixed(1))
         .spawn(move || async move {
             let t = Instant::now();
             for _ in 0..runs {
@@ -125,50 +119,41 @@ fn test_mesh_mpmc(capacity: usize, peers: usize) {
     let runs: u32 = 10_000_000;
 
     let mesh = glommio::channels::channel_mesh::MeshBuilder::full(peers, capacity);
-    let mut execs = vec![];
-
     let t = Instant::now();
-    for _ in 0..peers {
-        execs.push(
-            LocalExecutorBuilder::new()
-                .spawn(enclose! {(mesh) move || async move {
-                    let (sender, mut receiver) = mesh.join().await.unwrap();
+    LocalExecutorPoolBuilder::new(PoolPlacement::MaxSpread(peers, None))
+        .on_all_shards(enclose! {(mesh) move || async move {
+            let (sender, mut receiver) = mesh.join().await.unwrap();
 
-                    let sender_task = async move {
-                        let mut rng = rand::thread_rng();
-                        for _ in 0..runs {
-                            let mut peer = rng.gen_range(0..sender.nr_consumers());
-                            if peer == sender.producer_id().unwrap() && peer == 0 {
-                                peer += 1;
-                            } else if peer == sender.producer_id().unwrap() {
-                                peer-=1;
-                            }
-
-                            sender.send_to(peer, 1).await.unwrap();
-                        }
-
-                        drop(sender);
-                    };
-
-                    let mut recvs = vec![];
-                    for (_, recv) in receiver.streams() {
-                        recvs.push(crate::spawn_local(async move {
-                            while recv.recv().await.is_some(){};
-                        }));
+            let sender_task = async move {
+                let mut rng = rand::thread_rng();
+                for _ in 0..runs {
+                    let mut peer = rng.gen_range(0..sender.nr_consumers());
+                    if peer == sender.producer_id().unwrap() && peer == 0 {
+                        peer += 1;
+                    } else if peer == sender.producer_id().unwrap() {
+                        peer-=1;
                     }
 
-                    sender_task.await;
-                    for x in recvs {
-                        x.await;
-                    }
-                }})
-                .unwrap(),
-        );
-    }
+                    sender.send_to(peer, 1).await.unwrap();
+                }
 
-    for x in execs {
-        x.join().unwrap();
-    }
+                drop(sender);
+            };
+
+            let mut recvs = vec![];
+            for (_, recv) in receiver.streams() {
+                recvs.push(crate::spawn_local(async move {
+                    while recv.recv().await.is_some(){};
+                }));
+            }
+
+            sender_task.await;
+            for x in recvs {
+                x.await;
+            }
+        }})
+        .unwrap()
+        .join_all();
 
     println!(
         "cost of mesh message shared channel: {:#?}, peers {}, capacity {}",

@@ -34,7 +34,7 @@ fn main() {
     let mesh = MeshBuilder::full(nr_shards, 1024);
 
     let shards = (0..nr_shards).map(|_| {
-        LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+        LocalExecutorBuilder::default().spawn(enclose!((mesh) move || async move {
             let handler = RequestHandler { nr_shards };
             let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
             let me = sharded.shard_id();

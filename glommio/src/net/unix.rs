@@ -247,7 +247,7 @@ impl AcceptedUnixStream {
     ///     let accepted = listener.shared_accept().await.unwrap();
     ///     sender.try_send(accepted).unwrap();
     ///
-    ///     let ex1 = LocalExecutorBuilder::new()
+    ///     let ex1 = LocalExecutorBuilder::default()
     ///         .spawn(move || async move {
     ///             let receiver = receiver.connect().await;
     ///             let accepted = receiver.recv().await.unwrap();

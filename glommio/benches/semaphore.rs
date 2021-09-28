@@ -2,8 +2,7 @@ use glommio::{enclose, prelude::*, sync::Semaphore};
 use std::{cell::Cell, rc::Rc, time::Instant};
 
 fn main() {
-    let local_ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let local_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(|| async move {
             let runs: u32 = 10_000_000;
             let s = Rc::new(Semaphore::new(10_000_000));
@@ -19,8 +18,7 @@ fn main() {
         .unwrap();
     local_ex.join().unwrap();
 
-    let local_ex = LocalExecutorBuilder::new()
-        .pin_to_cpu(0)
+    let local_ex = LocalExecutorBuilder::new(Placement::Fixed(0))
         .spawn(|| async move {
             let runs: u32 = 10_000_000;
             let s = Rc::new(Semaphore::new(0));

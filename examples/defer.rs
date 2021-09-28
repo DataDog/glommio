@@ -11,7 +11,7 @@ fn main() {
         println!("Executor is done!");
     }
 
-    let handle = LocalExecutorBuilder::new()
+    let handle = LocalExecutorBuilder::default()
         .spawn(|| async move {
             defer! {
                 println!("This will print after the timer");

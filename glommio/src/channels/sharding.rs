@@ -222,7 +222,7 @@ mod tests {
         let mesh = MeshBuilder::full(nr_shards, 1024);
 
         let shards = (0..nr_shards).map(|_| {
-            LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+            LocalExecutorBuilder::default().spawn(enclose!((mesh) move || async move {
                 let handler = RequestHandler { nr_shards };
                 let mut sharded = Sharded::new(mesh, shard_fn, handler).await.unwrap();
                 for i in 0..nr_shards {
@@ -262,7 +262,7 @@ mod tests {
         let mesh = MeshBuilder::full(nr_shards, 1024);
 
         let shards = (0..nr_shards).map(|_| {
-            LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+            LocalExecutorBuilder::default().spawn(enclose!((mesh) move || async move {
                 let handler = RequestHandler { nr_shards };
                 let mut sharded = Sharded::new(mesh, shard_fn, handler).await.unwrap();
                 for i in 0..nr_shards {
@@ -303,7 +303,7 @@ mod tests {
         let mesh = MeshBuilder::full(nr_shards, 1024);
 
         let shards = (0..nr_shards).map(|_| {
-            LocalExecutorBuilder::new().spawn(enclose!((mesh) move || async move {
+            LocalExecutorBuilder::default().spawn(enclose!((mesh) move || async move {
                 let handler = RequestHandler { nr_shards };
                 let mut sharded = Sharded::new(mesh, shard_fn, handler).await.unwrap();
                 let messages = repeat_with(|| fastrand::i32(0..100)).take(1000);

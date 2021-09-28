@@ -321,7 +321,7 @@ impl AcceptedTcpStream {
     ///     let accepted = listener.shared_accept().await.unwrap();
     ///     sender.try_send(accepted).unwrap();
     ///
-    ///     let ex1 = LocalExecutorBuilder::new()
+    ///     let ex1 = LocalExecutorBuilder::default()
     ///         .spawn(move || async move {
     ///             let receiver = receiver.connect().await;
     ///             let accepted = receiver.recv().await.unwrap();
@@ -788,7 +788,7 @@ mod tests {
             let (first_sender, first_receiver) = shared_channel::new_bounded(1);
             let (second_sender, second_receiver) = shared_channel::new_bounded(1);
 
-            let ex1 = LocalExecutorBuilder::new()
+            let ex1 = LocalExecutorBuilder::default()
                 .spawn(move || async move {
                     let receiver = first_receiver.connect().await;
                     let _ = TcpListener::bind(addr).unwrap();
@@ -796,7 +796,7 @@ mod tests {
                 })
                 .unwrap();
 
-            let ex2 = LocalExecutorBuilder::new()
+            let ex2 = LocalExecutorBuilder::default()
                 .spawn(move || async move {
                     let receiver = second_receiver.connect().await;
                     let _ = TcpListener::bind(addr).unwrap();
@@ -823,7 +823,7 @@ mod tests {
         let connected = Arc::new(AtomicUsize::new(0));
 
         let status = connected.clone();
-        let ex1 = LocalExecutorBuilder::new()
+        let ex1 = LocalExecutorBuilder::default()
             .spawn(move || async move {
                 let sender = sender.connect().await;
                 let addr_sender = addr_sender.connect().await;
@@ -838,7 +838,7 @@ mod tests {
             .unwrap();
 
         let status = connected.clone();
-        let ex2 = LocalExecutorBuilder::new()
+        let ex2 = LocalExecutorBuilder::default()
             .spawn(move || async move {
                 let receiver = receiver.connect().await;
                 let accepted = receiver.recv().await.unwrap();
@@ -847,7 +847,7 @@ mod tests {
             })
             .unwrap();
 
-        let ex3 = LocalExecutorBuilder::new()
+        let ex3 = LocalExecutorBuilder::default()
             .spawn(move || async move {
                 let receiver = addr_receiver.connect().await;
                 let addr = receiver.recv().await.unwrap();

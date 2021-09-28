@@ -131,7 +131,7 @@ fn test_latency(latency_req: Latency) {
         }
     });
 
-    LocalExecutorBuilder::new()
+    LocalExecutorBuilder::default()
         .spawn(move || async move {
             let tq = glommio::executor().create_task_queue(
                 Shares::Static(1000),
