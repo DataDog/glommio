@@ -8,8 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    prelude::*,
     time::sleep,
 };
 

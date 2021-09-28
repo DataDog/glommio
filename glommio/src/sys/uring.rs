@@ -9,7 +9,7 @@ use nix::{
     fcntl::{FallocateFlags, OFlag},
     poll::PollFlags,
 };
-use rlimit::{Resource, Rlim};
+use rlimit::Resource;
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::VecDeque,
@@ -1178,7 +1178,7 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
     ) -> io::Result<Reactor> {
-        const MIN_MEMLOCK_LIMIT: Rlim = Rlim::from_raw(512 * 1024);
+        const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
             return Err(Error::new(
