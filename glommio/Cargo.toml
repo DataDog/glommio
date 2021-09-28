@@ -1,16 +1,18 @@
 [package]
 name = "glommio"
 version = "0.6.0"
-authors = [ "Glauber Costa <glommer@gmail.com>",
-            "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
-            "DataDog"]
+authors = [
+    "Glauber Costa <glommer@gmail.com>",
+    "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
+    "DataDog <info@datadoghq.com>"
+]
 edition = "2018"
-description = "A set of utilities to allow one to write thread per core applications"
+description = "Glommio is a thread-per-core framework that aims to make the task of writing highly parallel asynchronous applications in a thread-per-core architecture easier for rustaceans"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/DataDog/glommio"
 homepage = "https://github.com/DataDog/glommio"
-keywords = ["uring", "reactor", "thread-per-core"]
-categories = ["asynchronous", "os", "filesystem", "network-programming"]
+keywords = ["linux", "rust", "async", "iouring", "thread-per-core"]
+categories = ["asynchronous", "concurrency", "os", "filesystem", "network-programming"]
 readme = "../README.md"
 
 [dependencies]
