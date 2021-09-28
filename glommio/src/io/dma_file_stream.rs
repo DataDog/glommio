@@ -408,10 +408,7 @@ impl DmaStreamReader {
         let to_cancel = handles.len();
         let cancelled = stream::iter(handles).then(|f| f).count().await;
         assert_eq!(to_cancel, cancelled);
-
-        // the file may be used by other processes so failing to close it is not an
-        // issue.
-        let _ = self.file.close_rc().await;
+        self.file.close_rc().await.unwrap();
 
         let mut state = self.state.borrow_mut();
         match state.error.take() {
