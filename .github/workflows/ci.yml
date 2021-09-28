@@ -2,10 +2,10 @@ name: CI
 
 on:
   pull_request:
-    branches: [master]
-    types: ["opened", "synchronize"]
+    branches: [ master ]
+    types: [ "opened", "synchronize" ]
   push:
-    branches: [master]
+    branches: [ master ]
 
 jobs:
   fmt:
@@ -48,17 +48,20 @@ jobs:
     # - name: Validate links
     #   run: cargo deadlinks --dir target/doc/glommio
 
-  deny:
+  third-party:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Run license checks
-        uses: EmbarkStudios/cargo-deny-action@v1
-        with:
-          command: check
-          arguments: --all-features
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version ~0.9
+      - name: Run checks on third-party dependencies
+        run: cargo deny --all-features check
+      - name: Assert third-party crates are listed correctly in THIRDPARTY
+        run: |
+          cargo deny --all-features --color never list -l crate -f human > THIRDPARTY.ci
+          cmp THIRDPARTY THIRDPARTY.ci
 
   clippy:
     runs-on: ubuntu-latest
