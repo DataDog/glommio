@@ -55,6 +55,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
+      - name: Install cargo-license
+        uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-license
+          version: latest
+          use-tool-cache: true
+
       - name: Run checks on third-party dependencies
         uses: EmbarkStudios/cargo-deny-action@v1
         with:
@@ -62,10 +69,10 @@ jobs:
           command: check
           arguments: --all-features
 
-      - name: Assert third-party crates are listed correctly in THIRDPARTY
+      - name: Assert third-party crates are listed correctly in `LICENSE-3rdparty.csv`
         run: |
-          cargo deny --all-features --color never list -l crate -f human > THIRDPARTY.ci
-          cmp THIRDPARTY THIRDPARTY.ci
+          cargo license --all-features -a -j --no-deps -d | jq -r '(["Component","Origin","License","Copyright"]) as $cols | map(. as $row | ["name", "repository", "license", "authors"] | map($row[.])) as $rows | $cols, $rows[] | @csv' > LICENSE-3rdparty.csv.ci
+          cmp LICENSE-3rdparty.csv LICENSE-3rdparty.csv.ci
 
   clippy:
     runs-on: ubuntu-latest
