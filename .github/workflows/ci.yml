@@ -54,10 +54,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --version ~0.9
+
       - name: Run checks on third-party dependencies
-        run: cargo deny --all-features check
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          log-level: warn
+          command: check
+          arguments: --all-features
+
       - name: Assert third-party crates are listed correctly in THIRDPARTY
         run: |
           cargo deny --all-features --color never list -l crate -f human > THIRDPARTY.ci
