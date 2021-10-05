@@ -11,6 +11,7 @@
 use crate::{
     executor::{maybe_activate, TaskQueue},
     task::{task_impl, JoinHandle},
+    Latency,
 };
 use std::{
     cell::RefCell,
@@ -139,6 +140,10 @@ impl LocalExecutor {
         tq: Rc<RefCell<TaskQueue>>,
         future: impl Future<Output = T>,
     ) -> (Runnable, JoinHandle<T>) {
+        let latency_matters = match tq.borrow().io_requirements.latency_req {
+            Latency::Matters(_) => true,
+            Latency::NotImportant => false,
+        };
         let tq = Rc::downgrade(&tq);
 
         // The function that schedules a runnable task when it gets woken up.
@@ -156,7 +161,7 @@ impl LocalExecutor {
 
         // Create a task, push it into the queue by scheduling it, and return its `Task`
         // handle.
-        task_impl::spawn_local(executor_id, future, schedule)
+        task_impl::spawn_local(executor_id, future, schedule, latency_matters)
     }
 
     pub(crate) fn spawn_and_run<T>(
