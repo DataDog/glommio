@@ -27,6 +27,9 @@ pub(crate) struct Header {
     /// Current state of the task.
     pub(crate) state: u8,
 
+    /// Latency matters or not
+    pub(crate) latency_matters: bool,
+
     /// Current reference count of the task.
     pub(crate) references: AtomicI16,
 

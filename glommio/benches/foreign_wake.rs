@@ -102,6 +102,14 @@ impl Timeline {
 }
 
 fn main() {
+    test_latency(Latency::NotImportant);
+    test_latency(Latency::Matters(Duration::from_millis(100)));
+}
+
+fn test_latency(latency_req: Latency) {
+    println!();
+    println!("Latency requirement: {:?}", latency_req);
+
     let runtime = Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -124,37 +132,49 @@ fn main() {
     });
 
     LocalExecutorBuilder::new()
-        .spawn(|| async move {
-            let mut remaining = 10_000;
-            let pending_requests = Rc::new(Cell::new(0));
-            let metrics = Rc::new(RefCell::new(Metrics::new()));
+        .spawn(move || async move {
+            let tq = glommio::executor().create_task_queue(
+                Shares::Static(1000),
+                latency_req,
+                "test_queue",
+            );
 
-            while remaining > 0 {
-                while pending_requests.get() < 1000 {
-                    for _ in 0..10 {
-                        remaining -= 1;
-                        let (response_sender, response_receiver) = oneshot::channel();
-                        sender.send((Timeline::new(), response_sender)).unwrap();
-                        pending_requests.set(pending_requests.get() + 1);
+            glommio::spawn_local_into(
+                async move {
+                    let mut remaining = 100_000;
+                    let pending_requests = Rc::new(Cell::new(0));
+                    let metrics = Rc::new(RefCell::new(Metrics::new()));
 
-                        spawn_local(enclose!((pending_requests, metrics) async move {
-                            let mut timeline = response_receiver.await.unwrap();
-                            pending_requests.set(pending_requests.get() - 1);
-                            timeline.record(Metric::Tokio2Glommio);
-                            metrics.borrow_mut().record(timeline);
-                        }))
-                        .detach();
+                    while remaining > 0 {
+                        while pending_requests.get() < 1000 {
+                            for _ in 0..10 {
+                                remaining -= 1;
+                                let (response_sender, response_receiver) = oneshot::channel();
+                                sender.send((Timeline::new(), response_sender)).unwrap();
+                                pending_requests.set(pending_requests.get() + 1);
+
+                                spawn_local(enclose!((pending_requests, metrics) async move {
+                                    let mut timeline = response_receiver.await.unwrap();
+                                    pending_requests.set(pending_requests.get() - 1);
+                                    timeline.record(Metric::Tokio2Glommio);
+                                    metrics.borrow_mut().record(timeline);
+                                }))
+                                .detach();
+                            }
+                            yield_if_needed().await;
+                        }
+                        yield_now().await;
                     }
-                    yield_if_needed().await;
-                }
-                yield_now().await;
-            }
 
-            while pending_requests.get() > 0 {
-                glommio::timer::sleep(Duration::from_millis(10)).await;
-            }
-
-            metrics.borrow().print();
+                    while pending_requests.get() > 0 {
+                        glommio::timer::sleep(Duration::from_millis(10)).await;
+                    }
+                    metrics.borrow().print();
+                },
+                tq,
+            )
+            .unwrap()
+            .await;
         })
         .unwrap()
         .join()

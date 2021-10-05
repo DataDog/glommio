@@ -241,7 +241,7 @@ impl Source {
     pub(super) fn is_installed(&self) -> Option<bool> {
         match &self.inner.borrow().source_type {
             SourceType::ForeignNotifier(_, installed) => Some(*installed),
-            _ => None
+            _ => None,
         }
     }
 
