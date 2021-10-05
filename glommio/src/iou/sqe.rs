@@ -393,6 +393,7 @@ impl<'a> SQE<'a> {
             POSIX_FADV_NOREUSE => libc::POSIX_FADV_NOREUSE,
             POSIX_FADV_WILLNEED => libc::POSIX_FADV_WILLNEED,
             POSIX_FADV_DONTNEED => libc::POSIX_FADV_DONTNEED,
+            _ => unreachable!(),
         };
         uring_sys::io_uring_prep_fadvise(self.sqe, fd.as_raw_fd(), off as _, len as _, advice);
         fd.update_sqe(self);
@@ -419,6 +420,7 @@ impl<'a> SQE<'a> {
             MADV_DONTDUMP => libc::MADV_DONTDUMP,
             MADV_DODUMP => libc::MADV_DODUMP,
             MADV_FREE => libc::MADV_FREE,
+            _ => unreachable!(),
         };
         uring_sys::io_uring_prep_madvise(
             self.sqe,
@@ -440,6 +442,7 @@ impl<'a> SQE<'a> {
             EpollOp::EpollCtlAdd => libc::EPOLL_CTL_ADD,
             EpollOp::EpollCtlDel => libc::EPOLL_CTL_DEL,
             EpollOp::EpollCtlMod => libc::EPOLL_CTL_MOD,
+            _ => unreachable!(),
         };
         let event = event.map_or(ptr::null_mut(), |event| event as *mut EpollEvent as *mut _);
         uring_sys::io_uring_prep_epoll_ctl(self.sqe, epoll_fd, fd, op, event);
