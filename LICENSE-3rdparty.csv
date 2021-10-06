@@ -14,6 +14,7 @@
 "cfg-if","https://github.com/alexcrichton/cfg-if","Apache-2.0 OR MIT","Alex Crichton <alex@alexcrichton.com>"
 "chrono","https://github.com/chronotope/chrono","Apache-2.0 OR MIT","Kang Seonghoon <public+rust@mearie.org>|Brandon W Maister <quodlibetor@gmail.com>"
 "clap","https://github.com/clap-rs/clap","MIT","Kevin K. <kbknapp@gmail.com>"
+"concurrent-queue","https://github.com/stjepang/concurrent-queue","Apache-2.0 OR MIT","Stjepan Glavina <stjepang@gmail.com>"
 "crossbeam","https://github.com/crossbeam-rs/crossbeam","Apache-2.0 OR MIT","The Crossbeam Project Developers"
 "crossbeam-channel","https://github.com/crossbeam-rs/crossbeam","Apache-2.0 OR MIT","The Crossbeam Project Developers"
 "crossbeam-deque","https://github.com/crossbeam-rs/crossbeam","Apache-2.0 OR MIT","The Crossbeam Project Developers"
