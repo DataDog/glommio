@@ -1,4 +1,4 @@
-name: CI
+name: Rust
 
 permissions: write-all
 
@@ -49,48 +49,6 @@ jobs:
     # temporarily disabled.
     # - name: Validate links
     #   run: cargo deadlinks --dir target/doc/glommio
-
-  third-party:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Install cargo-license
-        uses: actions-rs/install@v0.1
-        with:
-          crate: cargo-license
-          version: latest
-          use-tool-cache: true
-
-      - name: Run checks on third-party dependencies
-        uses: EmbarkStudios/cargo-deny-action@v1
-        with:
-          log-level: warn
-          command: check
-          arguments: --all-features
-
-      - name: Assert third-party crates are listed correctly in `LICENSE-3rdparty.csv`
-        run: |
-          cargo license --all-features -a -j --no-deps -d | jq -r '(["Component","Origin","License","Copyright"]) as $cols | map(. as $row | ["name", "repository", "license", "authors"] | map($row[.])) as $rows | $cols, $rows[] | @csv' > LICENSE-3rdparty.csv.ci
-          cmp LICENSE-3rdparty.csv LICENSE-3rdparty.csv.ci
-
-      - name: Render Template
-        id: template
-        if: failure()
-        uses: chuhlomin/render-template@v1.2
-        with:
-          template: .github/templates/license_check_failed.md
-          vars: |
-            user: ${{ github.actor }}
-
-      - name: Comment PR
-        if: failure()
-        uses: peter-evans/create-or-update-comment@v1
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          body: ${{ steps.template.outputs.result }}
 
   clippy:
     runs-on: ubuntu-latest
