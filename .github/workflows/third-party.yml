@@ -1,4 +1,4 @@
-name: Third-party dependencies checks
+name: Third-party
 
 permissions: write-all
 
@@ -7,19 +7,16 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  third-party:
+  check:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-
-      - name: Install cargo-license
-        uses: actions-rs/install@v0.1
         with:
-          crate: cargo-license
-          version: latest
-          use-tool-cache: true
+          # pull the fork's HEAD instead of the main repo's
+          repository: ${{ github.event.repository }}
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Run checks on third-party dependencies
         uses: EmbarkStudios/cargo-deny-action@v1
@@ -28,22 +25,44 @@ jobs:
           command: check
           arguments: --all-features
 
+  exported:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          # pull the fork's HEAD instead of the main repo's
+          repository: ${{ github.event.repository }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install cargo-license
+        uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-license
+          version: latest
+          use-tool-cache: true
+
       - name: Assert third-party crates are listed correctly in `LICENSE-3rdparty.csv`
         run: |
           cargo license --all-features -a -j --no-deps -d | jq -r '(["Component","Origin","License","Copyright"]) as $cols | map(. as $row | ["name", "repository", "license", "authors"] | map($row[.])) as $rows | $cols, $rows[] | @csv' > LICENSE-3rdparty.csv.ci
           cmp LICENSE-3rdparty.csv LICENSE-3rdparty.csv.ci
 
+  comment:
+    runs-on: ubuntu-latest
+
+    needs: [ check, exported ]
+    if: failure()
+    steps:
       - name: Render Template
         id: template
-        if: failure()
         uses: chuhlomin/render-template@v1.2
         with:
           template: .github/templates/license_check_failed.md
           vars: |
-            user: ${{ github.actor }}
+            user: ${{ github.event.pull_request.user.login }}
 
       - name: Comment PR
-        if: failure()
         uses: peter-evans/create-or-update-comment@v1
         with:
           issue-number: ${{ github.event.pull_request.number }}
