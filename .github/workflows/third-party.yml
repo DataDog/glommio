@@ -54,6 +54,13 @@ jobs:
     needs: [ check, exported ]
     if: failure()
     steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          # pull the fork's HEAD instead of the main repo's
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
       - name: Render Template
         id: template
         uses: chuhlomin/render-template@v1.2
