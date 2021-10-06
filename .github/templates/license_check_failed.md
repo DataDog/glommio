@@ -7,7 +7,7 @@ Some possible reasons this could happen:
 * You added or updated a dependency and didn't update the `LICENSE-3rdparty.csv` file. To do so, run the following and commit the changes:
 ```
 $ cargo install cargo-license
-$ cargo license --all-features -a -j --no-deps -d | jq -r '(["Component","Origin","License","Copyright"]) as $cols | map(. as $row | ["name", "repository", "license", "authors"] | map($row[.])) as $rows | $cols, $rows[] | @csv' > LICENSE-3rdparty.csv.ci
+$ cargo license --all-features -a -j --no-deps -d | jq -r '(["Component","Origin","License","Copyright"]) as $cols | map(. as $row | ["name", "repository", "license", "authors"] | map($row[.])) as $rows | $cols, $rows[] | @csv' > LICENSE-3rdparty.csv
 ```
 
 Thank you!
