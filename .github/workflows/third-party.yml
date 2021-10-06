@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           # pull the fork's HEAD instead of the main repo's
-          repository: ${{ github.event.repository }}
+          repository: ${{ github.event.repository.name }}
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Run checks on third-party dependencies
@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           # pull the fork's HEAD instead of the main repo's
-          repository: ${{ github.event.repository }}
+          repository: ${{ github.event.repository.name }}
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Install cargo-license
