@@ -947,4 +947,45 @@ mod test {
         // despite differing conditions.
         assert_eq!(original.load(Ordering::Relaxed), 0usize);
     }
+
+    #[test]
+    fn close_sender_while_blocked_on_send() {
+        use std::rc::Rc;
+
+        let (sender, receiver) = new_bounded(10);
+
+        let ex1 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let s1 = Rc::new(sender.connect().await);
+                let s2 = Rc::clone(&s1);
+                crate::executor()
+                    .spawn_local(async move {
+                        let mut ii = 0;
+                        while s1.try_send(ii).is_ok() {
+                            ii += 1;
+                        }
+                        Timer::new(Duration::from_millis(20)).await;
+                        s1.close();
+                    })
+                    .await;
+                crate::executor()
+                    .spawn_local(async move {
+                        Timer::new(Duration::from_millis(10)).await;
+                        s2.send(-1).await.ok();
+                    })
+                    .await;
+            })
+            .unwrap();
+
+        let ex2 = LocalExecutorBuilder::new()
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                Timer::new(Duration::from_millis(50)).await;
+                while receiver.recv().await.is_some() {}
+            })
+            .unwrap();
+
+        ex1.join().unwrap();
+        ex2.join().unwrap();
+    }
 }
