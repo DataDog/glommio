@@ -300,7 +300,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
     }
 
     fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
-        match self.state.buffer.free_space() > 0 {
+        match self.state.buffer.free_space() > 0 || self.state.buffer.producer_disconnected() {
             true => Poll::Ready(()),
             false => {
                 self.reactor
@@ -323,7 +323,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
                 // closed; we don't `unregister_shared_channel` here because
                 // another task could still be `await`ing this sender, in which
                 // case we need to be able to `wake` it
-                r.wake_wakers(self.id);
+                r.process_shared_channels_by_id(self.id);
             }
         }
     }
@@ -971,30 +971,33 @@ mod test {
 
     #[test]
     fn close_sender_while_blocked_on_send() {
-        use std::rc::Rc;
+        use std::time::Instant;
 
         let (sender, receiver) = new_bounded(10);
 
         let ex1 = LocalExecutorBuilder::new()
-            .spawn(move || async move {
-                let s1 = Rc::new(sender.connect().await);
-                let s2 = Rc::clone(&s1);
-                crate::executor()
-                    .spawn_local(async move {
+            .spawn({
+                let t = Instant::now();
+                move || async move {
+                    let s1 = Rc::new(sender.connect().await);
+                    let s2 = Rc::clone(&s1);
+                    let t1 = crate::executor().spawn_local(async move {
                         let mut ii = 0;
                         while s1.try_send(ii).is_ok() {
                             ii += 1;
                         }
                         Timer::new(Duration::from_millis(20)).await;
                         s1.close();
-                    })
-                    .await;
-                crate::executor()
-                    .spawn_local(async move {
+                    });
+                    let t2 = crate::executor().spawn_local(async move {
                         Timer::new(Duration::from_millis(10)).await;
-                        s2.send(-1).await.ok();
-                    })
-                    .await;
+                        assert!(s2.send(-1).await.is_err());
+                        let dt = t.elapsed();
+                        assert!(Duration::from_millis(20) <= dt && dt < Duration::from_millis(50));
+                    });
+                    t1.await;
+                    t2.await;
+                }
             })
             .unwrap();
 
