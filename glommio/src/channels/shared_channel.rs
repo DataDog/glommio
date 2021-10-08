@@ -232,7 +232,16 @@ impl<T: Send + Sized> ConnectedSender<T> {
         // However after we try_push(), we can still fail because the buffer
         // disconnected between now and then. That's okay as all we're trying to
         // do here is prevent unnecessary sends.
-        if self.state.buffer.consumer_disconnected() {
+        //
+        // Note that we check `producer_disconnected` because:
+        // (1) senders can be referenced by multiple tasks simultaneously
+        // (2) senders can be closed at any time using `Self::close` (which does not
+        // automatically cause the receiver / consumer to drop)
+        // (3) `Self::try_send` is used by async `Self::send`, which will not
+        // unblock correctly if the channel was closed in another task
+        if self.state.buffer.consumer_disconnected()
+            || self.state.buffer.buffer.producer_disconnected()
+        {
             return Err(GlommioError::Closed(ResourceType::Channel(item)));
         }
         match self.state.buffer.try_push(item) {
@@ -243,7 +252,9 @@ impl<T: Send + Sized> ConnectedSender<T> {
                 Ok(())
             }
             Some(item) => {
-                let res = if self.state.buffer.consumer_disconnected() {
+                let res = if self.state.buffer.consumer_disconnected()
+                    || self.state.buffer.buffer.producer_disconnected()
+                {
                     GlommioError::Closed(ResourceType::Channel(item))
                 } else {
                     GlommioError::WouldBlock(ResourceType::Channel(item))
@@ -304,13 +315,15 @@ impl<T: Send + Sized> ConnectedSender<T> {
     /// Close the sender
     pub fn close(&self) {
         if !self.state.buffer.disconnect() {
-            if let Some(fd) = self.notifier.must_notify() {
-                if let Some(r) = self.reactor.upgrade() {
+            if let Some(r) = self.reactor.upgrade() {
+                if let Some(fd) = self.notifier.must_notify() {
                     r.notify(fd);
                 }
-            }
-            if let Some(r) = self.reactor.upgrade() {
-                r.unregister_shared_channel(self.id)
+                // wake other tasks `awaiting` the same sender letting them know sender is
+                // closed; we don't `unregister_shared_channel` here because
+                // another task could still be `await`ing this sender, in which
+                // case we need to be able to `wake` it
+                r.wake_wakers(self.id);
             }
         }
     }
@@ -434,11 +447,12 @@ impl<T: Send + Sized> Drop for SharedSender<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
-            state.buffer.disconnect();
-            let id = state.buffer.peer_id();
-            if let Some(notifier) = sys::get_sleep_notifier_for(id) {
-                if let Some(fd) = notifier.must_notify() {
-                    crate::executor().reactor().notify(fd);
+            if !state.buffer.disconnect() {
+                let id = state.buffer.peer_id();
+                if let Some(notifier) = sys::get_sleep_notifier_for(id) {
+                    if let Some(fd) = notifier.must_notify() {
+                        crate::executor().reactor().notify(fd);
+                    }
                 }
             }
         }
@@ -449,11 +463,12 @@ impl<T: Send + Sized> Drop for SharedReceiver<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
             // Never connected, we must connect ourselves.
-            state.buffer.disconnect();
-            let id = state.buffer.peer_id();
-            if let Some(notifier) = sys::get_sleep_notifier_for(id) {
-                if let Some(fd) = notifier.must_notify() {
-                    crate::executor().reactor().notify(fd);
+            if !state.buffer.disconnect() {
+                let id = state.buffer.peer_id();
+                if let Some(notifier) = sys::get_sleep_notifier_for(id) {
+                    if let Some(fd) = notifier.must_notify() {
+                        crate::executor().reactor().notify(fd);
+                    }
                 }
             }
         }
@@ -462,21 +477,27 @@ impl<T: Send + Sized> Drop for SharedReceiver<T> {
 
 impl<T: Send + Sized> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
-        self.state.buffer.disconnect();
-        if let Some(fd) = self.notifier.must_notify() {
+        if !self.state.buffer.disconnect() {
             if let Some(r) = self.reactor.upgrade() {
-                r.notify(fd);
+                if let Some(fd) = self.notifier.must_notify() {
+                    r.notify(fd);
+                }
+                r.unregister_shared_channel(self.id);
             }
-        }
-        if let Some(r) = self.reactor.upgrade() {
-            r.unregister_shared_channel(self.id)
         }
     }
 }
 
 impl<T: Send + Sized> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
-        self.close();
+        if !self.state.buffer.disconnect() {
+            if let Some(r) = self.reactor.upgrade() {
+                if let Some(fd) = self.notifier.must_notify() {
+                    r.notify(fd);
+                }
+                r.unregister_shared_channel(self.id)
+            }
+        }
     }
 }
 
