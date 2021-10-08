@@ -311,6 +311,17 @@ macro_rules! wake {
     };
 }
 
+/// Call `Waker::wake_by_ref()` and log to `error` if panicked.
+macro_rules! wake_by_ref {
+    ($waker:expr $(,)?) => {
+        use log::error;
+
+        if let Err(x) = std::panic::catch_unwind(|| $waker.wake_by_ref()) {
+            error!("Panic while calling waker! {:?}", x);
+        }
+    };
+}
+
 mod free_list;
 
 #[allow(clippy::redundant_slicing)]

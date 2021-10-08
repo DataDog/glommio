@@ -257,6 +257,14 @@ impl Reactor {
         id
     }
 
+    pub(crate) fn wake_wakers(&self, id: u64) {
+        if let Some(wakers) = self.shared_channels.borrow_mut().wakers_map.get(&id) {
+            wakers.0.iter().for_each(|w| {
+                wake_by_ref!(w);
+            })
+        };
+    }
+
     pub(crate) fn unregister_shared_channel(&self, id: u64) {
         let mut channels = self.shared_channels.borrow_mut();
         channels.wakers_map.remove(&id);
