@@ -1257,8 +1257,8 @@ impl Reactor {
         }
     }
 
-    pub(crate) fn foreign_notifiers(&self) -> Option<core::task::Waker> {
-        self.notifier.get_foreign_notifier()
+    pub(crate) fn process_foreign_wakes(&self) -> usize {
+        self.notifier.process_foreign_wakes()
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
