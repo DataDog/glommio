@@ -971,13 +971,15 @@ mod test {
 
     #[test]
     fn close_sender_while_blocked_on_send() {
-        use std::time::Instant;
+        use std::sync::{Condvar, Mutex};
 
         let (sender, receiver) = new_bounded(10);
+        let cv_mtx_1 = Arc::new((Condvar::new(), Mutex::new(0)));
+        let cv_mtx_2 = Arc::clone(&cv_mtx_1);
+        let cv_mtx_3 = Arc::clone(&cv_mtx_1);
 
         let ex1 = LocalExecutorBuilder::new()
             .spawn({
-                let t = Instant::now();
                 move || async move {
                     let s1 = Rc::new(sender.connect().await);
                     let s2 = Rc::clone(&s1);
@@ -986,14 +988,18 @@ mod test {
                         while s1.try_send(ii).is_ok() {
                             ii += 1;
                         }
-                        Timer::new(Duration::from_millis(20)).await;
                         s1.close();
+                        *cv_mtx_1.1.lock().unwrap() = 1;
+                        cv_mtx_1.0.notify_all();
                     });
                     let t2 = crate::executor().spawn_local(async move {
-                        Timer::new(Duration::from_millis(10)).await;
+                        let mut lck = cv_mtx_2
+                            .0
+                            .wait_while(cv_mtx_2.1.lock().unwrap(), |l| *l < 1)
+                            .unwrap();
                         assert!(s2.send(-1).await.is_err());
-                        let dt = t.elapsed();
-                        assert!(Duration::from_millis(20) <= dt && dt < Duration::from_millis(50));
+                        *lck = 2;
+                        cv_mtx_2.0.notify_all();
                     });
                     t1.await;
                     t2.await;
@@ -1004,8 +1010,13 @@ mod test {
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 let receiver = receiver.connect().await;
-                Timer::new(Duration::from_millis(50)).await;
-                while receiver.recv().await.is_some() {}
+                let _lck = cv_mtx_3
+                    .0
+                    .wait_while(cv_mtx_3.1.lock().unwrap(), |l| *l < 2)
+                    .unwrap();
+                while let Some(v) = receiver.recv().await {
+                    assert!(0 <= v);
+                }
             })
             .unwrap();
 
