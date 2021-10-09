@@ -13,11 +13,7 @@ use std::{
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-        RwLock,
-    },
+    sync::{atomic::Ordering, Arc, RwLock},
     task::Waker,
     time::Duration,
 };
@@ -198,10 +194,7 @@ pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
 use smallvec::SmallVec;
-use std::{
-    ops::Deref,
-    sync::atomic::AtomicBool,
-};
+use std::{ops::Deref, sync::atomic::AtomicBool};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -278,10 +271,10 @@ impl fmt::Debug for OsError {
 pub(crate) struct SleepNotifier {
     id: usize,
     eventfd: std::fs::File,
-    memory: AtomicUsize,
+    is_sleeping: AtomicBool,
+    notified: AtomicBool,
     foreign_wakes: crossbeam::channel::Receiver<Waker>,
     waker_sender: crossbeam::channel::Sender<Waker>,
-    notified: AtomicBool,
 }
 
 lazy_static! {
@@ -312,10 +305,10 @@ impl SleepNotifier {
         Ok(Arc::new(Self {
             eventfd,
             id,
-            memory: AtomicUsize::new(0),
+            is_sleeping: AtomicBool::new(false),
+            notified: AtomicBool::new(false),
             waker_sender,
             foreign_wakes,
-            notified: AtomicBool::new(false),
         }))
     }
 
@@ -327,10 +320,9 @@ impl SleepNotifier {
         self.id
     }
 
-    pub(crate) fn must_notify(&self) -> Option<RawFd> {
-        match self.memory.load(Ordering::Acquire) {
-            0 => None,
-            x => Some(x as _),
+    pub(crate) fn notify_if_sleeping(&self) {
+        if self.is_sleeping.load(Ordering::Relaxed) {
+            self.notify_if_needed();
         }
     }
 
@@ -351,9 +343,7 @@ impl SleepNotifier {
             );
         }
 
-        if let Some(fd) = self.must_notify() {
-            write_eventfd(fd);
-        }
+        self.notify_if_sleeping();
     }
 
     pub(crate) fn process_foreign_wakes(&self) -> usize {
@@ -370,12 +360,11 @@ impl SleepNotifier {
         // This will allow this `eventfd` to be notified. This should not happen
         // for the placeholder (disconnected) case.
         assert_ne!(self.id, usize::MAX);
-        self.memory
-            .store(self.eventfd.as_raw_fd() as _, Ordering::SeqCst);
+        self.is_sleeping.store(true, Ordering::Relaxed);
     }
 
     pub(super) fn wake_up(&self) {
-        self.memory.store(0, Ordering::Release);
+        self.is_sleeping.store(false, Ordering::Relaxed);
     }
 }
 
