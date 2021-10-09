@@ -220,10 +220,6 @@ impl Reactor {
         self.sys.id()
     }
 
-    pub(crate) fn notify(&self, remote: RawFd) {
-        sys::write_eventfd(remote);
-    }
-
     fn new_source(
         &self,
         raw: RawFd,

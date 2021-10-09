@@ -167,9 +167,7 @@ impl BlockingThread {
                         panic!("Could not add response to syscall response queue");
                     }
                 }
-                if let Some(fd) = reactor_sleep_notifier.must_notify() {
-                    write_eventfd(fd);
-                }
+                reactor_sleep_notifier.notify_if_sleeping();
             }
         });
         BlockingThread {
