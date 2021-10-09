@@ -198,7 +198,10 @@ pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
 use smallvec::SmallVec;
-use std::ops::Deref;
+use std::{
+    ops::Deref,
+    sync::atomic::AtomicBool,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -278,6 +281,7 @@ pub(crate) struct SleepNotifier {
     memory: AtomicUsize,
     foreign_wakes: crossbeam::channel::Receiver<Waker>,
     waker_sender: crossbeam::channel::Sender<Waker>,
+    notified: AtomicBool,
 }
 
 lazy_static! {
@@ -311,6 +315,7 @@ impl SleepNotifier {
             memory: AtomicUsize::new(0),
             waker_sender,
             foreign_wakes,
+            notified: AtomicBool::new(false),
         }))
     }
 
@@ -326,6 +331,12 @@ impl SleepNotifier {
         match self.memory.load(Ordering::Acquire) {
             0 => None,
             x => Some(x as _),
+        }
+    }
+
+    pub(crate) fn notify_if_needed(&self) {
+        if !self.notified.swap(true, Ordering::Relaxed) {
+            write_eventfd(self.eventfd_fd());
         }
     }
 
@@ -345,14 +356,14 @@ impl SleepNotifier {
         }
     }
 
-    pub(crate) fn get_foreign_notifier(&self) -> Option<Waker> {
-        match self.foreign_wakes.try_recv() {
-            Ok(x) => Some(x),
-            // Possible errors:
-            //  - channel disconnected, so we won't ever have another notification
-            //  - no messages, so the iterator must stop.
-            Err(_) => None,
+    pub(crate) fn process_foreign_wakes(&self) -> usize {
+        self.notified.store(false, Ordering::Relaxed);
+        let mut processed = 0;
+        while let Ok(waker) = self.foreign_wakes.try_recv() {
+            processed += 1;
+            wake!(waker);
         }
+        processed
     }
 
     pub(super) fn prepare_to_sleep(&self) {

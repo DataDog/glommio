@@ -684,10 +684,7 @@ impl Reactor {
     fn process_shared_channels(&self) -> usize {
         let mut channels = self.shared_channels.borrow_mut();
         let mut processed = channels.process_shared_channels();
-        while let Some(waker) = self.sys.foreign_notifiers() {
-            processed += 1;
-            wake!(waker);
-        }
+        processed += self.sys.process_foreign_wakes();
         processed
     }
 
