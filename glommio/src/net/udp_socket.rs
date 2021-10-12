@@ -346,6 +346,44 @@ impl UdpSocket {
         Ok(self.socket.socket.set_multicast_ttl_v4(multicast_ttl_v4)?)
     }
 
+    /// Gets the value of the `IP_TTL` option for this socket.
+    ///
+    /// For more information about this option, see [`UdpSocket::set_ttl`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_ttl(42).expect("set_ttl call failed");
+    /// assert_eq!(s.ttl().unwrap(), 42);
+    /// # })
+    /// ```
+    pub fn ttl(&self) -> Result<u32> {
+        Ok(self.socket.socket.ttl()?)
+    }
+
+    /// Sets the value for the `IP_TTL` option on this socket.
+    ///
+    /// This value sets the time-to-live field that is used in every packet sent
+    /// from this socket.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_ttl(42).expect("set_ttl call failed");
+    /// # })
+    /// ```
+    pub fn set_ttl(&self, ttl: u32) -> Result<()> {
+        Ok(self.socket.socket.set_ttl(ttl)?)
+    }
+
     /// Sets the read timeout to the timeout specified.
     ///
     /// If the value specified is [`None`], then read calls will block
@@ -984,6 +1022,15 @@ mod tests {
             s.set_multicast_ttl_v4(42)
                 .expect("set_multicast_ttl_v4 call failed");
             assert_eq!(s.multicast_ttl_v4().unwrap(), 42);
+        });
+    }
+
+    #[test]
+    fn set_ttl() {
+        test_executor!(async move {
+            let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+            s.set_ttl(42).expect("set_ttl call failed");
+            assert_eq!(s.ttl().unwrap(), 42);
         });
     }
 }
