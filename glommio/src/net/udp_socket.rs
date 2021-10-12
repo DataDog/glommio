@@ -1003,7 +1003,7 @@ mod tests {
         test_executor!(async move {
             let s = UdpSocket::bind("127.0.0.1:0").unwrap();
             s.set_broadcast(false).expect("set_broadcast call failed");
-            assert_eq!(s.broadcast().unwrap(), false);
+            assert!(!s.broadcast().unwrap());
         });
     }
 
@@ -1013,7 +1013,7 @@ mod tests {
             let s = UdpSocket::bind("127.0.0.1:0").unwrap();
             s.set_multicast_loop_v4(false)
                 .expect("set_multicast_loop_v4 call failed");
-            assert_eq!(s.multicast_loop_v4().unwrap(), false);
+            assert!(!s.multicast_loop_v4().unwrap());
         });
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
             let s = UdpSocket::bind("::1:0").unwrap();
             s.set_multicast_loop_v6(false)
                 .expect("set_multicast_loop_v6 call failed");
-            assert_eq!(s.multicast_loop_v6().unwrap(), false);
+            assert!(!s.multicast_loop_v6().unwrap());
         });
     }
 
