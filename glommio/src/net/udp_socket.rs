@@ -147,7 +147,8 @@ impl UdpSocket {
 
     /// Gets the value of the `SO_BROADCAST` option for this socket.
     ///
-    /// For more information about this option, see [`UdpSocket::set_broadcast`].
+    /// For more information about this option, see
+    /// [`UdpSocket::set_broadcast`].
     ///
     /// # Examples
     ///
@@ -205,7 +206,8 @@ impl UdpSocket {
 
     /// Executes an operation of the `IP_DROP_MEMBERSHIP` type.
     ///
-    /// For more information about this option, see [`UdpSocket::join_multicast_v4`].
+    /// For more information about this option, see
+    /// [`UdpSocket::join_multicast_v4`].
     pub fn leave_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> Result<()> {
         Ok(self
             .socket
@@ -215,7 +217,8 @@ impl UdpSocket {
 
     /// Executes an operation of the `IPV6_DROP_MEMBERSHIP` type.
     ///
-    /// For more information about this option, see [`UdpSocket::join_multicast_v6`].
+    /// For more information about this option, see
+    /// [`UdpSocket::join_multicast_v6`].
     pub fn leave_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<()> {
         Ok(self
             .socket
@@ -225,7 +228,8 @@ impl UdpSocket {
 
     /// Gets the value of the `IP_MULTICAST_LOOP` option for this socket.
     ///
-    /// For more information about this option, see [`UdpSocket::set_multicast_loop_v4`].
+    /// For more information about this option, see
+    /// [`UdpSocket::set_multicast_loop_v4`].
     ///
     /// # Examples
     ///
@@ -234,7 +238,8 @@ impl UdpSocket {
     /// # let ex = LocalExecutor::default();
     /// # ex.run(async move {
     /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
-    /// s.set_multicast_loop_v4(false).expect("set_multicast_loop_v4 call failed");
+    /// s.set_multicast_loop_v4(false)
+    ///     .expect("set_multicast_loop_v4 call failed");
     /// assert_eq!(s.multicast_loop_v4().unwrap(), false);
     /// # })
     /// ```
@@ -254,7 +259,8 @@ impl UdpSocket {
     /// # let ex = LocalExecutor::default();
     /// # ex.run(async move {
     /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
-    /// s.set_multicast_loop_v4(false).expect("set_multicast_loop_v4 call failed");
+    /// s.set_multicast_loop_v4(false)
+    ///     .expect("set_multicast_loop_v4 call failed");
     /// # })
     /// ```
     pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> Result<()> {
@@ -266,7 +272,8 @@ impl UdpSocket {
 
     /// Gets the value of the `IPV6_MULTICAST_LOOP` option for this socket.
     ///
-    /// For more information about this option, see [`UdpSocket::set_multicast_loop_v6`].
+    /// For more information about this option, see
+    /// [`UdpSocket::set_multicast_loop_v6`].
     ///
     /// # Examples
     ///
@@ -275,7 +282,8 @@ impl UdpSocket {
     /// # let ex = LocalExecutor::default();
     /// # ex.run(async move {
     /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
-    /// s.set_multicast_loop_v6(false).expect("set_multicast_loop_v6 call failed");
+    /// s.set_multicast_loop_v6(false)
+    ///     .expect("set_multicast_loop_v6 call failed");
     /// assert_eq!(s.multicast_loop_v6().unwrap(), false);
     /// # })
     /// ```
@@ -295,7 +303,8 @@ impl UdpSocket {
     /// # let ex = LocalExecutor::default();
     /// # ex.run(async move {
     /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
-    /// s.set_multicast_loop_v6(false).expect("set_multicast_loop_v6 call failed");
+    /// s.set_multicast_loop_v6(false)
+    ///     .expect("set_multicast_loop_v6 call failed");
     /// # })
     /// ```
     pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> Result<()> {
@@ -307,7 +316,8 @@ impl UdpSocket {
 
     /// Gets the value of the `IP_MULTICAST_TTL` option for this socket.
     ///
-    /// For more information about this option, see [`UdpSocket::set_multicast_ttl_v4`].
+    /// For more information about this option, see
+    /// [`UdpSocket::set_multicast_ttl_v4`].
     ///
     /// # Examples
     ///
@@ -316,7 +326,8 @@ impl UdpSocket {
     /// # let ex = LocalExecutor::default();
     /// # ex.run(async move {
     /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
-    /// s.set_multicast_ttl_v4(42).expect("set_multicast_ttl_v4 call failed");
+    /// s.set_multicast_ttl_v4(42)
+    ///     .expect("set_multicast_ttl_v4 call failed");
     /// assert_eq!(s.multicast_ttl_v4().unwrap(), 42);
     /// # })
     /// ```
@@ -339,7 +350,8 @@ impl UdpSocket {
     /// # let ex = LocalExecutor::default();
     /// # ex.run(async move {
     /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
-    /// s.set_multicast_ttl_v4(42).expect("set_multicast_ttl_v4 call failed");
+    /// s.set_multicast_ttl_v4(42)
+    ///     .expect("set_multicast_ttl_v4 call failed");
     /// # })
     /// ```
     pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> Result<()> {
