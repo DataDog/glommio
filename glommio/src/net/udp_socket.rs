@@ -305,6 +305,47 @@ impl UdpSocket {
             .set_multicast_loop_v6(multicast_loop_v6)?)
     }
 
+    /// Gets the value of the `IP_MULTICAST_TTL` option for this socket.
+    ///
+    /// For more information about this option, see [`UdpSocket::set_multicast_ttl_v4`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_multicast_ttl_v4(42).expect("set_multicast_ttl_v4 call failed");
+    /// assert_eq!(s.multicast_ttl_v4().unwrap(), 42);
+    /// # })
+    /// ```
+    pub fn multicast_ttl_v4(&self) -> Result<u32> {
+        Ok(self.socket.socket.multicast_ttl_v4()?)
+    }
+
+    /// Sets the value of the `IP_MULTICAST_TTL` option for this socket.
+    ///
+    /// Indicates the time-to-live value of outgoing multicast packets for
+    /// this socket. The default value is 1 which means that multicast packets
+    /// don't leave the local network unless explicitly requested.
+    ///
+    /// Note that this may not have any effect on IPv6 sockets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_multicast_ttl_v4(42).expect("set_multicast_ttl_v4 call failed");
+    /// # })
+    /// ```
+    pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> Result<()> {
+        Ok(self.socket.socket.set_multicast_ttl_v4(multicast_ttl_v4)?)
+    }
+
     /// Sets the read timeout to the timeout specified.
     ///
     /// If the value specified is [`None`], then read calls will block
@@ -933,6 +974,16 @@ mod tests {
             s.set_multicast_loop_v6(false)
                 .expect("set_multicast_loop_v6 call failed");
             assert_eq!(s.multicast_loop_v6().unwrap(), false);
+        });
+    }
+
+    #[test]
+    fn set_multicast_ttl_v4() {
+        test_executor!(async move {
+            let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+            s.set_multicast_ttl_v4(42)
+                .expect("set_multicast_ttl_v4 call failed");
+            assert_eq!(s.multicast_ttl_v4().unwrap(), 42);
         });
     }
 }
