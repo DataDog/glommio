@@ -8,7 +8,7 @@ use nix::sys::socket::{InetAddr, SockAddr};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     io,
-    net::{self, SocketAddr, ToSocketAddrs},
+    net::{self, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     time::Duration,
 };
@@ -181,6 +181,46 @@ impl UdpSocket {
     /// ```
     pub fn set_broadcast(&self, broadcast: bool) -> Result<()> {
         Ok(self.socket.socket.set_broadcast(broadcast)?)
+    }
+
+    /// Executes an operation of the `IP_ADD_MEMBERSHIP` type.
+    ///
+    /// This function specifies a new multicast group for this socket to join.
+    /// The address must be a valid multicast address, and `interface` is the
+    /// address of the local interface with which the system should join the
+    /// multicast group. If it's equal to `INADDR_ANY` then an appropriate
+    /// interface is chosen by the system.
+    pub fn join_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> Result<()> {
+        Ok(self.socket.socket.join_multicast_v4(multiaddr, interface)?)
+    }
+
+    /// Executes an operation of the `IPV6_ADD_MEMBERSHIP` type.
+    ///
+    /// This function specifies a new multicast group for this socket to join.
+    /// The address must be a valid multicast address, and `interface` is the
+    /// index of the interface to join/leave (or 0 to indicate any interface).
+    pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<()> {
+        Ok(self.socket.socket.join_multicast_v6(multiaddr, interface)?)
+    }
+
+    /// Executes an operation of the `IP_DROP_MEMBERSHIP` type.
+    ///
+    /// For more information about this option, see [`UdpSocket::join_multicast_v4`].
+    pub fn leave_multicast_v4(&self, multiaddr: &Ipv4Addr, interface: &Ipv4Addr) -> Result<()> {
+        Ok(self
+            .socket
+            .socket
+            .leave_multicast_v4(multiaddr, interface)?)
+    }
+
+    /// Executes an operation of the `IPV6_DROP_MEMBERSHIP` type.
+    ///
+    /// For more information about this option, see [`UdpSocket::join_multicast_v6`].
+    pub fn leave_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<()> {
+        Ok(self
+            .socket
+            .socket
+            .leave_multicast_v6(multiaddr, interface)?)
     }
 
     /// Sets the read timeout to the timeout specified.
