@@ -223,6 +223,88 @@ impl UdpSocket {
             .leave_multicast_v6(multiaddr, interface)?)
     }
 
+    /// Gets the value of the `IP_MULTICAST_LOOP` option for this socket.
+    ///
+    /// For more information about this option, see [`UdpSocket::set_multicast_loop_v4`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_multicast_loop_v4(false).expect("set_multicast_loop_v4 call failed");
+    /// assert_eq!(s.multicast_loop_v4().unwrap(), false);
+    /// # })
+    /// ```
+    pub fn multicast_loop_v4(&self) -> Result<bool> {
+        Ok(self.socket.socket.multicast_loop_v4()?)
+    }
+
+    /// Sets the value of the `IP_MULTICAST_LOOP` option for this socket.
+    ///
+    /// If enabled, multicast packets will be looped back to the local socket.
+    /// Note that this may not have any effect on IPv6 sockets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_multicast_loop_v4(false).expect("set_multicast_loop_v4 call failed");
+    /// # })
+    /// ```
+    pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> Result<()> {
+        Ok(self
+            .socket
+            .socket
+            .set_multicast_loop_v4(multicast_loop_v4)?)
+    }
+
+    /// Gets the value of the `IPV6_MULTICAST_LOOP` option for this socket.
+    ///
+    /// For more information about this option, see [`UdpSocket::set_multicast_loop_v6`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_multicast_loop_v6(false).expect("set_multicast_loop_v6 call failed");
+    /// assert_eq!(s.multicast_loop_v6().unwrap(), false);
+    /// # })
+    /// ```
+    pub fn multicast_loop_v6(&self) -> Result<bool> {
+        Ok(self.socket.socket.multicast_loop_v6()?)
+    }
+
+    /// Sets the value of the `IPV6_MULTICAST_LOOP` option for this socket.
+    ///
+    /// Controls whether this socket sees the multicast packets it sends itself.
+    /// Note that this may not have any affect on IPv4 sockets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_multicast_loop_v6(false).expect("set_multicast_loop_v6 call failed");
+    /// # })
+    /// ```
+    pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> Result<()> {
+        Ok(self
+            .socket
+            .socket
+            .set_multicast_loop_v6(multicast_loop_v6)?)
+    }
+
     /// Sets the read timeout to the timeout specified.
     ///
     /// If the value specified is [`None`], then read calls will block
@@ -831,6 +913,26 @@ mod tests {
             let s = UdpSocket::bind("127.0.0.1:0").unwrap();
             s.set_broadcast(false).expect("set_broadcast call failed");
             assert_eq!(s.broadcast().unwrap(), false);
+        });
+    }
+
+    #[test]
+    fn set_multicast_loop_v4() {
+        test_executor!(async move {
+            let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+            s.set_multicast_loop_v4(false)
+                .expect("set_multicast_loop_v4 call failed");
+            assert_eq!(s.multicast_loop_v4().unwrap(), false);
+        });
+    }
+
+    #[test]
+    fn set_multicast_loop_v6() {
+        test_executor!(async move {
+            let s = UdpSocket::bind("::1:0").unwrap();
+            s.set_multicast_loop_v6(false)
+                .expect("set_multicast_loop_v6 call failed");
+            assert_eq!(s.multicast_loop_v6().unwrap(), false);
         });
     }
 }
