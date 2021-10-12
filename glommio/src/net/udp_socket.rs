@@ -145,6 +145,44 @@ impl UdpSocket {
         self.socket.rx_buf_size
     }
 
+    /// Gets the value of the `SO_BROADCAST` option for this socket.
+    ///
+    /// For more information about this option, see [`UdpSocket::set_broadcast`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_broadcast(false).expect("set_broadcast call failed");
+    /// assert_eq!(s.broadcast().unwrap(), false);
+    /// # })
+    /// ```
+    pub fn broadcast(&self) -> Result<bool> {
+        Ok(self.socket.socket.broadcast()?)
+    }
+
+    /// Sets the value of the `SO_BROADCAST` option for this socket.
+    ///
+    /// When enabled, this socket is allowed to send packets to a broadcast
+    /// address.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::UdpSocket, LocalExecutor};
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let s = UdpSocket::bind("127.0.0.1:10000").unwrap();
+    /// s.set_broadcast(false).expect("set_broadcast call failed");
+    /// # })
+    /// ```
+    pub fn set_broadcast(&self, broadcast: bool) -> Result<()> {
+        Ok(self.socket.socket.set_broadcast(broadcast)?)
+    }
+
     /// Sets the read timeout to the timeout specified.
     ///
     /// If the value specified is [`None`], then read calls will block
@@ -744,6 +782,15 @@ mod tests {
             let sz = receiver.recv(&mut buf).await.unwrap();
             assert_eq!(sz, 1);
             assert_eq!(buf[0], 65u8);
+        });
+    }
+
+    #[test]
+    fn broadcast() {
+        test_executor!(async move {
+            let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+            s.set_broadcast(false).expect("set_broadcast call failed");
+            assert_eq!(s.broadcast().unwrap(), false);
         });
     }
 }
