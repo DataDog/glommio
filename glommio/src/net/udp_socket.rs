@@ -1008,6 +1008,31 @@ mod tests {
     }
 
     #[test]
+    fn multicast_v4() {
+        test_executor!(async move {
+            let multicast_addr = Ipv4Addr::new(239, 0, 0, 0);
+            assert!(multicast_addr.is_multicast());
+            let interface_addr = Ipv4Addr::new(0, 0, 0, 0);
+            let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+            s.join_multicast_v4(&multicast_addr, &interface_addr)
+                .unwrap();
+            s.leave_multicast_v4(&multicast_addr, &interface_addr)
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn multicast_v6() {
+        test_executor!(async move {
+            let multicast_addr = Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0);
+            assert!(multicast_addr.is_multicast());
+            let s = UdpSocket::bind("::1:0").unwrap();
+            s.join_multicast_v6(&multicast_addr, 0).unwrap();
+            s.leave_multicast_v6(&multicast_addr, 0).unwrap();
+        });
+    }
+
+    #[test]
     fn set_multicast_loop_v4() {
         test_executor!(async move {
             let s = UdpSocket::bind("127.0.0.1:0").unwrap();
