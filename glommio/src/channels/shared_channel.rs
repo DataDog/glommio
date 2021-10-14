@@ -300,7 +300,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
     }
 
     fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
-        match self.state.buffer.free_space() > 0 {
+        match self.state.buffer.free_space() > 0 || self.state.buffer.producer_disconnected() {
             true => Poll::Ready(()),
             false => {
                 self.reactor
@@ -323,7 +323,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
                 // closed; we don't `unregister_shared_channel` here because
                 // another task could still be `await`ing this sender, in which
                 // case we need to be able to `wake` it
-                r.wake_wakers(self.id);
+                r.process_shared_channels_by_id(self.id);
             }
         }
     }
@@ -971,38 +971,52 @@ mod test {
 
     #[test]
     fn close_sender_while_blocked_on_send() {
-        use std::rc::Rc;
+        use std::sync::{Condvar, Mutex};
 
         let (sender, receiver) = new_bounded(10);
+        let cv_mtx_1 = Arc::new((Condvar::new(), Mutex::new(0)));
+        let cv_mtx_2 = Arc::clone(&cv_mtx_1);
+        let cv_mtx_3 = Arc::clone(&cv_mtx_1);
 
         let ex1 = LocalExecutorBuilder::new()
-            .spawn(move || async move {
-                let s1 = Rc::new(sender.connect().await);
-                let s2 = Rc::clone(&s1);
-                crate::executor()
-                    .spawn_local(async move {
+            .spawn({
+                move || async move {
+                    let s1 = Rc::new(sender.connect().await);
+                    let s2 = Rc::clone(&s1);
+                    let t1 = crate::executor().spawn_local(async move {
                         let mut ii = 0;
                         while s1.try_send(ii).is_ok() {
                             ii += 1;
                         }
-                        Timer::new(Duration::from_millis(20)).await;
                         s1.close();
-                    })
-                    .await;
-                crate::executor()
-                    .spawn_local(async move {
-                        Timer::new(Duration::from_millis(10)).await;
-                        s2.send(-1).await.ok();
-                    })
-                    .await;
+                        *cv_mtx_1.1.lock().unwrap() = 1;
+                        cv_mtx_1.0.notify_all();
+                    });
+                    let t2 = crate::executor().spawn_local(async move {
+                        let mut lck = cv_mtx_2
+                            .0
+                            .wait_while(cv_mtx_2.1.lock().unwrap(), |l| *l < 1)
+                            .unwrap();
+                        assert!(s2.send(-1).await.is_err());
+                        *lck = 2;
+                        cv_mtx_2.0.notify_all();
+                    });
+                    t1.await;
+                    t2.await;
+                }
             })
             .unwrap();
 
         let ex2 = LocalExecutorBuilder::new()
             .spawn(move || async move {
                 let receiver = receiver.connect().await;
-                Timer::new(Duration::from_millis(50)).await;
-                while receiver.recv().await.is_some() {}
+                let _lck = cv_mtx_3
+                    .0
+                    .wait_while(cv_mtx_3.1.lock().unwrap(), |l| *l < 2)
+                    .unwrap();
+                while let Some(v) = receiver.recv().await {
+                    assert!(0 <= v);
+                }
             })
             .unwrap();
 

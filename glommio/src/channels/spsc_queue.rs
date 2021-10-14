@@ -348,6 +348,11 @@ impl<T> Producer<T> {
         (*self.buffer).consumer_disconnected()
     }
 
+    /// Whether the associated producer is disconnected.
+    pub(crate) fn producer_disconnected(&self) -> bool {
+        (*self.buffer).producer_disconnected()
+    }
+
     /// Returns the available space in the queue
     ///
     /// This value represents the number of items that can be pushed onto the

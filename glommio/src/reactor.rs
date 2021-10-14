@@ -257,14 +257,6 @@ impl Reactor {
         id
     }
 
-    pub(crate) fn wake_wakers(&self, id: u64) {
-        if let Some(wakers) = self.shared_channels.borrow_mut().wakers_map.get(&id) {
-            wakers.0.iter().for_each(|w| {
-                wake_by_ref!(w);
-            })
-        };
-    }
-
     pub(crate) fn unregister_shared_channel(&self, id: u64) {
         let mut channels = self.shared_channels.borrow_mut();
         channels.wakers_map.remove(&id);
@@ -697,6 +689,19 @@ impl Reactor {
             wake!(waker);
         }
         processed
+    }
+
+    pub(crate) fn process_shared_channels_by_id(&self, id: u64) -> usize {
+        match self.shared_channels.borrow_mut().wakers_map.get_mut(&id) {
+            Some(wakers) => {
+                let processed = wakers.0.len();
+                wakers.0.drain(..).for_each(|w| {
+                    wake!(w);
+                });
+                processed
+            }
+            None => 0,
+        }
     }
 
     fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
