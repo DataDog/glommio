@@ -17,10 +17,13 @@ use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
 use std::{
     cell::Ref,
+    future::Future,
     io,
     os::unix::io::{AsRawFd, RawFd},
     path::Path,
+    pin::Pin,
     rc::Rc,
+    task::{Context, Poll},
 };
 
 pub(super) type Result<T> = crate::Result<T, ()>;
@@ -283,6 +286,21 @@ impl DmaFile {
         ))
     }
 
+    /// Poll-based version of [`Self::read_at_aligned`]
+    pub fn poll_read_at_aligned(&self, pos: u64, size: usize) -> PollDmaReadAligned<'_> {
+        let source = self.file.reactor.upgrade().unwrap().read_dma(
+            self.as_raw_fd(),
+            pos,
+            size,
+            self.pollable,
+            self.file.scheduler.borrow().as_ref(),
+        );
+        PollDmaReadAligned {
+            source: Some(source),
+            file: &self.file,
+        }
+    }
+
     /// Submit many reads and process the results in a stream-like fashion via a
     /// [`ReadManyResult`].
     ///
@@ -421,6 +439,32 @@ impl DmaFile {
             Err(_) => Ok(CloseResult::Unreferenced),
             Ok(file) => file.close().await.map(|_| CloseResult::Closed),
         }
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+#[must_use = "future has no effect unless you .await or poll it"]
+pub struct PollDmaReadAligned<'a> {
+    source: Option<ScheduledSource>,
+    file: &'a GlommioFile,
+}
+
+impl Future for PollDmaReadAligned<'_> {
+    type Output = Result<ReadResult>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let read_size = self
+            .source
+            .as_ref()
+            .expect("Polling a finished task")
+            .poll_collect_rw(cx)
+            .map(|read_size| enhanced_try!(read_size, "Reading", self.file))?;
+
+        read_size.map(|size| {
+            let source = self.get_mut().source.take().unwrap();
+            Ok(ReadResult::from_sliced_buffer(source, 0, size))
+        })
     }
 }
 
