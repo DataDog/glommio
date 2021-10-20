@@ -271,8 +271,7 @@ impl fmt::Debug for OsError {
 pub(crate) struct SleepNotifier {
     id: usize,
     eventfd: std::fs::File,
-    is_sleeping: AtomicBool,
-    notified: AtomicBool,
+    should_notify: AtomicBool,
     foreign_wakes: crossbeam::channel::Receiver<Waker>,
     waker_sender: crossbeam::channel::Sender<Waker>,
 }
@@ -305,8 +304,7 @@ impl SleepNotifier {
         Ok(Arc::new(Self {
             eventfd,
             id,
-            is_sleeping: AtomicBool::new(false),
-            notified: AtomicBool::new(false),
+            should_notify: AtomicBool::new(false),
             waker_sender,
             foreign_wakes,
         }))
@@ -321,13 +319,13 @@ impl SleepNotifier {
     }
 
     pub(crate) fn notify_if_sleeping(&self) {
-        if self.is_sleeping.load(Ordering::Relaxed) {
+        if self.should_notify.load(Ordering::Relaxed) {
             self.notify_if_needed();
         }
     }
 
     pub(crate) fn notify_if_needed(&self) {
-        if !self.notified.swap(true, Ordering::Relaxed) {
+        if self.should_notify.swap(false, Ordering::Relaxed) {
             write_eventfd(self.eventfd_fd());
         }
     }
@@ -347,7 +345,7 @@ impl SleepNotifier {
     }
 
     pub(crate) fn process_foreign_wakes(&self) -> usize {
-        self.notified.store(false, Ordering::Relaxed);
+        self.should_notify.store(true, Ordering::Relaxed);
         let mut processed = 0;
         while let Ok(waker) = self.foreign_wakes.try_recv() {
             processed += 1;
@@ -360,11 +358,11 @@ impl SleepNotifier {
         // This will allow this `eventfd` to be notified. This should not happen
         // for the placeholder (disconnected) case.
         assert_ne!(self.id, usize::MAX);
-        self.is_sleeping.store(true, Ordering::Relaxed);
+        self.should_notify.store(true, Ordering::Relaxed);
     }
 
     pub(super) fn wake_up(&self) {
-        self.is_sleeping.store(false, Ordering::Relaxed);
+        self.should_notify.store(false, Ordering::Relaxed);
     }
 }
 
