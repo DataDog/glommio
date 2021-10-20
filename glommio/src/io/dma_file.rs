@@ -245,7 +245,7 @@ impl DmaFile {
     ///
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
-    pub async fn read_at_aligned(&self, pos: u64, size: usize) -> Result<ReadResult> {
+    pub fn read_at_aligned(&self, pos: u64, size: usize) -> PollDmaReadAligned<'_> {
         let source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             pos,
@@ -253,8 +253,10 @@ impl DmaFile {
             self.pollable,
             self.file.scheduler.borrow().as_ref(),
         );
-        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        Ok(ReadResult::from_sliced_buffer(source, 0, read_size))
+        PollDmaReadAligned {
+            source: Some(source),
+            file: &self.file,
+        }
     }
 
     /// Reads into buffer in buf from a specific position in the file.
@@ -284,21 +286,6 @@ impl DmaFile {
             b,
             std::cmp::min(read_size, size),
         ))
-    }
-
-    /// Poll-based version of [`Self::read_at_aligned`]
-    pub fn poll_read_at_aligned(&self, pos: u64, size: usize) -> PollDmaReadAligned<'_> {
-        let source = self.file.reactor.upgrade().unwrap().read_dma(
-            self.as_raw_fd(),
-            pos,
-            size,
-            self.pollable,
-            self.file.scheduler.borrow().as_ref(),
-        );
-        PollDmaReadAligned {
-            source: Some(source),
-            file: &self.file,
-        }
     }
 
     /// Submit many reads and process the results in a stream-like fashion via a
@@ -442,7 +429,7 @@ impl DmaFile {
     }
 }
 
-#[doc(hidden)]
+/// Future of [`DmaFile::read_at_aligned`].
 #[derive(Debug)]
 #[must_use = "future has no effect unless you .await or poll it"]
 pub struct PollDmaReadAligned<'a> {
