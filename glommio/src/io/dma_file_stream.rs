@@ -626,7 +626,7 @@ impl DmaStreamReader {
         Poll::Ready(Ok(x))
     }
 
-    fn get_buffer(
+    fn poll_get_buffer(
         &mut self,
         cx: &mut Context<'_>,
         len: u64,
