@@ -280,15 +280,10 @@ impl DmaStreamReaderState {
         len
     }
 
-    fn add_waker(&mut self, buffer_id: u64, waker: Waker) {
-        match self.wakermap.get_mut(&buffer_id) {
-            Some(_) => {
-                panic!("More than one waker in a linear access API. Something is wrong!");
-            }
-            None => {
-                self.wakermap.insert(buffer_id, waker);
-            }
-        }
+    // returns true if heir was no waker for this buffer_id
+    // otherwise, it replaces the existing one and returns false
+    fn add_waker(&mut self, buffer_id: u64, waker: Waker) -> bool {
+        self.wakermap.insert(buffer_id, waker).is_none()
     }
 
     fn cancel_all_in_flight(&mut self) -> Vec<task::JoinHandle<()>> {
@@ -603,8 +598,9 @@ impl DmaStreamReader {
 
         match state.get_cached_buffer(&buffer_id).cloned() {
             None => {
-                state.fill_buffer(self.state.clone(), self.file.clone());
-                state.add_waker(buffer_id, cx.waker().clone());
+                if state.add_waker(buffer_id, cx.waker().clone()) {
+                    state.fill_buffer(self.state.clone(), self.file.clone());
+                }
                 Poll::Pending
             }
             Some(buffer) => {
@@ -655,8 +651,9 @@ impl AsyncRead for DmaStreamReader {
                     Poll::Ready(Ok(bytes_copied))
                 }
                 None => {
-                    state.fill_buffer(self.state.clone(), self.file.clone());
-                    state.add_waker(start, cx.waker().clone());
+                    if state.add_waker(start, cx.waker().clone()) {
+                        state.fill_buffer(self.state.clone(), self.file.clone());
+                    }
                     Poll::Pending
                 }
             }
@@ -669,8 +666,9 @@ impl AsyncRead for DmaStreamReader {
                         }
                     }
                     None => {
-                        state.fill_buffer(self.state.clone(), self.file.clone());
-                        state.add_waker(id, cx.waker().clone());
+                        if state.add_waker(id, cx.waker().clone()) {
+                            state.fill_buffer(self.state.clone(), self.file.clone());
+                        }
                         return Poll::Pending;
                     }
                 }
@@ -1456,7 +1454,7 @@ mod test {
         io::dma_file::{align_up, test::make_test_directories},
         timer::Timer,
     };
-    use futures::{AsyncReadExt, AsyncWriteExt};
+    use futures::{task::noop_waker_ref, AsyncRead, AsyncReadExt, AsyncWriteExt};
     use std::{io::ErrorKind, path::Path, time::Duration};
 
     macro_rules! file_stream_read_test {
@@ -1856,6 +1854,20 @@ mod test {
 
         let mut buf = [0u8; 2000];
         expect_specific_error(reader.read_exact(&mut buf).await, None, "Bad file descriptor (os error 9)");
+        reader.close().await.unwrap();
+    });
+
+    file_stream_read_test!(poll_reader_repeatedly, path, _k, file, _file_size: 131072, {
+        let mut reader = DmaStreamReaderBuilder::new(file)
+            .with_read_ahead(0)
+            .build();
+
+        let mut buf = [0u8; 2000];
+        let mut cx = std::task::Context::from_waker(noop_waker_ref());
+
+        assert!(matches!(Pin::new(&mut reader).poll_read(&mut cx, &mut buf), Poll::Pending));
+        assert!(matches!(Pin::new(&mut reader).poll_read(&mut cx, &mut buf), Poll::Pending));
+
         reader.close().await.unwrap();
     });
 
