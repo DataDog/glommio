@@ -109,7 +109,12 @@ where
     ///
     /// It is assumed that initially only the `Task` reference and the
     /// `JoinHandle` exist.
-    pub(crate) fn allocate(future: F, schedule: S, executor_id: usize) -> NonNull<()> {
+    pub(crate) fn allocate(
+        future: F,
+        schedule: S,
+        executor_id: usize,
+        latency_matters: bool,
+    ) -> NonNull<()> {
         // Compute the layout of the task for allocation. Abort if the computation
         // fails.
         let task_layout = abort_on_panic(Self::task_layout);
@@ -127,6 +132,7 @@ where
             (raw.header as *mut Header).write(Header {
                 notifier: sys::get_sleep_notifier_for(executor_id).unwrap(),
                 state: SCHEDULED | HANDLE,
+                latency_matters,
                 references: AtomicI16::new(0),
                 awaiter: None,
                 vtable: &TaskVTable {
@@ -221,6 +227,9 @@ where
             dbg_context!(ptr, "foreign", {
                 let notifier = raw.notifier();
                 notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+                if (*raw.header).latency_matters {
+                    notifier.notify_if_needed();
+                }
             });
         } else {
             let state = (*raw.header).state;

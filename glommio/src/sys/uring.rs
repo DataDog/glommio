@@ -296,21 +296,22 @@ fn fill_sqe<F>(
                 sqe.prep_write(op.fd, buf, pos);
             }
             UringOpDescriptor::Read(pos, len) => {
-                let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
-                sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-
                 source_map.peek_source_mut(from_user_data(op.user_data), |mut x| {
-                    if let SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) =
-                        &mut x.source_type
-                    {
-                        // If you have a buffer here, that very likely means you are reusing the
-                        // source. The kernel knows about that buffer already, and will write to
-                        // it. So this can only be called if there is no buffer attached to it.
-                        assert!(slot.is_none());
-                        *slot = Some(IoBuffer::Dma(buf));
-                    } else {
-                        unreachable!("Expected Read source type");
-                    };
+                    match &mut x.source_type {
+                        SourceType::ForeignNotifier(result, _) => {
+                            sqe.prep_read(op.fd, result, pos);
+                        }
+                        SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
+                            let mut buf = buffer_allocation(len).expect("Buffer allocation failed");
+                            sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
+                            // If you have a buffer here, that very likely means you are reusing the
+                            // source. The kernel knows about that buffer already, and will write to
+                            // it. So this can only be called if there is no buffer attached to it.
+                            assert!(slot.is_none());
+                            *slot = Some(IoBuffer::Dma(buf));
+                        }
+                        _ => unreachable!("Expected Read source type"),
+                    }
                 });
             }
             UringOpDescriptor::Open(path, flags, mode) => {
@@ -502,7 +503,7 @@ fn process_one_event<F, R>(
 ) -> Option<bool>
 where
     F: FnOnce(Ref<'_, InnerSource>) -> Option<()>,
-    R: FnOnce(Ref<'_, InnerSource>, io::Result<usize>) -> io::Result<usize>,
+    R: FnOnce(RefMut<'_, InnerSource>, io::Result<usize>) -> io::Result<usize>,
 {
     if let Some(value) = cqe {
         // No user data is `POLL_REMOVE` or `CANCEL`, we won't process.
@@ -518,7 +519,7 @@ where
 
         let mut woke = false;
         if try_process(src.borrow()).is_none() {
-            let res = Some(post_process(src.borrow(), transmute_error(result)));
+            let res = Some(post_process(src.borrow_mut(), transmute_error(result)));
             let mut inner_source = src.borrow_mut();
             inner_source.wakers.result = res;
             woke = inner_source.wakers.wake_waiters();
@@ -862,7 +863,6 @@ struct SleepableRing {
     stats: RingIoStats,
     task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
     source_map: Rc<RefCell<SourceMap>>,
-    eventfd_buffer: Vec<u8>,
 }
 
 impl SleepableRing {
@@ -883,7 +883,6 @@ impl SleepableRing {
             stats: RingIoStats::new(),
             task_queue_stats: AHashMap::new(),
             source_map,
-            eventfd_buffer: Vec::with_capacity(8),
         })
     }
 
@@ -926,8 +925,6 @@ impl SleepableRing {
     }
 
     fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
-        assert!(eventfd_src.result().is_none());
-
         if let Some(mut sqe) = self.ring.prepare_sqe() {
             self.waiting_submission += 1;
             // Now must wait on the `eventfd` in case someone wants to wake us up.
@@ -944,10 +941,10 @@ impl SleepableRing {
             };
 
             let buffer_ptr = {
-                let mut src_type = eventfd_src.source_type_mut();
-                *src_type = SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None);
-                assert!(self.eventfd_buffer.capacity() >= 8);
-                self.eventfd_buffer.as_mut_ptr()
+                match &mut *eventfd_src.source_type_mut() {
+                    SourceType::ForeignNotifier(result, _) => result as *mut _ as _,
+                    _ => unreachable!("Expected ForeignNotifier source type"),
+                }
             };
 
             fill_sqe(
@@ -961,13 +958,20 @@ impl SleepableRing {
                 },
                 &mut *self.source_map.borrow_mut(),
             );
-            true
+
+            match &mut *eventfd_src.source_type_mut() {
+                SourceType::ForeignNotifier(_, installed) => {
+                    *installed = self.submit_sqes().is_ok();
+                    *installed
+                }
+                _ => unreachable!("Expected ForeignNotifier source type"),
+            }
         } else {
             false
         }
     }
 
-    fn sleep(&mut self, link: &mut Source, eventfd_src: &Source) -> io::Result<usize> {
+    fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
         if let Some(mut sqe) = self.ring.prepare_sqe() {
             self.waiting_submission += 1;
 
@@ -987,32 +991,12 @@ impl SleepableRing {
                 DmaBuffer::new,
                 &mut *self.source_map.borrow_mut(),
             );
+            self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
         } else {
             // Can't link rings because we ran out of `CQE`s. Just can't sleep.
             // Submit what we have, once we're out of here we'll consume them
             // and at some point will be able to sleep again.
-            return self.ring.submit_sqes().map(|x| x as usize);
-        }
-
-        let res = eventfd_src.take_result();
-        match res {
-            None => {
-                // We already have the `eventfd` registered and nobody woke us up so far.
-                // Just proceed to sleep
-                self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
-            }
-            Some(res) => {
-                if self.install_eventfd(eventfd_src) {
-                    // Do not expect any failures reading from `eventfd`. This will panic if we
-                    // failed.
-                    res.unwrap();
-                    // Now must wait on the `eventfd` in case someone wants to wake us up.
-                    // If we can't then we can't sleep and will just bail immediately
-                    self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
-                } else {
-                    self.ring.submit_sqes().map(|x| x as usize)
-                }
-            }
+            self.ring.submit_sqes().map(|x| x as usize)
         }
     }
 }
@@ -1058,8 +1042,11 @@ impl UringCommon for SleepableRing {
                 SourceType::LinkRings => Some(()),
                 _ => None,
             },
-            |src, res| {
+            |mut src, res| {
                 record_stats(self, &src, &res);
+                if let SourceType::ForeignNotifier(_, installed) = &mut src.source_type {
+                    *installed = false;
+                }
                 res
             },
             source_map,
@@ -1197,7 +1184,7 @@ impl Reactor {
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
         let registry = vec![allocator.as_bytes()];
 
-        let mut main_ring = SleepableRing::new(
+        let main_ring = SleepableRing::new(
             RING_SUBMISSION_DEPTH,
             "main",
             allocator.clone(),
@@ -1225,7 +1212,7 @@ impl Reactor {
             },
         }
 
-        let latency_ring = SleepableRing::new(
+        let mut latency_ring = SleepableRing::new(
             RING_SUBMISSION_DEPTH,
             "latency",
             allocator.clone(),
@@ -1236,11 +1223,14 @@ impl Reactor {
         let eventfd_src = Source::new(
             IoRequirements::default(),
             notifier.eventfd_fd(),
-            SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), None),
+            SourceType::ForeignNotifier(0, false),
             None,
             None,
         );
-        assert!(main_ring.install_eventfd(&eventfd_src));
+
+        if !eventfd_src.is_installed().unwrap() {
+            latency_ring.install_eventfd(&eventfd_src);
+        }
 
         Ok(Reactor {
             main_ring: RefCell::new(main_ring),
@@ -1259,8 +1249,16 @@ impl Reactor {
         self.notifier.id()
     }
 
-    pub(crate) fn foreign_notifiers(&self) -> Option<core::task::Waker> {
-        self.notifier.get_foreign_notifier()
+    pub(crate) fn install_eventfd(&self) {
+        if !self.eventfd_src.is_installed().unwrap() {
+            self.latency_ring
+                .borrow_mut()
+                .install_eventfd(&self.eventfd_src);
+        }
+    }
+
+    pub(crate) fn process_foreign_wakes(&self) -> usize {
+        self.notifier.process_foreign_wakes()
     }
 
     pub(crate) fn alloc_dma_buffer(&self, size: usize) -> DmaBuffer {
@@ -1467,11 +1465,7 @@ impl Reactor {
     ///
     /// We may not be able to register an `SQE` at this point, so we return an
     /// Error and will just not sleep.
-    fn link_rings_and_sleep(
-        &self,
-        ring: &mut SleepableRing,
-        eventfd_src: &Source,
-    ) -> io::Result<()> {
+    fn link_rings_and_sleep(&self, ring: &mut SleepableRing) -> io::Result<()> {
         let mut link_rings = Source::new(
             IoRequirements::default(),
             self.link_fd,
@@ -1479,8 +1473,7 @@ impl Reactor {
             None,
             None,
         );
-        ring.sleep(&mut link_rings, eventfd_src)
-            .or_else(Self::busy_ok)?;
+        ring.sleep(&mut link_rings).or_else(Self::busy_ok)?;
         Ok(())
     }
 
@@ -1604,14 +1597,16 @@ impl Reactor {
             membarrier::heavy();
             let events = process_remote_channels() + self.flush_syscall_thread();
             if events == 0 {
-                self.link_rings_and_sleep(&mut main_ring, &self.eventfd_src)
-                    .expect("some error");
+                if self.eventfd_src.is_installed().unwrap() {
+                    self.link_rings_and_sleep(&mut main_ring)
+                        .expect("some error");
+                    // May have new cancellations related to the link ring fd.
+                    flush_cancellations!(into &mut 0; main_ring);
+                    flush_rings!(main_ring)?;
+                    consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
+                }
                 // Woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
-                // May have new cancellations related to the link ring fd.
-                flush_cancellations!(into &mut 0; main_ring);
-                flush_rings!(main_ring)?;
-                consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
             }
         }
 

@@ -13,11 +13,7 @@ use std::{
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-        RwLock,
-    },
+    sync::{atomic::Ordering, Arc, RwLock},
     task::Waker,
     time::Duration,
 };
@@ -198,7 +194,7 @@ pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
 use smallvec::SmallVec;
-use std::ops::Deref;
+use std::{ops::Deref, sync::atomic::AtomicBool};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -275,7 +271,7 @@ impl fmt::Debug for OsError {
 pub(crate) struct SleepNotifier {
     id: usize,
     eventfd: std::fs::File,
-    memory: AtomicUsize,
+    should_notify: AtomicBool,
     foreign_wakes: crossbeam::channel::Receiver<Waker>,
     waker_sender: crossbeam::channel::Sender<Waker>,
 }
@@ -308,7 +304,7 @@ impl SleepNotifier {
         Ok(Arc::new(Self {
             eventfd,
             id,
-            memory: AtomicUsize::new(0),
+            should_notify: AtomicBool::new(false),
             waker_sender,
             foreign_wakes,
         }))
@@ -322,10 +318,15 @@ impl SleepNotifier {
         self.id
     }
 
-    pub(crate) fn must_notify(&self) -> Option<RawFd> {
-        match self.memory.load(Ordering::Acquire) {
-            0 => None,
-            x => Some(x as _),
+    pub(crate) fn notify_if_sleeping(&self) {
+        if self.should_notify.load(Ordering::Relaxed) {
+            self.notify_if_needed();
+        }
+    }
+
+    pub(crate) fn notify_if_needed(&self) {
+        if self.should_notify.swap(false, Ordering::Relaxed) {
+            write_eventfd(self.eventfd_fd());
         }
     }
 
@@ -340,31 +341,28 @@ impl SleepNotifier {
             );
         }
 
-        if let Some(fd) = self.must_notify() {
-            write_eventfd(fd);
-        }
+        self.notify_if_sleeping();
     }
 
-    pub(crate) fn get_foreign_notifier(&self) -> Option<Waker> {
-        match self.foreign_wakes.try_recv() {
-            Ok(x) => Some(x),
-            // Possible errors:
-            //  - channel disconnected, so we won't ever have another notification
-            //  - no messages, so the iterator must stop.
-            Err(_) => None,
+    pub(crate) fn process_foreign_wakes(&self) -> usize {
+        self.should_notify.store(true, Ordering::Relaxed);
+        let mut processed = 0;
+        while let Ok(waker) = self.foreign_wakes.try_recv() {
+            processed += 1;
+            wake!(waker);
         }
+        processed
     }
 
     pub(super) fn prepare_to_sleep(&self) {
         // This will allow this `eventfd` to be notified. This should not happen
         // for the placeholder (disconnected) case.
         assert_ne!(self.id, usize::MAX);
-        self.memory
-            .store(self.eventfd.as_raw_fd() as _, Ordering::SeqCst);
+        self.should_notify.store(true, Ordering::Relaxed);
     }
 
     pub(super) fn wake_up(&self) {
-        self.memory.store(0, Ordering::Release);
+        self.should_notify.store(false, Ordering::Relaxed);
     }
 }
 

@@ -28,6 +28,7 @@ pub(crate) fn spawn_local<F, R, S>(
     executor_id: usize,
     future: F,
     schedule: S,
+    latency_matters: bool,
 ) -> (Task, JoinHandle<R>)
 where
     F: Future<Output = R>,
@@ -36,9 +37,9 @@ where
     // Allocate large futures on the heap.
     let raw_task = if mem::size_of::<F>() >= 2048 {
         let future = alloc::boxed::Box::pin(future);
-        RawTask::<_, R, S>::allocate(future, schedule, executor_id)
+        RawTask::<_, R, S>::allocate(future, schedule, executor_id, latency_matters)
     } else {
-        RawTask::<_, R, S>::allocate(future, schedule, executor_id)
+        RawTask::<_, R, S>::allocate(future, schedule, executor_id, latency_matters)
     };
 
     let task = Task { raw_task };
