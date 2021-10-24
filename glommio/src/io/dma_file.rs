@@ -246,7 +246,7 @@ impl DmaFile {
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
     ///
-    /// Equal to
+    /// Equals to
     /// ```ignore
     /// pub async fn read_at_aligned(&self, pos: u64, size: usize) -> Result<ReadResult>;
     /// ```
@@ -273,7 +273,7 @@ impl DmaFile {
     /// If you can guarantee proper alignment, prefer [`Self::read_at_aligned`]
     /// instead
     ///
-    /// /// Equal to
+    /// Equals to
     /// ```ignore
     /// pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult>;
     /// ```
@@ -464,6 +464,7 @@ impl Future for PollDmaReadAtAligned<'_> {
     }
 }
 
+/// Future of [`DmaFile::read_at`].
 #[derive(Debug)]
 #[must_use = "future has no effect unless you .await or poll it"]
 pub struct PollDmaReadAt<'a> {

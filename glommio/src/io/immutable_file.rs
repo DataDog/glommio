@@ -10,8 +10,8 @@ use crate::io::{
     DmaStreamWriter,
     DmaStreamWriterBuilder,
     IoVec,
+    PollDmaReadAt,
     ReadManyResult,
-    ReadResult,
     ScheduledSource,
 };
 use futures_lite::{future::poll_fn, io::AsyncWrite, Stream};
@@ -372,8 +372,13 @@ impl ImmutableFile {
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
     /// this API will internally convert the positions and sizes to match,
     /// at a cost.
-    pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
-        self.stream_builder.file.read_at(pos, size).await
+    ///
+    /// Equals to
+    /// ```ignore
+    /// pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult>;
+    /// ```
+    pub fn read_at(&self, pos: u64, size: usize) -> PollDmaReadAt<'_> {
+        self.stream_builder.file.read_at(pos, size)
     }
 
     /// Submit many reads and process the results in a stream-like fashion via a

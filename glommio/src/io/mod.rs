@@ -163,7 +163,7 @@ pub use self::{
     },
     bulk_io::{IoVec, ReadManyResult},
     directory::Directory,
-    dma_file::{CloseResult, DmaFile},
+    dma_file::{CloseResult, DmaFile, PollDmaReadAt, PollDmaReadAtAligned},
     dma_file_stream::{
         DmaStreamReader,
         DmaStreamReaderBuilder,
