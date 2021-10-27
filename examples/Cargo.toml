@@ -59,3 +59,7 @@ path = "hyper.rs"
 [[example]]
 name = "gate"
 path = "gate.rs"
+
+[[example]]
+name = "proxy"
+path = "proxy.rs"

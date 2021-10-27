@@ -4,15 +4,13 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::{
-    reactor::Reactor,
-    sys::{self, DmaBuffer, Source, SourceType},
-    ByteSliceMutExt,
+    reactor::{Reactor, RecvBuffer},
+    sys::{self, Source},
 };
 use futures_lite::ready;
 use nix::sys::socket::MsgFlags;
 use std::{
     cell::Cell,
-    convert::TryFrom,
     io,
     net::Shutdown,
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
@@ -23,57 +21,128 @@ use std::{
 
 type Result<T> = crate::Result<T, ()>;
 
-struct RecvBuffer {
-    buf: DmaBuffer,
+pub(crate) trait RxBuf: Default {
+    type ReadResult;
+
+    fn len(&self) -> usize;
+    fn read(&mut self, buf: &mut [u8]) -> usize;
+    fn resize(&mut self);
+    fn is_empty(&mut self) -> bool;
+    fn as_bytes(&self) -> &[u8];
+    fn recv_buffer(&mut self, buf: Option<&mut [u8]>) -> RecvBuffer;
+    fn consume(&mut self, amt: usize);
+    fn buffer_size(&self) -> usize;
+    fn set_buffer_size(&mut self, buffer_size: usize);
+    fn handle_result(&mut self, result: usize);
+    fn prefer_external_buffer(&self, buf: &mut [u8]) -> bool;
 }
 
-impl TryFrom<Source> for RecvBuffer {
-    type Error = io::Error;
+#[derive(Debug)]
+pub(crate) struct Preallocated {
+    buf: Vec<u8>,
+    head: usize,
+    tail: usize,
+    cap: usize,
+}
 
-    fn try_from(source: Source) -> io::Result<RecvBuffer> {
-        let res = source.result();
-        match source.extract_source_type() {
-            SourceType::SockRecv(mut buf) => {
-                let sz = res.unwrap()?;
-                let mut buf = buf.take().unwrap();
-                buf.trim_to_size(sz);
-                Ok(RecvBuffer { buf })
-            }
-            _ => unreachable!(),
+impl Preallocated {
+    fn new(size: usize) -> Self {
+        Self {
+            buf: vec![0; size],
+            tail: 0,
+            head: 0,
+            cap: size,
         }
+    }
+}
+
+impl Default for Preallocated {
+    fn default() -> Self {
+        Self::new(DEFAULT_BUFFER_SIZE)
+    }
+}
+
+impl RxBuf for Preallocated {
+    type ReadResult = usize;
+
+    fn len(&self) -> usize {
+        self.tail - self.head
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> usize {
+        let sz = std::cmp::min(self.len(), buf.len());
+        if sz > 0 {
+            buf[..sz].copy_from_slice(&self.buf[self.head..self.head + sz]);
+            self.head += sz;
+        }
+        sz
+    }
+
+    fn resize(&mut self) {
+        if self.cap > self.buf.len() {
+            self.buf.reserve(self.cap - self.buf.len());
+        } else {
+            assert!(self.tail == 0);
+            unsafe { self.buf.set_len(self.cap) };
+            self.buf.shrink_to_fit();
+        }
+    }
+
+    fn is_empty(&mut self) -> bool {
+        if self.tail > self.head {
+            return false;
+        } else if self.tail > 0 {
+            self.tail = 0;
+            self.head = 0;
+        }
+        true
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.buf[self.head..self.tail]
+    }
+
+    fn recv_buffer(&mut self, buf: Option<&mut [u8]>) -> RecvBuffer {
+        RecvBuffer::allocated(buf.unwrap_or_else(|| self.buf.as_mut()))
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.head += std::cmp::min(self.len(), amt);
+    }
+
+    fn buffer_size(&self) -> usize {
+        self.cap
+    }
+
+    fn set_buffer_size(&mut self, buffer_size: usize) {
+        self.cap = buffer_size;
+    }
+
+    fn handle_result(&mut self, result: usize) {
+        self.tail = result;
+    }
+
+    fn prefer_external_buffer(&self, buf: &mut [u8]) -> bool {
+        buf.len() >= self.cap
     }
 }
 
 const DEFAULT_BUFFER_SIZE: usize = 8192;
 
 #[derive(Debug)]
-pub(crate) struct GlommioStream<S: AsRawFd + FromRawFd + From<socket2::Socket>> {
-    pub(crate) reactor: Weak<Reactor>,
-    pub(crate) stream: S,
-    pub(crate) source_tx: Option<Source>,
-    pub(crate) source_rx: Option<Source>,
-
-    pub(crate) write_timeout: Cell<Option<Duration>>,
-    pub(crate) read_timeout: Cell<Option<Duration>>,
-
-    // you only live once, you've got no time to block! if this is set to true try a direct
-    // non-blocking syscall otherwise schedule for sending later over the ring
-    //
-    // If you are familiar with high throughput networking code you might have seen similar
-    // techniques with names such as "optimistic" "speculative" or things like that. But frankly
-    // "yolo" is such a better name. Calling this "yolo" is likely glommio's biggest
-    // contribution to humankind.
-    pub(crate) tx_yolo: bool,
-    pub(crate) rx_yolo: bool,
-
-    pub(crate) rx_buf: Option<DmaBuffer>,
-    pub(crate) tx_buf: Option<DmaBuffer>,
-
-    pub(crate) rx_buf_size: usize,
+pub(crate) struct GlommioStream<S, B = Preallocated> {
+    reactor: Weak<Reactor>,
+    stream: S,
+    source_tx: Option<Source>,
+    source_rx: Option<Source>,
+    write_timeout: Cell<Option<Duration>>,
+    read_timeout: Cell<Option<Duration>>,
+    rx_buf: B,
+    rx_buf_size: usize,
 }
 
-impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> From<socket2::Socket> for GlommioStream<S> {
-    fn from(socket: socket2::Socket) -> GlommioStream<S> {
+impl<S: From<socket2::Socket>, B: RxBuf> From<socket2::Socket> for GlommioStream<S, B> {
+    fn from(socket: socket2::Socket) -> GlommioStream<S, B> {
         let stream = socket.into();
         GlommioStream {
             reactor: Rc::downgrade(&crate::executor().reactor()),
@@ -82,29 +151,26 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> From<socket2::Socket> for G
             source_rx: None,
             write_timeout: Cell::new(None),
             read_timeout: Cell::new(None),
-            tx_yolo: true,
-            rx_yolo: true,
-            rx_buf: None,
-            tx_buf: None,
+            rx_buf: B::default(),
             rx_buf_size: DEFAULT_BUFFER_SIZE,
         }
     }
 }
 
-impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> AsRawFd for GlommioStream<S> {
+impl<S: AsRawFd, B> AsRawFd for GlommioStream<S, B> {
     fn as_raw_fd(&self) -> RawFd {
         self.stream.as_raw_fd()
     }
 }
 
-impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> FromRawFd for GlommioStream<S> {
+impl<S: FromRawFd + From<socket2::Socket>, B: RxBuf> FromRawFd for GlommioStream<S, B> {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         let socket = socket2::Socket::from_raw_fd(fd);
         GlommioStream::from(socket)
     }
 }
 
-impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
+impl<S: AsRawFd + Unpin, B: RxBuf> GlommioStream<S, B> {
     /// Receives data on the socket from the remote address to which it is
     /// connected, without removing that data from the queue.
     ///
@@ -113,33 +179,99 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
     /// `MSG_PEEK` as a flag to the underlying `recv` system call.
     pub(crate) async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         let source = self.reactor.upgrade().unwrap().recv(
-            self.stream.as_raw_fd(),
-            buf.len(),
+            self.as_raw_fd(),
+            RecvBuffer::allocated(buf),
             MsgFlags::MSG_PEEK,
         );
-
-        let sz = source.collect_rw().await?;
-        match source.extract_source_type() {
-            SourceType::SockRecv(mut src) => {
-                buf[0..sz].copy_from_slice(&src.take().unwrap().as_bytes()[0..sz]);
-            }
-            _ => unreachable!(),
-        }
-        Ok(sz)
+        source.collect_rw().await
     }
 
-    fn consume_receive_buffer(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
-        if let Some(src) = self.rx_buf.as_mut() {
-            let sz = std::cmp::min(src.len(), buf.len());
-            buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
-            src.trim_front(sz);
-            if src.is_empty() {
-                self.rx_buf.take();
-            }
-            Some(Ok(sz))
-        } else {
-            None
+    pub(crate) fn poll_replenish_buffer(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.source_rx.is_none() {
+            self.rx_buf.resize();
         }
+        let result = poll_err!(ready!(self.poll_read(cx, None)));
+        self.rx_buf.handle_result(result);
+        Poll::Ready(Ok(()))
+    }
+
+    pub(crate) fn poll_fill_buf(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        if self.rx_buf.is_empty() {
+            poll_err!(ready!(self.poll_replenish_buffer(cx)));
+        }
+        Poll::Ready(Ok(self.rx_buf.as_bytes()))
+    }
+
+    pub(crate) fn poll_buffered_read(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.rx_buf.is_empty() {
+            // If we don't have any buffered data and we're doing a massive read
+            // (larger than our internal buffer), bypass our internal buffer
+            // entirely.
+            if self.rx_buf.prefer_external_buffer(buf) {
+                return self.poll_read(cx, Some(buf));
+            }
+            poll_err!(ready!(self.poll_replenish_buffer(cx)));
+        }
+        Poll::Ready(Ok(self.rx_buf.read(buf)))
+    }
+
+    fn poll_read(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: Option<&mut [u8]>,
+    ) -> Poll<io::Result<usize>> {
+        if self.source_rx.is_none() {
+            let buf = self.rx_buf.recv_buffer(buf);
+            if let Some(buf) = buf.as_mut() {
+                poll_some!(super::yolo_recv(self.stream.as_raw_fd(), buf));
+            }
+            let reactor = self.reactor.upgrade().unwrap();
+            self.source_rx =
+                Some(reactor.rushed_recv(self.stream.as_raw_fd(), buf, self.read_timeout.get())?);
+        }
+        Self::poll_result(cx, &mut self.source_rx)
+    }
+
+    pub(crate) fn poll_write(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.source_tx.is_none() {
+            poll_some!(super::yolo_send(self.stream.as_raw_fd(), buf));
+            let reactor = self.reactor.upgrade().unwrap();
+            self.source_tx = Some(reactor.rushed_send(
+                self.stream.as_raw_fd(),
+                buf.into(),
+                self.read_timeout.get(),
+            )?);
+        }
+        Self::poll_result(cx, &mut self.source_tx)
+    }
+
+    pub(crate) fn poll_close(&mut self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.source_tx.take();
+        Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), Shutdown::Write))
+    }
+
+    fn poll_result(cx: &mut Context<'_>, source: &mut Option<Source>) -> Poll<io::Result<usize>> {
+        let src = source.take().unwrap();
+        match src.result() {
+            None => {
+                src.add_waiter_single(cx.waker().clone());
+                *source = Some(src);
+                Poll::Pending
+            }
+            Some(result) => Poll::Ready(result),
+        }
+    }
+
+    pub(crate) fn poll_flush(&self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     /// io_uring has support for shutdown now, but it is not in any released
@@ -151,11 +283,11 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         _cx: &mut Context<'_>,
         how: Shutdown,
     ) -> Poll<io::Result<()>> {
-        Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), how))
+        Poll::Ready(sys::shutdown(self.as_raw_fd(), how))
     }
 
-    pub(crate) fn allocate_buffer(&self, size: usize) -> DmaBuffer {
-        self.reactor.upgrade().unwrap().alloc_dma_buffer(size)
+    pub(crate) fn consume(&mut self, amt: usize) {
+        self.rx_buf.consume(amt);
     }
 
     pub(crate) fn set_write_timeout(&self, dur: Option<Duration>) -> Result<()> {
@@ -186,121 +318,15 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         self.read_timeout.get()
     }
 
-    pub(crate) fn yolo_rx(&mut self, buf: &mut [u8]) -> Option<io::Result<usize>> {
-        if self.rx_yolo {
-            super::yolo_recv(self.stream.as_raw_fd(), buf)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.rx_yolo = false;
-            None
-        })
+    pub(crate) fn buffer_size(&self) -> usize {
+        self.rx_buf.buffer_size()
     }
 
-    pub(crate) fn yolo_tx(&mut self, buf: &[u8]) -> Option<io::Result<usize>> {
-        if self.tx_yolo {
-            super::yolo_send(self.stream.as_raw_fd(), buf)
-        } else {
-            None
-        }
-        .or_else(|| {
-            self.tx_yolo = false;
-            None
-        })
+    pub(crate) fn set_buffer_size(&mut self, buffer_size: usize) {
+        self.rx_buf.set_buffer_size(buffer_size);
     }
 
-    pub(crate) fn poll_replenish_buffer(
-        &mut self,
-        cx: &mut Context<'_>,
-        size: usize,
-    ) -> Poll<io::Result<usize>> {
-        let source = match self.source_rx.take() {
-            Some(source) => source,
-            None => poll_err!(self.reactor.upgrade().unwrap().rushed_recv(
-                self.stream.as_raw_fd(),
-                size,
-                self.read_timeout.get()
-            )),
-        };
-
-        if source.result().is_none() {
-            source.add_waiter_single(cx.waker().clone());
-            self.source_rx = Some(source);
-            Poll::Pending
-        } else {
-            let buf = poll_err!(RecvBuffer::try_from(source));
-            self.rx_yolo = true;
-            self.rx_buf = Some(buf.buf);
-            Poll::Ready(Ok(self.rx_buf.as_ref().unwrap().len()))
-        }
-    }
-
-    pub(crate) fn write_dma(
-        &mut self,
-        cx: &mut Context<'_>,
-        buf: DmaBuffer,
-    ) -> Poll<io::Result<usize>> {
-        let source = match self.source_tx.take() {
-            Some(source) => source,
-            None => poll_err!(self.reactor.upgrade().unwrap().rushed_send(
-                self.stream.as_raw_fd(),
-                buf,
-                self.write_timeout.get()
-            )),
-        };
-
-        match source.result() {
-            None => {
-                source.add_waiter_single(cx.waker().clone());
-                self.source_tx = Some(source);
-                Poll::Pending
-            }
-            Some(res) => {
-                self.tx_yolo = true;
-                Poll::Ready(res)
-            }
-        }
-    }
-
-    pub(crate) fn poll_read(
-        &mut self,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        poll_some!(self.consume_receive_buffer(buf));
-        poll_some!(self.yolo_rx(buf));
-        poll_err!(ready!(self.poll_replenish_buffer(cx, buf.len())));
-        poll_some!(self.consume_receive_buffer(buf));
-        unreachable!();
-    }
-
-    pub(crate) fn consume(&mut self, amt: usize) {
-        let buf_ref = self.rx_buf.as_mut().unwrap();
-        let amt = std::cmp::min(amt, buf_ref.len());
-        buf_ref.trim_front(amt);
-        if buf_ref.is_empty() {
-            self.rx_buf.take();
-        }
-    }
-
-    pub(crate) fn poll_write(
-        &mut self,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        poll_some!(self.yolo_tx(buf));
-        let mut dma = self.allocate_buffer(buf.len());
-        assert_eq!(dma.write_at(0, buf), buf.len());
-        self.write_dma(cx, dma)
-    }
-
-    pub(crate) fn poll_flush(&self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-
-    pub(crate) fn poll_close(&mut self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.source_tx.take();
-        Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), Shutdown::Write))
+    pub(crate) fn stream(&self) -> &S {
+        &self.stream
     }
 }

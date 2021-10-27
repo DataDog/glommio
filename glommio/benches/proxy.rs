@@ -45,8 +45,7 @@ fn start_server(runtime: &Runtime, port: u16) {
     let (ready_send, ready_recv) = oneshot::channel();
 
     runtime.spawn(async move {
-        use tokio::io::copy;
-        use tokio::net::TcpListener;
+        use tokio::{io::copy, net::TcpListener};
 
         let listener = TcpListener::bind(("0.0.0.0", port)).await.unwrap();
         ready_send.send(()).unwrap();
@@ -94,8 +93,10 @@ fn start_tokio_proxy(runtime: &Runtime, port: u16, server_port: u16) {
 
     runtime.spawn_blocking(move || {
         block_on(async move {
-            use tokio::io::copy;
-            use tokio::net::{TcpListener, TcpStream};
+            use tokio::{
+                io::copy,
+                net::{TcpListener, TcpStream},
+            };
 
             Builder::new_current_thread()
                 .enable_io()

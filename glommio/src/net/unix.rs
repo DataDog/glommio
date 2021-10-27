@@ -8,7 +8,6 @@ use crate::reactor::Reactor;
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
-    ready,
     stream::{self, Stream},
 };
 use nix::sys::socket::{SockAddr, UnixAddr};
@@ -338,12 +337,12 @@ impl UnixStream {
 
     /// Sets the buffer size used on the receive path
     pub fn set_buffer_size(&mut self, buffer_size: usize) {
-        self.stream.rx_buf_size = buffer_size;
+        self.stream.set_buffer_size(buffer_size);
     }
 
     /// gets the buffer size used
     pub fn buffer_size(&mut self) -> usize {
-        self.stream.rx_buf_size
+        self.stream.buffer_size()
     }
 
     /// Receives data on the socket from the remote address to which it is
@@ -370,7 +369,7 @@ impl UnixStream {
     /// })
     /// ```
     pub fn peer_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.peer_addr().map_err(Into::into)
+        self.stream.stream().peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this Unix connection.
@@ -387,21 +386,17 @@ impl UnixStream {
     /// })
     /// ```
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.local_addr().map_err(Into::into)
+        self.stream.stream().local_addr().map_err(Into::into)
     }
 }
 
 impl AsyncBufRead for UnixStream {
     fn poll_fill_buf<'a>(
-        mut self: Pin<&'a mut Self>,
+        self: Pin<&'a mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
-        let buf_size = self.stream.rx_buf_size;
-        if self.stream.rx_buf.as_ref().is_none() {
-            poll_err!(ready!(self.stream.poll_replenish_buffer(cx, buf_size)));
-        }
         let this = self.project();
-        Poll::Ready(Ok(this.stream.rx_buf.as_ref().unwrap().as_bytes()))
+        this.stream.poll_fill_buf(cx)
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
@@ -415,7 +410,7 @@ impl AsyncRead for UnixStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_read(cx, buf)
+        Pin::new(&mut self.stream).poll_buffered_read(cx, buf)
     }
 }
 

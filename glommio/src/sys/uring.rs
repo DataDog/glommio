@@ -30,6 +30,7 @@ use crate::{
     free_list::{FreeList, Idx},
     iou,
     iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, SubmissionFlags, TimeoutFlags},
+    reactor::{RecvBuffer, SendBuffer},
     sys::{
         self,
         blocking::{BlockingThread, BlockingThreadOp},
@@ -82,7 +83,7 @@ enum UringOpDescriptor {
     TimeoutRemove(u64),
     SockSend(*const u8, usize, i32),
     SockSendMsg(*mut libc::msghdr, i32),
-    SockRecv(usize, i32),
+    SockRecv(*mut u8, usize, i32),
     SockRecvMsg(usize, i32),
     Nop,
 }
@@ -404,22 +405,8 @@ fn fill_sqe<F>(
                 );
             }
 
-            UringOpDescriptor::SockRecv(len, flags) => {
-                let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
-                sqe.prep_recv(
-                    op.fd,
-                    buf.as_bytes_mut(),
-                    MsgFlags::from_bits_unchecked(flags),
-                );
-
-                source_map.peek_source_mut(from_user_data(op.user_data), |mut src| {
-                    match &mut src.source_type {
-                        SourceType::SockRecv(slot) => {
-                            *slot = Some(buf);
-                        }
-                        _ => unreachable!(),
-                    };
-                });
+            UringOpDescriptor::SockRecv(buf, len, flags) => {
+                sqe.prep_recv(op.fd, buf, len, MsgFlags::from_bits_unchecked(flags));
             }
 
             UringOpDescriptor::SockRecvMsg(len, flags) => {
@@ -1304,8 +1291,8 @@ impl Reactor {
 
     pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
         let op = match &*source.source_type() {
-            SourceType::SockSend(buf) => {
-                UringOpDescriptor::SockSend(buf.as_ptr() as *const u8, buf.len(), flags.bits())
+            SourceType::SockSend(SendBuffer(ptr, len)) => {
+                UringOpDescriptor::SockSend(*ptr, *len, flags.bits())
             }
             _ => unreachable!(),
         };
@@ -1330,8 +1317,12 @@ impl Reactor {
         self.queue_standard_request(source, op);
     }
 
-    pub(crate) fn recv(&self, source: &Source, len: usize, flags: MsgFlags) {
-        let op = UringOpDescriptor::SockRecv(len, flags.bits());
+    pub(crate) fn recv(&self, source: &Source, buf: RecvBuffer, flags: MsgFlags) {
+        let (buf, len) = match buf {
+            RecvBuffer::Allocated(ptr, len) => (ptr, len),
+            // RecvBuffer::Select => unimplemented!(),
+        };
+        let op = UringOpDescriptor::SockRecv(buf, len, flags.bits());
         self.queue_standard_request(source, op);
     }
 

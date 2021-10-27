@@ -5,6 +5,7 @@
 //
 use crate::{
     iou::sqe::{SockAddr, SockAddrStorage},
+    reactor::{RecvBuffer, SendBuffer},
     sys::{
         DmaBuffer,
         IoBuffer,
@@ -40,8 +41,8 @@ use std::{
 pub(crate) enum SourceType {
     Write(PollableStatus, IoBuffer),
     Read(PollableStatus, Option<IoBuffer>),
-    SockSend(DmaBuffer),
-    SockRecv(Option<DmaBuffer>),
+    SockSend(SendBuffer),
+    SockRecv(RecvBuffer),
     SockRecvMsg(
         Option<DmaBuffer>,
         libc::iovec,

@@ -8,7 +8,6 @@ use crate::{net::yolo_accept, reactor::Reactor, GlommioError};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
-    ready,
     stream::{self, Stream},
 };
 use nix::sys::socket::{InetAddr, SockAddr};
@@ -547,7 +546,7 @@ impl TcpStream {
     /// });
     /// ```
     pub fn set_nodelay(&self, value: bool) -> Result<()> {
-        self.stream.stream.set_nodelay(value).map_err(Into::into)
+        self.stream.stream().set_nodelay(value).map_err(Into::into)
     }
 
     /// Gets the `TCP_NODELAY` option on this socket.
@@ -567,17 +566,12 @@ impl TcpStream {
     /// });
     /// ```
     pub fn nodelay(&self) -> Result<bool> {
-        self.stream.stream.nodelay().map_err(Into::into)
-    }
-
-    /// Sets the buffer size used on the receive path
-    pub fn set_buffer_size(&mut self, buffer_size: usize) {
-        self.stream.rx_buf_size = buffer_size;
+        self.stream.stream().nodelay().map_err(Into::into)
     }
 
     /// gets the buffer size used
     pub fn buffer_size(&mut self) -> usize {
-        self.stream.rx_buf_size
+        self.stream.buffer_size()
     }
 
     /// Gets the value of the `IP_TTL` option for this socket.
@@ -597,7 +591,7 @@ impl TcpStream {
     /// });
     /// ```
     pub fn ttl(&self) -> Result<u32> {
-        Ok(self.stream.stream.ttl()?)
+        Ok(self.stream.stream().ttl()?)
     }
 
     /// Sets the value of the `IP_TTL` option for this socket.
@@ -617,7 +611,7 @@ impl TcpStream {
     /// });
     /// ```
     pub fn set_ttl(&self, ttl: u32) -> Result<()> {
-        Ok(self.stream.stream.set_ttl(ttl)?)
+        Ok(self.stream.stream().set_ttl(ttl)?)
     }
 
     /// Receives data on the socket from the remote address to which it is
@@ -644,7 +638,7 @@ impl TcpStream {
     /// })
     /// ```
     pub fn peer_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.peer_addr().map_err(Into::into)
+        self.stream.stream().peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this TCP connection.
@@ -661,25 +655,21 @@ impl TcpStream {
     /// })
     /// ```
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.local_addr().map_err(Into::into)
+        self.stream.stream().local_addr().map_err(Into::into)
     }
 }
 
 impl AsyncBufRead for TcpStream {
     fn poll_fill_buf<'a>(
-        mut self: Pin<&'a mut Self>,
+        self: Pin<&'a mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
-        let buf_size = self.stream.rx_buf_size;
-        if self.stream.rx_buf.as_ref().is_none() {
-            poll_err!(ready!(self.stream.poll_replenish_buffer(cx, buf_size)));
-        }
         let this = self.project();
-        Poll::Ready(Ok(this.stream.rx_buf.as_ref().unwrap().as_bytes()))
+        this.stream.poll_fill_buf(cx)
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        Pin::new(&mut self.stream).consume(amt)
+        self.stream.consume(amt)
     }
 }
 
@@ -689,7 +679,7 @@ impl AsyncRead for TcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_read(cx, buf)
+        self.stream.poll_buffered_read(cx, buf)
     }
 }
 
@@ -699,15 +689,15 @@ impl AsyncWrite for TcpStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
+        self.stream.poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.stream.poll_flush(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_close(cx)
+        self.stream.poll_close(cx)
     }
 }
 

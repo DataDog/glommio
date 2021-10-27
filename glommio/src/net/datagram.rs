@@ -4,6 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::{
+    reactor::RecvBuffer,
     sys::{self, DmaBuffer, Source, SourceType},
     ByteSliceMutExt,
     Reactor,
@@ -71,17 +72,8 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> FromRawFd for GlommioDatagr
 }
 
 impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
-    async fn consume_receive_buffer(&self, source: Source, buf: &mut [u8]) -> io::Result<usize> {
+    async fn consume_receive_buffer(&self, source: Source) -> io::Result<usize> {
         let sz = source.collect_rw().await?;
-        let src = match source.extract_source_type() {
-            SourceType::SockRecv(mut buf) => {
-                let mut buf = buf.take().unwrap();
-                buf.trim_to_size(sz);
-                buf
-            }
-            _ => unreachable!(),
-        };
-        buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
         self.rx_yolo.set(true);
         Ok(sz)
     }
@@ -89,11 +81,10 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     pub(crate) async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         let source = self.reactor.upgrade().unwrap().recv(
             self.socket.as_raw_fd(),
-            buf.len(),
+            RecvBuffer::allocated(buf),
             MsgFlags::MSG_PEEK,
         );
-
-        self.consume_receive_buffer(source, buf).await
+        self.consume_receive_buffer(source).await
     }
 
     pub(crate) async fn peek_from(
@@ -112,10 +103,10 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
             None => {
                 let source = self.reactor.upgrade().unwrap().rushed_recv(
                     self.socket.as_raw_fd(),
-                    buf.len(),
+                    RecvBuffer::allocated(buf),
                     self.read_timeout.get(),
                 )?;
-                self.consume_receive_buffer(source, buf).await
+                self.consume_receive_buffer(source).await
             }
         }
     }
@@ -216,11 +207,9 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         match self.yolo_tx(buf) {
             Some(r) => r,
             None => {
-                let mut dma = self.allocate_buffer(buf.len());
-                assert_eq!(dma.write_at(0, buf), buf.len());
                 let source = self.reactor.upgrade().unwrap().rushed_send(
                     self.socket.as_raw_fd(),
-                    dma,
+                    buf.into(),
                     self.write_timeout.get(),
                 )?;
                 let ret = source.collect_rw().await?;

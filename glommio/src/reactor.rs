@@ -156,6 +156,35 @@ impl Timers {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum RecvBuffer {
+    Allocated(*mut u8, usize),
+    // Select,
+}
+
+impl RecvBuffer {
+    pub(crate) fn allocated(buf: &mut [u8]) -> Self {
+        Self::Allocated(buf.as_mut_ptr(), buf.len())
+    }
+
+    pub(crate) fn as_mut(&self) -> Option<&mut [u8]> {
+        match self {
+            Self::Allocated(ptr, len) => unsafe {
+                Some(std::slice::from_raw_parts_mut(*ptr, *len))
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SendBuffer(pub(crate) *const u8, pub(crate) usize);
+
+impl From<&[u8]> for SendBuffer {
+    fn from(buf: &[u8]) -> Self {
+        Self(buf.as_ptr(), buf.len())
+    }
+}
+
 /// The reactor.
 ///
 /// Every async I/O handle and every timer is registered here. Invocations of
@@ -349,7 +378,7 @@ impl Reactor {
     pub(crate) fn rushed_send(
         &self,
         fd: RawFd,
-        buf: DmaBuffer,
+        buf: SendBuffer,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
         let source = self.new_source(fd, SourceType::SockSend(buf), None);
@@ -435,21 +464,21 @@ impl Reactor {
     pub(crate) fn rushed_recv(
         &self,
         fd: RawFd,
-        size: usize,
+        buf: RecvBuffer,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let source = self.new_source(fd, SourceType::SockRecv(None), None);
+        let source = self.new_source(fd, SourceType::SockRecv(buf), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
         }
-        self.sys.recv(&source, size, MsgFlags::empty());
+        self.sys.recv(&source, buf, MsgFlags::empty());
         self.rush_dispatch(&source)?;
         Ok(source)
     }
 
-    pub(crate) fn recv(&self, fd: RawFd, size: usize, flags: MsgFlags) -> Source {
-        let source = self.new_source(fd, SourceType::SockRecv(None), None);
-        self.sys.recv(&source, size, flags);
+    pub(crate) fn recv(&self, fd: RawFd, buf: RecvBuffer, flags: MsgFlags) -> Source {
+        let source = self.new_source(fd, SourceType::SockRecv(buf), None);
+        self.sys.recv(&source, buf, flags);
         source
     }
 
