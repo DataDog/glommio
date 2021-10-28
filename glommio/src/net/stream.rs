@@ -3,6 +3,8 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
+#[cfg(not(feature = "trust-unmanaged-buffer"))]
+use crate::ByteSliceMutExt;
 use crate::{
     reactor::{Reactor, RecvBuffer},
     sys::{self, Source},
@@ -211,6 +213,7 @@ impl<S: AsRawFd + Unpin, B: RxBuf> GlommioStream<S, B> {
             // If we don't have any buffered data and we're doing a massive read
             // (larger than our internal buffer), bypass our internal buffer
             // entirely.
+            #[cfg(feature = "trust-unmanaged-buffer")]
             if self.rx_buf.prefer_external_buffer(buf) {
                 return self.poll_read(cx, Some(buf));
             }
@@ -244,6 +247,12 @@ impl<S: AsRawFd + Unpin, B: RxBuf> GlommioStream<S, B> {
         if self.source_tx.is_none() {
             poll_some!(super::yolo_send(self.stream.as_raw_fd(), buf));
             let reactor = self.reactor.upgrade().unwrap();
+            #[cfg(not(feature = "trust-unmanaged-buffer"))]
+            let buf = {
+                let mut dma = reactor.alloc_dma_buffer(buf.len());
+                dma.write_at(0, &buf);
+                dma
+            };
             self.source_tx = Some(reactor.rushed_send(
                 self.stream.as_raw_fd(),
                 buf.into(),

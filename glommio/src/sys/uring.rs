@@ -1291,8 +1291,12 @@ impl Reactor {
 
     pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
         let op = match &*source.source_type() {
-            SourceType::SockSend(SendBuffer(ptr, len)) => {
-                UringOpDescriptor::SockSend(*ptr, *len, flags.bits())
+            SourceType::SockSend(buf) => {
+                let (ptr, len) = match buf {
+                    SendBuffer::Managed(buf) => (buf.as_ptr(), buf.len()),
+                    SendBuffer::Unmanaged(ptr, len) => (*ptr, *len),
+                };
+                UringOpDescriptor::SockSend(ptr, len, flags.bits())
             }
             _ => unreachable!(),
         };

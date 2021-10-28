@@ -177,11 +177,20 @@ impl RecvBuffer {
 }
 
 #[derive(Debug)]
-pub(crate) struct SendBuffer(pub(crate) *const u8, pub(crate) usize);
+pub(crate) enum SendBuffer {
+    Unmanaged(*const u8, usize),
+    Managed(DmaBuffer),
+}
 
 impl From<&[u8]> for SendBuffer {
     fn from(buf: &[u8]) -> Self {
-        Self(buf.as_ptr(), buf.len())
+        Self::Unmanaged(buf.as_ptr(), buf.len())
+    }
+}
+
+impl From<DmaBuffer> for SendBuffer {
+    fn from(buf: DmaBuffer) -> Self {
+        Self::Managed(buf)
     }
 }
 
