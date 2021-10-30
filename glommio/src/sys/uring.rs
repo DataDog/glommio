@@ -1107,12 +1107,12 @@ pub(crate) struct Reactor {
     syscall_thread: BlockingThread,
 }
 
-fn common_flags() -> PollFlags {
+pub(crate) fn common_flags() -> PollFlags {
     PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL
 }
 
 /// Epoll flags for all possible readability events.
-fn read_flags() -> PollFlags {
+pub(crate) fn read_flags() -> PollFlags {
     PollFlags::POLLIN | PollFlags::POLLPRI
 }
 
@@ -1286,6 +1286,11 @@ impl Reactor {
 
     pub(crate) fn read_buffered(&self, source: &Source, pos: u64, size: usize) {
         let op = UringOpDescriptor::Read(pos, size);
+        self.queue_standard_request(source, op);
+    }
+
+    pub(crate) fn poll_ready(&self, source: &Source, flags: PollFlags) {
+        let op = UringOpDescriptor::PollAdd(flags);
         self.queue_standard_request(source, op);
     }
 

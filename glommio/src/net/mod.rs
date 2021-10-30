@@ -52,6 +52,21 @@ fn yolo_recv(fd: RawFd, buf: &mut [u8]) -> Option<io::Result<usize>> {
     }
 }
 
+fn yolo_peek(fd: RawFd, buf: &mut [u8]) -> Option<io::Result<usize>> {
+    match sys::recv_syscall(
+        fd,
+        buf.as_mut_ptr(),
+        buf.len(),
+        (MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_PEEK).bits(),
+    ) {
+        Ok(x) => Some(Ok(x)),
+        Err(err) => match err.kind() {
+            io::ErrorKind::WouldBlock => None,
+            _ => Some(Err(err)),
+        },
+    }
+}
+
 fn yolo_recvmsg(
     fd: RawFd,
     buf: &mut [u8],

@@ -7,7 +7,6 @@ use glommio::{
     net::{TcpListener, TcpStream},
     prelude::*,
 };
-use std::time::Duration;
 use tokio::runtime::{Builder, Handle};
 
 fn main() {
@@ -17,7 +16,6 @@ fn main() {
     let tokio_port = 8090;
 
     LocalExecutorPoolBuilder::new(threads)
-        .spin_before_park(Duration::from_millis(10))
         .on_all_shards(move || async move {
             let listener = TcpListener::bind(("0.0.0.0", glommio_port)).unwrap();
 
@@ -66,7 +64,7 @@ fn main() {
                     let upstreaming = copy(&mut down_read, &mut up_write);
                     let downstreaming = copy(&mut up_read, &mut down_write);
 
-                    try_zip(upstreaming, downstreaming).await.unwrap();
+                    try_zip(upstreaming, downstreaming).await.ok();
                 });
             }
         });

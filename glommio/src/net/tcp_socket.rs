@@ -3,8 +3,11 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use super::stream::GlommioStream;
-use crate::{net::yolo_accept, reactor::Reactor, GlommioError};
+use crate::{
+    net::{stream::GlommioStream, yolo_accept},
+    reactor::Reactor,
+    GlommioError,
+};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
@@ -355,7 +358,7 @@ pin_project! {
 impl From<socket2::Socket> for TcpStream {
     fn from(socket: socket2::Socket) -> TcpStream {
         Self {
-            stream: GlommioStream::<net::TcpStream>::from(socket),
+            stream: GlommioStream::from(socket),
         }
     }
 }
@@ -620,7 +623,7 @@ impl TcpStream {
     /// On success, returns the number of bytes peeked.
     /// Successive calls return the same data. This is accomplished by passing
     /// MSG_PEEK as a flag to the underlying `recv` system call.
-    pub async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
+    pub async fn peek(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.stream.peek(buf).await.map_err(Into::into)
     }
 
@@ -679,7 +682,7 @@ impl AsyncRead for TcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        self.stream.poll_buffered_read(cx, buf)
+        self.stream.poll_read(cx, buf)
     }
 }
 
@@ -1175,6 +1178,34 @@ mod tests {
                     }
                 };
                 assert!(now.elapsed().as_secs() >= 1);
+                io::Result::Ok(0)
+            });
+
+            let _s = TcpStream::connect(addr).await.unwrap();
+            ltask.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn tcp_write_timeout() {
+        test_executor!(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let ltask = crate::spawn_local(async move {
+                let mut stream = listener.accept().await?;
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let buf = [0u8; 4096];
+                loop {
+                    let now = Instant::now();
+                    if let Err(x) = stream.write(&buf).await {
+                        assert_eq!(x.kind(), io::ErrorKind::TimedOut);
+                        assert!(now.elapsed().as_secs() >= 1);
+                        break;
+                    }
+                }
                 io::Result::Ok(0)
             });
 

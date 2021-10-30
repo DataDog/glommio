@@ -32,6 +32,7 @@ use crate::{
     iou::sqe::SockAddrStorage,
     sys::{
         self,
+        common_flags,
         DirectIo,
         DmaBuffer,
         IoBuffer,
@@ -46,6 +47,7 @@ use crate::{
     Latency,
     TaskQueueHandle,
 };
+use nix::poll::PollFlags;
 
 type SharedChannelWakerChecker = (SmallVec<[Waker; 1]>, Option<Box<dyn Fn() -> usize>>);
 
@@ -165,14 +167,6 @@ pub(crate) enum RecvBuffer {
 impl RecvBuffer {
     pub(crate) fn allocated(buf: &mut [u8]) -> Self {
         Self::Allocated(buf.as_mut_ptr(), buf.len())
-    }
-
-    pub(crate) fn as_mut(&self) -> Option<&mut [u8]> {
-        match self {
-            Self::Allocated(ptr, len) => unsafe {
-                Some(std::slice::from_raw_parts_mut(*ptr, *len))
-            },
-        }
     }
 }
 
@@ -381,6 +375,23 @@ impl Reactor {
         let addr = SockAddrStorage::uninit();
         let source = self.new_source(raw, SourceType::Accept(addr), None);
         self.sys.accept(&source);
+        source
+    }
+
+    pub(crate) fn poll_read(&self, fd: RawFd) -> Source {
+        let source = self.new_source(fd, SourceType::PollAdd, None);
+        self.sys
+            .poll_ready(&source, common_flags() | sys::read_flags());
+        source
+    }
+
+    pub(crate) fn poll_write(&self, fd: RawFd, timeout: Option<Duration>) -> Source {
+        let source = self.new_source(fd, SourceType::PollAdd, None);
+        if let Some(timeout) = timeout {
+            source.set_timeout(timeout);
+        }
+        self.sys
+            .poll_ready(&source, common_flags() | PollFlags::POLLOUT);
         source
     }
 
@@ -735,9 +746,8 @@ impl Reactor {
         }
     }
 
-    fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
-        self.sys.rush_dispatch(Some(source.latency_req()), &mut 0)?;
-        Ok(())
+    pub(crate) fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
+        self.sys.rush_dispatch(Some(source.latency_req()), &mut 0)
     }
 
     /// Polls for I/O, but does not change any timer registration.
