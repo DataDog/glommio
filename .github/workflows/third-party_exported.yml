@@ -1,4 +1,4 @@
-name: Third-party
+name: Third-party licences
 
 permissions: write-all
 
@@ -7,7 +7,7 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  check:
+  allowed:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,11 +18,11 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Run checks on third-party dependencies
+      - name: Assert Glommio depends on crates permissively licensed
         uses: EmbarkStudios/cargo-deny-action@v1
         with:
           log-level: warn
-          command: check
+          command: check licenses
           arguments: --all-features
 
   exported:
@@ -51,7 +51,7 @@ jobs:
   comment:
     runs-on: ubuntu-latest
 
-    needs: [ check, exported ]
+    needs: [ allowed, exported ]
     if: failure()
     steps:
       - name: Checkout

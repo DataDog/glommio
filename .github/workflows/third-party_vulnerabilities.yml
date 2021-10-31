@@ -1,0 +1,22 @@
+name: Third-party vulnerabilities
+
+permissions: write-all
+
+on:
+  push:
+    branches:
+      - master
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Run checks on third-party dependencies
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          log-level: warn
+          command: check
+          arguments: --all-features
