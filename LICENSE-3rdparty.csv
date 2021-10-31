@@ -19,6 +19,7 @@
 "clap","https://github.com/clap-rs/clap","MIT","Kevin K. <kbknapp@gmail.com>"
 "concurrent-queue","https://github.com/stjepang/concurrent-queue","Apache-2.0 OR MIT","Stjepan Glavina <stjepang@gmail.com>"
 "crc32fast","https://github.com/srijs/rust-crc32fast","Apache-2.0 OR MIT","Sam Rijs <srijs@airpost.net>|Alex Crichton <alex@alexcrichton.com>"
+"crossbeam","https://github.com/crossbeam-rs/crossbeam","Apache-2.0 OR MIT","The Crossbeam Project Developers"
 "crossbeam-channel","https://github.com/crossbeam-rs/crossbeam","Apache-2.0 OR MIT","The Crossbeam Project Developers"
 "crossbeam-deque","https://github.com/crossbeam-rs/crossbeam","Apache-2.0 OR MIT","The Crossbeam Project Developers"
 "crossbeam-epoch","https://github.com/crossbeam-rs/crossbeam","Apache-2.0 OR MIT","The Crossbeam Project Developers"
