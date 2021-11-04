@@ -77,7 +77,7 @@ use super::{LocalExecutor, LocalExecutorBuilder, LocalExecutorPoolBuilder};
 /// ## Example
 ///
 /// Some `PoolPlacement`s allow manually filtering available CPUs via a
-/// [`CpuSet`], such as `MaxSpread`.  The following would place shards on four
+/// [`CpuSet`], such as `MaxSpread`. The following would place shards on four
 /// CPUs (a.k.a.  hyper-threads) that are on NUMA node 0 and have an even
 /// numbered package ID according to their [`CpuLocation`]. The selection aims
 /// to achieve a high degree of separation between the CPUs in terms of machine
@@ -136,10 +136,9 @@ pub enum PoolPlacement {
     ///
     /// #### Errors
     ///
-    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs available, then a call to
-    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
-    /// Err`.
+    /// If the number of shards is greater than the number of CPUs available,
+    /// then a call to [`LocalExecutorPoolBuilder::on_all_shards`] will
+    /// return `Result:: Err`.
     MaxSpread(usize, Option<CpuSet>),
     /// Each [`LocalExecutor`] to create is pinned to a particular
     /// [`CpuLocation`] such that the set of all CPUs selected has a low
@@ -151,10 +150,9 @@ pub enum PoolPlacement {
     ///
     /// #### Errors
     ///
-    /// If the number of shards specified in [`LocalExecutorPoolBuilder::new`]
-    /// is greater than the number of CPUs available, then a call to
-    /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::
-    /// Err`.
+    /// If the number of shards is greater than the number of CPUs available,
+    /// then a call to [`LocalExecutorPoolBuilder::on_all_shards`] will
+    /// return `Result:: Err`.
     MaxPack(usize, Option<CpuSet>),
     /// One [`LocalExecutor`] is bound to each of the [`CpuSet`]s specified by
     /// `Custom`. The number of `CpuSet`s in the `Vec` should match the
@@ -163,7 +161,7 @@ pub enum PoolPlacement {
     /// #### Errors
     ///
     /// [`LocalExecutorPoolBuilder::on_all_shards`] will return `Result::Err` if
-    /// either of the follow is any of the [`CpuSet`]s is empty.
+    /// any of the provided [`CpuSet`] is empty.
     Custom(Vec<CpuSet>),
 }
 
@@ -441,6 +439,9 @@ impl CpuSetGenerator {
             PoolPlacement::Fenced(nr_shards, cpus) => {
                 Self::check_nr_executors(1, nr_shards)?;
                 Self::check_nr_cpus(1, &cpus)?;
+                for cpu in cpus.iter() {
+                    Self::check_cpu(cpu.cpu)?;
+                }
                 Self::Fenced(cpus)
             }
             PoolPlacement::MaxSpread(nr_shards, cpus) => {
@@ -450,6 +451,9 @@ impl CpuSetGenerator {
                     None => CpuSet::online()?,
                 };
                 Self::check_nr_cpus(nr_shards, &cpus)?;
+                for cpu in cpus.iter() {
+                    Self::check_cpu(cpu.cpu)?;
+                }
                 Self::MaxSpread(MaxSpreader::from_cpu_set(cpus))
             }
             PoolPlacement::MaxPack(nr_shards, cpus) => {
@@ -459,11 +463,17 @@ impl CpuSetGenerator {
                     None => CpuSet::online()?,
                 };
                 Self::check_nr_cpus(nr_shards, &cpus)?;
+                for cpu in cpus.iter() {
+                    Self::check_cpu(cpu.cpu)?;
+                }
                 Self::MaxPack(MaxPacker::from_cpu_set(cpus))
             }
             PoolPlacement::Custom(cpu_sets) => {
                 for cpu_set in &cpu_sets {
                     Self::check_nr_cpus(1, cpu_set)?;
+                    for cpu in cpu_set.iter() {
+                        Self::check_cpu(cpu.cpu)?;
+                    }
                 }
                 Self::Custom(cpu_sets)
             }
@@ -511,6 +521,7 @@ impl CpuSetGenerator {
         }
     }
 
+    #[cfg(not(test))]
     fn check_cpu(id: usize) -> Result<()> {
         if CpuSet::online()?.filter(|cpu| cpu.cpu == id).is_empty() {
             Err(GlommioError::BuilderError(
@@ -519,6 +530,12 @@ impl CpuSetGenerator {
         } else {
             Ok(())
         }
+    }
+
+    #[cfg(test)]
+    fn check_cpu(_: usize) -> Result<()> {
+        // the test machine may not have the CPU we are asking for during testing
+        Ok(())
     }
 
     /// A method that generates a [`CpuIter`] according to the provided
