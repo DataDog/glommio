@@ -7,11 +7,7 @@ fn test_spsc(capacity: usize) {
     let consumer = std::thread::spawn(move || {
         let t = Instant::now();
         for _ in 0..RUNS {
-            let mut opt: Option<u64>;
-            while {
-                opt = receiver.try_pop();
-                opt.is_none()
-            } {}
+            while receiver.try_pop().is_none() {}
         }
         println!(
             "cost of receiving {:#?}, capacity {}",
