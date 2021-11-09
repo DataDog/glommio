@@ -104,3 +104,11 @@ harness = false
 [[bench]]
 name = "foreign_wake"
 harness = false
+
+[[bench]]
+name = "proxy"
+harness = false
+
+[[bench]]
+name = "echo"
+harness = false
