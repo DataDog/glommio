@@ -4,11 +4,17 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::stream::GlommioStream;
-use crate::{net::yolo_accept, reactor::Reactor, GlommioError};
+use crate::{
+    net::{
+        stream::{Buffered, NonBuffered, Preallocated, RxBuf},
+        yolo_accept,
+    },
+    reactor::Reactor,
+    GlommioError,
+};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
-    ready,
     stream::{self, Stream},
 };
 use nix::sys::socket::{InetAddr, SockAddr};
@@ -348,22 +354,22 @@ pin_project! {
     /// [`AsyncBufRead`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncBufRead.html
     /// [`AsyncWrite`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncWrite.html
 
-    pub struct TcpStream {
-        stream: GlommioStream<net::TcpStream>
+    pub struct TcpStream<B: RxBuf = NonBuffered> {
+        stream: GlommioStream<net::TcpStream, B>
     }
 }
 
 impl From<socket2::Socket> for TcpStream {
     fn from(socket: socket2::Socket) -> TcpStream {
         Self {
-            stream: GlommioStream::<net::TcpStream>::from(socket),
+            stream: GlommioStream::from(socket),
         }
     }
 }
 
-impl AsRawFd for TcpStream {
+impl<B: RxBuf> AsRawFd for TcpStream<B> {
     fn as_raw_fd(&self) -> RawFd {
-        self.stream.as_raw_fd()
+        self.stream.stream().as_raw_fd()
     }
 }
 
@@ -409,60 +415,6 @@ impl TcpStream {
         Ok(TcpStream {
             stream: GlommioStream::from(socket),
         })
-    }
-
-    /// Sets the read timeout to the timeout specified.
-    ///
-    /// If the value specified is [`None`], then read calls will block
-    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
-    /// passed to this method.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use glommio::{net::TcpStream, LocalExecutor};
-    /// # use std::time::Duration;
-    /// # let ex = LocalExecutor::default();
-    /// # ex.run(async move {
-    /// let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
-    /// stream
-    ///     .set_read_timeout(Some(Duration::from_secs(1)))
-    ///     .unwrap();
-    /// # })
-    /// ```
-    pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<()> {
-        self.stream.set_read_timeout(dur)
-    }
-
-    /// Sets the write timeout to the timeout specified.
-    ///
-    /// If the value specified is [`None`], then write calls will block
-    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
-    /// passed to this method.
-    ///
-    /// ```no_run
-    /// # use glommio::{net::TcpStream, LocalExecutor};
-    /// # use std::time::Duration;
-    /// # let ex = LocalExecutor::default();
-    /// # ex.run(async move {
-    /// let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
-    /// stream
-    ///     .set_write_timeout(Some(Duration::from_secs(1)))
-    ///     .unwrap();
-    /// # })
-    /// ```
-    pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<()> {
-        self.stream.set_write_timeout(dur)
-    }
-
-    /// Returns the read timeout of this socket.
-    pub fn read_timeout(&self) -> Option<Duration> {
-        self.stream.read_timeout()
-    }
-
-    /// Returns the write timeout of this socket.
-    pub fn write_timeout(&self) -> Option<Duration> {
-        self.stream.write_timeout()
     }
 
     /// Creates a TCP connection to the specified address with a timeout.
@@ -520,6 +472,74 @@ impl TcpStream {
         })
     }
 
+    /// Creates a buffered TCP connection with default receive buffer.
+    pub fn buffered(self) -> TcpStream<Preallocated> {
+        self.buffered_with(Preallocated::default())
+    }
+
+    /// Creates a buffered TCP connection with custom receive buffer.
+    pub fn buffered_with<B: Buffered>(self, buf: B) -> TcpStream<B> {
+        TcpStream {
+            stream: self.stream.buffered_with(buf),
+        }
+    }
+}
+
+impl<B: RxBuf> TcpStream<B> {
+    /// Sets the read timeout to the timeout specified.
+    ///
+    /// If the value specified is [`None`], then read calls will block
+    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
+    /// passed to this method.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use glommio::{net::TcpStream, LocalExecutor};
+    /// # use std::time::Duration;
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    /// stream
+    ///     .set_read_timeout(Some(Duration::from_secs(1)))
+    ///     .unwrap();
+    /// # })
+    /// ```
+    pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        self.stream.set_read_timeout(dur)
+    }
+
+    /// Sets the write timeout to the timeout specified.
+    ///
+    /// If the value specified is [`None`], then write calls will block
+    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
+    /// passed to this method.
+    ///
+    /// ```no_run
+    /// # use glommio::{net::TcpStream, LocalExecutor};
+    /// # use std::time::Duration;
+    /// # let ex = LocalExecutor::default();
+    /// # ex.run(async move {
+    /// let stream = TcpStream::connect("127.0.0.1:10000").await.unwrap();
+    /// stream
+    ///     .set_write_timeout(Some(Duration::from_secs(1)))
+    ///     .unwrap();
+    /// # })
+    /// ```
+    pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<()> {
+        self.stream.set_write_timeout(dur)
+    }
+
+    /// Returns the read timeout of this socket.
+    pub fn read_timeout(&self) -> Option<Duration> {
+        self.stream.read_timeout()
+    }
+
+    /// Returns the write timeout of this socket.
+    pub fn write_timeout(&self) -> Option<Duration> {
+        self.stream.write_timeout()
+    }
+
     /// Shuts down the read, write, or both halves of this connection.
     pub async fn shutdown(&self, how: Shutdown) -> Result<()> {
         poll_fn(|cx| self.stream.poll_shutdown(cx, how))
@@ -547,7 +567,7 @@ impl TcpStream {
     /// });
     /// ```
     pub fn set_nodelay(&self, value: bool) -> Result<()> {
-        self.stream.stream.set_nodelay(value).map_err(Into::into)
+        self.stream.stream().set_nodelay(value).map_err(Into::into)
     }
 
     /// Gets the `TCP_NODELAY` option on this socket.
@@ -567,17 +587,7 @@ impl TcpStream {
     /// });
     /// ```
     pub fn nodelay(&self) -> Result<bool> {
-        self.stream.stream.nodelay().map_err(Into::into)
-    }
-
-    /// Sets the buffer size used on the receive path
-    pub fn set_buffer_size(&mut self, buffer_size: usize) {
-        self.stream.rx_buf_size = buffer_size;
-    }
-
-    /// gets the buffer size used
-    pub fn buffer_size(&mut self) -> usize {
-        self.stream.rx_buf_size
+        self.stream.stream().nodelay().map_err(Into::into)
     }
 
     /// Gets the value of the `IP_TTL` option for this socket.
@@ -597,7 +607,7 @@ impl TcpStream {
     /// });
     /// ```
     pub fn ttl(&self) -> Result<u32> {
-        Ok(self.stream.stream.ttl()?)
+        Ok(self.stream.stream().ttl()?)
     }
 
     /// Sets the value of the `IP_TTL` option for this socket.
@@ -617,7 +627,7 @@ impl TcpStream {
     /// });
     /// ```
     pub fn set_ttl(&self, ttl: u32) -> Result<()> {
-        Ok(self.stream.stream.set_ttl(ttl)?)
+        Ok(self.stream.stream().set_ttl(ttl)?)
     }
 
     /// Receives data on the socket from the remote address to which it is
@@ -644,7 +654,7 @@ impl TcpStream {
     /// })
     /// ```
     pub fn peer_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.peer_addr().map_err(Into::into)
+        self.stream.stream().peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this TCP connection.
@@ -661,29 +671,25 @@ impl TcpStream {
     /// })
     /// ```
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.local_addr().map_err(Into::into)
+        self.stream.stream().local_addr().map_err(Into::into)
     }
 }
 
-impl AsyncBufRead for TcpStream {
+impl<B: Buffered + Unpin> AsyncBufRead for TcpStream<B> {
     fn poll_fill_buf<'a>(
-        mut self: Pin<&'a mut Self>,
+        self: Pin<&'a mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
-        let buf_size = self.stream.rx_buf_size;
-        if self.stream.rx_buf.as_ref().is_none() {
-            poll_err!(ready!(self.stream.poll_replenish_buffer(cx, buf_size)));
-        }
         let this = self.project();
-        Poll::Ready(Ok(this.stream.rx_buf.as_ref().unwrap().as_bytes()))
+        this.stream.poll_fill_buf(cx)
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        Pin::new(&mut self.stream).consume(amt)
+        self.stream.consume(amt);
     }
 }
 
-impl AsyncRead for TcpStream {
+impl<B: RxBuf + Unpin> AsyncRead for TcpStream<B> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -693,7 +699,7 @@ impl AsyncRead for TcpStream {
     }
 }
 
-impl AsyncWrite for TcpStream {
+impl<B: RxBuf + Unpin> AsyncWrite for TcpStream<B> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -969,7 +975,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
 
             let listener_handle = crate::spawn_local(async move {
-                let mut stream = listener.accept().await?;
+                let mut stream = listener.accept().await?.buffered();
                 let mut buf = Vec::new();
                 stream.read_until(10, &mut buf).await?;
                 io::Result::Ok(buf.len())
@@ -992,7 +998,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
 
             let listener_handle = crate::spawn_local(async move {
-                let mut stream = listener.accept().await?;
+                let mut stream = listener.accept().await?.buffered();
                 let mut buf = String::new();
                 stream.read_line(&mut buf).await?;
                 io::Result::Ok(buf.len())
@@ -1014,7 +1020,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
 
             let listener_handle = crate::spawn_local(async move {
-                let stream = listener.accept().await?;
+                let stream = listener.accept().await?.buffered();
                 io::Result::Ok(stream.lines().count().await)
             })
             .detach();
@@ -1035,7 +1041,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
 
             let listener_handle = crate::spawn_local(async move {
-                let mut stream = listener.accept().await?;
+                let mut stream = listener.accept().await?.buffered();
                 let buf = stream.fill_buf().await?;
                 // likely both messages were coalesced together
                 assert_eq!(&buf[0..4], b"msg1");
@@ -1067,7 +1073,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
 
             let listener_handle = crate::spawn_local(async move {
-                let mut stream = listener.accept().await?;
+                let mut stream = listener.accept().await?.buffered();
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf.len(), 4);
                 stream.consume(100);
@@ -1092,7 +1098,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
 
             let listener_handle = crate::spawn_local(async move {
-                let mut stream = listener.accept().await?;
+                let mut stream = listener.accept().await?.buffered();
                 let buf = stream.fill_buf().await?;
                 assert_eq!(buf, b"msg1");
                 let buf = stream.fill_buf().await?;

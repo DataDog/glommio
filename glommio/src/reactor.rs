@@ -32,6 +32,8 @@ use crate::{
     iou::sqe::SockAddrStorage,
     sys::{
         self,
+        common_flags,
+        read_flags,
         DirectIo,
         DmaBuffer,
         IoBuffer,
@@ -46,6 +48,7 @@ use crate::{
     Latency,
     TaskQueueHandle,
 };
+use nix::poll::PollFlags;
 
 type SharedChannelWakerChecker = (SmallVec<[Waker; 1]>, Option<Box<dyn Fn() -> usize>>);
 
@@ -351,6 +354,19 @@ impl Reactor {
         let addr = SockAddrStorage::uninit();
         let source = self.new_source(raw, SourceType::Accept(addr), None);
         self.sys.accept(&source);
+        source
+    }
+
+    pub(crate) fn poll_read_ready(&self, fd: RawFd) -> Source {
+        let source = self.new_source(fd, SourceType::PollAdd, None);
+        self.sys.poll_ready(&source, common_flags() | read_flags());
+        source
+    }
+
+    pub(crate) fn poll_write_ready(&self, fd: RawFd) -> Source {
+        let source = self.new_source(fd, SourceType::PollAdd, None);
+        self.sys
+            .poll_ready(&source, common_flags() | PollFlags::POLLOUT);
         source
     }
 
@@ -677,6 +693,11 @@ impl Reactor {
         timers.remove(id)
     }
 
+    pub(crate) fn timer_exists(&self, id: &(Instant, u64)) -> bool {
+        let timers = self.timers.borrow();
+        timers.timers.contains_key(id)
+    }
+
     /// Processes ready timers and extends the list of wakers to wake.
     ///
     /// Returns the duration until the next timer before this method was called.
@@ -705,7 +726,7 @@ impl Reactor {
         }
     }
 
-    fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
+    pub(crate) fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
         self.sys.rush_dispatch(Some(source.latency_req()), &mut 0)?;
         Ok(())
     }
