@@ -343,6 +343,7 @@ macro_rules! poll_err {
 /// Unwraps an Option to Poll<T>: if Some returns right away.
 ///
 /// Usage is similar to `future_lite::ready!`
+#[allow(unused)]
 macro_rules! poll_some {
     ($e:expr $(,)?) => {
         match $e {

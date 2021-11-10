@@ -40,6 +40,7 @@ use std::{
 pub(crate) enum SourceType {
     Write(PollableStatus, IoBuffer),
     Read(PollableStatus, Option<IoBuffer>),
+    PollAdd,
     SockSend(DmaBuffer),
     SockRecv(Option<DmaBuffer>),
     SockRecvMsg(
@@ -225,10 +226,17 @@ impl Source {
     // adds a single waiter to the list, replacing any waiter that may already
     // exist. Should be used for single streams that map a future 1:1 to their I/O
     // source
-    pub(crate) fn add_waiter_single(&self, waker: Waker) {
+    pub(crate) fn add_waiter_single(&self, waker: &Waker) {
         let mut inner = self.inner.borrow_mut();
-        inner.wakers.waiters.pop();
-        inner.wakers.waiters.push(waker);
+        let waiters = &mut inner.wakers.waiters;
+        match waiters.first_mut() {
+            Some(w) => {
+                if !w.will_wake(waker) {
+                    *w = waker.clone();
+                }
+            }
+            None => waiters.push(waker.clone()),
+        }
         debug_assert_eq!(inner.wakers.waiters.len(), 1)
     }
 

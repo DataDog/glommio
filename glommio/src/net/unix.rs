@@ -4,11 +4,13 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::{datagram::GlommioDatagram, stream::GlommioStream};
-use crate::reactor::Reactor;
+use crate::{
+    net::stream::{Buffered, NonBuffered, Preallocated, RxBuf},
+    reactor::Reactor,
+};
 use futures_lite::{
     future::poll_fn,
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
-    ready,
     stream::{self, Stream},
 };
 use nix::sys::socket::{SockAddr, UnixAddr};
@@ -272,8 +274,8 @@ pin_project! {
     /// [`AsyncRead`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncRead.html
     /// [`AsyncBufRead`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncBufRead.html
     /// [`AsyncWrite`]: https://docs.rs/futures-io/0.3.8/futures_io/trait.AsyncWrite.html
-    pub struct UnixStream {
-        stream: GlommioStream<net::UnixStream>
+    pub struct UnixStream<B: RxBuf = NonBuffered> {
+        stream: GlommioStream<net::UnixStream, B>
     }
 }
 
@@ -329,21 +331,25 @@ impl UnixStream {
         })
     }
 
+    /// Creates a buffered Unix connection with default receive buffer.
+    pub fn buffered(self) -> UnixStream<Preallocated> {
+        self.buffered_with(Preallocated::default())
+    }
+
+    /// Creates a buffered Unix connection with custom receive buffer.
+    pub fn buffered_with<B: Buffered>(self, buf: B) -> UnixStream<B> {
+        UnixStream {
+            stream: self.stream.buffered_with(buf),
+        }
+    }
+}
+
+impl<B: RxBuf> UnixStream<B> {
     /// Shuts down the read, write, or both halves of this connection.
     pub async fn shutdown(&self, how: Shutdown) -> Result<()> {
         poll_fn(|cx| self.stream.poll_shutdown(cx, how))
             .await
             .map_err(Into::into)
-    }
-
-    /// Sets the buffer size used on the receive path
-    pub fn set_buffer_size(&mut self, buffer_size: usize) {
-        self.stream.rx_buf_size = buffer_size;
-    }
-
-    /// gets the buffer size used
-    pub fn buffer_size(&mut self) -> usize {
-        self.stream.rx_buf_size
     }
 
     /// Receives data on the socket from the remote address to which it is
@@ -370,7 +376,7 @@ impl UnixStream {
     /// })
     /// ```
     pub fn peer_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.peer_addr().map_err(Into::into)
+        self.stream.stream().peer_addr().map_err(Into::into)
     }
 
     /// Returns the socket address of the local half of this Unix connection.
@@ -387,29 +393,25 @@ impl UnixStream {
     /// })
     /// ```
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.stream.stream.local_addr().map_err(Into::into)
+        self.stream.stream().local_addr().map_err(Into::into)
     }
 }
 
-impl AsyncBufRead for UnixStream {
+impl<B: Buffered + Unpin> AsyncBufRead for UnixStream<B> {
     fn poll_fill_buf<'a>(
-        mut self: Pin<&'a mut Self>,
+        self: Pin<&'a mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<&'a [u8]>> {
-        let buf_size = self.stream.rx_buf_size;
-        if self.stream.rx_buf.as_ref().is_none() {
-            poll_err!(ready!(self.stream.poll_replenish_buffer(cx, buf_size)));
-        }
         let this = self.project();
-        Poll::Ready(Ok(this.stream.rx_buf.as_ref().unwrap().as_bytes()))
+        this.stream.poll_fill_buf(cx)
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        Pin::new(&mut self.stream).consume(amt)
+        self.stream.consume(amt);
     }
 }
 
-impl AsyncRead for UnixStream {
+impl<B: RxBuf + Unpin> AsyncRead for UnixStream<B> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -419,7 +421,7 @@ impl AsyncRead for UnixStream {
     }
 }
 
-impl AsyncWrite for UnixStream {
+impl<B: RxBuf + Unpin> AsyncWrite for UnixStream<B> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -774,7 +776,7 @@ mod tests {
         let listener = UnixListener::bind(&file).unwrap();
 
         let listener_handle = crate::spawn_local(async move {
-            let mut stream = listener.accept().await?;
+            let mut stream = listener.accept().await?.buffered();
             let mut buf = Vec::new();
             stream.read_until(10, &mut buf).await?;
             io::Result::Ok(buf.len())

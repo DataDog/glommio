@@ -118,12 +118,6 @@ impl DmaBuffer {
         self.size = newsize;
     }
 
-    pub(crate) fn trim_front(&mut self, trim: usize) {
-        assert!(trim <= self.size);
-        self.trim += trim;
-        self.size -= trim;
-    }
-
     /// Returns a representation of the current addressable contents of this
     /// `DmaBuffer` as a byte slice
     pub fn as_bytes(&self) -> &[u8] {

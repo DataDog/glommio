@@ -381,7 +381,7 @@ impl StreamWriter {
         res.map(|_x| ())
     }
 
-    fn flush_write_buffer(&mut self, waker: Waker) -> bool {
+    fn flush_write_buffer(&mut self, waker: &Waker) -> bool {
         assert!(self.source.is_none());
         let bytes = self.buffer.consumed_bytes();
         if !bytes.is_empty() {
@@ -409,7 +409,7 @@ impl StreamWriter {
                         .upgrade()
                         .unwrap()
                         .fdatasync(self.file.as_ref().unwrap().as_raw_fd());
-                    source.add_waiter_single(cx.waker().clone());
+                    source.add_waiter_single(cx.waker());
                     self.source = Some(source);
                     Poll::Pending
                 }
@@ -429,7 +429,7 @@ impl StreamWriter {
                     .upgrade()
                     .unwrap()
                     .close(self.file.as_ref().unwrap().as_raw_fd());
-                source.add_waiter_single(cx.waker().clone());
+                source.add_waiter_single(cx.waker());
                 self.source = Some(source);
                 Poll::Pending
             }
@@ -443,7 +443,7 @@ impl StreamWriter {
 
     fn do_poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.source.take() {
-            None => match self.flush_write_buffer(cx.waker().clone()) {
+            None => match self.flush_write_buffer(cx.waker()) {
                 true => Poll::Pending,
                 false => Poll::Ready(Ok(())),
             },
@@ -497,7 +497,7 @@ macro_rules! do_seek {
                         .upgrade()
                         .unwrap()
                         .statx($fileobj.as_raw_fd(), &$fileobj.path().unwrap());
-                    source.add_waiter_single($cx.waker().clone());
+                    source.add_waiter_single($cx.waker());
                     $source = Some(source);
                     Poll::Pending
                 }
@@ -585,7 +585,7 @@ impl AsyncBufRead for StreamReader {
                         self.buffer.max_buffer_size,
                         self.file.file.scheduler.borrow().as_ref(),
                     );
-                    source.add_waiter_single(cx.waker().clone());
+                    source.add_waiter_single(cx.waker());
                     self.io_source = Some(source);
                     Poll::Pending
                 }
@@ -611,7 +611,7 @@ impl AsyncWrite for StreamWriter {
         }
 
         if !self.buffer.data.is_empty() {
-            let x = self.flush_write_buffer(cx.waker().clone());
+            let x = self.flush_write_buffer(cx.waker());
             assert!(x);
             Poll::Pending
         } else {
@@ -670,7 +670,7 @@ impl AsyncBufRead for Stdin {
                         self.buffer.max_buffer_size,
                         None,
                     );
-                    source.add_waiter_single(cx.waker().clone());
+                    source.add_waiter_single(cx.waker());
                     self.source = Some(source);
                     Poll::Pending
                 }
