@@ -61,6 +61,7 @@ use std::{
         HashSet,
     },
     convert::TryInto,
+    hash::{Hash, Hasher},
     iter::FromIterator,
 };
 
@@ -103,7 +104,7 @@ use super::{LocalExecutor, LocalExecutorBuilder, LocalExecutorPoolBuilder};
 ///
 /// handles.join_all();
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PoolPlacement {
     /// The `Unbound` variant creates a specific number of
     /// [`LocalExecutor`]s that are not bound to any CPU.
@@ -208,7 +209,7 @@ impl PoolPlacement {
 ///     .unwrap()
 ///     .join();
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Placement {
     /// The `Unbound` variant creates a [`LocalExecutor`]s that are not bound to
     /// any CPU.
@@ -243,8 +244,22 @@ pub enum Placement {
 /// Please see the documentation for [`PoolPlacement`] variants to
 /// understand how `CpuSet` restrictions apply to each variant.  CPUs are
 /// identified via their [`CpuLocation`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct CpuSet(HashSet<CpuLocation>);
+
+impl Hash for CpuSet {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for loc in &self.0 {
+            loc.hash(state);
+        }
+    }
+}
+
+impl PartialEq for CpuSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
 
 impl FromIterator<CpuLocation> for CpuSet {
     fn from_iter<I: IntoIterator<Item = CpuLocation>>(cpus: I) -> Self {
