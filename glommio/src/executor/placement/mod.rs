@@ -178,6 +178,24 @@ impl PoolPlacement {
             PoolPlacement::Custom(cpus) => cpus.len(),
         }
     }
+
+    /// Probe the topology of the system and materialize this [`PoolPlacement`]
+    /// into a set of [`CpuSet`]
+    pub fn generate_cpu_set(self) -> Result<CpuSetGenerator> {
+        CpuSetGenerator::pool(self)
+    }
+}
+
+impl From<Placement> for PoolPlacement {
+    fn from(placement: Placement) -> Self {
+        match placement {
+            Placement::Unbound => PoolPlacement::Unbound(1),
+            Placement::Fenced(set) => PoolPlacement::Fenced(1, set),
+            Placement::Fixed(cpu) => {
+                PoolPlacement::Custom(vec![CpuSet::online().unwrap().filter(|x| x.cpu == cpu)])
+            }
+        }
+    }
 }
 
 /// Specifies a policy by which [`LocalExecutorBuilder`] selects CPUs.
@@ -235,6 +253,14 @@ pub enum Placement {
     /// [`LocalExecutorBuilder`] will return `Result::Err` if the CPU doesn't
     /// exist.
     Fixed(usize),
+}
+
+impl Placement {
+    /// Probe the topology of the system and materialize this [`Placement`]
+    /// into a [`CpuSet`]
+    pub fn generate_cpu_set(self) -> Result<CpuSetGenerator> {
+        CpuSetGenerator::one(self)
+    }
 }
 
 /// Used to specify a set of permitted CPUs on which
@@ -394,7 +420,7 @@ impl CpuSet {
 /// Iterates over a set of CPUs associated with a [`LocalExecutor`] when created
 /// via a [`LocalExecutorPoolBuilder`].
 #[derive(Clone, Debug)]
-pub(crate) enum CpuIter {
+pub enum CpuIter {
     Unbound,
     Single(CpuLocation),
     Multi(Vec<CpuLocation>),
@@ -436,7 +462,8 @@ impl Iterator for CpuIter {
 
 /// Generates CPU sets as iterators.  The sets generated depend on the specified
 /// [`Placement`].
-pub(crate) enum CpuSetGenerator {
+#[derive(Debug)]
+pub enum CpuSetGenerator {
     Unbound,
     Fenced(CpuSet),
     MaxSpread(MaxSpreader),
@@ -445,7 +472,7 @@ pub(crate) enum CpuSetGenerator {
 }
 
 impl CpuSetGenerator {
-    pub fn pool(placement: PoolPlacement) -> Result<Self> {
+    pub(crate) fn pool(placement: PoolPlacement) -> Result<Self> {
         let this = match placement {
             PoolPlacement::Unbound(nr_shards) => {
                 Self::check_nr_executors(1, nr_shards)?;
@@ -496,7 +523,7 @@ impl CpuSetGenerator {
         Ok(this)
     }
 
-    pub fn one(placement: Placement) -> Result<Self> {
+    pub(crate) fn one(placement: Placement) -> Result<Self> {
         let this = match placement {
             Placement::Unbound => Self::Unbound,
             Placement::Fenced(cpus) => {
@@ -589,7 +616,8 @@ type MaxSpreader = TopologyIter<Spread>;
 /// and will cycle through [`CpuLocation`] non-deterministically.
 type MaxPacker = TopologyIter<Pack>;
 
-pub(crate) struct TopologyIter<T> {
+#[derive(Debug)]
+pub struct TopologyIter<T> {
     tree: Node<T>,
 }
 
