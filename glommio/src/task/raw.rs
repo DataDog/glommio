@@ -228,7 +228,7 @@ where
                 let notifier = raw.notifier();
                 notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
                 if (*raw.header).latency_matters {
-                    notifier.notify_if_needed();
+                    notifier.notify_if_sleeping();
                 }
             });
         } else {
