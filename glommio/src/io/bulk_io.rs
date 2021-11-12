@@ -268,6 +268,16 @@ impl<U: Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> OrderedBulkIo<U, 
             terminated: false,
         }
     }
+
+    pub(crate) fn set_concurrency(&mut self, concurrency: usize) {
+        assert!(concurrency > 0);
+        assert!(
+            !self.terminated && self.inflight.is_empty(),
+            "should be called before the first call to poll()"
+        );
+        self.inflight.reserve(concurrency);
+        self.cap = concurrency
+    }
 }
 
 impl<U: Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> Stream for OrderedBulkIo<U, S> {
@@ -349,6 +359,26 @@ pub struct ReadManyResult<
 > {
     pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>, S>,
     pub(crate) current: Option<(ScheduledSource, ReadManyArgs<V>)>,
+}
+
+impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin>
+    ReadManyResult<V, S>
+{
+    /// Set the amount of IO concurrency of this stream, i.e., the number of IO
+    /// requests this stream will submit at any one time
+    ///
+    /// Higher concurrency levels may improve performance and will extend the
+    /// lifetime of IO requests, meaning they have a greater chance of being
+    /// reused via IO request deduplication.
+    /// However, higher values will increase memory usage and possibly starve
+    /// by-standing IO-emitting tasks.
+    ///
+    /// This function should be called before the stream is first polled and
+    /// will panic otherwise.
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.inner.set_concurrency(concurrency);
+        self
+    }
 }
 
 impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin> Stream
