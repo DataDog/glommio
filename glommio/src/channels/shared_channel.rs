@@ -246,7 +246,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
         }
         match self.state.buffer.try_push(item) {
             None => {
-                self.notifier.notify_if_sleeping();
+                self.notifier.notify(false);
                 Ok(())
             }
             Some(item) => {
@@ -314,7 +314,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
     pub fn close(&self) {
         if !self.state.buffer.disconnect() {
             if let Some(r) = self.reactor.upgrade() {
-                self.notifier.notify_if_sleeping();
+                self.notifier.notify(false);
                 // wake other tasks `awaiting` the same sender letting them know sender is
                 // closed; we don't `unregister_shared_channel` here because
                 // another task could still be `await`ing this sender, in which
@@ -422,7 +422,7 @@ impl<T: Send + Sized> ConnectedReceiver<T> {
                 }
             }
             res => {
-                self.notifier.notify_if_sleeping();
+                self.notifier.notify(false);
                 Poll::Ready(res)
             }
         }
@@ -444,7 +444,7 @@ impl<T: Send + Sized> Drop for SharedSender<T> {
             if !state.buffer.disconnect() {
                 let id = state.buffer.peer_id();
                 if let Some(notifier) = sys::get_sleep_notifier_for(id) {
-                    notifier.notify_if_sleeping();
+                    notifier.notify(false);
                 }
             }
         }
@@ -458,7 +458,7 @@ impl<T: Send + Sized> Drop for SharedReceiver<T> {
             if !state.buffer.disconnect() {
                 let id = state.buffer.peer_id();
                 if let Some(notifier) = sys::get_sleep_notifier_for(id) {
-                    notifier.notify_if_sleeping();
+                    notifier.notify(false);
                 }
             }
         }
@@ -469,7 +469,7 @@ impl<T: Send + Sized> Drop for ConnectedReceiver<T> {
     fn drop(&mut self) {
         if !self.state.buffer.disconnect() {
             if let Some(r) = self.reactor.upgrade() {
-                self.notifier.notify_if_sleeping();
+                self.notifier.notify(false);
                 r.unregister_shared_channel(self.id);
             }
         }
@@ -480,7 +480,7 @@ impl<T: Send + Sized> Drop for ConnectedSender<T> {
     fn drop(&mut self) {
         if !self.state.buffer.disconnect() {
             if let Some(r) = self.reactor.upgrade() {
-                self.notifier.notify_if_sleeping();
+                self.notifier.notify(false);
                 r.unregister_shared_channel(self.id)
             }
         }

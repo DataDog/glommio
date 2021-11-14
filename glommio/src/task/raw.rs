@@ -226,10 +226,10 @@ where
         if Self::thread_id() != Some(raw.my_id()) {
             dbg_context!(ptr, "foreign", {
                 let notifier = raw.notifier();
-                notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
-                if (*raw.header).latency_matters {
-                    notifier.notify_if_sleeping();
-                }
+                notifier.queue_waker(
+                    Waker::from_raw(Self::clone_waker(ptr)),
+                    (*raw.header).latency_matters,
+                );
             });
         } else {
             let state = (*raw.header).state;
@@ -306,7 +306,10 @@ where
                     // will be destroyed
                     if Self::decrement_references(&mut *(raw.header as *mut Header)) == 0 {
                         let notifier = raw.notifier();
-                        notifier.queue_waker(Waker::from_raw(Self::clone_waker(ptr)));
+                        notifier.queue_waker(
+                            Waker::from_raw(Self::clone_waker(ptr)),
+                            (*raw.header).latency_matters,
+                        );
                     }
                     return;
                 });
