@@ -167,7 +167,7 @@ impl BlockingThread {
                         panic!("Could not add response to syscall response queue");
                     }
                 }
-                reactor_sleep_notifier.notify_if_sleeping();
+                reactor_sleep_notifier.notify(false);
             }
         });
         BlockingThread {

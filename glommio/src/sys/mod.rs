@@ -318,17 +318,18 @@ impl SleepNotifier {
         self.id
     }
 
-    pub(crate) fn notify_if_sleeping(&self) {
+    pub(crate) fn notify(&self, force: bool) {
         if self
             .should_notify
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
+            || force
         {
             write_eventfd(self.eventfd_fd());
         }
     }
 
-    pub(crate) fn queue_waker(&self, waker: Waker) {
+    pub(crate) fn queue_waker(&self, waker: Waker, force_notify: bool) {
         // Sender only errors out if the destination disconnected. That
         // most likely happened because the remote executor already died, in which
         // case they were no longer interested in this notification. But log.
@@ -339,7 +340,7 @@ impl SleepNotifier {
             );
         }
 
-        self.notify_if_sleeping();
+        self.notify(force_notify);
     }
 
     pub(crate) fn process_foreign_wakes(&self) -> usize {
