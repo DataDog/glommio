@@ -319,13 +319,11 @@ impl SleepNotifier {
     }
 
     pub(crate) fn notify_if_sleeping(&self) {
-        if self.should_notify.load(Ordering::Relaxed) {
-            self.notify_if_needed();
-        }
-    }
-
-    pub(crate) fn notify_if_needed(&self) {
-        if self.should_notify.swap(false, Ordering::Relaxed) {
+        if self
+            .should_notify
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
             write_eventfd(self.eventfd_fd());
         }
     }
@@ -345,7 +343,6 @@ impl SleepNotifier {
     }
 
     pub(crate) fn process_foreign_wakes(&self) -> usize {
-        self.should_notify.store(true, Ordering::Relaxed);
         let mut processed = 0;
         while let Ok(waker) = self.foreign_wakes.try_recv() {
             processed += 1;
