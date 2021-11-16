@@ -62,7 +62,6 @@ use crate::{
     parking,
     reactor,
     sys,
-    sys::DEFAULT_RING_SUBMISSION_DEPTH,
     task::{self, waker_fn::dummy_waker},
     GlommioError,
     IoRequirements,
@@ -72,6 +71,11 @@ use crate::{
     Shares,
 };
 use ahash::AHashMap;
+
+pub(crate) const DEFAULT_EXECUTOR_NAME: &str = "unnamed";
+pub(crate) const DEFAULT_PREEMPT_TIMER: Duration = Duration::from_millis(100);
+pub(crate) const DEFAULT_IO_MEMORY: usize = 10 << 20;
+pub(crate) const DEFAULT_RING_SUBMISSION_DEPTH: usize = 128;
 
 /// Result type alias that removes the need to specify a type parameter
 /// that's only valid in the channel variants of the error. Otherwise, it
@@ -438,10 +442,10 @@ impl LocalExecutorBuilder {
         LocalExecutorBuilder {
             placement,
             spin_before_park: None,
-            name: String::from("unnamed"),
-            io_memory: 10 << 20,
+            name: String::from(DEFAULT_EXECUTOR_NAME),
+            io_memory: DEFAULT_IO_MEMORY,
             ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
-            preempt_timer_duration: Duration::from_millis(100),
+            preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
         }
     }
 
@@ -659,10 +663,10 @@ impl LocalExecutorPoolBuilder {
     pub fn new(placement: PoolPlacement) -> Self {
         Self {
             spin_before_park: None,
-            name: String::from("unnamed"),
-            io_memory: 10 << 20,
+            name: String::from(DEFAULT_EXECUTOR_NAME),
+            io_memory: DEFAULT_IO_MEMORY,
             ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
-            preempt_timer_duration: Duration::from_millis(100),
+            preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
             placement,
         }
     }
