@@ -189,8 +189,12 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    pub(crate) fn new(notifier: Arc<SleepNotifier>, io_memory: usize) -> Reactor {
-        let sys = sys::Reactor::new(notifier, io_memory)
+    pub(crate) fn new(
+        notifier: Arc<SleepNotifier>,
+        io_memory: usize,
+        ring_depth: usize,
+    ) -> Reactor {
+        let sys = sys::Reactor::new(notifier, io_memory, ring_depth)
             .expect("cannot initialize I/O event notification");
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {
