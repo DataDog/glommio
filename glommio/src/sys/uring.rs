@@ -1577,7 +1577,11 @@ impl Reactor {
         consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
-        should_sleep &= (woke == 0) & poll_ring.can_sleep();
+        should_sleep &= (woke == 0)
+            && poll_ring.can_sleep()
+            && main_ring.submission_queue.borrow().submissions.is_empty()
+            && lat_ring.submission_queue.borrow().submissions.is_empty()
+            && poll_ring.submission_queue.borrow().submissions.is_empty();
 
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
