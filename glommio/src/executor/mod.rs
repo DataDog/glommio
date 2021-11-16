@@ -62,6 +62,7 @@ use crate::{
     parking,
     reactor,
     sys,
+    sys::DEFAULT_RING_SUBMISSION_DEPTH,
     task::{self, waker_fn::dummy_waker},
     GlommioError,
     IoRequirements,
@@ -898,7 +899,11 @@ impl LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
-            reactor: Rc::new(reactor::Reactor::new(notifier, io_memory)),
+            reactor: Rc::new(reactor::Reactor::new(
+                notifier,
+                io_memory,
+                DEFAULT_RING_SUBMISSION_DEPTH,
+            )),
         })
     }
 

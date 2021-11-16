@@ -58,7 +58,7 @@ use nix::sys::{
 };
 
 const MSG_ZEROCOPY: i32 = 0x4000000;
-pub(crate) const RING_SUBMISSION_DEPTH: usize = 128;
+pub(crate) const DEFAULT_RING_SUBMISSION_DEPTH: usize = 128;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -1164,6 +1164,7 @@ impl Reactor {
     pub(crate) fn new(
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
+        ring_depth: usize,
     ) -> io::Result<Reactor> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
@@ -1184,14 +1185,9 @@ impl Reactor {
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
         let registry = vec![allocator.as_bytes()];
 
-        let main_ring = SleepableRing::new(
-            RING_SUBMISSION_DEPTH,
-            "main",
-            allocator.clone(),
-            source_map.clone(),
-        )?;
-        let poll_ring =
-            PollRing::new(RING_SUBMISSION_DEPTH, allocator.clone(), source_map.clone())?;
+        let main_ring =
+            SleepableRing::new(ring_depth, "main", allocator.clone(), source_map.clone())?;
+        let poll_ring = PollRing::new(ring_depth, allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
@@ -1212,12 +1208,8 @@ impl Reactor {
             },
         }
 
-        let mut latency_ring = SleepableRing::new(
-            RING_SUBMISSION_DEPTH,
-            "latency",
-            allocator.clone(),
-            source_map.clone(),
-        )?;
+        let mut latency_ring =
+            SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(
@@ -1780,7 +1772,7 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0).unwrap();
+        let reactor = Reactor::new(notifier, 0, DEFAULT_RING_SUBMISSION_DEPTH).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
