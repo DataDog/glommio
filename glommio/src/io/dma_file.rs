@@ -11,7 +11,7 @@ use crate::{
         read_result::ReadResult,
         ScheduledSource,
     },
-    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus, DEFAULT_RING_SUBMISSION_DEPTH},
+    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
 };
 use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
@@ -333,7 +333,7 @@ impl DmaFile {
             )
         });
         ReadManyResult {
-            inner: OrderedBulkIo::new(self.clone(), DEFAULT_RING_SUBMISSION_DEPTH, it),
+            inner: OrderedBulkIo::new(self.clone(), 128, it),
             current: Default::default(),
         }
     }

@@ -58,7 +58,6 @@ use nix::sys::{
 };
 
 const MSG_ZEROCOPY: i32 = 0x4000000;
-pub(crate) const DEFAULT_RING_SUBMISSION_DEPTH: usize = 128;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -1772,7 +1771,7 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0, DEFAULT_RING_SUBMISSION_DEPTH).unwrap();
+        let reactor = Reactor::new(notifier, 0, 128).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
