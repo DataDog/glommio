@@ -1117,6 +1117,8 @@ pub(crate) struct Reactor {
     source_map: Rc<RefCell<SourceMap>>,
 
     syscall_thread: BlockingThread,
+
+    rings_depth: usize,
 }
 
 fn common_flags() -> PollFlags {
@@ -1233,11 +1235,16 @@ impl Reactor {
             notifier,
             eventfd_src,
             source_map,
+            rings_depth: ring_depth,
         })
     }
 
     pub(crate) fn id(&self) -> usize {
         self.notifier.id()
+    }
+
+    pub(crate) fn ring_depth(&self) -> usize {
+        self.rings_depth
     }
 
     pub(crate) fn install_eventfd(&self) {
