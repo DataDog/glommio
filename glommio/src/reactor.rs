@@ -224,6 +224,10 @@ impl Reactor {
         self.sys.id()
     }
 
+    pub(crate) fn ring_depth(&self) -> usize {
+        self.sys.ring_depth()
+    }
+
     fn new_source(
         &self,
         raw: RawFd,
