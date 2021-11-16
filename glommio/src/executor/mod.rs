@@ -420,6 +420,10 @@ pub struct LocalExecutorBuilder {
     /// that, but it will come from the standard allocator and performance
     /// will suffer. Defaults to 10 MiB.
     io_memory: usize,
+    /// The depth of the IO rings to create. This influences the level of IO
+    /// concurrency. A higher ring depth allows a shard to submit a
+    /// greater number of IO requests to the kernel at once.
+    ring_depth: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
 }
@@ -436,6 +440,7 @@ impl LocalExecutorBuilder {
             spin_before_park: None,
             name: String::from("unnamed"),
             io_memory: 10 << 20,
+            ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
             preempt_timer_duration: Duration::from_millis(100),
         }
     }
@@ -462,6 +467,17 @@ impl LocalExecutorBuilder {
     /// and the default is 10 MiB.
     pub fn io_memory(mut self, io_memory: usize) -> LocalExecutorBuilder {
         self.io_memory = io_memory;
+        self
+    }
+
+    /// The depth of the IO rings to create. This influences the level of IO
+    /// concurrency. A higher ring depth allows a shard to submit a
+    /// greater number of IO requests to the kernel at once.
+    ///
+    /// Values above zero are valid and the default is 128.
+    pub fn ring_depth(mut self, ring_depth: usize) -> LocalExecutorBuilder {
+        assert!(ring_depth > 0, "ring depth should be strictly positive");
+        self.ring_depth = ring_depth;
         self
     }
 
@@ -496,6 +512,7 @@ impl LocalExecutorBuilder {
         let mut le = LocalExecutor::new(
             notifier,
             self.io_memory,
+            self.ring_depth,
             self.preempt_timer_duration,
             cpu_set_gen.next().cpu_binding(),
             self.spin_before_park,
@@ -557,6 +574,7 @@ impl LocalExecutorBuilder {
         let name = format!("{}-{}", self.name, notifier.id());
         let mut cpu_set_gen = placement::CpuSetGenerator::one(self.placement)?;
         let io_memory = self.io_memory;
+        let ring_depth = self.ring_depth;
         let preempt_timer_duration = self.preempt_timer_duration;
         let spin_before_park = self.spin_before_park;
 
@@ -566,6 +584,7 @@ impl LocalExecutorBuilder {
                 let mut le = LocalExecutor::new(
                     notifier,
                     io_memory,
+                    ring_depth,
                     preempt_timer_duration,
                     cpu_set_gen.next().cpu_binding(),
                     spin_before_park,
@@ -621,6 +640,10 @@ pub struct LocalExecutorPoolBuilder {
     /// that, but it will come from the standard allocator and performance
     /// will suffer. Defaults to 10 MiB.
     io_memory: usize,
+    /// The depth of the IO rings to create. This influences the level of IO
+    /// concurrency. A higher ring depth allows a shard to submit a
+    /// greater number of IO requests to the kernel at once.
+    ring_depth: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
     /// Indicates a policy by which [`LocalExecutor`]s are bound to CPUs.
@@ -638,6 +661,7 @@ impl LocalExecutorPoolBuilder {
             spin_before_park: None,
             name: String::from("unnamed"),
             io_memory: 10 << 20,
+            ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
             preempt_timer_duration: Duration::from_millis(100),
             placement,
         }
@@ -665,6 +689,14 @@ impl LocalExecutorPoolBuilder {
     /// details.  The setting is applied to all executors in the pool.
     pub fn io_memory(mut self, io_memory: usize) -> Self {
         self.io_memory = io_memory;
+        self
+    }
+
+    /// Please see documentation under [`LocalExecutorBuilder::ring_depth`] for
+    /// details.  The setting is applied to all executors in the pool.
+    pub fn ring_depth(mut self, ring_depth: usize) -> Self {
+        assert!(ring_depth > 0, "ring depth should be strictly positive");
+        self.ring_depth = ring_depth;
         self
     }
 
@@ -733,6 +765,7 @@ impl LocalExecutorPoolBuilder {
         let name = format!("{}-{}", &self.name, notifier.id());
         let handle = Builder::new().name(name).spawn({
             let io_memory = self.io_memory;
+            let ring_depth = self.ring_depth;
             let preempt_timer_duration = self.preempt_timer_duration;
             let spin_before_park = self.spin_before_park;
             let latch = Latch::clone(latch);
@@ -744,6 +777,7 @@ impl LocalExecutorPoolBuilder {
                     let mut le = LocalExecutor::new(
                         notifier,
                         io_memory,
+                        ring_depth,
                         preempt_timer_duration,
                         cpu_binding,
                         spin_before_park,
@@ -876,6 +910,7 @@ impl LocalExecutor {
     fn new(
         notifier: Arc<sys::SleepNotifier>,
         io_memory: usize,
+        ring_depth: usize,
         preempt_timer: Duration,
         cpu_binding: Option<impl IntoIterator<Item = usize>>,
         mut spin_before_park: Option<Duration>,
@@ -899,11 +934,7 @@ impl LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
-            reactor: Rc::new(reactor::Reactor::new(
-                notifier,
-                io_memory,
-                DEFAULT_RING_SUBMISSION_DEPTH,
-            )),
+            reactor: Rc::new(reactor::Reactor::new(notifier, io_memory, ring_depth)),
         })
     }
 
