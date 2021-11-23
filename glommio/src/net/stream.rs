@@ -279,7 +279,7 @@ impl<S: AsRawFd> NonBufferedStream<S> {
                     self.source_rx = Some(reactor.poll_read_ready(self.stream.as_raw_fd()));
                     // The `rush_dispatch`s here and after could be removed to
                     // improve performance if #458 is handled appropriately.
-                    reactor.rush_dispatch(self.source_rx.as_ref().unwrap());
+                    // reactor.rush_dispatch(self.source_rx.as_ref().unwrap());
                 }
                 return Poll::Ready(Ok(result));
             }
@@ -289,7 +289,7 @@ impl<S: AsRawFd> NonBufferedStream<S> {
 
         if no_pending_poll {
             self.source_rx = Some(reactor.poll_read_ready(self.stream.as_raw_fd()));
-            reactor.rush_dispatch(self.source_rx.as_ref().unwrap());
+            // reactor.rush_dispatch(self.source_rx.as_ref().unwrap());
         }
 
         let source = self.source_rx.as_ref().unwrap();
