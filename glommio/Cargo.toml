@@ -47,7 +47,7 @@ hdrhistogram = "7.3.0"
 pretty_env_logger = "~0.4"
 rand = "~0.8"
 tokio = { version = "1.12", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
-tracing-subscriber = "~0.2"
+tracing-subscriber = { version = "~0.3", features = ["env-filter"] }
 
 [build-dependencies]
 cc = "1.0"
