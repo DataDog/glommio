@@ -10,26 +10,6 @@ on:
     branches: [ master ]
 
 jobs:
-  fmt:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Cache setup
-        uses: ./.github/actions/cache-setup
-
-      - name: Install nightly for rustfmt features
-        run: |
-          FMT_NIGHTLY=nightly-$(curl -s https://rust-lang.github.io/rustup-components-history/x86_64-unknown-linux-gnu/rustfmt)
-          rustup install nightly
-          rustup default "$FMT_NIGHTLY"
-          rustup component add rustfmt
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
   doc:
     runs-on: ubuntu-latest
 
@@ -49,35 +29,6 @@ jobs:
     # temporarily disabled.
     # - name: Validate links
     #   run: cargo deadlinks --dir target/doc/glommio
-
-  toml:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Cache setup
-        uses: ./.github/actions/cache-setup
-
-      - name: Install cargo-sort
-        run: cargo install cargo-sort
-
-      - name: Sort Cargo.toml
-        run: cargo sort -w --check
-
-  clippy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Cache setup
-        uses: ./.github/actions/cache-setup
-
-      - name: Run linters
-        run: cargo clippy --all-targets --all-features -- -D warnings
 
   build:
     runs-on: ubuntu-latest
@@ -102,5 +53,15 @@ jobs:
       - name: Cache setup
         uses: ./.github/actions/cache-setup
 
-      - name: Test all targets
-        run: sudo bash -c "ulimit -Sl 512 && ulimit -Hl 512 && PATH=$PATH:/usr/share/rust/.cargo/bin && RUSTUP_TOOLCHAIN=stable cargo test --all-features"
+      - name: Install cargo helpers and test all targets 
+        run: |
+          cat << EOF > "run-gha-workflow.sh"
+          PATH=$PATH:/usr/share/rust/.cargo/bin
+          rustup install nightly
+          rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
+          rustup show
+          rustup default stable
+          cargo install cargo-sort
+          cargo test --all-features
+          EOF
+          sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"
