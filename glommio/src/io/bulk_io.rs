@@ -101,11 +101,10 @@ impl<V: IoVec> IOVecMerger<V> {
                         || u64::saturating_sub(pos, cur.pos() + cur.size() as u64) > gap as u64
                     {
                         let (pos, size) = self.current.replace((pos, size)).unwrap();
+                        self.merged.push_front(io);
+
                         return Some(MergedIOVecs {
-                            coalesced_user_iovecs: std::mem::replace(
-                                &mut self.merged,
-                                VecDeque::from(vec![io]),
-                            ),
+                            coalesced_user_iovecs: self.merged.drain(1..).collect(),
                             pos,
                             size,
                         });
@@ -118,11 +117,10 @@ impl<V: IoVec> IOVecMerger<V> {
                 if merged.1 - merged.0 > self.max_merged_buffer_size as u64 {
                     // if the merged buffer is too large, don't merge
                     let (pos, size) = self.current.replace((pos, size)).unwrap();
+                    self.merged.push_front(io);
+
                     return Some(MergedIOVecs {
-                        coalesced_user_iovecs: std::mem::replace(
-                            &mut self.merged,
-                            VecDeque::from(vec![io]),
-                        ),
+                        coalesced_user_iovecs: self.merged.drain(1..).collect(),
                         pos,
                         size,
                     });
@@ -136,7 +134,7 @@ impl<V: IoVec> IOVecMerger<V> {
 
     pub(super) fn flush(&mut self) -> Option<MergedIOVecs<V>> {
         self.current.map(|x| MergedIOVecs {
-            coalesced_user_iovecs: std::mem::take(&mut self.merged),
+            coalesced_user_iovecs: self.merged.drain(..).collect(),
             pos: x.pos(),
             size: x.size(),
         })
