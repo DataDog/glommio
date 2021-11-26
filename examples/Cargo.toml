@@ -6,18 +6,18 @@ publish = false
 edition = "2018"
 
 [dev-dependencies]
+ansi_term = "~0.12.1"
+clap = "2.33"
+fastrand = "1.4.0"
 futures = "~0.3.5"
 futures-lite = "1.11.1"
-ansi_term = "~0.12.1"
 glommio = { path = "../glommio" }
-pretty-bytes = "~0.2.2"
-clap = "2.33"
-sys-info = "~0.8.0"
-fastrand = "1.4.0"
-num_cpus = "1.13.0"
 
 # hyper and tokio for the hyper example. We just need the traits from Tokio
 hyper = { version = "0.14", features = ["full"] }
+num_cpus = "1.13.0"
+pretty-bytes = "~0.2.2"
+sys-info = "~0.8.0"
 tokio = { version = "1" }
 
 [[example]]
