@@ -6,14 +6,21 @@ fn main() {
     let project = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .canonicalize()
         .unwrap();
-    let liburing = project.join("liburing");
 
-    Command::new("git")
-        .arg("submodule")
-        .arg("update")
-        .arg("--init")
-        .status()
-        .unwrap();
+    let liburing = match env::var("GLOMMIO_LIBURING_DIR") {
+        Ok(path) => PathBuf::from(path).canonicalize().unwrap(),
+        Err(_) => {
+            Command::new("git")
+                .arg("submodule")
+                .arg("update")
+                .arg("--init")
+                .status()
+                .unwrap();
+
+            project.join("liburing")
+        }
+    };
+
     // Run the configure script in OUT_DIR to get `compat.h`
     let configured_include = configure(&liburing);
 
