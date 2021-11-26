@@ -50,6 +50,22 @@ jobs:
     # - name: Validate links
     #   run: cargo deadlinks --dir target/doc/glommio
 
+  toml:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: Install cargo-sort
+        run: cargo install cargo-sort
+
+      - name: Sort Cargo.toml
+        run: cargo sort -w --check
+
   clippy:
     runs-on: ubuntu-latest
 
