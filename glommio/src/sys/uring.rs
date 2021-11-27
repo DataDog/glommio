@@ -23,7 +23,7 @@ use std::{
     ptr,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -471,7 +471,12 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
         })
 }
 
-fn record_stats<Ring: ReactorRing>(ring: &mut Ring, src: &InnerSource, res: &io::Result<usize>) {
+fn record_stats<Ring: ReactorRing>(
+    ring: &mut Ring,
+    src: &mut InnerSource,
+    res: &io::Result<usize>,
+) {
+    src.wakers.fulfilled_at = Some(Instant::now());
     if let Some(fulfilled) = src.stats_collection.and_then(|x| x.fulfilled) {
         fulfilled(res, ring.io_stats_mut(), 1);
         if let Some(handle) = src.task_queue {
@@ -795,8 +800,8 @@ impl UringCommon for PollRing {
         process_one_event(
             self.ring.peek_for_cqe(),
             |_| None,
-            |src, res| {
-                record_stats(self, &src, &res);
+            |mut src, res| {
+                record_stats(self, &mut src, &res);
                 res
             },
             source_map,
@@ -1042,7 +1047,7 @@ impl UringCommon for SleepableRing {
                 _ => None,
             },
             |mut src, res| {
-                record_stats(self, &src, &res);
+                record_stats(self, &mut src, &res);
                 if let SourceType::ForeignNotifier(_, installed) = &mut src.source_type {
                     *installed = false;
                 }

@@ -457,6 +457,9 @@ pub(super) struct Wakers {
     /// Raw result of the operation.
     pub(super) result: Option<io::Result<usize>>,
 
+    /// The timestamp at which the reactor fulfilled the source
+    pub(super) fulfilled_at: Option<std::time::Instant>,
+
     /// Tasks waiting for the next event.
     pub(super) waiters: SmallVec<[Waker; 1]>,
 }
@@ -465,6 +468,7 @@ impl Wakers {
     pub(super) fn new() -> Self {
         Wakers {
             result: None,
+            fulfilled_at: None,
             waiters: Default::default(),
         }
     }
