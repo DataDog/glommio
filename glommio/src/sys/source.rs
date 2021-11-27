@@ -33,7 +33,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
     task::{Poll, Waker},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug)]
@@ -93,12 +93,20 @@ pub struct EnqueuedSource {
 }
 
 pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats, waiters: u64) -> ();
+pub(crate) type LatencyCollectionFn = fn(std::time::Duration, &mut RingIoStats) -> ();
+
 #[derive(Copy, Clone)]
 pub(crate) struct StatsCollection {
     /// fulfilled runs when the source exits the reactor
     pub(crate) fulfilled: Option<StatsCollectionFn>,
+
     /// reused runs when a fulfilled source is reused by another consumer
     pub(crate) reused: Option<StatsCollectionFn>,
+
+    /// Called when a result is first consumed. It collects the time
+    /// it took for user code to consume the result of a fulfilled source.
+    /// This is called once, even if the source is reused multiple time.
+    pub(crate) post_reactor_scheduler_latency: Option<LatencyCollectionFn>,
 }
 
 /// A registered source of I/O events.
@@ -215,12 +223,36 @@ impl Source {
     }
 
     pub(crate) fn result(&self) -> Option<io::Result<usize>> {
-        self.inner
-            .borrow()
+        let mut inner = self.inner.borrow_mut();
+        let ret = inner
             .wakers
             .result
             .as_ref()
-            .map(|x| OsResult::from(x).into())
+            .map(|x| OsResult::from(x).into());
+
+        // if there is a scheduler latency collection function present, invoke it once
+        if ret.is_some() && inner.wakers.fulfilled_at.is_some() {
+            if let Some(Some(stat_fn)) = inner
+                .stats_collection
+                .as_ref()
+                .map(|x| x.post_reactor_scheduler_latency)
+            {
+                let delay =
+                    Instant::now().duration_since(inner.wakers.fulfilled_at.take().unwrap());
+                let reactor = &crate::executor().reactor().sys;
+                drop(inner);
+
+                (stat_fn)(delay, reactor.ring_for_source(self).io_stats_mut());
+                (stat_fn)(
+                    delay,
+                    reactor
+                        .ring_for_source(self)
+                        .io_stats_for_task_queue_mut(crate::executor().current_task_queue()),
+                );
+            }
+        }
+
+        ret
     }
 
     // adds a single waiter to the list, replacing any waiter that may already
