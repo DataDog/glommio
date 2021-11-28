@@ -9,8 +9,6 @@ use crate::{
     task,
     ByteSliceExt,
     ByteSliceMutExt,
-    GlommioError,
-    ResourceType,
 };
 use ahash::AHashMap;
 use core::task::Waker;
@@ -519,25 +517,19 @@ impl DmaStreamReader {
     }
 
     /// Allows access to the buffer that holds the current position with no
-    /// extra copy
-    /// In order to use this API, one must guarantee that reading the specified
-    /// length may not cross into a different buffer.  Users of this API are
-    /// expected to be aware of their buffer size (selectable in the
-    /// [`DmaStreamReaderBuilder`]) and act accordingly.
+    /// extra copy.
     ///
-    /// The buffer is also not released until the returned [`ReadResult`] goes
+    /// This function returns a [`ReadResult`]. It contains all the bytes read,
+    /// which can be less than the requested amount. Users are expected to call
+    /// this in a loop like they would [`AsyncRead::poll_read`].
+    ///
+    /// The buffer is not released until the returned [`ReadResult`] goes
     /// out of scope. So if you plan to keep this alive for a long time this
     /// is probably the wrong API.
     ///
     /// If EOF is hit while reading with this method, the number of bytes in the
-    /// returned buffer will be less than number requested.
-    ///
-    /// Let's say you want to open a file and check if its header is sane: this
-    /// is a good API for that.
-    ///
-    /// But if after such header there is an index that you want to keep in
-    /// memory, then you are probably better off with one of the methods
-    /// from [`AsyncReadExt`].
+    /// returned buffer will be less than number requested and the remaining
+    /// bytes will be 0.
     ///
     /// # Examples
     /// ```no_run
@@ -558,9 +550,7 @@ impl DmaStreamReader {
     /// });
     /// ```
     ///
-    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
-    /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
-    /// [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html
+    /// [`AsyncRead::poll_read`]: https://docs.rs/futures-io/latest/futures_io/trait.AsyncRead.html#tymethod.poll_read
     /// [`ReadResult`]: struct.ReadResult.html
     pub async fn get_buffer_aligned(&mut self, len: u64) -> Result<ReadResult> {
         poll_fn(|cx| self.poll_get_buffer_aligned(cx, len)).await
@@ -569,60 +559,25 @@ impl DmaStreamReader {
     /// A variant of [`get_buffer_aligned`] that can be called from a poll
     /// function context.
     ///
-    /// Allows access to the buffer that holds the current position with no
-    /// extra copy
-    /// In order to use this API, one must guarantee that reading the specified
-    /// length may not cross into a different buffer.  Users of this API are
-    /// expected to be aware of their buffer size (selectable in the
-    /// [`DmaStreamReaderBuilder`]) and act accordingly.
-    ///
-    /// The buffer is also not released until the returned [`ReadResult`] goes
-    /// out of scope. So if you plan to keep this alive for a long time this
-    /// is probably the wrong API.
-    ///
-    /// If EOF is hit while reading with this method, the number of bytes in the
-    /// returned buffer will be less than number requested.
-    ///
-    /// Let's say you want to open a file and check if its header is sane: this
-    /// is a good API for that.
-    ///
-    /// But if after such header there is an index that you want to keep in
-    /// memory, then you are probably better off with one of the methods
-    /// from [`AsyncReadExt`].
-    ///
     /// [`get_buffer_aligned`]: Self::get_buffer_aligned
-    /// [`DmaStreamReader`]: struct.DmaStreamReader.html
-    /// [`DmaStreamReaderBuilder`]: struct.DmaStreamReaderBuilder.html
-    /// [`AsyncReadExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html
-    /// [`ReadResult`]: struct.ReadResult.html
     pub fn poll_get_buffer_aligned(
         &mut self,
         cx: &mut Context<'_>,
-        len: u64,
+        mut len: u64,
     ) -> Poll<Result<ReadResult>> {
+        let (start_id, buffer_len) = {
+            let state = self.state.borrow();
+            let start_id = state.buffer_id(self.current_pos);
+            let offset = state.offset_of(self.current_pos);
+            (start_id, (self.buffer_size - offset as u64).min(len))
+        };
+
         if len == 0 {
             return Poll::Ready(Ok(ReadResult::empty_buffer()));
         }
 
-        let (start_id, end_id, buffer_size) = {
-            let state = self.state.borrow();
-            let start_id = state.buffer_id(self.current_pos);
-            let end_id = state.buffer_id(self.current_pos + len - 1);
-            (start_id, end_id, state.buffer_size)
-        };
-
-        if start_id != end_id {
-            return Poll::Ready(Err(GlommioError::<()>::WouldBlock(ResourceType::File(
-                format!(
-                    "Reading {} bytes from position {} would cross a buffer boundary (Buffer size \
-                     {})",
-                    len, self.current_pos, buffer_size
-                ),
-            ))));
-        }
-
-        let x = ready!(self.poll_get_buffer(cx, len, start_id))?;
-        self.skip(len);
+        let x = ready!(self.poll_get_buffer(cx, buffer_len, start_id))?;
+        self.skip(x.len() as u64);
         Poll::Ready(Ok(x))
     }
 
@@ -1793,16 +1748,53 @@ mod test {
         let buffer = reader.get_buffer_aligned(8).await.unwrap();
         assert_eq!(buffer.len(), 8);
         check_contents!(*buffer, 1004);
-
-        match reader.get_buffer_aligned(20).await {
-            Err(_) => {},
-            Ok(_) => panic!("Expected an error"),
-        }
-        assert_eq!(reader.current_pos(), 1012);
         reader.skip((128 << 10) - 1012);
         let eof_short_buffer = reader.get_buffer_aligned(4).await.unwrap();
         assert_eq!(eof_short_buffer.len(), 2);
         check_contents!(*eof_short_buffer, 131072);
+
+        reader.close().await.unwrap();
+    });
+
+    file_stream_read_test!(read_get_buffer_aligned_cross_boundaries, path, _k, file, _file_size: 2048, {
+        let mut reader = DmaStreamReaderBuilder::new(file)
+            .with_buffer_size(1024)
+            .build();
+
+        reader.skip(1022);
+
+        match reader.get_buffer_aligned(130).await {
+            Err(_) => panic!("Expected partial success"),
+            Ok(res) => {
+                assert_eq!(res.len(), 2);
+                check_contents!(*res, 1022);
+            },
+        }
+        assert_eq!(reader.current_pos(), 1024);
+
+        match reader.get_buffer_aligned(64).await {
+            Err(_) => panic!("Expected success"),
+            Ok(res) => {
+                assert_eq!(res.len(), 64);
+                check_contents!(*res, 1024);
+            },
+        }
+        assert_eq!(reader.current_pos(), 1088);
+
+        reader.skip(896);
+
+        // EOF
+        match reader.get_buffer_aligned(128).await {
+            Err(_) => panic!("Expected success"),
+            Ok(res) => {
+                assert_eq!(res.len(), 64);
+                check_contents!(*res, 1984);
+            },
+        }
+        assert_eq!(reader.current_pos(), 2048);
+
+        let eof = reader.get_buffer_aligned(64).await.unwrap();
+        assert_eq!(eof.len(), 0);
 
         reader.close().await.unwrap();
     });
