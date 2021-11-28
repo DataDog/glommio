@@ -569,6 +569,12 @@ impl DmaStreamReader {
             let state = self.state.borrow();
             let start_id = state.buffer_id(self.current_pos);
             let offset = state.offset_of(self.current_pos);
+
+            // enforce max_pos
+            if self.current_pos + len > state.max_pos {
+                len = state.max_pos - self.current_pos;
+            }
+
             (start_id, (self.buffer_size - offset as u64).min(len))
         };
 
