@@ -416,20 +416,22 @@ impl ImmutableFile {
             .read_many(iovs, max_merged_buffer_size, max_read_amp)
     }
 
-    /// rename this file.
+    /// Rename this file.
     ///
-    /// **Warning:** synchronous operation, will block the reactor
+    /// Note: this syscall might be issued in a background thread depending on
+    /// the system's capabilities.
     pub async fn rename<P: AsRef<Path>>(&self, new_path: P) -> Result<()> {
         self.stream_builder.file.rename(new_path).await
     }
 
-    /// remove this file.
+    /// Remove this file.
     ///
     /// The file does not have to be closed to be removed. Removing removes
     /// the name from the filesystem but the file will still be accessible for
     /// as long as it is open.
     ///
-    /// **Warning:** synchronous operation, will block the reactor
+    /// Note: this syscall might be issued in a background thread depending on
+    /// the system's capabilities.
     pub async fn remove(&self) -> Result<()> {
         self.stream_builder.file.remove().await
     }
