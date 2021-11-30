@@ -1,6 +1,6 @@
 # glommio
 
-![crates.io](https://img.shields.io/crates/v/glommio)
+[![crates.io](https://img.shields.io/crates/v/glommio)](https://crates.io/crates/glommio)
 [![docs.rs](https://docs.rs/glommio/badge.svg)](https://docs.rs/glommio/latest/glommio/)
 ![license](https://img.shields.io/crates/l/glommio)
 [![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://glommio.zulipchat.com)
