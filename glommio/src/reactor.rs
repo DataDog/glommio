@@ -500,7 +500,12 @@ impl Reactor {
                     stats.file_deduped_bytes_read += *result as u64 * op_count;
                 }
             }),
-            latency: None,
+            latency: Some(|io_lat, sched_lat, stats| {
+                stats.io_latency_us.add(io_lat.as_micros() as f64);
+                stats
+                    .post_reactor_io_scheduler_latency_us
+                    .add(sched_lat.as_micros() as f64)
+            }),
         };
 
         let source = self.new_source(raw, SourceType::Read(pollable, None), Some(stats));
@@ -535,7 +540,12 @@ impl Reactor {
                 }
             }),
             reused: None,
-            latency: None,
+            latency: Some(|io_lat, sched_lat, stats| {
+                stats.io_latency_us.add(io_lat.as_micros() as f64);
+                stats
+                    .post_reactor_io_scheduler_latency_us
+                    .add(sched_lat.as_micros() as f64)
+            }),
         };
 
         let source = self.new_source(

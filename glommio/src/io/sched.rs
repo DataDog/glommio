@@ -400,54 +400,32 @@ pub(crate) mod test {
 
         let read_buf1 = read_some(new_file.clone(), 0..4096).await;
         // we expect one IO to have been performed at this point
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            0
-        );
+        // all buffers are dead so this last read should trigger an IO request
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 1);
+        assert_eq!(io_stats.file_deduped_reads().0, 0);
 
         let read_buf2 = read_some(new_file.clone(), 0..4096).await;
         // should feed from the first buffer
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            1
-        );
+        // all buffers are dead so this last read should trigger an IO request
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 0);
+        assert_eq!(io_stats.file_deduped_reads().0, 1);
 
         drop(read_buf1);
         let read_buf3 = read_some(new_file.clone(), 0..4096).await;
         // initial buffer lifetime should have been extended
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            2
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 0);
+        assert_eq!(io_stats.file_deduped_reads().0, 1);
 
         drop(read_buf2);
         drop(read_buf3);
         let _ = read_some(new_file.clone(), 0..4096).await;
         // all buffers are dead so this last read should trigger an IO request
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 2);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            2
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 1);
+        assert_eq!(io_stats.file_deduped_reads().0, 0);
 
         new_file.close_rc().await.expect("failed to close file");
     });
@@ -486,15 +464,9 @@ pub(crate) mod test {
         join!(read_buf1, read_buf2);
 
         // should feed from the first buffer
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            1
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 1);
+        assert_eq!(io_stats.file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -527,27 +499,15 @@ pub(crate) mod test {
 
         let _first = read_some(new_file.clone(), 0..16384).await;
         // we expect one IO to have been performed at this point
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            0
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 1);
+        assert_eq!(io_stats.file_deduped_reads().0, 0);
 
         let _second = read_some(new_file.clone(), 67..578).await;
         // should feed from the first buffer
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            1
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 0);
+        assert_eq!(io_stats.file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -581,15 +541,9 @@ pub(crate) mod test {
         assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
 
         let _second = read_some(new_file.clone(), 0..4096).await;
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 2);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            0
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 1);
+        assert_eq!(io_stats.file_deduped_reads().0, 0);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -638,15 +592,9 @@ pub(crate) mod test {
 
         let _second = read_some(linked_file.clone(), 0..4096).await;
         // should feed from the first buffer
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            1
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 0);
+        assert_eq!(io_stats.file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
         linked_file.close_rc().await.expect("failed to close file");
     });
@@ -696,15 +644,9 @@ pub(crate) mod test {
 
         let _second = read_some(linked_file.clone(), 0..4096).await;
         // should feed from the first buffer
-        assert_eq!(crate::executor().io_stats().all_rings().file_reads().0, 1);
-        assert_eq!(
-            crate::executor()
-                .io_stats()
-                .all_rings()
-                .file_deduped_reads()
-                .0,
-            1
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 0);
+        assert_eq!(io_stats.file_deduped_reads().0, 1);
         new_file.close_rc().await.expect("failed to close file");
         linked_file.close_rc().await.expect("failed to close file");
     });

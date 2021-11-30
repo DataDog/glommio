@@ -740,7 +740,7 @@ impl PollRing {
             ring,
             submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
             allocator,
-            stats: RingIoStats::new(),
+            stats: RingIoStats::default(),
             task_queue_stats: AHashMap::new(),
             source_map,
         })
@@ -884,7 +884,7 @@ impl SleepableRing {
             waiting_submission: 0,
             name,
             allocator,
-            stats: RingIoStats::new(),
+            stats: RingIoStats::default(),
             task_queue_stats: AHashMap::new(),
             source_map,
         })
@@ -1745,18 +1745,33 @@ impl Reactor {
 
     pub fn io_stats(&self) -> IoStats {
         IoStats::new(
-            self.main_ring.borrow().stats,
-            self.latency_ring.borrow().stats,
-            self.poll_ring.borrow().stats,
+            std::mem::take(&mut self.main_ring.borrow_mut().stats),
+            std::mem::take(&mut self.latency_ring.borrow_mut().stats),
+            std::mem::take(&mut self.poll_ring.borrow_mut().stats),
         )
     }
 
     pub(crate) fn task_queue_io_stats(&self, h: &TaskQueueHandle) -> Option<IoStats> {
-        let main = self.main_ring.borrow().task_queue_stats.get(h).copied();
-        let lat = self.latency_ring.borrow().task_queue_stats.get(h).copied();
-        let poll = self.poll_ring.borrow().task_queue_stats.get(h).copied();
+        let main = self
+            .main_ring
+            .borrow_mut()
+            .task_queue_stats
+            .get_mut(h)
+            .map(std::mem::take);
+        let lat = self
+            .latency_ring
+            .borrow_mut()
+            .task_queue_stats
+            .get_mut(h)
+            .map(std::mem::take);
+        let poll = self
+            .poll_ring
+            .borrow_mut()
+            .task_queue_stats
+            .get_mut(h)
+            .map(std::mem::take);
 
-        if let (None, None, None) = (main, lat, poll) {
+        if let (None, None, None) = (&main, &lat, &poll) {
             None
         } else {
             Some(IoStats::new(
