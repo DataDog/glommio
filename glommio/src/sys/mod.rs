@@ -457,6 +457,9 @@ pub(super) struct Wakers {
     /// Raw result of the operation.
     pub(super) result: Option<io::Result<usize>>,
 
+    /// The timestamp at which the reactor inserted the source in the ring
+    pub(super) seen_at: Option<std::time::Instant>,
+
     /// The timestamp at which the reactor fulfilled the source
     pub(super) fulfilled_at: Option<std::time::Instant>,
 
@@ -468,6 +471,7 @@ impl Wakers {
     pub(super) fn new() -> Self {
         Wakers {
             result: None,
+            seen_at: None,
             fulfilled_at: None,
             waiters: Default::default(),
         }

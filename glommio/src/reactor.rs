@@ -303,7 +303,7 @@ impl Reactor {
                 }
             }),
             reused: None,
-            post_reactor_scheduler_latency: None,
+            latency: None,
         };
 
         let source = self.new_source(
@@ -324,7 +324,7 @@ impl Reactor {
                 }
             }),
             reused: None,
-            post_reactor_scheduler_latency: None,
+            latency: None,
         };
 
         let source = self.new_source(
@@ -500,7 +500,7 @@ impl Reactor {
                     stats.file_deduped_bytes_read += *result as u64 * op_count;
                 }
             }),
-            post_reactor_scheduler_latency: None,
+            latency: None,
         };
 
         let source = self.new_source(raw, SourceType::Read(pollable, None), Some(stats));
@@ -535,7 +535,7 @@ impl Reactor {
                 }
             }),
             reused: None,
-            post_reactor_scheduler_latency: None,
+            latency: None,
         };
 
         let source = self.new_source(
@@ -620,7 +620,7 @@ impl Reactor {
                     }
                 }),
                 reused: None,
-                post_reactor_scheduler_latency: None,
+                latency: None,
             }),
         );
         self.sys.close(&source);
@@ -663,7 +663,7 @@ impl Reactor {
                     }
                 }),
                 reused: None,
-                post_reactor_scheduler_latency: None,
+                latency: None,
             }),
         );
         self.sys.open_at(&source, flags, mode);

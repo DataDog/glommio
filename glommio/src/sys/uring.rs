@@ -1774,6 +1774,7 @@ fn queue_request_into_ring(
     descriptor: UringOpDescriptor,
     source_map: &mut SourceMap,
 ) {
+    source.inner.borrow_mut().wakers.seen_at = Some(Instant::now());
     let q = ring.borrow_mut().submission_queue();
     let id = source_map.add_source(source, Rc::clone(&q));
 

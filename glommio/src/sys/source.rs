@@ -33,7 +33,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
     task::{Poll, Waker},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Debug)]
@@ -93,7 +93,8 @@ pub struct EnqueuedSource {
 }
 
 pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats, waiters: u64) -> ();
-pub(crate) type LatencyCollectionFn = fn(std::time::Duration, &mut RingIoStats) -> ();
+pub(crate) type LatencyCollectionFn =
+    fn(std::time::Duration, std::time::Duration, &mut RingIoStats) -> ();
 
 #[derive(Copy, Clone)]
 pub(crate) struct StatsCollection {
@@ -106,7 +107,7 @@ pub(crate) struct StatsCollection {
     /// Called when a result is first consumed. It collects the time
     /// it took for user code to consume the result of a fulfilled source.
     /// This is called once, even if the source is reused multiple time.
-    pub(crate) post_reactor_scheduler_latency: Option<LatencyCollectionFn>,
+    pub(crate) latency: Option<LatencyCollectionFn>,
 }
 
 /// A registered source of I/O events.
@@ -231,20 +232,24 @@ impl Source {
             .map(|x| OsResult::from(x).into());
 
         // if there is a scheduler latency collection function present, invoke it once
-        if ret.is_some() && inner.wakers.fulfilled_at.is_some() {
-            if let Some(Some(stat_fn)) = inner
-                .stats_collection
-                .as_ref()
-                .map(|x| x.post_reactor_scheduler_latency)
-            {
-                let delay =
-                    Instant::now().duration_since(inner.wakers.fulfilled_at.take().unwrap());
-                let reactor = &crate::executor().reactor().sys;
+        if ret.is_some() && inner.wakers.fulfilled_at.is_some() && inner.wakers.seen_at.is_some() {
+            if let Some(Some(stat_fn)) = inner.stats_collection.as_ref().map(|x| x.latency) {
+                let seen_at = inner.wakers.seen_at.take().unwrap();
+                let fulfilled_at = inner.wakers.fulfilled_at.take().unwrap();
                 drop(inner);
 
-                (stat_fn)(delay, reactor.ring_for_source(self).io_stats_mut());
+                let io_lat = fulfilled_at - seen_at;
+                let sched_lat = fulfilled_at.elapsed();
+
+                let reactor = &crate::executor().reactor().sys;
                 (stat_fn)(
-                    delay,
+                    io_lat,
+                    sched_lat,
+                    reactor.ring_for_source(self).io_stats_mut(),
+                );
+                (stat_fn)(
+                    io_lat,
+                    sched_lat,
                     reactor
                         .ring_for_source(self)
                         .io_stats_for_task_queue_mut(crate::executor().current_task_queue()),
