@@ -756,7 +756,7 @@ impl Reactor {
     }
 
     /// Processes new events, blocking until the first event or the timeout.
-    pub(crate) fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
+    pub(crate) fn react(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<()> {
         // Process ready timers.
         let (next_timer, woke) = self.process_external_events();
 
