@@ -1683,14 +1683,20 @@ impl Reactor {
             SourceType::Read(p, _) | SourceType::Write(p, _) => *p,
             _ => panic!("SourceType should declare if it supports poll operations"),
         };
-        match pollable {
-            PollableStatus::Pollable => queue_request_into_ring(
+        match (source.latency_req(), pollable) {
+            (Latency::Matters(_), _) => queue_request_into_ring(
+                &self.latency_ring,
+                source,
+                op,
+                &mut *self.source_map.borrow_mut(),
+            ),
+            (Latency::NotImportant, PollableStatus::Pollable) => queue_request_into_ring(
                 &self.poll_ring,
                 source,
                 op,
                 &mut *self.source_map.borrow_mut(),
             ),
-            PollableStatus::NonPollable(_) => queue_request_into_ring(
+            (Latency::NotImportant, PollableStatus::NonPollable(_)) => queue_request_into_ring(
                 &self.main_ring,
                 source,
                 op,
@@ -1701,16 +1707,17 @@ impl Reactor {
 
     pub(crate) fn ring_for_source(&self, source: &Source) -> RefMut<'_, dyn ReactorRing> {
         match &*source.source_type() {
-            SourceType::Read(p, _) | SourceType::Write(p, _) => {
-                return match p {
-                    PollableStatus::Pollable => {
-                        RefMut::map(self.poll_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
-                    }
-                    PollableStatus::NonPollable(_) => {
-                        RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
-                    }
-                };
-            }
+            SourceType::Read(p, _) | SourceType::Write(p, _) => match (source.latency_req(), p) {
+                (Latency::Matters(_), _) => RefMut::map(self.latency_ring.borrow_mut(), |x| {
+                    x as &mut dyn ReactorRing
+                }),
+                (Latency::NotImportant, PollableStatus::Pollable) => {
+                    RefMut::map(self.poll_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
+                }
+                (Latency::NotImportant, PollableStatus::NonPollable(_)) => {
+                    RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
+                }
+            },
             SourceType::Invalid => {
                 unreachable!("called ring_for_source on invalid source")
             }
