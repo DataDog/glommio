@@ -1552,14 +1552,15 @@ impl Reactor {
     ///   to the point where we *leave* this method. For instance: if we spin
     ///   here for 3ms and the preempt timer is 10ms that would leave the next
     ///   task queue just 7ms to run.
-    pub(crate) fn wait<F>(
+    pub(crate) fn wait<Preempt, F>(
         &self,
-        preempt_timer: Option<Duration>,
+        preempt_timer: Preempt,
         user_timer: Option<Duration>,
         mut woke: usize,
         process_remote_channels: F,
     ) -> io::Result<bool>
     where
+        Preempt: Fn() -> Option<Duration>,
         F: Fn() -> usize,
     {
         woke += self.flush_syscall_thread();
@@ -1568,6 +1569,11 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
+        // we need to make sure we consume the latency ring before setting the
+        // preemption timer because consuming this ring may wake up some previously
+        // asleep task queues.
+        consume_rings!(into &mut woke; lat_ring);
+
         // Cancel the old timer regardless of whether we can sleep:
         // if we won't sleep, we will register the new timer with its new
         // value.
@@ -1575,7 +1581,7 @@ impl Reactor {
         // But if we will sleep, there might be a timer registered that needs
         // to be removed otherwise we'll wake up when it expires.
         drop(self.timeout_src.take());
-        let mut should_sleep = match preempt_timer {
+        let mut should_sleep = match preempt_timer() {
             None => true,
             Some(dur) => {
                 self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
@@ -1829,13 +1835,13 @@ mod tests {
         reactor.queue_standard_request(&lethargic, op);
 
         let start = Instant::now();
-        reactor.wait(None, None, 0, || 0).unwrap();
+        reactor.wait(|| None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!((50..100).contains(&elapsed_ms));
 
         drop(slow); // Cancel this one.
 
-        reactor.wait(None, None, 0, || 0).unwrap();
+        reactor.wait(|| None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!((300..350).contains(&elapsed_ms));
     }
