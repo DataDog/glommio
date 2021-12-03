@@ -1189,6 +1189,8 @@ impl Reactor {
         let main_ring =
             SleepableRing::new(ring_depth, "main", allocator.clone(), source_map.clone())?;
         let poll_ring = PollRing::new(ring_depth, allocator.clone(), source_map.clone())?;
+        let mut latency_ring =
+            SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
@@ -1204,13 +1206,23 @@ impl Reactor {
                     main_ring.registrar().unregister_buffers().unwrap();
                 }
                 Ok(_) => {
-                    allocator.activate_registered_buffers(0);
+                    match latency_ring.registrar().register_buffers_by_ref(&registry) {
+                        Err(x) => {
+                            warn!(
+                                "Error: registering buffers in the poll ring. Skipping{:#?}",
+                                x
+                            );
+                            poll_ring.registrar().unregister_buffers().unwrap();
+                            main_ring.registrar().unregister_buffers().unwrap();
+                        }
+                        Ok(_) => {
+                            allocator.activate_registered_buffers(0);
+                        }
+                    };
                 }
             },
         }
 
-        let mut latency_ring =
-            SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(
