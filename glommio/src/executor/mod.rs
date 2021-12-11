@@ -2508,23 +2508,24 @@ mod test {
                 "testlat",
             );
 
-            let first_started = Rc::new(RefCell::new(false));
-            let second_status = Rc::new(RefCell::new(false));
+            let first_started = Rc::new(RefCell::new(0));
+            let second_status = Rc::new(RefCell::new(0));
 
             let first = local_ex
                 .spawn_into(
                     crate::enclose! { (first_started, second_status)
                         async move {
-                            *(first_started.borrow_mut()) = true;
-
                             let start = Instant::now();
                             // Now busy loop and make sure that we yield when we have too.
                             loop {
+                                let mut count = first_started.borrow_mut();
+                                *count += 1;
+
                                 if start.elapsed().as_millis() >= 99 {
                                     break;
                                 }
 
-                                if *(second_status.borrow()) {
+                                if *count < *(second_status.borrow()) {
                                     panic!("I was preempted but should not have been");
                                 }
                                 crate::yield_if_needed().await;
@@ -2541,13 +2542,14 @@ mod test {
                         async move {
                             // In case we are executed first, yield to the the other task
                             loop {
-                                if !(*(first_started.borrow())) {
+                                let mut count = second_status.borrow_mut();
+                                *count += 1;
+                                if *count >= *(first_started.borrow()) {
                                     crate::executor().yield_task_queue_now().await;
                                 } else {
                                     break;
                                 }
                             }
-                            *(second_status.borrow_mut()) = true;
                         }
                     },
                     tq2,
