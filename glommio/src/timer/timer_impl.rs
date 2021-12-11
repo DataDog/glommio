@@ -802,13 +802,14 @@ mod test {
                     Timer::new(Duration::from_millis(1)).await;
                     Ok(5)
                 },
-                Duration::from_millis(10),
+                Duration::from_millis(50),
             )
             .await
             .unwrap();
+            let elapsed = now.elapsed();
             assert_eq!(res, 5);
-            assert!(now.elapsed().as_millis() >= 1);
-            assert!(now.elapsed().as_millis() < 10);
+            assert!(elapsed.as_millis() >= 1);
+            assert!(elapsed.as_millis() < 50, "{}", elapsed.as_millis());
         });
     }
 
