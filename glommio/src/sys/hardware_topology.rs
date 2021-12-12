@@ -6,7 +6,7 @@
 //
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, BTreeMap},
     io::{self, ErrorKind},
     path::Path,
 };
@@ -90,6 +90,47 @@ pub fn get_machine_topology_unsorted() -> io::Result<Vec<CpuLocation>> {
 
             let cpu_location = build_cpu_location(sysfs_path, cpu, node, &mut cpu_to_core)?;
             cpu_locations.push(cpu_location);
+        }
+    }
+
+    // Make sure that differnt NUMA nodes do not contain the same core id.
+    let mut core_id_not_unique = false;
+    let mut core_to_numa = HashMap::new();
+    for l in &cpu_locations {
+        if *core_to_numa.entry(l.core).or_insert(l.numa_node) != l.numa_node {
+            core_id_not_unique = true;
+            break;
+        }
+    }
+
+    if core_id_not_unique {
+        // Assign a virtual core id to each CPU. The basic strategy is to sort CPUs 
+        // by their (NUMA node id, core id) and assign virtual core id in this order.
+        // Note we need to ensure that the CPUs on the same core will have the same core id.
+
+        // Using BTree over HashMap for 2 reasons:
+        // 1. to keep mapping consitent between different invocations.
+        // 2. to assign smaller virtual core ids to smaller numa node id.
+        // numa_node -> (core_id -> [cpu_id])
+        let mut node_to_core_to_cpus: BTreeMap<usize, BTreeMap<usize, Vec<usize>>> = BTreeMap::new();
+        for l in &cpu_locations {
+            node_to_core_to_cpus
+                .entry(l.numa_node)
+                .or_insert_with(BTreeMap::new)
+                .entry(l.core)
+                .or_insert_with(Vec::new)
+                .push(l.cpu)
+        }
+
+        let mut cpu_to_vcore = HashMap::new();
+        for (vcore, cpu_on_same_core) in node_to_core_to_cpus.values().flat_map(BTreeMap::values).enumerate() {
+            for &cpu in cpu_on_same_core {
+                cpu_to_vcore.insert(cpu, vcore);
+            }
+        }
+
+        for cpu_location in &mut cpu_locations {
+            cpu_location.core = *cpu_to_vcore.get(&cpu_location.cpu).unwrap();
         }
     }
 
