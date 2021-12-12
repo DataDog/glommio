@@ -757,7 +757,7 @@ mod test {
             Timer::new(Duration::from_millis(2)).await;
             let shares_second = queue.queue.shares();
             // The second element that we push should rush the first.
-            assert!(shares_second >= shares_first);
+            assert!(shares_second > shares_first);
             tq.await;
             tq2.await;
         });
