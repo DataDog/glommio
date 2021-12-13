@@ -93,17 +93,6 @@ pub fn get_machine_topology_unsorted() -> io::Result<Vec<CpuLocation>> {
         }
     }
 
-    // Make sure that differnt NUMA nodes do not contain the same core id.
-    let mut core_id_not_unique = false;
-    let mut core_to_numa = HashMap::new();
-    for l in &cpu_locations {
-        if *core_to_numa.entry(l.core).or_insert(l.numa_node) != l.numa_node {
-            core_id_not_unique = true;
-            break;
-        }
-    }
-
-    if core_id_not_unique {
         // Assign a virtual core id to each CPU. The basic strategy is to sort CPUs 
         // by their (NUMA node id, core id) and assign virtual core id in this order.
         // Note we need to ensure that the CPUs on the same core will have the same core id.
@@ -132,7 +121,6 @@ pub fn get_machine_topology_unsorted() -> io::Result<Vec<CpuLocation>> {
         for cpu_location in &mut cpu_locations {
             cpu_location.core = *cpu_to_vcore.get(&cpu_location.cpu).unwrap();
         }
-    }
 
     Ok(cpu_locations)
 }
