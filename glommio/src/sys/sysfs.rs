@@ -35,6 +35,7 @@ impl FromStr for StorageCache {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct BlockDevice {
     memory_device: bool,
     rotational: bool,

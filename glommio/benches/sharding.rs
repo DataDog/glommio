@@ -22,7 +22,7 @@ fn main() {
 
     #[derive(Clone)]
     struct RequestHandler {
-        nr_shards: usize,
+        _nr_shards: usize,
     }
 
     impl Handler<i32> for RequestHandler {
@@ -38,7 +38,7 @@ fn main() {
     let shards = LocalExecutorPoolBuilder::new(PoolPlacement::MaxSpread(nr_shards, None))
         .spin_before_park(Duration::from_millis(10))
         .on_all_shards(enclose!((mesh) move || async move {
-            let handler = RequestHandler { nr_shards };
+            let handler = RequestHandler { _nr_shards: nr_shards };
             let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
             if sharded.shard_id() == 0 {
                 sharded.handle(repeat(1).take(n)).unwrap();

@@ -133,8 +133,7 @@ type QueueItem<T> = Rc<dyn DeadlineSource<Output = T>>;
 struct InnerQueue<T> {
     queue: RefCell<VecDeque<(Instant, QueueItem<T>)>>,
     last_admitted: Cell<Instant>,
-
-    last_adjusted: Cell<Instant>,
+    _last_adjusted: Cell<Instant>,
     last_shares: Cell<usize>,
     accumulated_error: Cell<f64>,
     adjustment_period: Duration,
@@ -281,7 +280,7 @@ impl<T> InnerQueue<T> {
         Self {
             queue: RefCell::new(VecDeque::new()),
             last_admitted: Cell::new(now),
-            last_adjusted: Cell::new(now),
+            _last_adjusted: Cell::new(now),
             last_shares: Cell::new(1),
             accumulated_error: Cell::new(0.0),
             adjustment_period,
@@ -369,7 +368,7 @@ pub struct DeadlineQueue<T> {
     tq: TaskQueueHandle,
     sender: LocalSender<Rc<dyn DeadlineSource<Output = T>>>,
     responder: LocalReceiver<T>,
-    handle: task::join_handle::JoinHandle<()>,
+    _handle: task::join_handle::JoinHandle<()>,
     queue: Rc<InnerQueue<T>>,
 }
 
@@ -451,7 +450,7 @@ impl<T: 'static> DeadlineQueue<T> {
             tq,
             sender,
             responder,
-            handle,
+            _handle: handle,
             queue,
         }
     }

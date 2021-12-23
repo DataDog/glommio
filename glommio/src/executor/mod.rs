@@ -98,18 +98,12 @@ pub(crate) fn executor_id() -> Option<usize> {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 /// An opaque handle indicating in which queue a group of tasks will execute.
 /// Tasks in the same group will execute in FIFO order but no guarantee is made
 /// about ordering on different task queues.
 pub struct TaskQueueHandle {
     index: usize,
-}
-
-impl Default for TaskQueueHandle {
-    fn default() -> Self {
-        TaskQueueHandle { index: 0 }
-    }
 }
 
 impl TaskQueueHandle {
@@ -126,7 +120,7 @@ pub(crate) struct TaskQueue {
     shares: Shares,
     vruntime: u64,
     io_requirements: IoRequirements,
-    name: String,
+    _name: String,
     last_adjustment: Instant,
     // for dynamic shares classes
     yielded: bool,
@@ -171,7 +165,7 @@ impl TaskQueue {
             shares,
             vruntime: 0,
             io_requirements: ioreq,
-            name: name.into(),
+            _name: name.into(),
             last_adjustment: Instant::now(),
             yielded: false,
         }))

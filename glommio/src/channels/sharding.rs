@@ -209,7 +209,7 @@ mod tests {
 
         #[derive(Clone)]
         struct RequestHandler {
-            nr_shards: usize,
+            _nr_shards: usize,
         }
 
         impl Handler<Msg> for RequestHandler {
@@ -223,7 +223,7 @@ mod tests {
 
         let shards = (0..nr_shards).map(|_| {
             LocalExecutorBuilder::default().spawn(enclose!((mesh) move || async move {
-                let handler = RequestHandler { nr_shards };
+                let handler = RequestHandler { _nr_shards: nr_shards };
                 let mut sharded = Sharded::new(mesh, shard_fn, handler).await.unwrap();
                 for i in 0..nr_shards {
                     sharded.send(i).await.unwrap();
@@ -249,7 +249,7 @@ mod tests {
 
         #[derive(Clone)]
         struct RequestHandler {
-            nr_shards: usize,
+            _nr_shards: usize,
         }
 
         impl Handler<Msg> for RequestHandler {
@@ -263,7 +263,7 @@ mod tests {
 
         let shards = (0..nr_shards).map(|_| {
             LocalExecutorBuilder::default().spawn(enclose!((mesh) move || async move {
-                let handler = RequestHandler { nr_shards };
+                let handler = RequestHandler { _nr_shards: nr_shards };
                 let mut sharded = Sharded::new(mesh, shard_fn, handler).await.unwrap();
                 for i in 0..nr_shards {
                     sharded.send_to(i, i).await.unwrap();
