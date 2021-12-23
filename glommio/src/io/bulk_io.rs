@@ -373,6 +373,7 @@ impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Un
     ///
     /// This function should be called before the stream is first polled and
     /// will panic otherwise.
+    #[must_use]
     pub fn with_concurrency(mut self, concurrency: usize) -> Self {
         self.inner.set_concurrency(concurrency);
         self
