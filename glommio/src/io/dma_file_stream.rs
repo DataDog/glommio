@@ -128,6 +128,7 @@ impl DmaStreamReaderBuilder {
     /// Reads from the [`DmaStreamReader`] will start from this position
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
+    #[must_use = "The builder must be built to be useful"]
     pub fn with_start_pos(mut self, start: u64) -> Self {
         self.start = start;
         self
@@ -139,6 +140,7 @@ impl DmaStreamReaderBuilder {
     /// file is larger.
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
+    #[must_use = "The builder must be built to be useful"]
     pub fn with_end_pos(mut self, end: u64) -> Self {
         self.end = end;
         self
@@ -151,6 +153,7 @@ impl DmaStreamReaderBuilder {
     /// usage.
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
+    #[must_use = "The builder must be built to be useful"]
     pub fn with_read_ahead(mut self, read_ahead: usize) -> Self {
         self.read_ahead = read_ahead;
         self
@@ -159,6 +162,7 @@ impl DmaStreamReaderBuilder {
     /// Define the buffer size that will be used by the [`DmaStreamReader`]
     ///
     /// [`DmaStreamReader`]: struct.DmaStreamReader.html
+    #[must_use = "The builder must be built to be useful"]
     pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
         let buffer_size = std::cmp::max(buffer_size, 1);
         self.buffer_size = self.file.align_up(buffer_size as _) as usize;
@@ -331,7 +335,7 @@ impl Drop for DmaStreamReaderState {
 /// struct.DmaStreamReader.html#method.get_buffer_aligned
 /// [`AsyncRead`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncRead.html
 pub struct DmaStreamReader {
-    start: u64,
+    _start: u64,
     end: u64,
     current_pos: u64,
     buffer_size: u64,
@@ -412,7 +416,7 @@ impl DmaStreamReader {
 
         DmaStreamReader {
             file: builder.file,
-            start: builder.start,
+            _start: builder.start,
             end: builder.end,
             current_pos: builder.start,
             buffer_size: builder.buffer_size as _,
@@ -663,6 +667,7 @@ impl DmaStreamWriterBuilder {
     /// writing to this [`DmaStreamWriter`] will not block.
     ///
     /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
+    #[must_use = "The builder must be built to be useful"]
     pub fn with_write_behind(mut self, write_behind: usize) -> Self {
         self.write_behind = std::cmp::max(write_behind, 1);
         self
@@ -670,6 +675,7 @@ impl DmaStreamWriterBuilder {
 
     /// Does not issue a sync operation when closing the file. This is dangerous
     /// and in most cases may lead to data loss.
+    #[must_use = "The builder must be built to be useful"]
     pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
         self.sync_on_close = !flush_disabled;
         self
@@ -678,6 +684,7 @@ impl DmaStreamWriterBuilder {
     /// Define the buffer size that will be used by the [`DmaStreamWriter`]
     ///
     /// [`DmaStreamWriter`]: struct.DmaStreamWriter.html
+    #[must_use = "The builder must be built to be useful"]
     pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
         let buffer_size = std::cmp::max(buffer_size, 1);
         self.buffer_size = self.file.align_up(buffer_size as _) as usize;

@@ -21,7 +21,7 @@ jobs:
         uses: ./.github/actions/cache-setup
 
       - name: Install cargo-deadlinks
-        run: cargo install cargo-deadlinks
+        run: which deadlinks || cargo install cargo-deadlinks
 
       - name: Generate documentation
         run: cargo doc --all-features
