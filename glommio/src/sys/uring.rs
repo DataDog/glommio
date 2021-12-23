@@ -473,7 +473,7 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
 
 fn record_stats<Ring: ReactorRing>(ring: &mut Ring, src: &InnerSource, res: &io::Result<usize>) {
     if let Some(fulfilled) = src.stats_collection.and_then(|x| x.fulfilled) {
-        fulfilled(res, &mut ring.io_stats_mut(), 1);
+        fulfilled(res, ring.io_stats_mut(), 1);
         if let Some(handle) = src.task_queue {
             fulfilled(res, ring.io_stats_for_task_queue_mut(handle), 1);
         }
@@ -482,7 +482,7 @@ fn record_stats<Ring: ReactorRing>(ring: &mut Ring, src: &InnerSource, res: &io:
     let waiters = usize::saturating_sub(src.wakers.waiters.len(), 1);
     if waiters > 0 {
         if let Some(reused) = src.stats_collection.and_then(|x| x.reused) {
-            reused(res, &mut ring.io_stats_mut(), waiters as u64);
+            reused(res, ring.io_stats_mut(), waiters as u64);
             if let Some(handle) = src.task_queue {
                 reused(
                     res,

@@ -503,7 +503,7 @@ impl<'a> SQE<'a> {
     }
 
     pub unsafe fn raw_mut(&mut self) -> &mut uring_sys::io_uring_sqe {
-        &mut self.sqe
+        self.sqe
     }
 }
 

@@ -331,7 +331,7 @@ impl Drop for DmaStreamReaderState {
 /// struct.DmaStreamReader.html#method.get_buffer_aligned
 /// [`AsyncRead`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncRead.html
 pub struct DmaStreamReader {
-    start: u64,
+    _start: u64,
     end: u64,
     current_pos: u64,
     buffer_size: u64,
@@ -412,7 +412,7 @@ impl DmaStreamReader {
 
         DmaStreamReader {
             file: builder.file,
-            start: builder.start,
+            _start: builder.start,
             end: builder.end,
             current_pos: builder.start,
             buffer_size: builder.buffer_size as _,
