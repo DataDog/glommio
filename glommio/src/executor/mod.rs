@@ -444,6 +444,7 @@ impl LocalExecutorBuilder {
     }
 
     /// Spin for duration before parking a reactor
+    #[must_use = "The builder must be built to be useful"]
     pub fn spin_before_park(mut self, spin: Duration) -> LocalExecutorBuilder {
         self.spin_before_park = Some(spin);
         self
@@ -451,6 +452,7 @@ impl LocalExecutorBuilder {
 
     /// Names the thread-to-be. Currently, the name is used for identification
     /// only in panic messages.
+    #[must_use = "The builder must be built to be useful"]
     pub fn name(mut self, name: &str) -> LocalExecutorBuilder {
         self.name = String::from(name);
         self
@@ -463,6 +465,7 @@ impl LocalExecutorBuilder {
     ///
     /// The system will always try to allocate at least 64 kiB for I/O memory,
     /// and the default is 10 MiB.
+    #[must_use = "The builder must be built to be useful"]
     pub fn io_memory(mut self, io_memory: usize) -> LocalExecutorBuilder {
         self.io_memory = io_memory;
         self
@@ -473,6 +476,7 @@ impl LocalExecutorBuilder {
     /// greater number of IO requests to the kernel at once.
     ///
     /// Values above zero are valid and the default is 128.
+    #[must_use = "The builder must be built to be useful"]
     pub fn ring_depth(mut self, ring_depth: usize) -> LocalExecutorBuilder {
         assert!(ring_depth > 0, "ring depth should be strictly positive");
         self.ring_depth = ring_depth;
@@ -490,6 +494,7 @@ impl LocalExecutorBuilder {
     ///
     /// [`need_preempt`]: ExecutorProxy::need_preempt
     /// [`Latency`]: crate::Latency
+    #[must_use = "The builder must be built to be useful"]
     pub fn preempt_timer(mut self, dur: Duration) -> LocalExecutorBuilder {
         self.preempt_timer_duration = dur;
         self
@@ -668,6 +673,7 @@ impl LocalExecutorPoolBuilder {
     /// Please see documentation under
     /// [`LocalExecutorBuilder::spin_before_park`] for details.  The setting
     /// is applied to all executors in the pool.
+    #[must_use = "The builder must be built to be useful"]
     pub fn spin_before_park(mut self, spin: Duration) -> Self {
         self.spin_before_park = Some(spin);
         self
@@ -678,6 +684,7 @@ impl LocalExecutorPoolBuilder {
     /// that when a thread is spawned, the `name` is combined with a hyphen
     /// and numeric id (e.g. `myname-1`) such that each thread has a unique
     /// name.
+    #[must_use = "The builder must be built to be useful"]
     pub fn name(mut self, name: &str) -> Self {
         self.name = String::from(name);
         self
@@ -685,6 +692,7 @@ impl LocalExecutorPoolBuilder {
 
     /// Please see documentation under [`LocalExecutorBuilder::io_memory`] for
     /// details.  The setting is applied to all executors in the pool.
+    #[must_use = "The builder must be built to be useful"]
     pub fn io_memory(mut self, io_memory: usize) -> Self {
         self.io_memory = io_memory;
         self
@@ -692,6 +700,7 @@ impl LocalExecutorPoolBuilder {
 
     /// Please see documentation under [`LocalExecutorBuilder::ring_depth`] for
     /// details.  The setting is applied to all executors in the pool.
+    #[must_use = "The builder must be built to be useful"]
     pub fn ring_depth(mut self, ring_depth: usize) -> Self {
         assert!(ring_depth > 0, "ring depth should be strictly positive");
         self.ring_depth = ring_depth;
@@ -700,6 +709,7 @@ impl LocalExecutorPoolBuilder {
 
     /// Please see documentation under [`LocalExecutorBuilder::preempt_timer`]
     /// for details.  The setting is applied to all executors in the pool.
+    #[must_use = "The builder must be built to be useful"]
     pub fn preempt_timer(mut self, dur: Duration) -> Self {
         self.preempt_timer_duration = dur;
         self
@@ -3111,7 +3121,7 @@ mod test {
 
         for nn in 1..2 {
             let nr_execs = nn * cpu_set.len();
-            let placements = [
+            let mut placements = vec![
                 PoolPlacement::Unbound(nr_execs),
                 PoolPlacement::Fenced(nr_execs, cpu_set.clone()),
                 PoolPlacement::MaxSpread(nr_execs, None),
@@ -3120,7 +3130,7 @@ mod test {
                 PoolPlacement::MaxPack(nr_execs, Some(cpu_set.clone())),
             ];
 
-            for pp in std::array::IntoIter::new(placements) {
+            for pp in placements.drain(..) {
                 let ids = Arc::new(Mutex::new(HashMap::new()));
                 let cpus = Arc::new(Mutex::new(HashMap::new()));
                 let cpu_hard_bind =
@@ -3175,7 +3185,7 @@ mod test {
 
         // test: confirm that we can always get shards up to the # of cpus
         {
-            let placements = [
+            let mut placements = vec![
                 (false, PoolPlacement::Unbound(cpu_set.len())),
                 (false, PoolPlacement::Fenced(cpu_set.len(), cpu_set.clone())),
                 (true, PoolPlacement::MaxSpread(cpu_set.len(), None)),
@@ -3190,7 +3200,7 @@ mod test {
                 ),
             ];
 
-            for (_shard_limited, p) in std::array::IntoIter::new(placements) {
+            for (_shard_limited, p) in placements.drain(..) {
                 LocalExecutorPoolBuilder::new(p)
                     .on_all_shards(|| async move {})
                     .unwrap()
@@ -3200,7 +3210,7 @@ mod test {
 
         // test: confirm that some placements fail when shards are # of cpus + 1
         {
-            let placements = [
+            let mut placements = vec![
                 (false, PoolPlacement::Unbound(1 + cpu_set.len())),
                 (
                     false,
@@ -3218,7 +3228,7 @@ mod test {
                 ),
             ];
 
-            for (shard_limited, p) in std::array::IntoIter::new(placements) {
+            for (shard_limited, p) in placements.drain(..) {
                 match LocalExecutorPoolBuilder::new(p).on_all_shards(|| async move {}) {
                     Ok(handles) => {
                         handles.join_all();

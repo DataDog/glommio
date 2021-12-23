@@ -360,8 +360,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
 
             let peers: Vec<_> = peers
                 .iter_mut()
-                .map(|notifier| notifier.notifier.take())
-                .flatten()
+                .filter_map(|notifier| notifier.notifier.take())
                 .collect();
 
             Ok(RegisterResult::NotificationSenders(peers))
