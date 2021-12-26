@@ -18,6 +18,7 @@ use std::{
     fmt,
     io,
     io::{Error, ErrorKind},
+    num::NonZeroI64,
     os::unix::io::RawFd,
     panic,
     ptr,
@@ -626,6 +627,8 @@ trait UringCommon {
     fn consume_one_event(&mut self) -> Option<bool>;
     fn name(&self) -> &'static str;
     fn registrar(&self) -> iou::Registrar<'_>;
+    fn register_latency_requirement(&mut self, req: Latency);
+    fn latency_requirement(&self) -> Option<Duration>;
 
     fn consume_sqe_queue(
         &mut self,
@@ -711,6 +714,7 @@ struct PollRing {
     submission_queue: ReactorQueue,
     submitted: u64,
     completed: u64,
+    lat_req: AHashMap<Latency, i64>,
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
     task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
@@ -738,6 +742,7 @@ impl PollRing {
             stats: RingIoStats::new(),
             task_queue_stats: AHashMap::new(),
             source_map,
+            lat_req: Default::default(),
         })
     }
 
@@ -769,6 +774,21 @@ impl UringCommon for PollRing {
         self.ring.registrar()
     }
 
+    fn register_latency_requirement(&mut self, req: Latency) {
+        self.lat_req.entry(req).and_modify(|e| *e += 1).or_insert(1);
+    }
+
+    fn latency_requirement(&self) -> Option<Duration> {
+        self.lat_req
+            .iter()
+            .filter_map(|(k, v)| match (&k, NonZeroI64::new(*v)) {
+                (Latency::Matters(lat), Some(_)) => Some(lat),
+                _ => None,
+            })
+            .min()
+            .copied()
+    }
+
     fn needs_kernel_enter(&self) -> bool {
         // If we submitted anything, we will have the submission count differing from
         // the completion count and can_sleep will be false.
@@ -796,15 +816,18 @@ impl UringCommon for PollRing {
             self.ring.peek_for_cqe(),
             |_| None,
             |src, res| {
+                self.completed += 1;
+                let req = self
+                    .lat_req
+                    .get_mut(&src.io_requirements.latency_req)
+                    .unwrap();
+                *req -= 1;
+                assert!(*req >= 0);
                 record_stats(self, &src, &res);
                 res
             },
             source_map,
         )
-        .map(|x| {
-            self.completed += 1;
-            x
-        })
     }
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
@@ -858,6 +881,7 @@ struct SleepableRing {
     submission_queue: ReactorQueue,
     waiting_submission: usize,
     name: &'static str,
+    lat_req: AHashMap<Latency, i64>,
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
     task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
@@ -878,6 +902,7 @@ impl SleepableRing {
             submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
             waiting_submission: 0,
             name,
+            lat_req: Default::default(),
             allocator,
             stats: RingIoStats::new(),
             task_queue_stats: AHashMap::new(),
@@ -1019,6 +1044,21 @@ impl UringCommon for SleepableRing {
         self.ring.registrar()
     }
 
+    fn register_latency_requirement(&mut self, req: Latency) {
+        self.lat_req.entry(req).and_modify(|e| *e += 1).or_insert(1);
+    }
+
+    fn latency_requirement(&self) -> Option<Duration> {
+        self.lat_req
+            .iter()
+            .filter_map(|(k, v)| match (&k, NonZeroI64::new(*v)) {
+                (Latency::Matters(lat), Some(_)) => Some(lat),
+                _ => None,
+            })
+            .min()
+            .copied()
+    }
+
     fn needs_kernel_enter(&self) -> bool {
         self.waiting_submission > 0
     }
@@ -1042,6 +1082,10 @@ impl UringCommon for SleepableRing {
                 _ => None,
             },
             |mut src, res| {
+                self.lat_req
+                    .entry(src.io_requirements.latency_req)
+                    .and_modify(|e| *e -= 1)
+                    .or_default();
                 record_stats(self, &src, &res);
                 if let SourceType::ForeignNotifier(_, installed) = &mut src.source_type {
                     *installed = false;
@@ -1570,7 +1614,25 @@ impl Reactor {
         // to be removed otherwise we'll wake up when it expires.
         drop(self.timeout_src.take());
 
-        let mut should_sleep = match preempt_timer() {
+        let io_latency = match (
+            poll_ring.latency_requirement(),
+            main_ring.latency_requirement(),
+        ) {
+            (Some(p1), Some(p2)) => Some(p1.min(p2)),
+            (Some(p1), None) => Some(p1),
+            (None, Some(p2)) => Some(p2),
+            (None, None) => None,
+        };
+
+        let mut preempt_timer = preempt_timer();
+        preempt_timer = match (preempt_timer, io_latency) {
+            (Some(p1), Some(p2)) => Some(p1.min(p2)),
+            (Some(p1), None) => Some(p1),
+            (None, Some(p2)) => Some(p2),
+            (None, None) => None,
+        };
+
+        let mut should_sleep = match preempt_timer {
             None => true,
             Some(dur) => {
                 self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
@@ -1754,6 +1816,8 @@ fn queue_request_into_ring(
     let q = ring.borrow_mut().submission_queue();
     let id = source_map.add_source(source, Rc::clone(&q));
 
+    ring.borrow_mut()
+        .register_latency_requirement(source.latency_req());
     let flags = match &*source.timeout_ref() {
         Some(_) => SubmissionFlags::IO_LINK,
         _ => SubmissionFlags::empty(),
