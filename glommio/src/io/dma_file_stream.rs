@@ -1686,32 +1686,32 @@ mod test {
         reader.close().await.unwrap();
     });
 
-    file_stream_read_test!(read_get_buffer_aligned_cross_boundaries, path, _k, file, _file_size: 2048, {
+    file_stream_read_test!(read_get_buffer_aligned_cross_boundaries, path, _k, file, _file_size: 16384, {
         let mut reader = DmaStreamReaderBuilder::new(file)
-            .with_buffer_size(1024)
+            .with_buffer_size(4096)
             .build();
 
-        reader.skip(1022);
+        reader.skip(4094);
 
         match reader.get_buffer_aligned(130).await {
             Err(_) => panic!("Expected partial success"),
             Ok(res) => {
                 assert_eq!(res.len(), 2);
-                check_contents!(*res, 1022);
+                check_contents!(*res, 4094);
             },
         }
-        assert_eq!(reader.current_pos(), 1024);
+        assert_eq!(reader.current_pos(), 4096);
 
         match reader.get_buffer_aligned(64).await {
             Err(_) => panic!("Expected success"),
             Ok(res) => {
                 assert_eq!(res.len(), 64);
-                check_contents!(*res, 1024);
+                check_contents!(*res, 4096);
             },
         }
-        assert_eq!(reader.current_pos(), 1088);
+        assert_eq!(reader.current_pos(), 4160);
 
-        reader.skip(896);
+        reader.skip(12160);
 
         // EOF
         match reader.get_buffer_aligned(128).await {
@@ -1721,7 +1721,7 @@ mod test {
                 check_contents!(*res, 1984);
             },
         }
-        assert_eq!(reader.current_pos(), 2048);
+        assert_eq!(reader.current_pos(), 16384);
 
         let eof = reader.get_buffer_aligned(64).await.unwrap();
         assert_eq!(eof.len(), 0);
