@@ -378,10 +378,12 @@ macro_rules! to_io_error {
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
-    use crate::executor::{LocalExecutor};
     use futures::future::join_all;
 
-    let local_ex = LocalExecutor::default();
+    let local_ex = crate::executor::LocalExecutorBuilder::new(crate::executor::Placement::Unbound)
+            .record_io_latencies(true)
+            .make()
+            .unwrap();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(

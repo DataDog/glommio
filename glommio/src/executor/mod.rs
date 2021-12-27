@@ -436,6 +436,8 @@ pub struct LocalExecutorBuilder {
     ring_depth: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
+    /// Whether to record the latencies of individual IO requests
+    record_io_latencies: bool,
 }
 
 impl LocalExecutorBuilder {
@@ -452,6 +454,7 @@ impl LocalExecutorBuilder {
             io_memory: DEFAULT_IO_MEMORY,
             ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
             preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
+            record_io_latencies: false,
         }
     }
 
@@ -512,6 +515,14 @@ impl LocalExecutorBuilder {
         self
     }
 
+    /// Whether to record the latencies of individual IO requests as part of the
+    /// IO stats. Recording latency can be expensive. Disabled by default.
+    #[must_use = "The builder must be built to be useful"]
+    pub fn record_io_latencies(mut self, enabled: bool) -> LocalExecutorBuilder {
+        self.record_io_latencies = enabled;
+        self
+    }
+
     /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and
     /// returns a [`Result`](crate::Result) to the executor.
     /// # Examples
@@ -529,6 +540,7 @@ impl LocalExecutorBuilder {
             self.io_memory,
             self.ring_depth,
             self.preempt_timer_duration,
+            self.record_io_latencies,
             cpu_set_gen.next().cpu_binding(),
             self.spin_before_park,
         )?;
@@ -592,6 +604,7 @@ impl LocalExecutorBuilder {
         let ring_depth = self.ring_depth;
         let preempt_timer_duration = self.preempt_timer_duration;
         let spin_before_park = self.spin_before_park;
+        let record_io_latencies = self.record_io_latencies;
 
         Builder::new()
             .name(name)
@@ -601,6 +614,7 @@ impl LocalExecutorBuilder {
                     io_memory,
                     ring_depth,
                     preempt_timer_duration,
+                    record_io_latencies,
                     cpu_set_gen.next().cpu_binding(),
                     spin_before_park,
                 )
@@ -663,6 +677,8 @@ pub struct LocalExecutorPoolBuilder {
     preempt_timer_duration: Duration,
     /// Indicates a policy by which [`LocalExecutor`]s are bound to CPUs.
     placement: PoolPlacement,
+    /// Whether to record the latencies of individual IO requests
+    record_io_latencies: bool,
 }
 
 impl LocalExecutorPoolBuilder {
@@ -679,6 +695,7 @@ impl LocalExecutorPoolBuilder {
             ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
             preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
             placement,
+            record_io_latencies: false,
         }
     }
 
@@ -724,6 +741,14 @@ impl LocalExecutorPoolBuilder {
     #[must_use = "The builder must be built to be useful"]
     pub fn preempt_timer(mut self, dur: Duration) -> Self {
         self.preempt_timer_duration = dur;
+        self
+    }
+
+    /// Whether to record the latencies of individual IO requests as part of the
+    /// IO stats. Recording latency can be expensive. Disabled by default.
+    #[must_use = "The builder must be built to be useful"]
+    pub fn record_io_latencies(mut self, enabled: bool) -> Self {
+        self.record_io_latencies = enabled;
         self
     }
 
@@ -788,6 +813,7 @@ impl LocalExecutorPoolBuilder {
             let ring_depth = self.ring_depth;
             let preempt_timer_duration = self.preempt_timer_duration;
             let spin_before_park = self.spin_before_park;
+            let record_io_latencies = self.record_io_latencies;
             let latch = Latch::clone(latch);
 
             move || {
@@ -799,6 +825,7 @@ impl LocalExecutorPoolBuilder {
                         io_memory,
                         ring_depth,
                         preempt_timer_duration,
+                        record_io_latencies,
                         cpu_binding,
                         spin_before_park,
                     )
@@ -932,6 +959,7 @@ impl LocalExecutor {
         io_memory: usize,
         ring_depth: usize,
         preempt_timer: Duration,
+        record_io_latencies: bool,
         cpu_binding: Option<impl IntoIterator<Item = usize>>,
         mut spin_before_park: Option<Duration>,
     ) -> Result<LocalExecutor> {
@@ -954,7 +982,12 @@ impl LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
-            reactor: Rc::new(reactor::Reactor::new(notifier, io_memory, ring_depth)),
+            reactor: Rc::new(reactor::Reactor::new(
+                notifier,
+                io_memory,
+                ring_depth,
+                record_io_latencies,
+            )),
         })
     }
 
