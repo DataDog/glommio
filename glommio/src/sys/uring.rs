@@ -23,7 +23,7 @@ use std::{
     ptr,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -471,7 +471,12 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
         })
 }
 
-fn record_stats<Ring: ReactorRing>(ring: &mut Ring, src: &InnerSource, res: &io::Result<usize>) {
+fn record_stats<Ring: ReactorRing>(
+    ring: &mut Ring,
+    src: &mut InnerSource,
+    res: &io::Result<usize>,
+) {
+    src.wakers.fulfilled_at = Some(Instant::now());
     if let Some(fulfilled) = src.stats_collection.and_then(|x| x.fulfilled) {
         fulfilled(res, ring.io_stats_mut(), 1);
         if let Some(handle) = src.task_queue {
@@ -735,7 +740,7 @@ impl PollRing {
             ring,
             submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
             allocator,
-            stats: RingIoStats::new(),
+            stats: RingIoStats::default(),
             task_queue_stats: AHashMap::new(),
             source_map,
         })
@@ -795,8 +800,8 @@ impl UringCommon for PollRing {
         process_one_event(
             self.ring.peek_for_cqe(),
             |_| None,
-            |src, res| {
-                record_stats(self, &src, &res);
+            |mut src, res| {
+                record_stats(self, &mut src, &res);
                 res
             },
             source_map,
@@ -879,7 +884,7 @@ impl SleepableRing {
             waiting_submission: 0,
             name,
             allocator,
-            stats: RingIoStats::new(),
+            stats: RingIoStats::default(),
             task_queue_stats: AHashMap::new(),
             source_map,
         })
@@ -1042,7 +1047,7 @@ impl UringCommon for SleepableRing {
                 _ => None,
             },
             |mut src, res| {
-                record_stats(self, &src, &res);
+                record_stats(self, &mut src, &res);
                 if let SourceType::ForeignNotifier(_, installed) = &mut src.source_type {
                     *installed = false;
                 }
@@ -1189,6 +1194,8 @@ impl Reactor {
         let main_ring =
             SleepableRing::new(ring_depth, "main", allocator.clone(), source_map.clone())?;
         let poll_ring = PollRing::new(ring_depth, allocator.clone(), source_map.clone())?;
+        let mut latency_ring =
+            SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
@@ -1204,13 +1211,23 @@ impl Reactor {
                     main_ring.registrar().unregister_buffers().unwrap();
                 }
                 Ok(_) => {
-                    allocator.activate_registered_buffers(0);
+                    match latency_ring.registrar().register_buffers_by_ref(&registry) {
+                        Err(x) => {
+                            warn!(
+                                "Error: registering buffers in the poll ring. Skipping{:#?}",
+                                x
+                            );
+                            poll_ring.registrar().unregister_buffers().unwrap();
+                            main_ring.registrar().unregister_buffers().unwrap();
+                        }
+                        Ok(_) => {
+                            allocator.activate_registered_buffers(0);
+                        }
+                    };
                 }
             },
         }
 
-        let mut latency_ring =
-            SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(
@@ -1540,14 +1557,15 @@ impl Reactor {
     ///   to the point where we *leave* this method. For instance: if we spin
     ///   here for 3ms and the preempt timer is 10ms that would leave the next
     ///   task queue just 7ms to run.
-    pub(crate) fn wait<F>(
+    pub(crate) fn wait<Preempt, F>(
         &self,
-        preempt_timer: Option<Duration>,
+        preempt_timer: Preempt,
         user_timer: Option<Duration>,
         mut woke: usize,
         process_remote_channels: F,
     ) -> io::Result<bool>
     where
+        Preempt: Fn() -> Option<Duration>,
         F: Fn() -> usize,
     {
         woke += self.flush_syscall_thread();
@@ -1556,6 +1574,11 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
+        // we need to make sure we consume the latency ring before setting the
+        // preemption timer because consuming this ring may wake up some previously
+        // asleep task queues.
+        consume_rings!(into &mut woke; lat_ring);
+
         // Cancel the old timer regardless of whether we can sleep:
         // if we won't sleep, we will register the new timer with its new
         // value.
@@ -1563,7 +1586,7 @@ impl Reactor {
         // But if we will sleep, there might be a timer registered that needs
         // to be removed otherwise we'll wake up when it expires.
         drop(self.timeout_src.take());
-        let mut should_sleep = match preempt_timer {
+        let mut should_sleep = match preempt_timer() {
             None => true,
             Some(dur) => {
                 self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
@@ -1671,14 +1694,20 @@ impl Reactor {
             SourceType::Read(p, _) | SourceType::Write(p, _) => *p,
             _ => panic!("SourceType should declare if it supports poll operations"),
         };
-        match pollable {
-            PollableStatus::Pollable => queue_request_into_ring(
+        match (source.latency_req(), pollable) {
+            (Latency::Matters(_), _) => queue_request_into_ring(
+                &self.latency_ring,
+                source,
+                op,
+                &mut *self.source_map.borrow_mut(),
+            ),
+            (Latency::NotImportant, PollableStatus::Pollable) => queue_request_into_ring(
                 &self.poll_ring,
                 source,
                 op,
                 &mut *self.source_map.borrow_mut(),
             ),
-            PollableStatus::NonPollable(_) => queue_request_into_ring(
+            (Latency::NotImportant, PollableStatus::NonPollable(_)) => queue_request_into_ring(
                 &self.main_ring,
                 source,
                 op,
@@ -1689,16 +1718,17 @@ impl Reactor {
 
     pub(crate) fn ring_for_source(&self, source: &Source) -> RefMut<'_, dyn ReactorRing> {
         match &*source.source_type() {
-            SourceType::Read(p, _) | SourceType::Write(p, _) => {
-                return match p {
-                    PollableStatus::Pollable => {
-                        RefMut::map(self.poll_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
-                    }
-                    PollableStatus::NonPollable(_) => {
-                        RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
-                    }
-                };
-            }
+            SourceType::Read(p, _) | SourceType::Write(p, _) => match (source.latency_req(), p) {
+                (Latency::Matters(_), _) => RefMut::map(self.latency_ring.borrow_mut(), |x| {
+                    x as &mut dyn ReactorRing
+                }),
+                (Latency::NotImportant, PollableStatus::Pollable) => {
+                    RefMut::map(self.poll_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
+                }
+                (Latency::NotImportant, PollableStatus::NonPollable(_)) => {
+                    RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
+                }
+            },
             SourceType::Invalid => {
                 unreachable!("called ring_for_source on invalid source")
             }
@@ -1715,18 +1745,33 @@ impl Reactor {
 
     pub fn io_stats(&self) -> IoStats {
         IoStats::new(
-            self.main_ring.borrow().stats,
-            self.latency_ring.borrow().stats,
-            self.poll_ring.borrow().stats,
+            std::mem::take(&mut self.main_ring.borrow_mut().stats),
+            std::mem::take(&mut self.latency_ring.borrow_mut().stats),
+            std::mem::take(&mut self.poll_ring.borrow_mut().stats),
         )
     }
 
     pub(crate) fn task_queue_io_stats(&self, h: &TaskQueueHandle) -> Option<IoStats> {
-        let main = self.main_ring.borrow().task_queue_stats.get(h).copied();
-        let lat = self.latency_ring.borrow().task_queue_stats.get(h).copied();
-        let poll = self.poll_ring.borrow().task_queue_stats.get(h).copied();
+        let main = self
+            .main_ring
+            .borrow_mut()
+            .task_queue_stats
+            .get_mut(h)
+            .map(std::mem::take);
+        let lat = self
+            .latency_ring
+            .borrow_mut()
+            .task_queue_stats
+            .get_mut(h)
+            .map(std::mem::take);
+        let poll = self
+            .poll_ring
+            .borrow_mut()
+            .task_queue_stats
+            .get_mut(h)
+            .map(std::mem::take);
 
-        if let (None, None, None) = (main, lat, poll) {
+        if let (None, None, None) = (&main, &lat, &poll) {
             None
         } else {
             Some(IoStats::new(
@@ -1744,6 +1789,7 @@ fn queue_request_into_ring(
     descriptor: UringOpDescriptor,
     source_map: &mut SourceMap,
 ) {
+    source.inner.borrow_mut().wakers.seen_at = Some(Instant::now());
     let q = ring.borrow_mut().submission_queue();
     let id = source_map.add_source(source, Rc::clone(&q));
 
@@ -1810,13 +1856,13 @@ mod tests {
         reactor.queue_standard_request(&lethargic, op);
 
         let start = Instant::now();
-        reactor.wait(None, None, 0, || 0).unwrap();
+        reactor.wait(|| None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!((50..100).contains(&elapsed_ms));
 
         drop(slow); // Cancel this one.
 
-        reactor.wait(None, None, 0, || 0).unwrap();
+        reactor.wait(|| None, None, 0, || 0).unwrap();
         let elapsed_ms = start.elapsed().as_millis();
         assert!((300..350).contains(&elapsed_ms));
     }

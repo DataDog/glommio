@@ -93,12 +93,21 @@ pub struct EnqueuedSource {
 }
 
 pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats, waiters: u64) -> ();
+pub(crate) type LatencyCollectionFn =
+    fn(std::time::Duration, std::time::Duration, &mut RingIoStats) -> ();
+
 #[derive(Copy, Clone)]
 pub(crate) struct StatsCollection {
     /// fulfilled runs when the source exits the reactor
     pub(crate) fulfilled: Option<StatsCollectionFn>,
+
     /// reused runs when a fulfilled source is reused by another consumer
     pub(crate) reused: Option<StatsCollectionFn>,
+
+    /// Called when a result is first consumed. It collects the time
+    /// it took for user code to consume the result of a fulfilled source.
+    /// This is called once, even if the source is reused multiple time.
+    pub(crate) latency: Option<LatencyCollectionFn>,
 }
 
 /// A registered source of I/O events.
@@ -215,12 +224,40 @@ impl Source {
     }
 
     pub(crate) fn result(&self) -> Option<io::Result<usize>> {
-        self.inner
-            .borrow()
+        let mut inner = self.inner.borrow_mut();
+        let ret = inner
             .wakers
             .result
             .as_ref()
-            .map(|x| OsResult::from(x).into())
+            .map(|x| OsResult::from(x).into());
+
+        // if there is a scheduler latency collection function present, invoke it once
+        if ret.is_some() && inner.wakers.fulfilled_at.is_some() && inner.wakers.seen_at.is_some() {
+            if let Some(Some(stat_fn)) = inner.stats_collection.as_ref().map(|x| x.latency) {
+                let seen_at = inner.wakers.seen_at.take().unwrap();
+                let fulfilled_at = inner.wakers.fulfilled_at.take().unwrap();
+                drop(inner);
+
+                let io_lat = fulfilled_at - seen_at;
+                let sched_lat = fulfilled_at.elapsed();
+
+                let reactor = &crate::executor().reactor().sys;
+                (stat_fn)(
+                    io_lat,
+                    sched_lat,
+                    reactor.ring_for_source(self).io_stats_mut(),
+                );
+                (stat_fn)(
+                    io_lat,
+                    sched_lat,
+                    reactor
+                        .ring_for_source(self)
+                        .io_stats_for_task_queue_mut(crate::executor().current_task_queue()),
+                );
+            }
+        }
+
+        ret
     }
 
     // adds a single waiter to the list, replacing any waiter that may already

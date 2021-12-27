@@ -853,10 +853,11 @@ pub(crate) mod test {
             }})
             .await;
         assert_eq!(*total_reads.borrow(), 512);
-        assert_eq!(
-            crate::executor().io_stats().all_rings().file_reads().0,
-            4096 / new_file.o_direct_alignment
-        );
+
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 4096 / new_file.o_direct_alignment);
+        assert_eq!(io_stats.post_reactor_io_scheduler_latency_us().count(), 1);
+        assert_eq!(io_stats.io_latency_us().count(), 1);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -884,10 +885,10 @@ pub(crate) mod test {
             }})
             .await;
         assert_eq!(*total_reads.borrow(), 511);
-        assert_eq!(
-            crate::executor().io_stats().all_rings().file_reads().0,
-            4096 / new_file.o_direct_alignment
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 4096 / new_file.o_direct_alignment);
+        assert_eq!(io_stats.post_reactor_io_scheduler_latency_us().count(), 1);
+        assert_eq!(io_stats.io_latency_us().count(), 1);
         new_file.close_rc().await.expect("failed to close file");
     });
 
@@ -915,10 +916,10 @@ pub(crate) mod test {
             .await;
 
         assert_eq!(*total_reads.borrow(), 511);
-        assert_eq!(
-            crate::executor().io_stats().all_rings().file_reads().0,
-            4096 / new_file.o_direct_alignment
-        );
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 4096 / new_file.o_direct_alignment);
+        assert_eq!(io_stats.post_reactor_io_scheduler_latency_us().count(), 1);
+        assert_eq!(io_stats.io_latency_us().count(), 1);
         new_file.close_rc().await.expect("failed to close file");
     });
 }

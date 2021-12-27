@@ -176,6 +176,7 @@ pub(crate) struct Reactor {
     shared_channels: RefCell<SharedChannels>,
 
     io_scheduler: Rc<IoScheduler>,
+    record_io_latencies: bool,
 
     /// Whether there are events in the latency ring.
     ///
@@ -196,6 +197,7 @@ impl Reactor {
         notifier: Arc<SleepNotifier>,
         io_memory: usize,
         ring_depth: usize,
+        record_io_latencies: bool,
     ) -> Reactor {
         let sys = sys::Reactor::new(notifier, io_memory, ring_depth)
             .expect("cannot initialize I/O event notification");
@@ -205,6 +207,7 @@ impl Reactor {
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
             io_scheduler: Rc::new(IoScheduler::new()),
+            record_io_latencies,
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
         }
@@ -303,6 +306,7 @@ impl Reactor {
                 }
             }),
             reused: None,
+            latency: None,
         };
 
         let source = self.new_source(
@@ -323,6 +327,7 @@ impl Reactor {
                 }
             }),
             reused: None,
+            latency: None,
         };
 
         let source = self.new_source(
@@ -498,6 +503,16 @@ impl Reactor {
                     stats.file_deduped_bytes_read += *result as u64 * op_count;
                 }
             }),
+            latency: if self.record_io_latencies {
+                Some(|io_lat, sched_lat, stats| {
+                    stats.io_latency_us.add(io_lat.as_micros() as f64);
+                    stats
+                        .post_reactor_io_scheduler_latency_us
+                        .add(sched_lat.as_micros() as f64)
+                })
+            } else {
+                None
+            },
         };
 
         let source = self.new_source(raw, SourceType::Read(pollable, None), Some(stats));
@@ -532,6 +547,16 @@ impl Reactor {
                 }
             }),
             reused: None,
+            latency: if self.record_io_latencies {
+                Some(|io_lat, sched_lat, stats| {
+                    stats.io_latency_us.add(io_lat.as_micros() as f64);
+                    stats
+                        .post_reactor_io_scheduler_latency_us
+                        .add(sched_lat.as_micros() as f64)
+                })
+            } else {
+                None
+            },
         };
 
         let source = self.new_source(
@@ -616,6 +641,7 @@ impl Reactor {
                     }
                 }),
                 reused: None,
+                latency: None,
             }),
         );
         self.sys.close(&source);
@@ -658,6 +684,7 @@ impl Reactor {
                     }
                 }),
                 reused: None,
+                latency: None,
             }),
         );
         self.sys.open_at(&source, flags, mode);
@@ -756,7 +783,7 @@ impl Reactor {
     }
 
     /// Processes new events, blocking until the first event or the timeout.
-    pub(crate) fn react(&self, timeout: Option<Duration>) -> io::Result<()> {
+    pub(crate) fn react(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<()> {
         // Process ready timers.
         let (next_timer, woke) = self.process_external_events();
 

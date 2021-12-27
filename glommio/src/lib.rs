@@ -295,9 +295,6 @@ extern crate lazy_static;
 #[macro_use(defer)]
 extern crate scopeguard;
 
-use crate::reactor::Reactor;
-use std::{fmt::Debug, time::Duration};
-
 /// Call [`Waker::wake()`] and log to `error` if panicked.
 macro_rules! wake {
     ($waker:expr $(,)?) => {
@@ -381,10 +378,12 @@ macro_rules! to_io_error {
 #[cfg(test)]
 macro_rules! test_executor {
     ($( $fut:expr ),+ ) => {
-    use crate::executor::{LocalExecutor};
     use futures::future::join_all;
 
-    let local_ex = LocalExecutor::default();
+    let local_ex = crate::executor::LocalExecutorBuilder::new(crate::executor::Placement::Unbound)
+            .record_io_latencies(true)
+            .make()
+            .unwrap();
     local_ex.run(async move {
         let mut joins = Vec::new();
         $(
@@ -464,6 +463,7 @@ mod shares;
 pub mod sync;
 pub mod timer;
 
+use crate::reactor::Reactor;
 pub use crate::{
     byte_slice_ext::{ByteSliceExt, ByteSliceMutExt},
     error::{
@@ -501,7 +501,12 @@ pub use crate::{
 };
 pub use enclose::enclose;
 pub use scopeguard::defer;
-use std::iter::Sum;
+use sketches_ddsketch::DDSketch;
+use std::{
+    fmt::{Debug, Formatter},
+    iter::Sum,
+    time::Duration,
+};
 
 /// Provides common imports that almost all Glommio applications will need
 pub mod prelude {
@@ -574,8 +579,9 @@ impl IoRequirements {
 }
 
 /// Stores information about IO performed in a specific ring
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Clone)]
 pub struct RingIoStats {
+    // Counters
     pub(crate) files_opened: u64,
     pub(crate) files_closed: u64,
     pub(crate) file_reads: u64,
@@ -588,13 +594,60 @@ pub struct RingIoStats {
     pub(crate) file_bytes_written: u64,
     pub(crate) file_buffered_writes: u64,
     pub(crate) file_buffered_bytes_written: u64,
+
+    // Distributions
+    pub(crate) io_latency_us: sketches_ddsketch::DDSketch,
+    pub(crate) post_reactor_io_scheduler_latency_us: sketches_ddsketch::DDSketch,
+}
+
+impl Default for RingIoStats {
+    fn default() -> Self {
+        Self {
+            files_opened: 0,
+            files_closed: 0,
+            file_reads: 0,
+            file_bytes_read: 0,
+            file_buffered_reads: 0,
+            file_buffered_bytes_read: 0,
+            file_deduped_reads: 0,
+            file_deduped_bytes_read: 0,
+            file_writes: 0,
+            file_bytes_written: 0,
+            file_buffered_writes: 0,
+            file_buffered_bytes_written: 0,
+            io_latency_us: sketches_ddsketch::DDSketch::new(sketches_ddsketch::Config::new(
+                0.01, 2048, 1.0e-9,
+            )),
+            post_reactor_io_scheduler_latency_us: sketches_ddsketch::DDSketch::new(
+                sketches_ddsketch::Config::new(0.01, 2048, 1.0e-9),
+            ),
+        }
+    }
+}
+
+impl Debug for RingIoStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RingIoStats")
+            .field("files_opened", &self.files_opened)
+            .field("files_closed", &self.files_closed)
+            .field("file_reads", &self.file_reads)
+            .field("file_bytes_read", &self.file_bytes_read)
+            .field("file_buffered_reads", &self.file_buffered_reads)
+            .field("file_buffered_bytes_read", &self.file_buffered_bytes_read)
+            .field("file_deduped_reads", &self.file_deduped_reads)
+            .field("file_deduped_bytes_read", &self.file_deduped_bytes_read)
+            .field("file_writes", &self.file_writes)
+            .field("file_bytes_written", &self.file_bytes_written)
+            .field("file_buffered_writes", &self.file_buffered_writes)
+            .field(
+                "file_buffered_bytes_written",
+                &self.file_buffered_bytes_written,
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl RingIoStats {
-    fn new() -> Self {
-        Default::default()
-    }
-
     /// The total amount of files opened in this executor so far.
     ///
     /// [`files_opened`] - [`files_closed`] gives the current open files count
@@ -650,24 +703,45 @@ impl RingIoStats {
     pub fn file_buffered_writes(&self) -> (u64, u64) {
         (self.file_buffered_writes, self.file_buffered_bytes_written)
     }
+
+    /// The IO latency
+    ///
+    /// Returns a distribution of measures tracking the time sources spent in
+    /// the ring
+    pub fn io_latency_us(&self) -> &DDSketch {
+        &self.io_latency_us
+    }
+
+    /// The post-reactor IO scheduler latency
+    ///
+    /// Returns a distribution of measures tracking the time between the moment
+    /// an IO operation was marked as fulfilled by the reactor and when the
+    /// result was consumed by the application code.
+    pub fn post_reactor_io_scheduler_latency_us(&self) -> &DDSketch {
+        &self.post_reactor_io_scheduler_latency_us
+    }
 }
 
-impl Sum<RingIoStats> for RingIoStats {
-    fn sum<I: Iterator<Item = RingIoStats>>(iter: I) -> Self {
-        iter.fold(RingIoStats::new(), |a, b| RingIoStats {
-            files_opened: a.files_opened + b.files_opened,
-            files_closed: a.files_closed + b.files_closed,
-            file_reads: a.file_reads + b.file_reads,
-            file_bytes_read: a.file_bytes_read + b.file_bytes_read,
-            file_buffered_reads: a.file_buffered_reads + b.file_buffered_reads,
-            file_buffered_bytes_read: a.file_buffered_bytes_read + b.file_buffered_bytes_read,
-            file_deduped_reads: a.file_deduped_reads + b.file_deduped_reads,
-            file_deduped_bytes_read: a.file_deduped_bytes_read + b.file_deduped_bytes_read,
-            file_writes: a.file_writes + b.file_writes,
-            file_bytes_written: a.file_bytes_written + b.file_bytes_written,
-            file_buffered_writes: a.file_buffered_writes + b.file_buffered_writes,
-            file_buffered_bytes_written: a.file_buffered_bytes_written
-                + b.file_buffered_bytes_written,
+impl<'a> Sum<&'a RingIoStats> for RingIoStats {
+    fn sum<I: Iterator<Item = &'a RingIoStats>>(iter: I) -> Self {
+        iter.fold(RingIoStats::default(), |mut a, b| {
+            a.files_opened += b.files_opened;
+            a.files_closed += b.files_closed;
+            a.file_reads += b.file_reads;
+            a.file_bytes_read += b.file_bytes_read;
+            a.file_buffered_reads += b.file_buffered_reads;
+            a.file_buffered_bytes_read += b.file_buffered_bytes_read;
+            a.file_deduped_reads += b.file_deduped_reads;
+            a.file_deduped_bytes_read += b.file_deduped_bytes_read;
+            a.file_writes += b.file_writes;
+            a.file_bytes_written += b.file_bytes_written;
+            a.file_buffered_writes += b.file_buffered_writes;
+            a.file_buffered_bytes_written += b.file_buffered_bytes_written;
+            a.post_reactor_io_scheduler_latency_us
+                .merge(&b.post_reactor_io_scheduler_latency_us)
+                .unwrap();
+            a.io_latency_us.merge(&b.io_latency_us).unwrap();
+            a
         })
     }
 }
@@ -694,7 +768,7 @@ impl IoStats {
 
     /// Combine stats from all rings
     pub fn all_rings(&self) -> RingIoStats {
-        [self.main_ring, self.latency_ring, self.poll_ring]
+        [&self.main_ring, &self.latency_ring, &self.poll_ring]
             .iter()
             .copied()
             .sum()
