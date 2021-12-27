@@ -220,7 +220,7 @@ fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
 // Stats should be copied Infrequently, and if you have enough stats to fill a
 // Kb with data from a single source, maybe you should rethink your life
 // choices.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 /// Allows information about the current state of this executor to be consumed
 /// by applications.
 pub struct ExecutorStats {
@@ -317,6 +317,18 @@ impl TaskQueueStats {
     /// amount of time this queue tends to run for
     pub fn queue_selected(&self) -> u64 {
         self.queue_selected
+    }
+
+    pub(crate) fn take(&mut self) -> Self {
+        std::mem::replace(
+            self,
+            Self {
+                index: self.index,
+                reciprocal_shares: self.reciprocal_shares,
+                queue_selected: Default::default(),
+                runtime: Default::default(),
+            },
+        )
     }
 }
 
@@ -1996,7 +2008,7 @@ impl ExecutorProxy {
     /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
     pub fn task_queue_stats(&self, handle: TaskQueueHandle) -> Result<TaskQueueStats> {
         LOCAL_EX.with(|local_ex| match local_ex.get_queue(&handle) {
-            Some(x) => Ok(x.borrow().stats),
+            Some(x) => Ok(x.borrow_mut().stats.take()),
             None => Err(GlommioError::queue_not_found(handle.index)),
         })
     }
@@ -2039,7 +2051,11 @@ impl ExecutorProxy {
     {
         LOCAL_EX.with(|local_ex| {
             let tq = local_ex.queues.borrow();
-            output.extend(tq.available_executors.values().map(|x| x.borrow().stats));
+            output.extend(
+                tq.available_executors
+                    .values()
+                    .map(|x| x.borrow_mut().stats.take()),
+            );
             output
         })
     }
@@ -2065,7 +2081,7 @@ impl ExecutorProxy {
     ///
     /// [`ExecutorStats`]: struct.ExecutorStats.html
     pub fn executor_stats(&self) -> ExecutorStats {
-        LOCAL_EX.with(|local_ex| local_ex.queues.borrow().stats)
+        LOCAL_EX.with(|local_ex| std::mem::take(&mut local_ex.queues.borrow_mut().stats))
     }
 
     /// Returns an [`IoStats`] struct with information about IO performed by
