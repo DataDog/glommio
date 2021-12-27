@@ -112,3 +112,7 @@ harness = false
 [[bench]]
 name = "echo"
 harness = false
+
+[[bench]]
+name = "competing_io"
+harness = false
