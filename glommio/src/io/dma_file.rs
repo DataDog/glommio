@@ -158,7 +158,9 @@ impl DmaFile {
 
         Ok(DmaFile {
             file,
-            o_direct_alignment: sysfs::BlockDevice::minimum_io_size(major, minor) as u64,
+            o_direct_alignment: (sysfs::BlockDevice::minimum_io_size(major, minor) as u64)
+                .max(sysfs::BlockDevice::logical_block_size(major, minor) as u64)
+                .max(512), // make sure the alignment is at least 512 in any case
             max_sectors_size,
             max_segment_size,
             pollable,
