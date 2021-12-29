@@ -87,9 +87,18 @@ impl TryFrom<SourceType> for libc::statx {
     }
 }
 
+#[derive(PartialEq, Clone, Copy)]
+pub(crate) enum EnqueuedStatus {
+    Enqueued,
+    Canceled,
+    Dispatched,
+}
+
+#[derive(Clone)]
 pub struct EnqueuedSource {
     pub(crate) id: SourceId,
     pub(crate) queue: ReactorQueue,
+    pub(crate) status: EnqueuedStatus,
 }
 
 pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats, waiters: u64) -> ();
@@ -313,9 +322,30 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        let enqueued = self.inner.borrow_mut().enqueued.take();
-        if let Some(EnqueuedSource { id, queue }) = enqueued {
-            queue.borrow_mut().cancel_request(id);
+        let mut inner = self.inner.borrow_mut();
+        let enqueued = inner.enqueued.as_mut();
+        if let Some(EnqueuedSource { id, queue, status }) = enqueued {
+            match status {
+                EnqueuedStatus::Enqueued => {
+                    // We never submitted the request, so it's safe to consume
+                    // source here -- kernel didn't see our buffers. By consuming
+                    // the source we are signaling to the submit method that we are
+                    // no longer interested in submitting this. This should be cheaper
+                    // than removing elements from the vector all the time.
+
+                    *status = EnqueuedStatus::Canceled;
+                }
+                EnqueuedStatus::Dispatched => {
+                    // We are cancelling this request, but it is already submitted.
+                    // This means that the kernel might be using the buffers right
+                    // now, so we delay `consume_source` until we consume the
+                    // corresponding event from the completion queue.
+
+                    queue.borrow_mut().cancel_request(*id);
+                    *status = EnqueuedStatus::Canceled; // not necessary, but useful for correctness
+                }
+                EnqueuedStatus::Canceled => unreachable!(),
+            }
         }
     }
 }

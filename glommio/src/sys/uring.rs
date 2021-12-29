@@ -18,6 +18,7 @@ use std::{
     fmt,
     io,
     io::{Error, ErrorKind},
+    ops::Range,
     os::unix::io::RawFd,
     panic,
     ptr,
@@ -36,6 +37,7 @@ use crate::{
         dma_buffer::{BufferStorage, DmaBuffer},
         DirectIo,
         EnqueuedSource,
+        EnqueuedStatus,
         InnerSource,
         IoBuffer,
         PollableStatus,
@@ -499,6 +501,56 @@ fn record_stats<Ring: ReactorRing>(
     }
 }
 
+// Find the next complete chain of events from the queue
+// Returns None if the queue is empty.
+fn peek_one_chain(queue: &VecDeque<UringDescriptor>, ring_size: usize) -> Option<Range<usize>> {
+    if queue.is_empty() {
+        return None;
+    }
+    let chain = queue
+        .iter()
+        .take(ring_size)
+        .position(|sqe| {
+            !sqe.flags
+                .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
+        })
+        .expect("Unterminated SQE link chain or submission queue overflow");
+    Some(0..chain + 1)
+}
+
+// Extract a chain of events from the queue.
+// The chain be empty if the sources were cancelled
+fn extract_one_chain(
+    source_map: &mut SourceMap,
+    queue: &mut VecDeque<UringDescriptor>,
+    chain: Range<usize>,
+) -> Vec<UringDescriptor> {
+    queue
+        .drain(chain)
+        .filter(move |op| {
+            if op.user_data > 0 {
+                let id = from_user_data(op.user_data);
+                let status = source_map.peek_source_mut(from_user_data(op.user_data), |mut x| {
+                    let current = x.enqueued.as_mut().expect("bug");
+                    match current.status {
+                        EnqueuedStatus::Enqueued => {
+                            current.status = EnqueuedStatus::Dispatched;
+                            EnqueuedStatus::Dispatched
+                        }
+                        EnqueuedStatus::Canceled => EnqueuedStatus::Canceled,
+                        _ => unreachable!(),
+                    }
+                });
+                if status == EnqueuedStatus::Canceled {
+                    source_map.consume_source(id);
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
 fn process_one_event<F, R>(
     cqe: Option<iou::CQE>,
     try_process: F,
@@ -546,20 +598,21 @@ impl SourceMap {
     fn add_source(&mut self, source: &Source, queue: ReactorQueue) -> SourceId {
         let item = source.inner.clone();
         let id = self.alloc(item);
+        let status = EnqueuedStatus::Enqueued;
         source
             .inner
             .borrow_mut()
             .enqueued
-            .replace(EnqueuedSource { id, queue });
+            .replace(EnqueuedSource { id, queue, status });
         id
     }
 
-    fn peek_source_mut<Fn: for<'a> FnOnce(RefMut<'a, InnerSource>)>(
+    fn peek_source_mut<R, Fn: for<'a> FnOnce(RefMut<'a, InnerSource>) -> R>(
         &mut self,
         id: SourceId,
         f: Fn,
-    ) {
-        f(self[id].borrow_mut());
+    ) -> R {
+        f(self[id].borrow_mut())
     }
 
     fn consume_source(&mut self, id: SourceId) -> Rc<RefCell<InnerSource>> {
@@ -573,43 +626,25 @@ impl SourceMap {
 pub(crate) struct UringQueueState {
     submissions: VecDeque<UringDescriptor>,
     cancellations: VecDeque<UringDescriptor>,
-    source_map: Rc<RefCell<SourceMap>>,
 }
 
 pub(crate) type ReactorQueue = Rc<RefCell<UringQueueState>>;
 
 impl UringQueueState {
-    fn with_capacity(cap: usize, source_map: Rc<RefCell<SourceMap>>) -> ReactorQueue {
+    fn with_capacity(cap: usize) -> ReactorQueue {
         Rc::new(RefCell::new(UringQueueState {
             submissions: VecDeque::with_capacity(cap),
             cancellations: VecDeque::new(),
-            source_map,
         }))
     }
 
     pub(crate) fn cancel_request(&mut self, id: SourceId) {
-        let found = self
-            .submissions
-            .iter()
-            .position(|el| el.user_data == to_user_data(id));
-        match found {
-            Some(idx) => {
-                self.submissions.remove(idx);
-                // We never submitted the request, so it's safe to consume
-                // source here -- kernel didn't see our buffers.
-                self.source_map.borrow_mut().consume_source(id);
-            }
-            // We are cancelling this request, but it is already submitted.
-            // This means that the kernel might be using the buffers right
-            // now, so we delay `consume_source` until we consume the
-            // corresponding event from the completion queue.
-            None => self.cancellations.push_back(UringDescriptor {
-                args: UringOpDescriptor::Cancel(to_user_data(id)),
-                fd: -1,
-                flags: SubmissionFlags::empty(),
-                user_data: 0,
-            }),
-        }
+        self.cancellations.push_back(UringDescriptor {
+            args: UringOpDescriptor::Cancel(to_user_data(id)),
+            fd: -1,
+            flags: SubmissionFlags::empty(),
+            user_data: 0,
+        });
     }
 }
 
@@ -738,7 +773,7 @@ impl PollRing {
             completed: 0,
             size,
             ring,
-            submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
+            submission_queue: UringQueueState::with_capacity(size * 4),
             allocator,
             stats: RingIoStats::default(),
             task_queue_stats: AHashMap::new(),
@@ -813,47 +848,32 @@ impl UringCommon for PollRing {
     }
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
-        if queue.is_empty() {
-            return Some(false);
-        }
+        let source_map = &mut *self.source_map.borrow_mut();
 
-        // Find position of first element without a link
-        let chain_len = match queue.iter().position(|sqe| {
-            !sqe.flags
-                .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
-        }) {
-            Some(pos) => pos,
-            None => panic!(
-                "Unterminated SQE link chain: internal source prep bug, {:?}",
-                queue
-            ),
-        };
+        while let Some(chain) = peek_one_chain(queue, self.size) {
+            return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
+                let ops = extract_one_chain(source_map, queue, chain);
+                if ops.is_empty() {
+                    // all the sources in the ring were cancelled
+                    continue;
+                }
 
-        if chain_len + 1 > self.size {
-            panic!(
-                "Link chain length ({:?}) overflows submission queue bounds ({:?}): {:?}",
-                chain_len + 1,
-                self.size,
-                queue
-            );
+                self.submitted += ops.len() as u64;
+                for (op, mut sqe) in ops.into_iter().zip(sqes.into_iter()) {
+                    let allocator = self.allocator.clone();
+                    fill_sqe(
+                        &mut sqe,
+                        &op,
+                        move |size| allocator.new_buffer(size),
+                        source_map,
+                    );
+                }
+                Some(true)
+            } else {
+                None
+            };
         }
-
-        if let Some(sqes) = self.ring.prepare_sqes(chain_len as u32 + 1) {
-            for mut sqe in sqes {
-                self.submitted += 1;
-                let op = queue.pop_front().unwrap();
-                let allocator = self.allocator.clone();
-                fill_sqe(
-                    &mut sqe,
-                    &op,
-                    move |size| allocator.new_buffer(size),
-                    &mut *self.source_map.borrow_mut(),
-                );
-            }
-            Some(true)
-        } else {
-            None
-        }
+        Some(false)
     }
 }
 
@@ -880,7 +900,7 @@ impl SleepableRing {
         Ok(SleepableRing {
             ring: iou::IoUring::new(size as _)?,
             size,
-            submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
+            submission_queue: UringQueueState::with_capacity(size * 4),
             waiting_submission: 0,
             name,
             allocator,
@@ -1058,47 +1078,32 @@ impl UringCommon for SleepableRing {
     }
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
-        if queue.is_empty() {
-            return Some(false);
-        }
+        let source_map = &mut *self.source_map.borrow_mut();
 
-        // Find position of first element without a link
-        let chain_len = match queue.iter().position(|sqe| {
-            !sqe.flags
-                .intersects(SubmissionFlags::IO_LINK | SubmissionFlags::IO_HARDLINK)
-        }) {
-            Some(pos) => pos,
-            None => panic!(
-                "Unterminated SQE link chain: internal source prep bug, {:?}",
-                queue
-            ),
-        };
+        while let Some(chain) = peek_one_chain(queue, self.size) {
+            return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
+                let ops = extract_one_chain(source_map, queue, chain);
+                if ops.is_empty() {
+                    // all the sources in the ring were cancelled
+                    continue;
+                }
 
-        if chain_len + 1 > self.size {
-            panic!(
-                "Link chain length ({:?}) overflows submission queue bounds ({:?}): {:?}",
-                chain_len + 1,
-                self.size,
-                queue
-            );
+                self.waiting_submission += ops.len();
+                for (op, mut sqe) in ops.into_iter().zip(sqes.into_iter()) {
+                    let allocator = self.allocator.clone();
+                    fill_sqe(
+                        &mut sqe,
+                        &op,
+                        move |size| allocator.new_buffer(size),
+                        source_map,
+                    );
+                }
+                Some(true)
+            } else {
+                None
+            };
         }
-
-        if let Some(sqes) = self.ring.prepare_sqes(chain_len as u32 + 1) {
-            for mut sqe in sqes {
-                self.waiting_submission += 1;
-                let op = queue.pop_front().unwrap();
-                let allocator = self.allocator.clone();
-                fill_sqe(
-                    &mut sqe,
-                    &op,
-                    move |size| allocator.new_buffer(size),
-                    &mut *self.source_map.borrow_mut(),
-                );
-            }
-            Some(true)
-        } else {
-            None
-        }
+        Some(false)
     }
 }
 
@@ -1975,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Link chain length (3) overflows submission queue bounds (2)")]
+    #[should_panic(expected = "Unterminated SQE link chain or submission queue overflow")]
     fn sqe_link_chain_overflow() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
         let source_map = Rc::new(RefCell::new(SourceMap::default()));
