@@ -27,6 +27,7 @@ use std::{
 };
 
 use crate::{
+    executor,
     free_list::{FreeList, Idx},
     iou,
     iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, SubmissionFlags, TimeoutFlags},
@@ -1108,7 +1109,7 @@ pub(crate) struct Reactor {
     latency_ring: RefCell<SleepableRing>,
     poll_ring: RefCell<PollRing>,
 
-    timeout_src: Cell<Option<Source>>,
+    timeout_src: RefCell<Option<Source>>,
 
     link_fd: RawFd,
 
@@ -1246,7 +1247,7 @@ impl Reactor {
             main_ring: RefCell::new(main_ring),
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
-            timeout_src: Cell::new(None),
+            timeout_src: RefCell::new(None),
             syscall_thread: BlockingThread::new(notifier.clone()),
             link_fd,
             notifier,
@@ -1512,8 +1513,22 @@ impl Reactor {
         match latency {
             None => Self::simple_poll(&self.poll_ring, woke),
             Some(Latency::NotImportant) => Self::simple_poll(&self.main_ring, woke),
-            Some(Latency::Matters(_)) => Self::simple_poll(&self.latency_ring, woke),
+            Some(Latency::Matters(_)) => {
+                let ret = Self::simple_poll(&self.latency_ring, woke);
+                if let Some(src) = &*self.timeout_src.borrow() {
+                    if src.result().is_some() {
+                        // the preemption timer has fired during the last poll
+                        // we need to communicate this to the scheduler
+                        let _ = executor().yield_task_queue_now();
+                    }
+                }
+                ret
+            }
         }
+    }
+
+    pub(crate) fn timeout_source(&self) -> Ref<'_, Option<Source>> {
+        self.timeout_src.borrow()
     }
 
     /// This function can be passed two timers. Because they play different
@@ -1589,7 +1604,7 @@ impl Reactor {
         let mut should_sleep = match preempt_timer() {
             None => true,
             Some(dur) => {
-                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
+                self.timeout_src.replace(Some(lat_ring.arm_timer(dur)));
                 false
             }
         };
@@ -1613,7 +1628,7 @@ impl Reactor {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
-                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
+                self.timeout_src.replace(Some(lat_ring.arm_timer(dur)));
                 flush_rings!(lat_ring)?;
             }
             // From this moment on the remote executors are aware that we are sleeping

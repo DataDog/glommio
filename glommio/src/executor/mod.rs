@@ -1065,8 +1065,9 @@ impl LocalExecutor {
 
     fn mark_me_for_yield(&self) {
         let queues = self.queues.borrow();
-        let mut me = queues.active_executing.as_ref().unwrap().borrow_mut();
-        me.yielded = true;
+        if let Some(me) = queues.active_executing.as_ref() {
+            me.borrow_mut().yielded = true;
+        }
     }
 
     fn spawn<T>(&self, future: impl Future<Output = T>) -> multitask::Task<T> {
@@ -1110,11 +1111,21 @@ impl LocalExecutor {
         self.reactor.need_preempt()
     }
 
+    pub(crate) fn need_preempt_check_timer(&self) -> bool {
+        let timer = if let Some(src) = &*self.reactor.sys.timeout_source() {
+            src.result().is_some()
+        } else {
+            false
+        };
+
+        timer || self.need_preempt()
+    }
+
     fn run_task_queues(&self) -> bool {
         let mut ran = false;
         loop {
             self.reactor.sys.install_eventfd();
-            if self.need_preempt() {
+            if self.need_preempt_check_timer() {
                 break;
             }
             if !self.run_one_task_queue() {
@@ -1789,22 +1800,18 @@ pub unsafe fn spawn_scoped_local_into<'a, T>(
 pub struct ExecutorProxy {}
 
 impl ExecutorProxy {
-    async fn cond_yield<F>(cond: F)
+    fn cond_yield<F>(cond: F) -> bool
     where
         F: FnOnce(&LocalExecutor) -> bool,
     {
-        let need_yield = LOCAL_EX.with(|local_ex| {
+        LOCAL_EX.with(|local_ex| {
             if cond(local_ex) {
                 local_ex.mark_me_for_yield();
                 true
             } else {
                 false
             }
-        });
-
-        if need_yield {
-            futures_lite::future::yield_now().await;
-        }
+        })
     }
 
     /// Checks if this task has run for too long and need to be preempted. This
@@ -1876,7 +1883,9 @@ impl ExecutorProxy {
     /// [`ExecutorProxy::yield_task_queue_now`].
     #[inline]
     pub async fn yield_if_needed(&self) {
-        Self::cond_yield(|local_ex| local_ex.need_preempt()).await;
+        if Self::cond_yield(|local_ex| local_ex.need_preempt()) {
+            futures_lite::future::yield_now().await
+        }
     }
 
     /// Unconditionally yields the current task and forces the scheduler
@@ -1885,8 +1894,8 @@ impl ExecutorProxy {
     ///
     /// Unless you know you need to yield right now, using
     /// [`ExecutorProxy::yield_if_needed`] instead is the better choice.
-    pub async fn yield_now(&self) {
-        futures_lite::future::yield_now().await
+    pub fn yield_now(&self) -> impl Future<Output = ()> {
+        futures_lite::future::yield_now()
     }
 
     /// Unconditionally yields the current task queue and forces the scheduler
@@ -1895,8 +1904,9 @@ impl ExecutorProxy {
     ///
     /// Unless you know you need to yield right now, using
     /// [`ExecutorProxy::yield_if_needed`] instead is the better choice.
-    pub async fn yield_task_queue_now(&self) {
-        Self::cond_yield(|_| true).await
+    pub fn yield_task_queue_now(&self) -> impl Future<Output = ()> {
+        Self::cond_yield(|_| true);
+        futures_lite::future::yield_now()
     }
 
     #[inline]
