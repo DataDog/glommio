@@ -21,6 +21,7 @@ use std::{
     ops::Range,
     os::unix::io::RawFd,
     panic,
+    pin::Pin,
     ptr,
     rc::Rc,
     sync::Arc,
@@ -585,8 +586,8 @@ where
     None
 }
 
-type SourceMap = FreeList<Rc<RefCell<InnerSource>>>;
-pub(crate) type SourceId = Idx<Rc<RefCell<InnerSource>>>;
+type SourceMap = FreeList<Pin<Rc<RefCell<InnerSource>>>>;
+pub(crate) type SourceId = Idx<Pin<Rc<RefCell<InnerSource>>>>;
 fn from_user_data(user_data: u64) -> SourceId {
     SourceId::from_raw((user_data - 1) as usize)
 }
@@ -615,7 +616,7 @@ impl SourceMap {
         f(self[id].borrow_mut())
     }
 
-    fn consume_source(&mut self, id: SourceId) -> Rc<RefCell<InnerSource>> {
+    fn consume_source(&mut self, id: SourceId) -> Pin<Rc<RefCell<InnerSource>>> {
         let source = self.dealloc(id);
         source.borrow_mut().enqueued.take();
         source
