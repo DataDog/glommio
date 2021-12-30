@@ -31,6 +31,7 @@ use std::{
     mem::MaybeUninit,
     os::unix::io::RawFd,
     path::PathBuf,
+    pin::Pin,
     rc::Rc,
     task::{Poll, Waker},
     time::Duration,
@@ -159,7 +160,7 @@ impl fmt::Debug for InnerSource {
 
 #[derive(Debug)]
 pub struct Source {
-    pub(crate) inner: Rc<RefCell<InnerSource>>,
+    pub(crate) inner: Pin<Rc<RefCell<InnerSource>>>,
 }
 
 impl Source {
@@ -172,7 +173,7 @@ impl Source {
         task_queue: Option<TaskQueueHandle>,
     ) -> Source {
         Source {
-            inner: Rc::new(RefCell::new(InnerSource {
+            inner: Rc::pin(RefCell::new(InnerSource {
                 raw,
                 wakers: Wakers::new(),
                 source_type,
