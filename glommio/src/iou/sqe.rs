@@ -680,6 +680,12 @@ impl<'ring> Iterator for SQEs<'ring> {
     }
 }
 
+impl<'ring> Drop for SQEs<'ring> {
+    fn drop(&mut self) {
+        self.sq.sqe_tail -= self.remaining()
+    }
+}
+
 /// An Iterator of [`SQE`]s which will be hard linked together.
 pub struct HardLinked<'ring, 'a> {
     sqes: &'a mut SQEs<'ring>,
