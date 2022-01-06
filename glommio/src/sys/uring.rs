@@ -59,6 +59,7 @@ use nix::sys::{
     socket::{MsgFlags, SockAddr, SockFlag},
     stat::Mode as OpenMode,
 };
+use smallvec::SmallVec;
 
 const MSG_ZEROCOPY: i32 = 0x4000000;
 
@@ -525,7 +526,7 @@ fn extract_one_chain(
     source_map: &mut SourceMap,
     queue: &mut VecDeque<UringDescriptor>,
     chain: Range<usize>,
-) -> Vec<UringDescriptor> {
+) -> SmallVec<[UringDescriptor; 1]> {
     queue
         .drain(chain)
         .filter(move |op| {
