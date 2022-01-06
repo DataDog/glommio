@@ -146,7 +146,7 @@ impl BlockDevice {
     }
 
     pub(crate) fn is_md(major: usize, minor: usize) -> bool {
-        block_property!(DEV_MAP, subcomponents, major, minor).len() > 1
+        !block_property!(DEV_MAP, subcomponents, major, minor).is_empty()
     }
 }
 
