@@ -104,7 +104,7 @@ pub struct EnqueuedSource {
 
 pub(crate) type StatsCollectionFn = fn(&io::Result<usize>, &mut RingIoStats, waiters: u64) -> ();
 pub(crate) type LatencyCollectionFn =
-    fn(std::time::Duration, std::time::Duration, &mut RingIoStats) -> ();
+    fn(std::time::Duration, std::time::Duration, std::time::Duration, &mut RingIoStats) -> ();
 
 #[derive(Copy, Clone)]
 pub(crate) struct StatsCollection {
@@ -240,26 +240,29 @@ impl Source {
             .result
             .as_ref()
             .map(|x| OsResult::from(x).into());
+        if ret.is_none() {
+            return ret;
+        }
 
         // if there is a scheduler latency collection function present, invoke it once
-        if ret.is_some() && inner.wakers.fulfilled_at.is_some() && inner.wakers.seen_at.is_some() {
-            if let Some(Some(stat_fn)) = inner.stats_collection.as_ref().map(|x| x.latency) {
-                let seen_at = inner.wakers.seen_at.take().unwrap();
-                let fulfilled_at = inner.wakers.fulfilled_at.take().unwrap();
+        if let Some(Some(stat_fn)) = inner.stats_collection.as_ref().map(|x| x.latency) {
+            if let Some(lat) = inner.wakers.timestamps() {
                 drop(inner);
-
-                let io_lat = fulfilled_at - seen_at;
-                let sched_lat = fulfilled_at.elapsed();
+                let pre_lat = lat.submitted_at - lat.queued_at;
+                let io_lat = lat.fulfilled_at - lat.submitted_at;
+                let post_lat = lat.fulfilled_at.elapsed();
 
                 let reactor = &crate::executor().reactor().sys;
                 (stat_fn)(
+                    pre_lat,
                     io_lat,
-                    sched_lat,
+                    post_lat,
                     reactor.ring_for_source(self).io_stats_mut(),
                 );
                 (stat_fn)(
+                    pre_lat,
                     io_lat,
-                    sched_lat,
+                    post_lat,
                     reactor
                         .ring_for_source(self)
                         .io_stats_for_task_queue_mut(crate::executor().current_task_queue()),
