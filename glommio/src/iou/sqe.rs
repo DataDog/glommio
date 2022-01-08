@@ -602,34 +602,18 @@ bitflags::bitflags! {
 
 /// A sequence of [`SQE`]s from the [`SubmissionQueue`][crate::SubmissionQueue].
 pub struct SQEs<'ring> {
-    sq: &'ring mut uring_sys::io_uring_sq,
-    first: u32,
+    sq: &'ring mut uring_sys::io_uring,
     count: u32,
     consumed: u32,
 }
 
 impl<'ring> SQEs<'ring> {
-    pub(crate) fn new(
-        sq: &'ring mut uring_sys::io_uring_sq,
-        first: u32,
-        count: u32,
-    ) -> SQEs<'ring> {
+    pub(crate) fn new(sq: &'ring mut uring_sys::io_uring, count: u32) -> SQEs<'ring> {
         SQEs {
             sq,
-            first,
             count,
             consumed: 0,
         }
-    }
-
-    /// Consumes all remaining [`SQE`]s, returning the last one. Subsequent
-    /// attempts to get additional [`SQE`]s will return `None`.
-    pub fn single(&mut self) -> Option<SQE<'ring>> {
-        let mut next = None;
-        while let Some(sqe) = self.consume() {
-            next = Some(sqe)
-        }
-        next
     }
 
     /// An iterator of [`HardLinkedSQE`]s. These will be [`SQE`]s that are
@@ -658,10 +642,7 @@ impl<'ring> SQEs<'ring> {
     fn consume(&mut self) -> Option<SQE<'ring>> {
         if self.consumed < self.count {
             unsafe {
-                let sqe = self
-                    .sq
-                    .sqes
-                    .offset(((self.first + self.consumed) & *self.sq.kring_mask) as isize);
+                let sqe = uring_sys::io_uring_get_sqe(self.sq);
                 uring_sys::io_uring_prep_nop(sqe);
                 self.consumed += 1;
                 Some(SQE { sqe: &mut *sqe })
@@ -677,12 +658,6 @@ impl<'ring> Iterator for SQEs<'ring> {
 
     fn next(&mut self) -> Option<SQE<'ring>> {
         self.consume()
-    }
-}
-
-impl<'ring> Drop for SQEs<'ring> {
-    fn drop(&mut self) {
-        self.sq.sqe_tail -= self.remaining()
     }
 }
 

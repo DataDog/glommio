@@ -161,12 +161,12 @@ impl IoUring {
     }
 
     /// Returns the `SubmissionQueue` part of the `IoUring`.
-    pub fn sq(&mut self) -> SubmissionQueue<'_> {
+    pub fn sq(&self) -> SubmissionQueue<'_> {
         SubmissionQueue::new(&*self)
     }
 
     /// Returns the `CompletionQueue` part of the `IoUring`.
-    pub fn cq(&mut self) -> CompletionQueue<'_> {
+    pub fn cq(&self) -> CompletionQueue<'_> {
         CompletionQueue::new(&*self)
     }
 
@@ -186,20 +186,6 @@ impl IoUring {
 
     pub fn probe(&mut self) -> io::Result<Probe> {
         Probe::for_ring(&mut self.ring)
-    }
-
-    /// Returns the next [`SQE`] which can be prepared to submit.
-    pub fn prepare_sqe(&mut self) -> Option<SQE<'_>> {
-        unsafe { submission_queue::prepare_sqe(&mut self.ring) }
-    }
-
-    /// Returns the next `count` [`SQE`]s which can be prepared to submit as an
-    /// iterator.
-    ///
-    /// See the [`SQEs`] type for more information about how these multiple SQEs
-    /// can be used.
-    pub fn prepare_sqes(&mut self, count: u32) -> Option<SQEs<'_>> {
-        unsafe { submission_queue::prepare_sqes(&mut self.ring.sq, count) }
     }
 
     /// Submit all prepared [`SQE`]s to the kernel.
