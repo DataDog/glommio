@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::{
-    bulk_io::ReadManyArgs,
+    bulk_io::{MergedBufferLimit, ReadAmplificationLimit, ReadManyArgs},
     open_options::OpenOptions,
     DmaStreamReaderBuilder,
     DmaStreamWriter,
@@ -388,24 +388,20 @@ impl ImmutableFile {
     /// This API will optimistically coalesce and deduplicate IO requests such
     /// that two overlapping or adjacent reads will result in a single IO
     /// request. This is transparent for the consumer, you will still
-    /// receive individual ReadResults corresponding to what you asked for.
+    /// receive individual [`ReadResult`]s corresponding to what you asked for.
     ///
-    /// The first argument is an iterator of [`IoVec`]. The last two
+    /// The first argument is a stream of [`IoVec`]. The last two
     /// arguments control how aggressive the IO coalescing should be:
-    /// * `max_merged_buffer_size` controls how large a merged IO request can
-    ///   be. A value of 0 disables merging completely.
-    /// * `max_read_amp` is optional and defines the maximum read amplification
-    ///   you are comfortable with. If two read requests are separated by a
-    ///   distance less than this value, they will be merged. A value `None`
-    ///   disables all read amplification limitation.
+    /// * `buffer_limit` controls how large a merged IO request can get;
+    /// * `read_amp_limit` controls how much read amplification is acceptable.
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
-    /// this API will internally convert the positions and sizes to match.
+    /// this API will internally align the reads appropriately.
     pub fn read_many<V, S>(
         &self,
         iovs: S,
-        max_merged_buffer_size: usize,
-        max_read_amp: Option<usize>,
+        buffer_limit: MergedBufferLimit,
+        read_amp_limit: ReadAmplificationLimit,
     ) -> ReadManyResult<V, impl Stream<Item = (ScheduledSource, ReadManyArgs<V>)>>
     where
         V: IoVec + Unpin,
@@ -413,7 +409,7 @@ impl ImmutableFile {
     {
         self.stream_builder
             .file
-            .read_many(iovs, max_merged_buffer_size, max_read_amp)
+            .read_many(iovs, buffer_limit, read_amp_limit)
     }
 
     /// Rename this file.
@@ -566,7 +562,11 @@ mod test {
 
         {
             let iovs = vec![(0, 1), (3, 1)];
-            let mut bufs = stream.read_many(stream::iter(iovs.into_iter()), 0, None);
+            let mut bufs = stream.read_many(
+                stream::iter(iovs.into_iter()),
+                MergedBufferLimit::NoMerging,
+                ReadAmplificationLimit::NoAmplification,
+            );
             let next_buffer = bufs.next().await.unwrap();
             assert_eq!(next_buffer.unwrap().1.len(), 1);
             let next_buffer = bufs.next().await.unwrap();
