@@ -1551,6 +1551,7 @@ impl Reactor {
 
     fn simple_poll(ring: &RefCell<dyn UringCommon>, woke: &mut usize) -> io::Result<()> {
         let mut ring = ring.borrow_mut();
+        ring.consume_cancellation_queue().or_else(Self::busy_ok)?;
         ring.consume_submission_queue().or_else(Self::busy_ok)?;
         ring.consume_completion_queue(woke);
         Ok(())
