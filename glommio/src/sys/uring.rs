@@ -643,6 +643,10 @@ impl UringQueueState {
         }))
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.submissions.is_empty() && self.cancellations.is_empty()
+    }
+
     pub(crate) fn cancel_request(&mut self, id: SourceId) {
         self.cancellations.push_back(UringDescriptor {
             args: UringOpDescriptor::Cancel(to_user_data(id)),
@@ -661,7 +665,10 @@ pub(crate) trait ReactorRing {
 trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
+    fn waiting_kernel_submission(&self) -> usize;
+    fn waiting_kernel_collection(&self) -> usize;
     fn needs_kernel_enter(&self) -> bool;
+    fn can_sleep(&self) -> bool;
     /// None if it wasn't possible to acquire an `sqe`. `Some(true)` if it was
     /// possible and there was something to dispatch. `Some(false)` if there
     /// was nothing to dispatch
@@ -786,10 +793,6 @@ impl PollRing {
         })
     }
 
-    fn can_sleep(&self) -> bool {
-        self.submitted == self.completed
-    }
-
     pub(crate) fn alloc_dma_buffer(&mut self, size: usize) -> DmaBuffer {
         self.allocator.new_buffer(size).unwrap()
     }
@@ -815,11 +818,22 @@ impl UringCommon for PollRing {
     }
 
     fn needs_kernel_enter(&self) -> bool {
-        // If we submitted anything, we will have the submission count differing from
-        // the completion count and can_sleep will be false.
-        //
-        // So only need to check for that.
-        !self.can_sleep()
+        // We need to enter the kernel to submit and collect CQEs so if the number of
+        // submitted requests doesn't match the number of request we collected, we need
+        // to poll.
+        self.submitted != self.completed
+    }
+
+    fn can_sleep(&self) -> bool {
+        self.submission_queue.borrow().is_empty() && !self.needs_kernel_enter()
+    }
+
+    fn waiting_kernel_submission(&self) -> usize {
+        self.ring.sq().ready() as usize
+    }
+
+    fn waiting_kernel_collection(&self) -> usize {
+        self.ring.cq().ready() as usize
     }
 
     fn submission_queue(&mut self) -> ReactorQueue {
@@ -857,7 +871,7 @@ impl UringCommon for PollRing {
         let now = Instant::now();
 
         while let Some(chain) = peek_one_chain(queue, self.size) {
-            return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
+            return if let Some(sqes) = self.ring.sq().prepare_sqes(chain.len() as u32) {
                 let ops = extract_one_chain(source_map, queue, chain, now);
                 if ops.is_empty() {
                     // all the sources in the ring were cancelled
@@ -887,7 +901,6 @@ struct SleepableRing {
     ring: iou::IoUring,
     size: usize,
     submission_queue: ReactorQueue,
-    waiting_submission: usize,
     name: &'static str,
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
@@ -907,7 +920,6 @@ impl SleepableRing {
             ring: iou::IoUring::new(size as _)?,
             size,
             submission_queue: UringQueueState::with_capacity(size * 4),
-            waiting_submission: 0,
             name,
             allocator,
             stats: RingIoStats::default(),
@@ -955,8 +967,7 @@ impl SleepableRing {
     }
 
     fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
-        if let Some(mut sqe) = self.ring.prepare_sqe() {
-            self.waiting_submission += 1;
+        if let Some(mut sqe) = self.ring.sq().prepare_sqe() {
             // Now must wait on the `eventfd` in case someone wants to wake us up.
             // If we can't then we can't sleep and will just bail immediately
             let op = UringDescriptor {
@@ -1002,9 +1013,13 @@ impl SleepableRing {
     }
 
     fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
-        if let Some(mut sqe) = self.ring.prepare_sqe() {
-            self.waiting_submission += 1;
-
+        assert_eq!(
+            self.waiting_kernel_submission(),
+            0,
+            "sleeping with pending SQEs"
+        );
+        if let Some(mut sqe) = self.ring.sq().prepare_sqe() {
+            let sqe_ptr = unsafe { sqe.raw_mut() as *mut _ };
             let op = UringDescriptor {
                 fd: link.raw(),
                 flags: SubmissionFlags::empty(),
@@ -1021,12 +1036,26 @@ impl SleepableRing {
                 DmaBuffer::new,
                 &mut *self.source_map.borrow_mut(),
             );
-            self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
+
+            // We have now prepared the SQE that links the two rings. We now need to submit
+            // it successfully to be able to safely sleep.
+
+            if self.ring.submit_sqes()? != 1 {
+                // We failed to submit the `SQE` that links the rings. Just can't sleep.
+                // Waiting here is unsafe because we could end up waiting much longer than
+                // needed.
+                // We make the SQE a no-op and return
+                unsafe { crate::uring_sys::io_uring_prep_nop(sqe_ptr) };
+                Err(io::Error::from_raw_os_error(libc::EBUSY))
+            } else {
+                // The rings are linked. Goodnight!
+                self.ring.cq().wait(1).map(|_| 1)
+            }
         } else {
             // Can't link rings because we ran out of `CQE`s. Just can't sleep.
             // Submit what we have, once we're out of here we'll consume them
             // and at some point will be able to sleep again.
-            self.ring.submit_sqes().map(|x| x as usize)
+            self.submit_sqes()
         }
     }
 }
@@ -1051,7 +1080,23 @@ impl UringCommon for SleepableRing {
     }
 
     fn needs_kernel_enter(&self) -> bool {
-        self.waiting_submission > 0
+        // We only need to enter the kernel to submit SQEs, not to collect CQEs (the
+        // kernel posts the CQEs asynchronously for us)
+        self.waiting_kernel_submission() > 0
+    }
+
+    fn can_sleep(&self) -> bool {
+        self.submission_queue.borrow().is_empty()
+            && self.waiting_kernel_submission() == 0
+            && self.waiting_kernel_collection() == 0
+    }
+
+    fn waiting_kernel_submission(&self) -> usize {
+        self.ring.sq().ready() as usize
+    }
+
+    fn waiting_kernel_collection(&self) -> usize {
+        self.ring.cq().ready() as usize
     }
 
     fn submission_queue(&mut self) -> ReactorQueue {
@@ -1060,7 +1105,6 @@ impl UringCommon for SleepableRing {
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
         let x = self.ring.submit_sqes()? as usize;
-        self.waiting_submission -= x;
         Ok(x)
     }
 
@@ -1088,14 +1132,13 @@ impl UringCommon for SleepableRing {
         let now = Instant::now();
 
         while let Some(chain) = peek_one_chain(queue, self.size) {
-            return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
+            return if let Some(sqes) = self.ring.sq().prepare_sqes(chain.len() as u32) {
                 let ops = extract_one_chain(source_map, queue, chain, now);
                 if ops.is_empty() {
                     // all the sources in the ring were cancelled
                     continue;
                 }
 
-                self.waiting_submission += ops.len();
                 for (op, mut sqe) in ops.into_iter().zip(sqes.into_iter()) {
                     let allocator = self.allocator.clone();
                     fill_sqe(
@@ -1501,8 +1544,9 @@ impl Reactor {
             None,
             None,
         );
-        ring.sleep(&mut link_rings).or_else(Self::busy_ok)?;
-        Ok(())
+        ring.sleep(&mut link_rings)
+            .or_else(Self::busy_ok)
+            .map(|_| {})
     }
 
     fn simple_poll(ring: &RefCell<dyn UringCommon>, woke: &mut usize) -> io::Result<()> {
@@ -1611,11 +1655,8 @@ impl Reactor {
         consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
-        should_sleep &= (woke == 0)
-            && poll_ring.can_sleep()
-            && main_ring.submission_queue.borrow().submissions.is_empty()
-            && lat_ring.submission_queue.borrow().submissions.is_empty()
-            && poll_ring.submission_queue.borrow().submissions.is_empty();
+        should_sleep &=
+            (woke == 0) && poll_ring.can_sleep() && main_ring.can_sleep() && lat_ring.can_sleep();
 
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
