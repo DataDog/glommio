@@ -43,6 +43,8 @@ pub(crate) struct BlockDevice {
     optimal_io_size: usize,
     logical_block_size: usize,
     physical_block_size: usize,
+    max_sectors_size: usize,
+    max_segment_size: usize,
     cache: StorageCache,
     subcomponents: Vec<PathBuf>,
 }
@@ -77,6 +79,8 @@ impl BlockDevice {
             optimal_io_size: 128 << 10,
             logical_block_size: 512,
             physical_block_size: 512,
+            max_sectors_size: 128 << 10,
+            max_segment_size: (u32::MAX - 1) as usize,
             cache: StorageCache::WriteBack,
             subcomponents: Vec::new(),
         }
@@ -101,6 +105,8 @@ impl BlockDevice {
         let optimal_io_size = read_int(&queue.join("optimal_io_size")) as _;
         let logical_block_size = read_int(&queue.join("logical_block_size")) as _;
         let physical_block_size = read_int(&queue.join("physical_block_size")) as _;
+        let max_sectors_kb = read_int(&queue.join("max_sectors_kb")) as usize;
+        let max_segment_size = read_int(&queue.join("max_segment_size")) as usize;
 
         let cache_data = read_to_string(&queue.join("write_cache")).unwrap();
         let cache = cache_data.parse::<StorageCache>().unwrap();
@@ -116,6 +122,8 @@ impl BlockDevice {
             optimal_io_size,
             logical_block_size,
             physical_block_size,
+            max_sectors_size: max_sectors_kb << 10,
+            max_segment_size,
             cache,
             subcomponents,
         }
@@ -143,6 +151,14 @@ impl BlockDevice {
 
     pub(crate) fn physical_block_size(major: usize, minor: usize) -> usize {
         block_property!(DEV_MAP, physical_block_size, major, minor)
+    }
+
+    pub(crate) fn max_sectors_size(major: usize, minor: usize) -> usize {
+        block_property!(DEV_MAP, max_sectors_size, major, minor)
+    }
+
+    pub(crate) fn max_segment_size(major: usize, minor: usize) -> usize {
+        block_property!(DEV_MAP, max_segment_size, major, minor)
     }
 
     pub(crate) fn is_md(major: usize, minor: usize) -> bool {
