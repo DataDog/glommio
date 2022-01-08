@@ -1209,11 +1209,11 @@ macro_rules! flush_cancellations {
 
 macro_rules! flush_rings {
     ($( $ring:expr ),+ ) => {{
+        let mut ret = 0;
         $(
-            $ring.consume_submission_queue()?;
+            ret += $ring.consume_submission_queue()?;
         )*
-        let ret : io::Result<()> = Ok(());
-        ret
+        io::Result::Ok(ret)
     }}
 }
 
@@ -1664,7 +1664,10 @@ impl Reactor {
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
                 self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
-                flush_rings!(lat_ring)?;
+                if flush_rings!(lat_ring)? != 1 {
+                    // we failed to submit the timeout SQE: it isn't safe to sleep
+                    return Ok(false);
+                }
             }
             // From this moment on the remote executors are aware that we are sleeping
             // We have to sweep the remote channels function once more because since
