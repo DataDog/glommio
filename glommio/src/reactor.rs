@@ -138,25 +138,18 @@ impl Timers {
         // Split timers into ready and pending timers.
         let pending = self.timers.split_off(&(now, 0));
         let ready = mem::replace(&mut self.timers, pending);
-
-        // Calculate the duration until the next event.
-        let dur = if ready.is_empty() {
-            // Duration until the next timer.
-            self.timers
-                .keys()
-                .next()
-                .map(|(when, _)| when.saturating_duration_since(now))
-        } else {
-            // Timers are about to fire right now.
-            Some(Duration::from_secs(0))
-        };
-
         let woke = ready.len();
         for (_, waker) in ready {
             wake!(waker);
         }
 
-        (dur, woke)
+        // Calculate the duration until the next event.
+        let next = self
+            .timers
+            .keys()
+            .next()
+            .map(|(when, _)| when.saturating_duration_since(now));
+        (next, woke)
     }
 }
 
@@ -740,7 +733,7 @@ impl Reactor {
 
     /// Processes ready timers and extends the list of wakers to wake.
     ///
-    /// Returns the duration until the next timer before this method was called.
+    /// Returns the duration until the next timer
     fn process_timers(&self) -> (Option<Duration>, usize) {
         let mut timers = self.timers.borrow_mut();
         timers.process_timers()
