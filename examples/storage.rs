@@ -12,6 +12,8 @@ use glommio::{
         DmaStreamReader,
         DmaStreamReaderBuilder,
         DmaStreamWriterBuilder,
+        MergedBufferLimit,
+        ReadAmplificationLimit,
         StreamReaderBuilder,
         StreamWriterBuilder,
     },
@@ -167,9 +169,13 @@ impl Reader {
     ) {
         match &self {
             Reader::Direct(file) => {
-                file.read_many(futures_lite::stream::iter(iovs), max_buffer_size, None)
-                    .for_each(|_| {})
-                    .await;
+                file.read_many(
+                    futures_lite::stream::iter(iovs),
+                    MergedBufferLimit::Custom(max_buffer_size),
+                    ReadAmplificationLimit::NoAmplification,
+                )
+                .for_each(|_| {})
+                .await;
             }
             Reader::Buffered(_) => {
                 panic!("bulk io is not available for buffered files")
