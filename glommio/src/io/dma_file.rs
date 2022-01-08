@@ -58,6 +58,8 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 pub struct DmaFile {
     file: GlommioFile,
     o_direct_alignment: u64,
+    max_sectors_size: usize,
+    max_segment_size: usize,
     pollable: PollableStatus,
 }
 
@@ -143,10 +145,16 @@ impl DmaFile {
         {
             pollable = PollableStatus::NonPollable(DirectIo::Enabled);
         }
+        let max_sectors_size =
+            sysfs::BlockDevice::max_sectors_size(file.dev_major as _, file.dev_minor as _);
+        let max_segment_size =
+            sysfs::BlockDevice::max_segment_size(file.dev_major as _, file.dev_minor as _);
 
         Ok(DmaFile {
             file,
             o_direct_alignment: 4096,
+            max_sectors_size,
+            max_segment_size,
             pollable,
         })
     }
