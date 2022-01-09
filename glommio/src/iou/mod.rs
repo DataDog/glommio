@@ -212,16 +212,7 @@ impl IoUring {
     /// Peek for any [`CQE`] that is already completed, without blocking. This
     /// will consume that CQE.
     pub fn peek_for_cqe(&mut self) -> Option<CQE> {
-        unsafe {
-            let mut cqe = MaybeUninit::uninit();
-            let count = uring_sys::io_uring_peek_batch_cqe(&mut self.ring, cqe.as_mut_ptr(), 1);
-
-            if count > 0 {
-                Some(CQE::new(NonNull::from(&self.ring), &mut *cqe.assume_init()))
-            } else {
-                None
-            }
-        }
+        self.cq().peek_for_cqe()
     }
 
     /// Block until at least one [`CQE`] is completed. This will consume that
