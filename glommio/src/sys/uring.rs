@@ -1211,7 +1211,10 @@ macro_rules! flush_rings {
     ($( $ring:expr ),+ ) => {{
         let mut ret = 0;
         $(
-            ret += $ring.consume_submission_queue()?;
+            ret += $ring.consume_submission_queue()
+                .or_else(Reactor::busy_ok)
+                .or_else(Reactor::again_ok)
+                .or_else(Reactor::intr_ok)?;
         )*
         io::Result::Ok(ret)
     }}
@@ -1517,13 +1520,37 @@ impl Reactor {
         self.queue_standard_request(source, UringOpDescriptor::Nop)
     }
 
-    /// io_uring can return `EBUSY` when the CQE queue is full, and we try to
-    /// push more requests. This is fine: we just need to make sure that we
+    /// io_uring can return `EBUSY` when submitting more requests would
+    /// over-commit the system. This is fine: we just need to make sure that we
     /// don't sleep and that we don't failed rushed polls. So we just ignore
     /// this error
     fn busy_ok(x: std::io::Error) -> io::Result<usize> {
         match x.raw_os_error() {
             Some(libc::EBUSY) => Ok(0),
+            Some(_) => Err(x),
+            None => Err(x),
+        }
+    }
+
+    /// io_uring can return `EAGAIN` when the CQE queue is full, and we try to
+    /// push more requests. This is fine: we just need to make sure that we
+    /// don't sleep and that we don't failed rushed polls. So we just ignore
+    /// this error
+    fn again_ok(x: std::io::Error) -> io::Result<usize> {
+        match x.raw_os_error() {
+            Some(libc::EAGAIN) => Ok(0),
+            Some(_) => Err(x),
+            None => Err(x),
+        }
+    }
+
+    /// io_uring can return `EINTR` if the syscall was interrupted by a signal
+    /// delivery. This is fine: we just need to make sure that we
+    /// don't sleep and that we don't failed rushed polls. So we just ignore
+    /// this error
+    fn intr_ok(x: std::io::Error) -> io::Result<usize> {
+        match x.raw_os_error() {
+            Some(libc::EINTR) => Ok(0),
             Some(_) => Err(x),
             None => Err(x),
         }
@@ -1551,8 +1578,14 @@ impl Reactor {
 
     fn simple_poll(ring: &RefCell<dyn UringCommon>, woke: &mut usize) -> io::Result<()> {
         let mut ring = ring.borrow_mut();
-        ring.consume_cancellation_queue().or_else(Self::busy_ok)?;
-        ring.consume_submission_queue().or_else(Self::busy_ok)?;
+        ring.consume_cancellation_queue()
+            .or_else(Self::busy_ok)
+            .or_else(Self::again_ok)
+            .or_else(Self::intr_ok)?;
+        ring.consume_submission_queue()
+            .or_else(Self::busy_ok)
+            .or_else(Self::again_ok)
+            .or_else(Self::intr_ok)?;
         ring.consume_completion_queue(woke);
         Ok(())
     }

@@ -1317,8 +1317,14 @@ impl LocalExecutor {
                 // requests that are latency sensitive we want them out of the
                 // ring ASAP (before we run the task queues). We will also use
                 // the opportunity to install the timer.
-                self.parker.poll_io(|| Some(self.preempt_timer_duration()));
+                self.parker
+                    .poll_io(|| Some(self.preempt_timer_duration()))
+                    .expect("Failed to poll io! This is actually pretty bad!");
+
+                // run user code
                 let run = self.run_task_queues();
+
+                // account for runtime and poll/sleep if possible
                 let cur_time = Instant::now();
                 self.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
                 pre_time = cur_time;
@@ -1332,7 +1338,9 @@ impl LocalExecutor {
                     } else {
                         while !self.reactor.spin_poll_io().unwrap() {
                             if pre_time.elapsed() > spin_before_park {
-                                self.parker.park();
+                                self.parker
+                                    .park()
+                                    .expect("Failed to park! This is actually pretty bad!");
                                 break;
                             }
                         }

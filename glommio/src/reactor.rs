@@ -789,7 +789,7 @@ impl Reactor {
     }
 
     /// Processes new events, blocking until the first event or the timeout.
-    pub(crate) fn react(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<()> {
+    pub(crate) fn react(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<bool> {
         // Process ready timers.
         let (next_timer, woke) = self.process_external_events();
 
@@ -801,13 +801,10 @@ impl Reactor {
             // Don't wait for the next loop to process timers or shared channels
             Ok(true) => {
                 self.process_external_events();
-                Ok(())
+                Ok(true)
             }
 
-            Ok(false) => Ok(()),
-
-            // The syscall was interrupted.
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),
+            Ok(false) => Ok(false),
 
             // An actual error occurred.
             Err(err) => Err(err),
