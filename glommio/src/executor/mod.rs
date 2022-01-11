@@ -2580,6 +2580,7 @@ mod test {
                                 if *count < *(second_status.borrow()) {
                                     panic!("I was preempted but should not have been");
                                 }
+                                drop(count);
                                 crate::yield_if_needed().await;
                             }
                         }
@@ -2597,6 +2598,7 @@ mod test {
                                 let mut count = second_status.borrow_mut();
                                 *count += 1;
                                 if *count >= *(first_started.borrow()) {
+                                    drop(count);
                                     crate::executor().yield_task_queue_now().await;
                                 } else {
                                     break;
