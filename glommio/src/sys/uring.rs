@@ -526,6 +526,7 @@ fn extract_one_chain(
     source_map: &mut SourceMap,
     queue: &mut VecDeque<UringDescriptor>,
     chain: Range<usize>,
+    now: Instant,
 ) -> SmallVec<[UringDescriptor; 1]> {
     queue
         .drain(chain)
@@ -533,6 +534,7 @@ fn extract_one_chain(
             if op.user_data > 0 {
                 let id = from_user_data(op.user_data);
                 let status = source_map.peek_source_mut(from_user_data(op.user_data), |mut x| {
+                    x.wakers.submitted_at = Some(now);
                     let current = x.enqueued.as_mut().expect("bug");
                     match current.status {
                         EnqueuedStatus::Enqueued => {
@@ -851,10 +853,11 @@ impl UringCommon for PollRing {
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         let source_map = &mut *self.source_map.borrow_mut();
+        let now = Instant::now();
 
         while let Some(chain) = peek_one_chain(queue, self.size) {
             return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
-                let ops = extract_one_chain(source_map, queue, chain);
+                let ops = extract_one_chain(source_map, queue, chain, now);
                 if ops.is_empty() {
                     // all the sources in the ring were cancelled
                     continue;
@@ -1081,10 +1084,11 @@ impl UringCommon for SleepableRing {
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         let source_map = &mut *self.source_map.borrow_mut();
+        let now = Instant::now();
 
         while let Some(chain) = peek_one_chain(queue, self.size) {
             return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
-                let ops = extract_one_chain(source_map, queue, chain);
+                let ops = extract_one_chain(source_map, queue, chain, now);
                 if ops.is_empty() {
                     // all the sources in the ring were cancelled
                     continue;
@@ -1796,7 +1800,7 @@ fn queue_request_into_ring(
     descriptor: UringOpDescriptor,
     source_map: &mut SourceMap,
 ) {
-    source.inner.borrow_mut().wakers.seen_at = Some(Instant::now());
+    source.inner.borrow_mut().wakers.queued_at = Some(Instant::now());
     let q = ring.borrow_mut().submission_queue();
     let id = source_map.add_source(source, Rc::clone(&q));
 

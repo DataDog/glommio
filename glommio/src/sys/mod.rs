@@ -451,14 +451,30 @@ impl From<Duration> for TimeSpec64 {
     }
 }
 
+pub(super) struct Latencies {
+    /// The timestamp at which the source was added to the IO queue of the
+    /// reactor
+    pub(super) queued_at: std::time::Instant,
+
+    /// The timestamp at which the source was submitted to the kernel
+    pub(super) submitted_at: std::time::Instant,
+
+    /// The timestamp at which the reactor fulfilled the source
+    pub(super) fulfilled_at: std::time::Instant,
+}
+
 /// Tasks interested in events on a source.
 #[derive(Debug)]
 pub(super) struct Wakers {
     /// Raw result of the operation.
     pub(super) result: Option<io::Result<usize>>,
 
-    /// The timestamp at which the reactor inserted the source in the ring
-    pub(super) seen_at: Option<std::time::Instant>,
+    /// The timestamp at which the source was added to the IO queue of the
+    /// reactor
+    pub(super) queued_at: Option<std::time::Instant>,
+
+    /// The timestamp at which the source was submitted to the kernel
+    pub(super) submitted_at: Option<std::time::Instant>,
 
     /// The timestamp at which the reactor fulfilled the source
     pub(super) fulfilled_at: Option<std::time::Instant>,
@@ -471,7 +487,8 @@ impl Wakers {
     pub(super) fn new() -> Self {
         Wakers {
             result: None,
-            seen_at: None,
+            queued_at: None,
+            submitted_at: None,
             fulfilled_at: None,
             waiters: Default::default(),
         }
@@ -485,6 +502,18 @@ impl Wakers {
                 wake!(x);
             });
             true
+        }
+    }
+
+    fn timestamps(&mut self) -> Option<Latencies> {
+        if self.queued_at.is_none() || self.submitted_at.is_none() || self.fulfilled_at.is_none() {
+            None
+        } else {
+            Some(Latencies {
+                queued_at: self.queued_at.take().unwrap(),
+                submitted_at: self.submitted_at.take().unwrap(),
+                fulfilled_at: self.fulfilled_at.take().unwrap(),
+            })
         }
     }
 }

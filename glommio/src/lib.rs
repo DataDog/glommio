@@ -596,6 +596,7 @@ pub struct RingIoStats {
     pub(crate) file_buffered_bytes_written: u64,
 
     // Distributions
+    pub(crate) pre_reactor_io_scheduler_latency_us: sketches_ddsketch::DDSketch,
     pub(crate) io_latency_us: sketches_ddsketch::DDSketch,
     pub(crate) post_reactor_io_scheduler_latency_us: sketches_ddsketch::DDSketch,
 }
@@ -615,6 +616,9 @@ impl Default for RingIoStats {
             file_bytes_written: 0,
             file_buffered_writes: 0,
             file_buffered_bytes_written: 0,
+            pre_reactor_io_scheduler_latency_us: sketches_ddsketch::DDSketch::new(
+                sketches_ddsketch::Config::new(0.01, 2048, 1.0e-9),
+            ),
             io_latency_us: sketches_ddsketch::DDSketch::new(sketches_ddsketch::Config::new(
                 0.01, 2048, 1.0e-9,
             )),
@@ -704,6 +708,15 @@ impl RingIoStats {
         (self.file_buffered_writes, self.file_buffered_bytes_written)
     }
 
+    /// The pre-reactor IO scheduler latency
+    ///
+    /// Returns a distribution of measures tracking the time between the moment
+    /// an IO operation was queued up and the moment it was submitted to the
+    /// kernel
+    pub fn pre_reactor_io_scheduler_latency_us(&self) -> &DDSketch {
+        &self.pre_reactor_io_scheduler_latency_us
+    }
+
     /// The IO latency
     ///
     /// Returns a distribution of measures tracking the time sources spent in
@@ -737,10 +750,13 @@ impl<'a> Sum<&'a RingIoStats> for RingIoStats {
             a.file_bytes_written += b.file_bytes_written;
             a.file_buffered_writes += b.file_buffered_writes;
             a.file_buffered_bytes_written += b.file_buffered_bytes_written;
+            a.pre_reactor_io_scheduler_latency_us
+                .merge(&b.pre_reactor_io_scheduler_latency_us)
+                .unwrap();
+            a.io_latency_us.merge(&b.io_latency_us).unwrap();
             a.post_reactor_io_scheduler_latency_us
                 .merge(&b.post_reactor_io_scheduler_latency_us)
                 .unwrap();
-            a.io_latency_us.merge(&b.io_latency_us).unwrap();
             a
         })
     }

@@ -504,11 +504,14 @@ impl Reactor {
                 }
             }),
             latency: if self.record_io_latencies {
-                Some(|io_lat, sched_lat, stats| {
+                Some(|pre_lat, io_lat, post_lat, stats| {
+                    stats
+                        .pre_reactor_io_scheduler_latency_us
+                        .add(pre_lat.as_micros() as f64);
                     stats.io_latency_us.add(io_lat.as_micros() as f64);
                     stats
                         .post_reactor_io_scheduler_latency_us
-                        .add(sched_lat.as_micros() as f64)
+                        .add(post_lat.as_micros() as f64)
                 })
             } else {
                 None
@@ -548,11 +551,14 @@ impl Reactor {
             }),
             reused: None,
             latency: if self.record_io_latencies {
-                Some(|io_lat, sched_lat, stats| {
+                Some(|pre_lat, io_lat, post_lat, stats| {
+                    stats
+                        .pre_reactor_io_scheduler_latency_us
+                        .add(pre_lat.as_micros() as f64);
                     stats.io_latency_us.add(io_lat.as_micros() as f64);
                     stats
                         .post_reactor_io_scheduler_latency_us
-                        .add(sched_lat.as_micros() as f64)
+                        .add(post_lat.as_micros() as f64)
                 })
             } else {
                 None
