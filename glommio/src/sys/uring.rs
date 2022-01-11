@@ -48,7 +48,6 @@ use crate::{
     GlommioError,
     IoRequirements,
     IoStats,
-    Latency,
     PoolPlacement,
     ReactorErrorKind,
     RingIoStats,
@@ -92,7 +91,7 @@ enum UringOpDescriptor {
 }
 
 #[derive(Debug)]
-struct UringDescriptor {
+pub(crate) struct UringDescriptor {
     fd: RawFd,
     flags: SubmissionFlags,
     user_data: u64,
@@ -476,7 +475,7 @@ fn transmute_error(res: io::Result<u32>) -> io::Result<usize> {
         })
 }
 
-fn record_stats<Ring: ReactorRing>(
+fn record_stats<Ring: UringCommon>(
     ring: &mut Ring,
     src: &mut InnerSource,
     res: &io::Result<usize>,
@@ -657,12 +656,7 @@ impl UringQueueState {
     }
 }
 
-pub(crate) trait ReactorRing {
-    fn io_stats_mut(&mut self) -> &mut RingIoStats;
-    fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats;
-}
-
-trait UringCommon {
+pub(crate) trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
     fn waiting_kernel_submission(&self) -> usize;
@@ -677,7 +671,12 @@ trait UringCommon {
     /// up and `Some(false)` for not.
     fn consume_one_event(&mut self) -> Option<bool>;
     fn name(&self) -> &'static str;
+    fn io_stats_mut(&mut self) -> &mut RingIoStats;
+    fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats;
     fn registrar(&self) -> iou::Registrar<'_>;
+    fn may_rush(&self) -> bool {
+        true
+    }
 
     fn consume_sqe_queue(
         &mut self,
@@ -755,6 +754,19 @@ trait UringCommon {
         }
         self.consume_completion_queue(woke);
     }
+
+    fn poll(&mut self, woke: &mut usize) -> io::Result<()> {
+        self.consume_cancellation_queue()
+            .or_else(Reactor::busy_ok)
+            .or_else(Reactor::again_ok)
+            .or_else(Reactor::intr_ok)?;
+        self.consume_submission_queue()
+            .or_else(Reactor::busy_ok)
+            .or_else(Reactor::again_ok)
+            .or_else(Reactor::intr_ok)?;
+        self.consume_completion_queue(woke);
+        Ok(())
+    }
 }
 
 struct PollRing {
@@ -798,19 +810,17 @@ impl PollRing {
     }
 }
 
-impl ReactorRing for PollRing {
+impl UringCommon for PollRing {
+    fn name(&self) -> &'static str {
+        "poll"
+    }
+
     fn io_stats_mut(&mut self) -> &mut RingIoStats {
         &mut self.stats
     }
 
     fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats {
         self.task_queue_stats.entry(handle).or_default()
-    }
-}
-
-impl UringCommon for PollRing {
-    fn name(&self) -> &'static str {
-        "poll"
     }
 
     fn registrar(&self) -> iou::Registrar<'_> {
@@ -1075,7 +1085,11 @@ impl SleepableRing {
     }
 }
 
-impl ReactorRing for SleepableRing {
+impl UringCommon for SleepableRing {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
     fn io_stats_mut(&mut self) -> &mut RingIoStats {
         &mut self.stats
     }
@@ -1083,15 +1097,13 @@ impl ReactorRing for SleepableRing {
     fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats {
         self.task_queue_stats.entry(handle).or_default()
     }
-}
-
-impl UringCommon for SleepableRing {
-    fn name(&self) -> &'static str {
-        self.name
-    }
 
     fn registrar(&self) -> iou::Registrar<'_> {
         self.ring.registrar()
+    }
+
+    fn may_rush(&self) -> bool {
+        false
     }
 
     fn needs_kernel_enter(&self) -> bool {
@@ -1364,7 +1376,12 @@ impl Reactor {
             },
             x => panic!("Unexpected source type for write: {:?}", x),
         };
-        self.queue_storage_io_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn write_buffered(&self, source: &Source, pos: u64) {
@@ -1375,22 +1392,42 @@ impl Reactor {
             ) => UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos),
             x => panic!("Unexpected source type for write: {:?}", x),
         };
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn read_dma(&self, source: &Source, pos: u64, size: usize) {
         let op = UringOpDescriptor::ReadFixed(pos, size);
-        self.queue_storage_io_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn read_buffered(&self, source: &Source, pos: u64, size: usize) {
         let op = UringOpDescriptor::Read(pos, size);
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn poll_ready(&self, source: &Source, flags: PollFlags) {
         let op = UringOpDescriptor::PollAdd(flags);
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
@@ -1400,7 +1437,12 @@ impl Reactor {
             }
             _ => unreachable!(),
         };
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn sendmsg(&self, source: &Source, flags: MsgFlags) {
@@ -1418,17 +1460,32 @@ impl Reactor {
             }
             _ => unreachable!(),
         };
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn recv(&self, source: &Source, len: usize, flags: MsgFlags) {
         let op = UringOpDescriptor::SockRecv(len, flags.bits());
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn recvmsg(&self, source: &Source, len: usize, flags: MsgFlags) {
         let op = UringOpDescriptor::SockRecvMsg(len, flags.bits());
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn connect(&self, source: &Source) {
@@ -1436,7 +1493,12 @@ impl Reactor {
             SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const SockAddr),
             x => panic!("Unexpected source type for connect: {:?}", x),
         };
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn accept(&self, source: &Source) {
@@ -1444,16 +1506,31 @@ impl Reactor {
             SourceType::Accept(addr) => UringOpDescriptor::Accept(addr as *mut SockAddrStorage),
             x => panic!("Unexpected source type for accept: {:?}", x),
         };
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn fdatasync(&self, source: &Source) {
-        self.queue_standard_request(source, UringOpDescriptor::FDataSync);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            UringOpDescriptor::FDataSync,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn fallocate(&self, source: &Source, offset: u64, size: u64, flags: libc::c_int) {
         let op = UringOpDescriptor::Fallocate(offset, size, flags);
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     fn enqueue_blocking_request(&self, source: &Source, op: BlockingThreadOp) {
@@ -1506,7 +1583,12 @@ impl Reactor {
 
     pub(crate) fn close(&self, source: &Source) {
         let op = UringOpDescriptor::Close;
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn statx(&self, source: &Source) {
@@ -1518,7 +1600,12 @@ impl Reactor {
             }
             _ => panic!("Unexpected source for statx operation"),
         };
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     pub(crate) fn open_at(&self, source: &Source, flags: libc::c_int, mode: libc::mode_t) {
@@ -1527,12 +1614,22 @@ impl Reactor {
             _ => panic!("Wrong source type!"),
         };
         let op = UringOpDescriptor::Open(pathptr as _, flags, mode as _);
-        self.queue_standard_request(source, op);
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            op,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     #[cfg(feature = "bench")]
     pub(crate) fn nop(&self, source: &Source) {
-        self.queue_standard_request(source, UringOpDescriptor::Nop)
+        queue_request_into_ring(
+            &mut *self.ring_for_source(source),
+            source,
+            UringOpDescriptor::Nop,
+            &mut *self.source_map.borrow_mut(),
+        );
     }
 
     /// io_uring can return `EBUSY` when submitting more requests would
@@ -1591,29 +1688,20 @@ impl Reactor {
             .map(|_| {})
     }
 
-    fn simple_poll(ring: &RefCell<dyn UringCommon>, woke: &mut usize) -> io::Result<()> {
-        let mut ring = ring.borrow_mut();
-        ring.consume_cancellation_queue()
-            .or_else(Self::busy_ok)
-            .or_else(Self::again_ok)
-            .or_else(Self::intr_ok)?;
-        ring.consume_submission_queue()
-            .or_else(Self::busy_ok)
-            .or_else(Self::again_ok)
-            .or_else(Self::intr_ok)?;
-        ring.consume_completion_queue(woke);
+    pub(crate) fn poll_io(&self, woke: &mut usize) -> io::Result<()> {
+        self.poll_ring.borrow_mut().poll(woke)?;
+        self.main_ring.borrow_mut().poll(woke)?;
+        self.latency_ring.borrow_mut().poll(woke)?;
+        *woke += self.flush_syscall_thread();
         Ok(())
     }
 
-    pub(crate) fn rush_dispatch(
-        &self,
-        latency: Option<Latency>,
-        woke: &mut usize,
-    ) -> io::Result<()> {
-        match latency {
-            None => Self::simple_poll(&self.poll_ring, woke),
-            Some(Latency::NotImportant) => Self::simple_poll(&self.main_ring, woke),
-            Some(Latency::Matters(_)) => Self::simple_poll(&self.latency_ring, woke),
+    pub(crate) fn rush_dispatch(&self, src: &Source, woke: &mut usize) -> io::Result<()> {
+        let ring = &mut *self.ring_for_source(src);
+        if ring.may_rush() {
+            ring.poll(woke)
+        } else {
+            Ok(())
         }
     }
 
@@ -1777,65 +1865,28 @@ impl Reactor {
         });
     }
 
-    fn queue_standard_request(&self, source: &Source, op: UringOpDescriptor) {
-        let ring = match source.latency_req() {
-            Latency::NotImportant => &self.main_ring,
-            Latency::Matters(_) => &self.latency_ring,
-        };
-        queue_request_into_ring(ring, source, op, &mut *self.source_map.borrow_mut())
-    }
+    pub(crate) fn ring_for_source(&self, source: &Source) -> RefMut<'_, dyn UringCommon> {
+        // Dispatch requests according to the following rules:
+        // * Disk reads/writes go to the poll ring if possible, or the main ring
+        //   otherwise;
+        // * Network Rx and connect/accept go the latency ring;
+        // * Every other request are dispatched to the main ring;
+        // We avoid putting requests that come in high numbers on the latency ring
+        // because the more request we issue there, the less effective it becomes.
 
-    fn queue_storage_io_request(&self, source: &Source, op: UringOpDescriptor) {
-        let pollable = match &*source.source_type() {
-            SourceType::Read(p, _) | SourceType::Write(p, _) => *p,
-            _ => panic!("SourceType should declare if it supports poll operations"),
-        };
-        match (source.latency_req(), pollable) {
-            (Latency::Matters(_), _) => queue_request_into_ring(
-                &self.latency_ring,
-                source,
-                op,
-                &mut *self.source_map.borrow_mut(),
-            ),
-            (Latency::NotImportant, PollableStatus::Pollable) => queue_request_into_ring(
-                &self.poll_ring,
-                source,
-                op,
-                &mut *self.source_map.borrow_mut(),
-            ),
-            (Latency::NotImportant, PollableStatus::NonPollable(_)) => queue_request_into_ring(
-                &self.main_ring,
-                source,
-                op,
-                &mut *self.source_map.borrow_mut(),
-            ),
-        }
-    }
-
-    pub(crate) fn ring_for_source(&self, source: &Source) -> RefMut<'_, dyn ReactorRing> {
         match &*source.source_type() {
-            SourceType::Read(p, _) | SourceType::Write(p, _) => match (source.latency_req(), p) {
-                (Latency::Matters(_), _) => RefMut::map(self.latency_ring.borrow_mut(), |x| {
-                    x as &mut dyn ReactorRing
-                }),
-                (Latency::NotImportant, PollableStatus::Pollable) => {
-                    RefMut::map(self.poll_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
-                }
-                (Latency::NotImportant, PollableStatus::NonPollable(_)) => {
-                    RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
-                }
+            SourceType::Read(p, _) | SourceType::Write(p, _) => match p {
+                PollableStatus::Pollable => self.poll_ring.borrow_mut(),
+                PollableStatus::NonPollable(_) => self.main_ring.borrow_mut(),
             },
+            SourceType::SockRecv(_)
+            | SourceType::SockRecvMsg(_, _, _, _)
+            | SourceType::Accept(_)
+            | SourceType::Connect(_) => self.latency_ring.borrow_mut(),
             SourceType::Invalid => {
                 unreachable!("called ring_for_source on invalid source")
             }
-            _ => match source.latency_req() {
-                Latency::NotImportant => {
-                    RefMut::map(self.main_ring.borrow_mut(), |x| x as &mut dyn ReactorRing)
-                }
-                Latency::Matters(_) => RefMut::map(self.latency_ring.borrow_mut(), |x| {
-                    x as &mut dyn ReactorRing
-                }),
-            },
+            _ => self.main_ring.borrow_mut(),
         }
     }
 
@@ -1880,13 +1931,13 @@ impl Reactor {
 }
 
 fn queue_request_into_ring(
-    ring: &RefCell<impl UringCommon>,
+    ring: &mut (impl UringCommon + ?Sized),
     source: &Source,
     descriptor: UringOpDescriptor,
     source_map: &mut SourceMap,
 ) {
     source.inner.borrow_mut().wakers.queued_at = Some(Instant::now());
-    let q = ring.borrow_mut().submission_queue();
+    let q = ring.submission_queue();
     let id = source_map.add_source(source, Rc::clone(&q));
 
     let flags = match &*source.timeout_ref() {
@@ -1943,13 +1994,28 @@ mod tests {
         }
 
         let (fast, op) = timeout_source(50);
-        reactor.queue_standard_request(&fast, op);
+        queue_request_into_ring(
+            &mut *reactor.ring_for_source(&fast),
+            &fast,
+            op,
+            &mut *reactor.source_map.borrow_mut(),
+        );
 
         let (slow, op) = timeout_source(150);
-        reactor.queue_standard_request(&slow, op);
+        queue_request_into_ring(
+            &mut *reactor.ring_for_source(&slow),
+            &slow,
+            op,
+            &mut *reactor.source_map.borrow_mut(),
+        );
 
         let (lethargic, op) = timeout_source(300);
-        reactor.queue_standard_request(&lethargic, op);
+        queue_request_into_ring(
+            &mut *reactor.ring_for_source(&lethargic),
+            &lethargic,
+            op,
+            &mut *reactor.source_map.borrow_mut(),
+        );
 
         let start = Instant::now();
         reactor.wait(|| None, None, 0, || 0).unwrap();
