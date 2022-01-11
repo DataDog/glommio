@@ -45,7 +45,6 @@ use crate::{
     },
     IoRequirements,
     IoStats,
-    Latency,
     PoolPlacement,
     TaskQueueHandle,
 };
@@ -760,8 +759,7 @@ impl Reactor {
     }
 
     pub(crate) fn rush_dispatch(&self, source: &Source) -> io::Result<()> {
-        self.sys.rush_dispatch(Some(source.latency_req()), &mut 0)?;
-        Ok(())
+        self.sys.rush_dispatch(source, &mut 0)
     }
 
     /// Polls for I/O, but does not change any timer registration.
@@ -769,15 +767,9 @@ impl Reactor {
     /// This doesn't ever sleep, and does not touch the preemption timer.
     pub(crate) fn spin_poll_io(&self) -> io::Result<bool> {
         let mut woke = 0;
-        // any duration, just so we land in the latency ring
-        self.sys
-            .rush_dispatch(Some(Latency::Matters(Duration::from_secs(1))), &mut woke)?;
-        self.sys
-            .rush_dispatch(Some(Latency::NotImportant), &mut woke)?;
-        self.sys.rush_dispatch(None, &mut woke)?;
+        self.sys.poll_io(&mut woke)?;
         woke += self.process_timers().1;
         woke += self.process_shared_channels();
-        woke += self.sys.flush_syscall_thread();
 
         Ok(woke > 0)
     }

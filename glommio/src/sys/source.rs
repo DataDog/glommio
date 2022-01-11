@@ -17,7 +17,6 @@ use crate::{
     },
     GlommioError,
     IoRequirements,
-    Latency,
     ReactorErrorKind,
     RingIoStats,
     TaskQueueHandle,
@@ -197,10 +196,6 @@ impl Source {
 
     pub(super) fn timeout_ref(&self) -> Ref<'_, Option<TimeSpec64>> {
         Ref::map(self.inner.borrow(), |x| &x.timeout)
-    }
-
-    pub(crate) fn latency_req(&self) -> Latency {
-        self.inner.borrow().io_requirements.latency_req
     }
 
     pub(super) fn source_type(&self) -> Ref<'_, SourceType> {
