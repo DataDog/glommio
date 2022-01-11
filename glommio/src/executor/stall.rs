@@ -68,7 +68,7 @@ impl StallDetector {
         let terminated = Arc::new(AtomicBool::new(false));
         let timer_handler = std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
             while timer.wait().is_ok() {
-                if terminated.load(Ordering::Acquire) {
+                if terminated.load(Ordering::Relaxed) {
                     return
                 }
                 unsafe { nix::libc::pthread_kill(tid, nix::libc::SIGUSR1) };
@@ -125,7 +125,7 @@ impl StallDetector {
 impl Drop for StallDetector {
     fn drop(&mut self) {
         let timer_handler = self.handler.take().unwrap();
-        self.terminated.store(true, Ordering::Release);
+        self.terminated.store(true, Ordering::Relaxed);
 
         self.timer
             .set(
