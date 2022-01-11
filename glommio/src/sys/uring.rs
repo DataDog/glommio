@@ -1660,11 +1660,6 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        // we need to make sure we consume the latency ring before setting the
-        // preemption timer because consuming this ring may wake up some previously
-        // asleep task queues.
-        consume_rings!(into &mut woke; lat_ring);
-
         // Cancel the old timer regardless of whether we can sleep:
         // if we won't sleep, we will register the new timer with its new
         // value.
@@ -1672,25 +1667,22 @@ impl Reactor {
         // But if we will sleep, there might be a timer registered that needs
         // to be removed otherwise we'll wake up when it expires.
         drop(self.timeout_src.take());
-        let mut should_sleep = match preempt_timer() {
-            None => true,
-            Some(dur) => {
-                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
-                false
-            }
-        };
 
         // This will only dispatch if we run out of sqes. Which means until
         // flush_rings! nothing is really send to the kernel...
-        flush_cancellations!(into &mut woke; main_ring, lat_ring, poll_ring);
+        flush_cancellations!(into &mut woke; lat_ring, poll_ring, main_ring);
         // ... which happens right here. If you ever reorder this code just
         // be careful about this dependency.
-        flush_rings!(main_ring, lat_ring, poll_ring)?;
+        flush_rings!(lat_ring, poll_ring, main_ring)?;
         consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
-        should_sleep &=
-            (woke == 0) && poll_ring.can_sleep() && main_ring.can_sleep() && lat_ring.can_sleep();
+        let preempt_timer = preempt_timer();
+        let should_sleep = preempt_timer.is_none()
+            && (woke == 0)
+            && poll_ring.can_sleep()
+            && main_ring.can_sleep()
+            && lat_ring.can_sleep();
 
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
@@ -1717,13 +1709,16 @@ impl Reactor {
                     self.link_rings_and_sleep(&mut main_ring)
                         .expect("some error");
                     // May have new cancellations related to the link ring fd.
-                    flush_cancellations!(into &mut 0; main_ring);
-                    flush_rings!(main_ring)?;
+                    flush_cancellations!(into &mut 0; lat_ring, poll_ring, main_ring);
+                    flush_rings!(lat_ring, poll_ring, main_ring)?;
                     consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
                 }
                 // Woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
             }
+        } else if let Some(preempt) = preempt_timer {
+            self.timeout_src.set(Some(lat_ring.arm_timer(preempt)));
+            assert!(flush_rings!(lat_ring)? >= 1);
         }
 
         // A Note about `need_preempt`:
