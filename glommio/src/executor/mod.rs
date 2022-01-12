@@ -1826,14 +1826,19 @@ impl ExecutorProxy {
     where
         F: FnOnce(&LocalExecutor) -> bool,
     {
-        let need_yield = LOCAL_EX.with(|local_ex| {
-            if cond(local_ex) {
-                local_ex.mark_me_for_yield();
-                true
-            } else {
-                false
-            }
-        });
+        let need_yield = if LOCAL_EX.is_set() {
+            LOCAL_EX.with(|local_ex| {
+                if cond(local_ex) {
+                    local_ex.mark_me_for_yield();
+                    true
+                } else {
+                    false
+                }
+            })
+        } else {
+            // We are not in a glommio context
+            false
+        };
 
         if need_yield {
             futures_lite::future::yield_now().await;
