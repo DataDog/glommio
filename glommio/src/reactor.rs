@@ -635,6 +635,12 @@ impl Reactor {
         source
     }
 
+    pub(crate) fn run_blocking(&self, func: Box<dyn FnOnce() + Send + 'static>) -> Source {
+        let source = self.new_source(-1, SourceType::BlockingFn, None);
+        self.sys.run_blocking(&source, func);
+        source
+    }
+
     pub(crate) fn close(&self, raw: RawFd) -> Source {
         let source = self.new_source(
             raw,

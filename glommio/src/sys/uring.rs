@@ -1444,6 +1444,13 @@ impl Reactor {
         self.blocking_syscall(source, op);
     }
 
+    pub(crate) fn run_blocking(&self, source: &Source, f: Box<dyn FnOnce() + Send + 'static>) {
+        assert!(matches!(&*source.source_type(), SourceType::BlockingFn));
+
+        let op = BlockingThreadOp::Fn(f);
+        self.blocking_syscall(source, op);
+    }
+
     pub(crate) fn close(&self, source: &Source) {
         let op = UringOpDescriptor::Close;
         self.queue_standard_request(source, op);
