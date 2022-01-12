@@ -60,7 +60,6 @@ use scoped_tls::scoped_thread_local;
 
 use log::warn;
 
-#[cfg(feature = "stall-detection")]
 use crate::executor::stall::StallDetector;
 use crate::{
     error::BuilderErrorKind,
@@ -443,6 +442,9 @@ pub struct LocalExecutorBuilder {
     preempt_timer_duration: Duration,
     /// Whether to record the latencies of individual IO requests
     record_io_latencies: bool,
+    /// Whether to detect stalls in unyielding tasks.
+    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    detect_stalls: bool,
 }
 
 impl LocalExecutorBuilder {
@@ -460,6 +462,7 @@ impl LocalExecutorBuilder {
             ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
             preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
             record_io_latencies: false,
+            detect_stalls: false,
         }
     }
 
@@ -528,6 +531,14 @@ impl LocalExecutorBuilder {
         self
     }
 
+    /// Whether to detect stalls in unyielding tasks.
+    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    #[must_use = "The builder must be built to be useful"]
+    pub fn detect_stalls(mut self, enabled: bool) -> Self {
+        self.detect_stalls = enabled;
+        self
+    }
+
     /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and
     /// returns a [`Result`](crate::Result) to the executor.
     /// # Examples
@@ -548,6 +559,7 @@ impl LocalExecutorBuilder {
             self.record_io_latencies,
             cpu_set_gen.next().cpu_binding(),
             self.spin_before_park,
+            self.detect_stalls,
         )?;
         le.init();
         Ok(le)
@@ -610,6 +622,7 @@ impl LocalExecutorBuilder {
         let preempt_timer_duration = self.preempt_timer_duration;
         let spin_before_park = self.spin_before_park;
         let record_io_latencies = self.record_io_latencies;
+        let detect_stalls = self.detect_stalls;
 
         Builder::new()
             .name(name)
@@ -622,6 +635,7 @@ impl LocalExecutorBuilder {
                     record_io_latencies,
                     cpu_set_gen.next().cpu_binding(),
                     spin_before_park,
+                    detect_stalls,
                 )
                 .unwrap();
                 le.init();
@@ -684,6 +698,9 @@ pub struct LocalExecutorPoolBuilder {
     placement: PoolPlacement,
     /// Whether to record the latencies of individual IO requests
     record_io_latencies: bool,
+    /// Whether to detect stalls in unyielding tasks.
+    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    detect_stalls: bool,
 }
 
 impl LocalExecutorPoolBuilder {
@@ -701,6 +718,7 @@ impl LocalExecutorPoolBuilder {
             preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
             placement,
             record_io_latencies: false,
+            detect_stalls: false,
         }
     }
 
@@ -754,6 +772,14 @@ impl LocalExecutorPoolBuilder {
     #[must_use = "The builder must be built to be useful"]
     pub fn record_io_latencies(mut self, enabled: bool) -> Self {
         self.record_io_latencies = enabled;
+        self
+    }
+
+    /// Whether to detect stalls in unyielding tasks.
+    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    #[must_use = "The builder must be built to be useful"]
+    pub fn detect_stalls(mut self, enabled: bool) -> Self {
+        self.detect_stalls = enabled;
         self
     }
 
@@ -819,6 +845,7 @@ impl LocalExecutorPoolBuilder {
             let preempt_timer_duration = self.preempt_timer_duration;
             let spin_before_park = self.spin_before_park;
             let record_io_latencies = self.record_io_latencies;
+            let detect_stalls = self.detect_stalls;
             let latch = Latch::clone(latch);
 
             move || {
@@ -833,6 +860,7 @@ impl LocalExecutorPoolBuilder {
                         record_io_latencies,
                         cpu_binding,
                         spin_before_park,
+                        detect_stalls,
                     )
                     .unwrap();
                     le.init();
@@ -940,7 +968,7 @@ pub struct LocalExecutor {
     id: usize,
     reactor: Rc<reactor::Reactor>,
 
-    #[cfg(feature = "stall-detection")]
+    signal_id: Option<signal_hook::SigId>,
     stall_detector: StallDetector,
 }
 
@@ -970,6 +998,7 @@ impl LocalExecutor {
         record_io_latencies: bool,
         cpu_binding: Option<impl IntoIterator<Item = usize>>,
         mut spin_before_park: Option<Duration>,
+        detect_stalls: bool,
     ) -> Result<LocalExecutor> {
         // Linux's default memory policy is "local allocation" which allocates memory
         // on the NUMA node containing the CPU where the allocation takes place.
@@ -986,8 +1015,9 @@ impl LocalExecutor {
         let p = parking::Parker::new();
         let queues = ExecutorQueues::new(preempt_timer, spin_before_park);
         let exec_id = notifier.id();
+
         trace!(id = exec_id, "Creating executor");
-        Ok(LocalExecutor {
+        let mut exec = LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
@@ -997,9 +1027,51 @@ impl LocalExecutor {
                 ring_depth,
                 record_io_latencies,
             )),
-            #[cfg(feature = "stall-detection")]
+            signal_id: None,
             stall_detector: StallDetector::new(exec_id)?,
-        })
+        };
+        exec = exec.detect_stalls(detect_stalls)?;
+        Ok(exec)
+    }
+
+    unsafe fn install_signal_handler(&self) -> Result<signal_hook::SigId> {
+        let tx = self.stall_detector.tx.clone();
+        signal_hook::low_level::register(signal_hook::consts::SIGUSR1, move || {
+            if tx.is_full() {
+                return;
+            }
+
+            backtrace::trace_unsynchronized(|frame| {
+                tx
+                    .try_send(backtrace::BacktraceFrame::from(frame.clone()))
+                    .is_ok()
+            });
+        }).map_err(GlommioError::from)
+    }
+
+    /// Enable or disable task stall detection at runtime
+    ///
+    /// # Examples
+    /// ```
+    /// use glommio::LocalExecutor;
+    ///
+    /// let local_ex = LocalExecutor::default();
+    /// local_ex.detect_stalls(true);
+    /// ```
+    pub fn detect_stalls(mut self, enabled: bool) -> Result<LocalExecutor> {
+        if enabled {
+            if self.signal_id.is_none() { unsafe {
+                self.signal_id = Some(self.install_signal_handler()?);
+            }}
+            //self.stall_detector.arm();
+        } else {
+            if let Some(signal_id) = self.signal_id {
+                signal_hook::low_level::unregister(signal_id);
+                self.signal_id = None;
+            }
+            self.stall_detector.disarm().map_err(std::io::Error::from)?;
+        }
+        Ok(self)
     }
 
     /// Returns a unique identifier for this Executor.
@@ -1157,15 +1229,17 @@ impl LocalExecutor {
                 };
 
                 let (runtime, tasks_executed_this_loop) = {
-                    #[cfg(feature = "stall-detection")]
-                    let _stall_detector_guard = self
-                        .stall_detector
+                    let _guard = if self.signal_id.is_some() {
+                        Some(self.stall_detector
                         .enter_task_queue(
                             queue.borrow_mut().name.clone(),
                             time,
                             self.preempt_timer_duration(),
                         )
-                        .unwrap();
+                        .unwrap())
+                    } else {
+                        None
+                    };
 
                     let mut tasks_executed_this_loop = 0;
                     loop {

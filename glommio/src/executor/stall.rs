@@ -15,48 +15,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "stall-detection")]
-thread_local! {
-    static STALL_STRACE_COLLECTOR: (
-        crossbeam::channel::Sender<backtrace::BacktraceFrame>,
-        crossbeam::channel::Receiver<backtrace::BacktraceFrame>
-    ) = crossbeam::channel::bounded(1 << 10);
-}
-
-#[cfg(feature = "stall-detection")]
-lazy_static! {
-    static ref STALL_SIG_HANDLER: signal_hook::SigId = unsafe {
-        signal_hook::low_level::register(signal_hook::consts::SIGUSR1, move || {
-            STALL_STRACE_COLLECTOR.with(|collector| {
-                if collector.0.is_full() {
-                    return;
-                }
-
-                backtrace::trace_unsynchronized(|frame| {
-                    collector
-                        .0
-                        .try_send(backtrace::BacktraceFrame::from(frame.clone()))
-                        .is_ok()
-                });
-            });
-        })
-    }
-    .unwrap();
-}
-
 #[derive(Debug)]
 pub(crate) struct StallDetector {
     timer: Arc<sys::timerfd::TimerFd>,
     handler: Option<JoinHandle<()>>,
     id: usize,
     terminated: Arc<AtomicBool>,
+    //NOTE: we don't use signal_hook::low_level::channel as backtraces
+    //      have too many elements
+    pub(crate) tx: crossbeam::channel::Sender<backtrace::BacktraceFrame>,
+    pub(crate) rx: crossbeam::channel::Receiver<backtrace::BacktraceFrame>,
 }
 
 impl StallDetector {
-    #[cfg(feature = "stall-detection")]
     pub(crate) fn new(executor_id: usize) -> std::io::Result<StallDetector> {
-        lazy_static::initialize(&STALL_SIG_HANDLER);
-
         let timer = Arc::new(
             sys::timerfd::TimerFd::new(
                 sys::timerfd::ClockId::CLOCK_MONOTONIC,
@@ -74,12 +46,15 @@ impl StallDetector {
                 unsafe { nix::libc::pthread_kill(tid, nix::libc::SIGUSR1) };
             }
         }});
+        let (tx, rx) = crossbeam::channel::bounded(1 << 10);
 
         Ok(Self {
             timer,
             handler: Some(timer_handler),
             id: executor_id,
             terminated,
+            tx,
+            rx,
         })
     }
 
@@ -110,14 +85,14 @@ impl StallDetector {
         )
     }
 
-    fn arm(&self, threshold: Duration) -> nix::Result<()> {
+    pub(crate) fn arm(&self, threshold: Duration) -> nix::Result<()> {
         self.timer.set(
             sys::timerfd::Expiration::OneShot(sys::time::TimeSpec::from(threshold)),
             sys::timerfd::TimerSetTimeFlags::empty(),
         )
     }
 
-    fn disarm(&self) -> nix::Result<()> {
+    pub(crate) fn disarm(&self) -> nix::Result<()> {
         self.timer.unset()
     }
 }
@@ -165,18 +140,15 @@ impl<'detector> StallDetectorGuard<'detector> {
     }
 }
 
-#[cfg(feature = "stall-detection")]
 impl<'detector> Drop for StallDetectorGuard<'detector> {
     fn drop(&mut self) {
         let _ = self.detector.disarm();
 
-        let mut strace = STALL_STRACE_COLLECTOR.with(|collector| {
-            let mut frames = vec![];
-            while let Ok(frame) = collector.1.try_recv() {
-                frames.push(frame);
-            }
-            backtrace::Backtrace::from(frames)
-        });
+        let mut frames = vec![];
+        while let Ok(frame) = self.detector.rx.try_recv() {
+            frames.push(frame);
+        }
+        let mut strace = backtrace::Backtrace::from(frames);
 
         if strace.frames().is_empty() {
             return;
@@ -196,7 +168,7 @@ impl<'detector> Drop for StallDetectorGuard<'detector> {
     }
 }
 
-#[cfg(all(test, feature = "stall-detection"))]
+#[cfg(test)]
 mod test {
     use crate::{timer::sleep, LocalExecutorBuilder};
     use logtest::Logger;
@@ -225,6 +197,7 @@ mod test {
     #[test]
     fn executor_stall_detector() {
         LocalExecutorBuilder::default()
+            .detect_stalls(true)
             .preempt_timer(Duration::from_millis(50))
             .make()
             .unwrap()
