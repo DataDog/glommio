@@ -70,6 +70,7 @@ pub(crate) enum SourceType {
     Rename(PathBuf, PathBuf),
     CreateDir(PathBuf),
     Remove(PathBuf),
+    BlockingFn,
     Invalid,
     #[cfg(feature = "bench")]
     Noop,

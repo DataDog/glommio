@@ -46,9 +46,11 @@ use std::{
     future::Future,
     io,
     marker::PhantomData,
+    mem::MaybeUninit,
+    ops::DerefMut,
     pin::Pin,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     task::{Context, Poll},
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -2377,6 +2379,65 @@ impl ExecutorProxy {
                 .map(|x| ScopedTask::<'a, T>(x, PhantomData))
         })
     }
+
+    /// Spawns a blocking task into a background thread where blocking is
+    /// acceptable.
+    ///
+    /// Glommio depends on cooperation from tasks in order to drive IO and meet
+    /// latency requirements. Unyielding tasks are detrimental to the
+    /// performance of the overall system, not just to the performance of
+    /// the one stalling task.
+    ///
+    /// `spawn_blocking` is there as a last resort when a blocking task needs to
+    /// be executed and cannot be made cooperative. Examples are:
+    /// * Expensive syscalls that cannot use `io_uring`, such as `mmap`
+    ///   (especially with `MAP_POPULATE`)
+    /// * Calls to synchronous third-party code (compression, encoding, etc.)
+    ///
+    /// # Note
+    ///
+    /// *This method is not meant to be a way to achieve compute parallelism.*
+    /// Distributing work across executors is the better way to achieve that.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{LocalExecutor, Task};
+    /// use std::time::Duration;
+    ///
+    /// let local_ex = LocalExecutor::default();
+    ///
+    /// local_ex.run(async {
+    ///     let task = glommio::executor()
+    ///         .spawn_blocking(|| {
+    ///             std::thread::sleep(Duration::from_millis(100));
+    ///         })
+    ///         .await;
+    /// });
+    /// ```
+    pub fn spawn_blocking<F, R>(&self, func: F) -> impl Future<Output = R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let result = Arc::new(Mutex::new(MaybeUninit::<R>::uninit()));
+        let f_inner = enclose::enclose!((result) move || {result.lock().unwrap().write(func());});
+        let source =
+            LOCAL_EX.with(move |local_ex| local_ex.reactor.run_blocking(Box::new(f_inner)));
+
+        async move {
+            assert!(source.collect_rw().await.is_ok());
+            unsafe {
+                let res_arc = Arc::try_unwrap(result).expect("leak");
+                let ret = std::mem::replace(
+                    &mut *res_arc.lock().unwrap().deref_mut(),
+                    MaybeUninit::<R>::uninit(),
+                )
+                .assume_init();
+                ret
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2389,7 +2450,7 @@ mod test {
     };
     use core::mem::MaybeUninit;
     use futures::{
-        future::{join_all, poll_fn},
+        future::{join, join_all, poll_fn},
         join,
     };
     use std::{
@@ -3637,6 +3698,31 @@ mod test {
             })
             .detach();
             timer::sleep(Duration::from_millis(1)).await;
+        });
+    }
+
+    #[test]
+    fn blocking_function() {
+        LocalExecutor::default().run(async {
+            let started = Instant::now();
+
+            let blocking = executor().spawn_blocking(enclose!((started) move || {
+                let now = Instant::now();
+                while now.elapsed() < Duration::from_millis(100) {}
+                started.elapsed()
+            }));
+            let coop = enclose!((started) async move {
+                let now = Instant::now();
+                while now.elapsed() < Duration::from_millis(100) {
+                    yield_if_needed().await;
+                }
+                started.elapsed()
+            });
+
+            let (blocking, coop) = join(blocking, coop).await;
+
+            assert!(blocking.as_millis() >= 100 && blocking.as_millis() < 150);
+            assert!(coop.as_millis() >= 100 && coop.as_millis() < 150);
         });
     }
 }

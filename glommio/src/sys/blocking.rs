@@ -47,12 +47,12 @@ macro_rules! c_str {
     };
 }
 
-#[derive(Clone, Debug)]
 pub(super) enum BlockingThreadOp {
     Rename(PathBuf, PathBuf),
     Remove(PathBuf),
     CreateDir(PathBuf, libc::c_int),
     Truncate(RawFd, i64),
+    Fn(Box<dyn FnOnce() + Send + 'static>),
 }
 
 impl BlockingThreadOp {
@@ -74,13 +74,17 @@ impl BlockingThreadOp {
             BlockingThreadOp::Truncate(fd, sz) => {
                 raw_syscall!(ftruncate(fd, sz))
             }
+            BlockingThreadOp::Fn(f) => {
+                f();
+                BlockingThreadResult::Fn
+            }
         }
     }
 }
 
-#[derive(Clone, Debug)]
 pub(super) enum BlockingThreadResult {
     Syscall(i64),
+    Fn,
 }
 
 impl TryFrom<BlockingThreadResult> for std::io::Result<usize> {
@@ -89,17 +93,16 @@ impl TryFrom<BlockingThreadResult> for std::io::Result<usize> {
     fn try_from(value: BlockingThreadResult) -> Result<Self, Self::Error> {
         match value {
             BlockingThreadResult::Syscall(x) => Ok(to_result(x)),
+            BlockingThreadResult::Fn => Ok(Ok(0)),
         }
     }
 }
 
-#[derive(Clone, Debug)]
 pub(super) struct BlockingThreadReq {
     op: BlockingThreadOp,
     id: u64,
 }
 
-#[derive(Clone, Debug)]
 pub(super) struct BlockingThreadResp {
     id: u64,
     res: BlockingThreadResult,
