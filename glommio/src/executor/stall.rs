@@ -15,6 +15,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
+    /// What signal number to use; see values in libc::SIG*
+    fn signal(&self) -> u8;
+}
+
+#[derive(Debug)]
+pub struct DefaultStallDetectionHandler {}
+
+impl StallDetectionHandler for DefaultStallDetectionHandler {
+    fn signal(&self) -> u8 {
+        nix::libc::SIGUSR1 as u8
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct StallDetector {
     timer: Arc<sys::timerfd::TimerFd>,
@@ -28,7 +42,7 @@ pub(crate) struct StallDetector {
 }
 
 impl StallDetector {
-    pub(crate) fn new(executor_id: usize) -> std::io::Result<StallDetector> {
+    pub(crate) fn new(executor_id: usize, sig: u8) -> std::io::Result<StallDetector> {
         let timer = Arc::new(
             sys::timerfd::TimerFd::new(
                 sys::timerfd::ClockId::CLOCK_MONOTONIC,
@@ -43,7 +57,7 @@ impl StallDetector {
                 if terminated.load(Ordering::Relaxed) {
                     return
                 }
-                unsafe { nix::libc::pthread_kill(tid, nix::libc::SIGUSR1) };
+                unsafe { nix::libc::pthread_kill(tid, sig.into()) };
             }
         }});
         let (tx, rx) = crossbeam::channel::bounded(1 << 10);
@@ -170,7 +184,11 @@ impl<'detector> Drop for StallDetectorGuard<'detector> {
 
 #[cfg(test)]
 mod test {
-    use crate::{timer::sleep, LocalExecutorBuilder};
+    use crate::{
+        executor::stall::DefaultStallDetectionHandler,
+        timer::sleep,
+        LocalExecutorBuilder,
+    };
     use logtest::Logger;
     use std::time::{Duration, Instant};
 
@@ -197,7 +215,7 @@ mod test {
     #[test]
     fn executor_stall_detector() {
         LocalExecutorBuilder::default()
-            .detect_stalls(true)
+            .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})))
             .preempt_timer(Duration::from_millis(50))
             .make()
             .unwrap()
