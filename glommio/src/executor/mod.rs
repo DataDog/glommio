@@ -537,6 +537,16 @@ impl LocalExecutorBuilder {
     /// Whether to detect stalls in unyielding tasks.
     /// DefaultStallDetectionHandler installs a signal handler for SIGUSR1, so
     /// is disabled by default.
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{stall::DefaultStallDetectionHandler, LocalExecutorBuilder};
+    ///
+    /// let local_ex = LocalExecutorBuilder::default()
+    ///     .detect_stalls(Some(|| Box::new(DefaultStallDetectionHandler {})))
+    ///     .make()
+    ///     .unwrap();
+    /// ```
     #[must_use = "The builder must be built to be useful"]
     pub fn detect_stalls(
         mut self,
@@ -809,6 +819,16 @@ impl LocalExecutorPoolBuilder {
     /// each new thread to generate the stall detection handler to be used in
     /// that executor. DefaultStallDetectionHandler installs a signal
     /// handler for SIGUSR1, so is disabled by default.
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{stall::DefaultStallDetectionHandler, LocalExecutorPoolBuilder};
+    ///
+    /// let local_ex = LocalExecutorPoolBuilder::default()
+    ///     .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})))
+    ///     .make()
+    ///     .unwrap();
+    /// ```
     #[must_use = "The builder must be built to be useful"]
     pub fn detect_stalls<G: 'static>(
         mut self,
