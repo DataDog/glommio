@@ -46,6 +46,7 @@ use crate::{
     IoRequirements,
     IoStats,
     Latency,
+    PoolPlacement,
     TaskQueueHandle,
 };
 use nix::poll::PollFlags;
@@ -198,8 +199,9 @@ impl Reactor {
         io_memory: usize,
         ring_depth: usize,
         record_io_latencies: bool,
+        thread_pool_placement: PoolPlacement,
     ) -> io::Result<Reactor> {
-        let sys = sys::Reactor::new(notifier, io_memory, ring_depth)?;
+        let sys = sys::Reactor::new(notifier, io_memory, ring_depth, thread_pool_placement)?;
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Ok(Reactor {
             sys,
