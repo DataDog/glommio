@@ -190,7 +190,7 @@ impl PoolPlacement {
     /// If `len` is greater than the number of placements in the pool, this has
     /// no effect.
     pub(super) fn shrink_to(self, count: usize) -> Self {
-        if count <= self.executor_count() {
+        if count > self.executor_count() {
             return self;
         }
         match self {

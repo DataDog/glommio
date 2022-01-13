@@ -1184,6 +1184,7 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
         ring_depth: usize,
+        thread_pool_placement: PoolPlacement,
     ) -> crate::Result<Reactor, ()> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
@@ -1257,7 +1258,7 @@ impl Reactor {
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
             timeout_src: Cell::new(None),
-            blocking_thread: BlockingThreadPool::new(PoolPlacement::Unbound(1), notifier.clone())?,
+            blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
             link_fd,
             notifier,
             eventfd_src,
@@ -1848,7 +1849,7 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0, 128).unwrap();
+        let reactor = Reactor::new(notifier, 0, 128, PoolPlacement::Unbound(1)).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
