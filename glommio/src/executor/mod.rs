@@ -210,7 +210,7 @@ impl TaskQueue {
     }
 }
 
-fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
+pub(crate) fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
     for cpu in cpus {
         cpuset.set(cpu).map_err(|e| to_io_error!(e))?;
@@ -3724,5 +3724,48 @@ mod test {
             assert!(blocking.as_millis() >= 100 && blocking.as_millis() < 150);
             assert!(coop.as_millis() >= 100 && coop.as_millis() < 150);
         });
+    }
+
+    #[test]
+    fn blocking_function_parallelism() {
+        LocalExecutorBuilder::new(Placement::Unbound)
+            .blocking_thread_pool_placement(PoolPlacement::Unbound(4))
+            .spawn(|| async {
+                let started = Instant::now();
+                let mut blocking = vec![];
+
+                for _ in 0..5 {
+                    blocking.push(executor().spawn_blocking(enclose!((started) move || {
+                        let now = Instant::now();
+                        while now.elapsed() < Duration::from_millis(100) {}
+                        started.elapsed()
+                    })));
+                }
+
+                // we created 5 blocking jobs each taking 100ms but our thread pool only has 4
+                // threads. SWe expect one of those jobs to take twice as long as the others.
+
+                let mut ts = JoinAll::from_iter(blocking.into_iter()).await;
+                assert_eq!(ts.len(), 5);
+
+                ts.sort_unstable();
+                for ts in ts.iter().take(4) {
+                    assert!(ts.as_millis() >= 100 && ts.as_millis() < 150);
+                }
+                assert!(ts[4].as_millis() >= 200 && ts[4].as_millis() < 250);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn blocking_pool_invalid_placement() {
+        let ret = LocalExecutorBuilder::new(Placement::Unbound)
+            .blocking_thread_pool_placement(PoolPlacement::Unbound(0))
+            .spawn(|| async {})
+            .unwrap()
+            .join();
+        assert!(ret.is_err());
     }
 }

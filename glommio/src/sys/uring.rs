@@ -33,7 +33,7 @@ use crate::{
     iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, SubmissionFlags, TimeoutFlags},
     sys::{
         self,
-        blocking::{BlockingThread, BlockingThreadOp},
+        blocking::{BlockingThreadOp, BlockingThreadPool},
         dma_buffer::{BufferStorage, DmaBuffer},
         DirectIo,
         EnqueuedSource,
@@ -50,6 +50,7 @@ use crate::{
     IoRequirements,
     IoStats,
     Latency,
+    PoolPlacement,
     ReactorErrorKind,
     RingIoStats,
     TaskQueueHandle,
@@ -1133,7 +1134,7 @@ pub(crate) struct Reactor {
     eventfd_src: Source,
     source_map: Rc<RefCell<SourceMap>>,
 
-    syscall_thread: BlockingThread,
+    blocking_thread: BlockingThreadPool,
 
     rings_depth: usize,
 }
@@ -1256,7 +1257,7 @@ impl Reactor {
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
             timeout_src: Cell::new(None),
-            syscall_thread: BlockingThread::new(notifier.clone()),
+            blocking_thread: BlockingThreadPool::new(PoolPlacement::Unbound(1), notifier.clone())?,
             link_fd,
             notifier,
             eventfd_src,
@@ -1394,24 +1395,26 @@ impl Reactor {
         self.queue_standard_request(source, op);
     }
 
-    fn blocking_syscall(&self, source: &Source, op: BlockingThreadOp) {
+    fn enqueue_blocking_request(&self, source: &Source, op: BlockingThreadOp) {
         let src = source.inner.clone();
 
-        self.syscall_thread.push(
-            op,
-            Box::new(move |res| {
-                let mut inner_source = src.borrow_mut();
-                let res: io::Result<usize> = res.try_into().expect("not a syscall result!");
+        self.blocking_thread
+            .push(
+                op,
+                Box::new(move |res| {
+                    let mut inner_source = src.borrow_mut();
+                    let res: io::Result<usize> = res.try_into().expect("not a syscall result!");
 
-                inner_source.wakers.result.replace(res);
-                inner_source.wakers.wake_waiters();
-            }),
-        );
+                    inner_source.wakers.result.replace(res);
+                    inner_source.wakers.wake_waiters();
+                }),
+            )
+            .expect("failed to spawn blocking request");
     }
 
     pub(crate) fn truncate(&self, source: &Source, size: u64) {
         let op = BlockingThreadOp::Truncate(source.raw(), size as _);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn rename(&self, source: &Source) {
@@ -1421,7 +1424,7 @@ impl Reactor {
         };
 
         let op = BlockingThreadOp::Rename(old_path, new_path);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn create_dir(&self, source: &Source, mode: libc::c_int) {
@@ -1431,7 +1434,7 @@ impl Reactor {
         };
 
         let op = BlockingThreadOp::CreateDir(path, mode);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn remove_file(&self, source: &Source) {
@@ -1441,14 +1444,14 @@ impl Reactor {
         };
 
         let op = BlockingThreadOp::Remove(path);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn run_blocking(&self, source: &Source, f: Box<dyn FnOnce() + Send + 'static>) {
         assert!(matches!(&*source.source_type(), SourceType::BlockingFn));
 
         let op = BlockingThreadOp::Fn(f);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn close(&self, source: &Source) {
@@ -1667,7 +1670,7 @@ impl Reactor {
     }
 
     pub(crate) fn flush_syscall_thread(&self) -> usize {
-        self.syscall_thread.flush()
+        self.blocking_thread.flush()
     }
 
     pub(crate) fn preempt_pointers(&self) -> (*const u32, *const u32) {
