@@ -445,7 +445,8 @@ pub struct LocalExecutorBuilder {
     /// Whether to record the latencies of individual IO requests
     record_io_latencies: bool,
     /// Whether to detect stalls in unyielding tasks.
-    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    /// DefaultStallDetectionHandler installs a signal handler for SIGUSR1, so
+    /// is disabled by default.
     detect_stalls: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
 }
 
@@ -534,7 +535,8 @@ impl LocalExecutorBuilder {
     }
 
     /// Whether to detect stalls in unyielding tasks.
-    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    /// DefaultStallDetectionHandler installs a signal handler for SIGUSR1, so
+    /// is disabled by default.
     #[must_use = "The builder must be built to be useful"]
     pub fn detect_stalls(
         mut self,
@@ -702,8 +704,9 @@ pub struct LocalExecutorPoolBuilder {
     placement: PoolPlacement,
     /// Whether to record the latencies of individual IO requests
     record_io_latencies: bool,
-    /// Whether to detect stalls in unyielding tasks.
-    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    /// Factory function to generate the stall detection handler.
+    /// DefaultStallDetectionHandler installs a signal handler for SIGUSR1, so
+    /// is disabled by default.
     handler_gen: Option<Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>>>,
 }
 
@@ -802,7 +805,10 @@ impl LocalExecutorPoolBuilder {
     }
 
     /// Whether to detect stalls in unyielding tasks.
-    /// This installs a signal handler for SIGUSR1, so is disabled by default.
+    /// This method takes a closure of `handler_gen`, which will be called on
+    /// each new thread to generate the stall detection handler to be used in
+    /// that executor. DefaultStallDetectionHandler installs a signal
+    /// handler for SIGUSR1, so is disabled by default.
     #[must_use = "The builder must be built to be useful"]
     pub fn detect_stalls<G: 'static>(
         mut self,
@@ -1044,11 +1050,6 @@ impl LocalExecutor {
         let p = parking::Parker::new();
         let queues = ExecutorQueues::new(preempt_timer, spin_before_park);
         let exec_id = notifier.id();
-        let stall_detector = match detect_stalls {
-            Some(ref detect_stalls) => Some(StallDetector::new(exec_id, detect_stalls.signal())?),
-            None => None,
-        };
-
         trace!(id = exec_id, "Creating executor");
         let mut exec = LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
@@ -1061,9 +1062,10 @@ impl LocalExecutor {
                 record_io_latencies,
             )),
             signal_id: None,
-            stall_detector,
+            stall_detector: None,
         };
         exec = exec.detect_stalls(detect_stalls)?;
+
         Ok(exec)
     }
 
@@ -1084,10 +1086,11 @@ impl LocalExecutor {
             Some(handler) => {
                 if self.signal_id.is_none() {
                     unsafe {
-                        let stall_detector = StallDetector::new(self.id, handler.signal())?;
+                        let signal_num = handler.signal();
+                        let stall_detector = StallDetector::new(self.id, handler)?;
                         let tx = stall_detector.tx.clone();
                         self.signal_id = Some(
-                            signal_hook::low_level::register(handler.signal().into(), move || {
+                            signal_hook::low_level::register(signal_num.into(), move || {
                                 if tx.is_full() {
                                     return;
                                 }
@@ -1104,9 +1107,8 @@ impl LocalExecutor {
                 }
             }
             None => {
-                if let Some(signal_id) = self.signal_id {
+                if let Some(signal_id) = self.signal_id.take() {
                     signal_hook::low_level::unregister(signal_id);
-                    self.signal_id = None;
                 }
                 if let Some(stall_detector) = self.stall_detector.take() {
                     stall_detector.disarm().map_err(std::io::Error::from)?;

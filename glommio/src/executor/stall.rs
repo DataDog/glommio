@@ -7,6 +7,7 @@
 
 use nix::sys;
 use std::{
+    fmt,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -15,9 +16,31 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub struct StallDetection<'a> {
+    executor: usize,
+    task_queue: &'a str,
+    trace: backtrace::Backtrace,
+    budget: Duration,
+    overage: Duration,
+}
+
+impl fmt::Debug for StallDetection<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[stall-detector -- executor {}] task queue {} went over-budget: {:#?} (budget: \
+             {:#?}). Backtrace: {:#?}",
+            self.executor, self.task_queue, self.overage, self.budget, self.trace,
+        )
+    }
+}
+
 pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     /// What signal number to use; see values in libc::SIG*
     fn signal(&self) -> u8;
+
+    /// Handler called when a task exceeds its budget
+    fn stall(&self, detection: StallDetection<'_>);
 }
 
 #[derive(Debug)]
@@ -27,12 +50,17 @@ impl StallDetectionHandler for DefaultStallDetectionHandler {
     fn signal(&self) -> u8 {
         nix::libc::SIGUSR1 as u8
     }
+
+    fn stall(&self, detection: StallDetection<'_>) {
+        log::warn!("{:?}", detection);
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct StallDetector {
     timer: Arc<sys::timerfd::TimerFd>,
-    handler: Option<JoinHandle<()>>,
+    stall_handler: Box<dyn StallDetectionHandler + 'static>,
+    timer_handler: Option<JoinHandle<()>>,
     id: usize,
     terminated: Arc<AtomicBool>,
     //NOTE: we don't use signal_hook::low_level::channel as backtraces
@@ -42,7 +70,10 @@ pub(crate) struct StallDetector {
 }
 
 impl StallDetector {
-    pub(crate) fn new(executor_id: usize, sig: u8) -> std::io::Result<StallDetector> {
+    pub(crate) fn new(
+        executor_id: usize,
+        stall_handler: Box<dyn StallDetectionHandler + 'static>,
+    ) -> std::io::Result<StallDetector> {
         let timer = Arc::new(
             sys::timerfd::TimerFd::new(
                 sys::timerfd::ClockId::CLOCK_MONOTONIC,
@@ -52,6 +83,7 @@ impl StallDetector {
         );
         let tid = unsafe { nix::libc::pthread_self() };
         let terminated = Arc::new(AtomicBool::new(false));
+        let sig = stall_handler.signal();
         let timer_handler = std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
             while timer.wait().is_ok() {
                 if terminated.load(Ordering::Relaxed) {
@@ -64,7 +96,8 @@ impl StallDetector {
 
         Ok(Self {
             timer,
-            handler: Some(timer_handler),
+            timer_handler: Some(timer_handler),
+            stall_handler,
             id: executor_id,
             terminated,
             tx,
@@ -113,7 +146,7 @@ impl StallDetector {
 
 impl Drop for StallDetector {
     fn drop(&mut self) {
-        let timer_handler = self.handler.take().unwrap();
+        let timer_handler = self.timer_handler.take().unwrap();
         self.terminated.store(true, Ordering::Relaxed);
 
         self.timer
@@ -170,15 +203,13 @@ impl<'detector> Drop for StallDetectorGuard<'detector> {
 
         let elapsed = self.start.elapsed();
         strace.resolve();
-        log::warn!(
-            "[stall-detector -- executor {}] task queue {} went over-budget: {:#?} (budget: \
-             {:#?}). Backtrace: {:#?}",
-            self.detector.id,
-            &self.queue_name,
-            elapsed,
-            self.threshold,
-            strace,
-        );
+        self.detector.stall_handler.stall(StallDetection {
+            executor: self.detector.id,
+            task_queue: &self.queue_name,
+            trace: strace,
+            budget: self.threshold,
+            overage: elapsed,
+        });
     }
 }
 
