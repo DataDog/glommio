@@ -65,6 +65,7 @@ use log::warn;
 use crate::{
     error::BuilderErrorKind,
     executor::stall::StallDetector,
+    io::DmaBuffer,
     parking,
     reactor,
     sys,
@@ -1831,6 +1832,38 @@ where
     executor().spawn_local(future)
 }
 
+/// Allocates a buffer that is suitable for using to write to Direct Memory
+/// Access File (DMA). Please note that this implementation uses embedded buddy
+/// allocator to speed up allocation of the memory chunks, but the same
+/// allocator is used to server memory needed to write/read data from `uring` so
+/// probably that is not good idea to keep allocated memory for a long time.
+/// If you want to keep allocated buffer for a long time please use
+/// ['crate::allocate_dma_buffer_global'] instead.
+/// Be careful when you use this buffer with DMA file, size and position of the
+/// buffer should be properly aligned to the block size of the device where the
+/// file is located
+///
+/// * `size` size of the requested buffer in bytes
+///
+/// [`DmaFile`]: crate::io::DmaFile
+pub fn allocate_dma_buffer(size: usize) -> DmaBuffer {
+    executor().reactor().alloc_dma_buffer(size)
+}
+
+/// Allocates a buffer that is suitable for using to write to Direct Memory
+/// Access File (DMA). If you do not plan to keep allocated buffer for a long
+/// time please use ['crate::allocate_dma_buffer'] instead.
+/// Be careful when you use this buffer with DMA file, size and position of the
+/// buffer should be properly aligned to the block size of the device where the
+/// file is located
+///
+/// * `size` size of the requested buffer in bytes
+///
+/// [`DmaFile`]: crate::io::DmaFile
+pub fn allocate_dma_buffer_global(size: usize) -> DmaBuffer {
+    DmaBuffer::new(size).unwrap()
+}
+
 /// Spawns a task onto the current single-threaded executor, in a particular
 /// task queue
 ///
@@ -2996,6 +3029,33 @@ mod test {
         test_static_shares!(1000, 1000, { work_quanta().await });
     }
 
+    #[test]
+    fn test_allocate_dma_buffer() {
+        LocalExecutor::default().run(async {
+            let mut buffer = crate::allocate_dma_buffer(42);
+            assert_eq!(buffer.len(), 42);
+            buffer.as_bytes_mut()[0] = 12;
+            buffer.as_bytes_mut()[12] = 13;
+            assert_eq!(buffer.as_bytes_mut().len(), 42);
+            assert_eq!(buffer.as_bytes()[0], 12);
+            assert_eq!(buffer.as_bytes()[12], 13);
+        });
+    }
+
+    #[test]
+    fn test_allocate_dma_buffer_global() {
+        LocalExecutor::default().run(async {
+            let mut buffer = crate::allocate_dma_buffer_global(42);
+            assert_eq!(buffer.len(), 42);
+            assert_eq!(buffer.len(), 42);
+            buffer.as_bytes_mut()[0] = 12;
+            buffer.as_bytes_mut()[12] = 13;
+            assert_eq!(buffer.as_bytes_mut().len(), 42);
+            assert_eq!(buffer.as_bytes()[0], 12);
+            assert_eq!(buffer.as_bytes()[12], 13);
+        });
+    }
+
     struct DynamicSharesTest {
         shares: Cell<usize>,
     }
@@ -3551,6 +3611,7 @@ mod test {
         Pending(Option<Waker>),
         Ready,
     }
+
     // following four tests are regression ones for https://github.com/DataDog/glommio/issues/379.
     // here we test against task reference count underflow
     // test includes two scenarios, with join handles and with sleep, for each case
@@ -3634,6 +3695,7 @@ mod test {
             timer::sleep(Duration::from_millis(1)).await;
         });
     }
+
     #[test]
     fn wake_refcount_underflow_with_join_handle() {
         LocalExecutor::default().run(async {
