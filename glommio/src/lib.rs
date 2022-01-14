@@ -485,6 +485,7 @@ pub use crate::{
         spawn_scoped_local_into,
         yield_if_needed,
         CpuSet,
+        ExecutorJoinHandle,
         ExecutorProxy,
         ExecutorStats,
         LocalExecutor,

@@ -198,11 +198,10 @@ impl Reactor {
         io_memory: usize,
         ring_depth: usize,
         record_io_latencies: bool,
-    ) -> Reactor {
-        let sys = sys::Reactor::new(notifier, io_memory, ring_depth)
-            .expect("cannot initialize I/O event notification");
+    ) -> io::Result<Reactor> {
+        let sys = sys::Reactor::new(notifier, io_memory, ring_depth)?;
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
-        Reactor {
+        Ok(Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
@@ -210,7 +209,7 @@ impl Reactor {
             record_io_latencies,
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
-        }
+        })
     }
 
     pub(crate) fn io_stats(&self) -> IoStats {

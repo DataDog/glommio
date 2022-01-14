@@ -857,7 +857,7 @@ mod tests {
             .spawn(move || async move {
                 let receiver = addr_receiver.connect().await;
                 let addr = receiver.recv().await.unwrap();
-                TcpStream::connect(addr).await.unwrap()
+                TcpStream::connect(addr).await.unwrap();
             })
             .unwrap();
 
