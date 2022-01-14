@@ -385,6 +385,29 @@ impl ExecutorQueues {
     }
 }
 
+/// A wrapper around a [`std::thread::JoinHandle`]
+#[derive(Debug)]
+pub struct ExecutorJoinHandle<T: Send + 'static>(JoinHandle<Result<T>>);
+
+impl<T: Send + 'static> ExecutorJoinHandle<T> {
+    /// See [`std::thread::JoinHandle::thread()`]
+    #[must_use]
+    pub fn thread(&self) -> &std::thread::Thread {
+        self.0.thread()
+    }
+
+    /// See [`std::thread::JoinHandle::join()`]
+    pub fn join(self) -> Result<T> {
+        match self.0.join() {
+            Err(err) => Err(GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(
+                err,
+            ))),
+            Ok(Err(err)) => Err(err),
+            Ok(Ok(res)) => Ok(res),
+        }
+    }
+}
+
 /// A factory that can be used to configure and create a [`LocalExecutor`].
 ///
 /// Methods can be chained on it in order to configure it.
@@ -593,10 +616,11 @@ impl LocalExecutorBuilder {
     /// [`LocalExecutor::run`]:struct.LocalExecutor.html#method.run
     #[must_use = "This spawns an executor on a thread, so you may need to call \
                   `JoinHandle::join()` to keep the main thread alive"]
-    pub fn spawn<G, F, T>(self, fut_gen: G) -> Result<JoinHandle<()>>
+    pub fn spawn<G, F, T>(self, fut_gen: G) -> Result<ExecutorJoinHandle<T>>
     where
         G: FnOnce() -> F + Send + 'static,
         F: Future<Output = T> + 'static,
+        T: Send + 'static,
     {
         let notifier = sys::new_sleep_notifier()?;
         let name = format!("{}-{}", self.name, notifier.id());
@@ -618,14 +642,12 @@ impl LocalExecutorBuilder {
                     record_io_latencies,
                     cpu_set_gen.next().cpu_binding(),
                     spin_before_park,
-                )
-                .unwrap();
+                )?;
                 le.init();
-                le.run(async move {
-                    fut_gen().await;
-                })
+                le.run(async move { Ok(fut_gen().await) })
             })
             .map_err(Into::into)
+            .map(ExecutorJoinHandle)
     }
 }
 
@@ -829,8 +851,7 @@ impl LocalExecutorPoolBuilder {
                         record_io_latencies,
                         cpu_binding,
                         spin_before_park,
-                    )
-                    .unwrap();
+                    )?;
                     le.init();
                     le.run(async move { Ok(fut_gen().await) })
                 } else {
@@ -988,7 +1009,7 @@ impl LocalExecutor {
                 io_memory,
                 ring_depth,
                 record_io_latencies,
-            )),
+            )?),
         })
     }
 

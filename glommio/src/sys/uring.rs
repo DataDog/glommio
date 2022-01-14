@@ -17,7 +17,6 @@ use std::{
     ffi::CStr,
     fmt,
     io,
-    io::{Error, ErrorKind},
     ops::Range,
     os::unix::io::RawFd,
     panic,
@@ -47,9 +46,11 @@ use crate::{
         TimeSpec64,
     },
     uring_sys::{self, IoRingOp},
+    GlommioError,
     IoRequirements,
     IoStats,
     Latency,
+    ReactorErrorKind,
     RingIoStats,
     TaskQueueHandle,
 };
@@ -1182,17 +1183,14 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
         ring_depth: usize,
-    ) -> io::Result<Reactor> {
+    ) -> crate::Result<Reactor, ()> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
         if memlock_limit < MIN_MEMLOCK_LIMIT {
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!(
-                    "The memlock resource limit is too low: {} (recommended {})",
-                    memlock_limit, MIN_MEMLOCK_LIMIT
-                ),
-            ));
+            return Err(GlommioError::ReactorError(ReactorErrorKind::MemLockLimit(
+                memlock_limit,
+                MIN_MEMLOCK_LIMIT,
+            )));
         }
 
         let source_map = Rc::new(RefCell::new(SourceMap::default()));
