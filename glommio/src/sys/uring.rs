@@ -13,7 +13,6 @@ use rlimit::Resource;
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::VecDeque,
-    convert::TryInto,
     ffi::CStr,
     fmt,
     io,
@@ -1397,19 +1396,8 @@ impl Reactor {
     }
 
     fn enqueue_blocking_request(&self, source: &Source, op: BlockingThreadOp) {
-        let src = source.inner.clone();
-
         self.blocking_thread
-            .push(
-                op,
-                Box::new(move |res| {
-                    let mut inner_source = src.borrow_mut();
-                    let res: io::Result<usize> = res.try_into().expect("not a syscall result!");
-
-                    inner_source.wakers.result.replace(res);
-                    inner_source.wakers.wake_waiters();
-                }),
-            )
+            .push(op, source.inner.clone())
             .expect("failed to spawn blocking request");
     }
 

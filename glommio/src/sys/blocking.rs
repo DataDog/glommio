@@ -1,16 +1,21 @@
-use crate::{executor::bind_to_cpu_set, sys::SleepNotifier, PoolPlacement};
+use crate::{
+    executor::bind_to_cpu_set,
+    sys::{InnerSource, SleepNotifier},
+    PoolPlacement,
+};
 use ahash::AHashMap;
 use alloc::rc::Rc;
 use core::fmt::{Debug, Formatter};
 use crossbeam::channel::{Receiver, Sender};
 use std::{
     cell::{Cell, RefCell},
-    convert::TryFrom,
+    convert::{TryFrom, TryInto},
     ffi::CString,
     io,
     io::ErrorKind,
     os::unix::{ffi::OsStrExt, prelude::*},
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
     thread::JoinHandle,
 };
@@ -128,8 +133,6 @@ pub(super) struct BlockingThreadResp {
     res: BlockingThreadResult,
 }
 
-pub(super) type BlockingThreadHandler = Box<dyn Fn(BlockingThreadResult)>;
-
 #[derive(Debug)]
 struct BlockingThread(JoinHandle<()>);
 
@@ -162,7 +165,7 @@ impl BlockingThread {
 pub(crate) struct BlockingThreadPool {
     tx: Sender<BlockingThreadReq>,
     rx: Receiver<BlockingThreadResp>,
-    waiters: RefCell<AHashMap<u64, BlockingThreadHandler>>,
+    sources: RefCell<AHashMap<u64, Pin<Rc<RefCell<InnerSource>>>>>,
     requests: Cell<u64>,
     _threads: Vec<BlockingThread>,
 }
@@ -194,7 +197,7 @@ impl BlockingThreadPool {
             _threads: threads,
             tx: in_tx,
             rx: out_rx,
-            waiters: RefCell::new(Default::default()),
+            sources: RefCell::new(Default::default()),
             requests: Cell::new(0),
         })
     }
@@ -202,7 +205,7 @@ impl BlockingThreadPool {
     pub(super) fn push(
         &self,
         op: BlockingThreadOp,
-        action: BlockingThreadHandler,
+        source: Pin<Rc<RefCell<InnerSource>>>,
     ) -> io::Result<()> {
         let id = self.requests.get();
         self.requests.set(id.overflowing_add(1).0);
@@ -216,19 +219,26 @@ impl BlockingThreadPool {
             )
         })?;
 
-        let mut waiters = self.waiters.borrow_mut();
-        waiters.insert(id, action);
+        let mut waiters = self.sources.borrow_mut();
+        assert!(waiters.insert(id, source).is_none());
         Ok(())
     }
 
     pub(super) fn flush(&self) -> usize {
         let mut woke = 0;
-        let mut waiters = self.waiters.borrow_mut();
+        let mut waiters = self.sources.borrow_mut();
         for x in self.rx.try_iter() {
             let id = x.id;
             let res = x.res;
-            let func = waiters.remove(&id).unwrap();
-            func(res);
+
+            let src = waiters.remove(&id).unwrap();
+            let mut inner_source = src.borrow_mut();
+            inner_source.wakers.result.replace(
+                res.try_into()
+                    .expect("not a valid blocking operation's result"),
+            );
+            inner_source.wakers.wake_waiters();
+
             woke += 1;
         }
         woke
