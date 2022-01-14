@@ -125,6 +125,7 @@ impl TryFrom<BlockingThreadResult> for std::io::Result<usize> {
 #[derive(Debug)]
 pub(super) struct BlockingThreadReq {
     op: BlockingThreadOp,
+    latency_sensitive: bool,
     id: u64,
 }
 
@@ -155,7 +156,7 @@ impl BlockingThread {
                 if tx.send(resp).is_err() {
                     panic!("failed to send response");
                 }
-                reactor_sleep_notifier.notify(false);
+                reactor_sleep_notifier.notify(el.latency_sensitive);
             }
         }))
     }
@@ -210,7 +211,14 @@ impl BlockingThreadPool {
         let id = self.requests.get();
         self.requests.set(id.overflowing_add(1).0);
 
-        let req = BlockingThreadReq { op, id };
+        let req = BlockingThreadReq {
+            op,
+            id,
+            latency_sensitive: matches!(
+                source.borrow().io_requirements.latency_req,
+                crate::Latency::Matters(_)
+            ),
+        };
 
         self.tx.send(req).map_err(|_| {
             io::Error::new(
