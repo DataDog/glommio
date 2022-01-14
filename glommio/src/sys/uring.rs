@@ -81,7 +81,7 @@ enum UringOpDescriptor {
     Accept(*mut SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
     Statx(*const u8, *mut libc::statx),
-    Timeout(*const uring_sys::__kernel_timespec),
+    Timeout(*const uring_sys::__kernel_timespec, u32),
     TimeoutRemove(u64),
     SockSend(*const u8, usize, i32),
     SockSendMsg(*mut libc::msghdr, i32),
@@ -352,8 +352,8 @@ fn fill_sqe<F>(
                 let path = CStr::from_ptr(path as _);
                 sqe.prep_statx(-1, path, flags, mode, &mut *statx_buf);
             }
-            UringOpDescriptor::Timeout(timespec) => {
-                sqe.prep_timeout(&*timespec, 0, TimeoutFlags::empty());
+            UringOpDescriptor::Timeout(timespec, events) => {
+                sqe.prep_timeout(&*timespec, events, TimeoutFlags::empty());
             }
             UringOpDescriptor::TimeoutRemove(timer) => {
                 sqe.prep_timeout_remove(timer as _);
@@ -942,11 +942,11 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
-    fn arm_timer(&mut self, d: Duration) -> Source {
+    fn arm_timer(&mut self, d: Duration, min_events: u32) -> Source {
         let source = Source::new(
             IoRequirements::default(),
             -1,
-            SourceType::Timeout(TimeSpec64::from(d)),
+            SourceType::Timeout(TimeSpec64::from(d), min_events),
             None,
             None,
         );
@@ -955,7 +955,9 @@ impl SleepableRing {
             .borrow_mut()
             .add_source(&source, self.submission_queue.clone());
         let op = match &*source.source_type() {
-            SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+            SourceType::Timeout(ts, events) => {
+                UringOpDescriptor::Timeout(&ts.raw as *const _, *events)
+            }
             _ => unreachable!(),
         };
 
@@ -1791,7 +1793,7 @@ impl Reactor {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
-                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
+                self.timeout_src.set(Some(lat_ring.arm_timer(dur, 0)));
                 if flush_rings!(lat_ring)? != 1 {
                     // we failed to submit the timeout SQE: it isn't safe to sleep
                     return Ok(false);
@@ -1982,12 +1984,14 @@ mod tests {
             let source = Source::new(
                 IoRequirements::default(),
                 -1,
-                SourceType::Timeout(TimeSpec64::from(Duration::from_millis(millis))),
+                SourceType::Timeout(TimeSpec64::from(Duration::from_millis(millis)), 0),
                 None,
                 None,
             );
             let op = match &*source.source_type() {
-                SourceType::Timeout(ts) => UringOpDescriptor::Timeout(&ts.raw as *const _),
+                SourceType::Timeout(ts, events) => {
+                    UringOpDescriptor::Timeout(&ts.raw as *const _, *events)
+                }
                 _ => unreachable!(),
             };
             (source, op)
