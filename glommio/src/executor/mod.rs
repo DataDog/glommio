@@ -35,7 +35,7 @@
 mod latch;
 mod multitask;
 mod placement;
-mod stall;
+pub mod stall;
 
 use latch::{Latch, LatchState};
 pub use placement::{CpuSet, Placement, PoolPlacement};
@@ -831,7 +831,7 @@ impl LocalExecutorPoolBuilder {
     ///     .unwrap();
     /// ```
     #[must_use = "The builder must be built to be useful"]
-    pub fn detect_stalls<G: 'static>(
+    pub fn detect_stalls(
         mut self,
         handler_gen: Option<Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>>>,
     ) -> Self {
@@ -1294,13 +1294,14 @@ impl LocalExecutor {
                 };
 
                 let (runtime, tasks_executed_this_loop) = {
-                    let _guard = self.stall_detector.as_ref().map(|x| {
+                    let guard = self.stall_detector.as_ref().map(|x| {
+                        let queue = queue.borrow_mut();
                         x.enter_task_queue(
-                            queue.borrow_mut().name.clone(),
+                            queue.stats.index,
+                            queue.name.clone(),
                             time,
                             self.preempt_timer_duration(),
                         )
-                        .unwrap()
                     });
 
                     let mut tasks_executed_this_loop = 0;
@@ -1318,8 +1319,9 @@ impl LocalExecutor {
                             break;
                         }
                     }
-
-                    (time.elapsed(), tasks_executed_this_loop)
+                    let elapsed = time.elapsed();
+                    drop(guard);
+                    (elapsed, tasks_executed_this_loop)
                 };
 
                 let (need_repush, last_vruntime) = {

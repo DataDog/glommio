@@ -476,6 +476,7 @@ pub use crate::{
         Result,
     },
     executor::{
+        stall::{DefaultStallDetectionHandler, StallDetectionHandler},
         allocate_dma_buffer,
         allocate_dma_buffer_global,
         executor,

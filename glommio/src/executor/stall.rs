@@ -14,10 +14,12 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
+use crate::executor::TaskQueueHandle;
 
 pub struct StallDetection<'a> {
     executor: usize,
-    task_queue: &'a str,
+    queue_handle: TaskQueueHandle,
+    queue_name: &'a str,
     trace: backtrace::Backtrace,
     budget: Duration,
     overage: Duration,
@@ -25,16 +27,36 @@ pub struct StallDetection<'a> {
 
 impl fmt::Debug for StallDetection<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StallDetection")
+            .field("executor", &self.executor)
+            .field("queue_handle", &self.queue_handle)
+            .field("queue_name", &self.queue_name)
+            .field("trace", &self.trace)
+            .field("budget", &self.budget)
+            .field("overage", &self.overage)
+            .finish()
+    }
+}
+
+impl fmt::Display for StallDetection<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "[stall-detector -- executor {}] task queue {} went over-budget: {:#?} (budget: \
              {:#?}). Backtrace: {:#?}",
-            self.executor, self.task_queue, self.overage, self.budget, self.trace,
+            self.executor, self.queue_name, self.overage, self.budget, self.trace,
         )
     }
 }
 
+/// Trait describing what signal to use to trigger stall detection,
+/// how far past expected execution time to trigger a stall,
+/// and how to handle a stall detection once triggered.
 pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
+    /// How far past the preemption timer should qualify as a stall
+    /// If None is returned, don't use the stall detector for this task queue.
+    fn high_water_mark(&self, queue_handle: TaskQueueHandle, max_expected_runtime: Duration) -> Option<Duration>;
+
     /// What signal number to use; see values in libc::SIG*
     fn signal(&self) -> u8;
 
@@ -42,16 +64,38 @@ pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     fn stall(&self, detection: StallDetection<'_>);
 }
 
+/// Default settings for signal number, high water mark and stall handler.
+/// By default, the high water mark to consider a task queue stalled is set to
+/// 10% of the expected run time. The default handler will log a stack trace of the currently
+/// executing task queue. The default signal number is SIGUSR1.
 #[derive(Debug)]
 pub struct DefaultStallDetectionHandler {}
 
 impl StallDetectionHandler for DefaultStallDetectionHandler {
+    /// The default high water mark is 10% of the preemption time,
+    /// capped at 10ms.
+    fn high_water_mark(&self, _queue_handle: TaskQueueHandle, max_expected_runtime: Duration) -> Option<Duration> {
+        // We consider a queue to be stalling the system if it failed to yield in due
+        // time. For a given maximum expected runtime, we allow a margin of error f 10%
+        // (and an absolute minimum of 10ms) after which we record a stacktrace. i.e. a
+        // task queue has should return shortly after `need_preempt()` returns
+        // true or the stall detector triggers. For example::
+        // * If a task queue has a preempt timer of 100ms the the stall detector
+        // triggers if it doesn't yield after running for 110ms.
+        // * If a task queue has a preempt timer of 5ms the the stall detector
+        // triggers if it doesn't yield after running for 15ms.
+        Some(Duration::from_millis((max_expected_runtime.as_millis() as f64 * 0.1) as u64)
+            .max(Duration::from_millis(10)))
+    }
+
+    /// The default signal is SIGUSR1.
     fn signal(&self) -> u8 {
         nix::libc::SIGUSR1 as u8
     }
 
+    /// The default stall reporting mechanism is to log a warning.
     fn stall(&self, detection: StallDetection<'_>) {
-        log::warn!("{:?}", detection);
+        log::warn!("{}", detection);
     }
 }
 
@@ -62,8 +106,8 @@ pub(crate) struct StallDetector {
     timer_handler: Option<JoinHandle<()>>,
     id: usize,
     terminated: Arc<AtomicBool>,
-    //NOTE: we don't use signal_hook::low_level::channel as backtraces
-    //      have too many elements
+    // NOTE: we don't use signal_hook::low_level::channel as backtraces
+    // have too many elements
     pub(crate) tx: crossbeam::channel::Sender<backtrace::BacktraceFrame>,
     pub(crate) rx: crossbeam::channel::Receiver<backtrace::BacktraceFrame>,
 }
@@ -106,29 +150,20 @@ impl StallDetector {
 
     pub(crate) fn enter_task_queue(
         &self,
+        queue_handle: TaskQueueHandle,
         queue_name: String,
         start: Instant,
         max_expected_runtime: Duration,
-    ) -> nix::Result<StallDetectorGuard<'_>> {
-        // We consider a queue to be stalling the system if it failed to yield in due
-        // time. For a given maximum expected runtime, we allow a margin of error f 10%
-        // (and an absolute minimum of 10ms) after which we record a stacktrace. i.e. a
-        // task queue has should return shortly after `need_preempt()` returns
-        // true or the stall detector triggers. For example::
-        // * If a task queue has a preempt timer of 100ms the the stall detector
-        // triggers if it doesn't yield after running for 110ms.
-        // * If a task queue has a preempt timer of 100ms the the stall detector
-        // triggers if it doesn't yield after running for 15ms.
-
-        let error_margin =
-            Duration::from_millis((max_expected_runtime.as_millis() as f64 * 0.1) as u64)
-                .max(Duration::from_millis(10));
-        StallDetectorGuard::new(
-            self,
-            queue_name,
-            start,
-            max_expected_runtime.saturating_add(error_margin),
-        )
+    ) -> Option<StallDetectorGuard<'_>> {
+        self.stall_handler.high_water_mark(queue_handle, max_expected_runtime).map(|hwm| {
+            StallDetectorGuard::new(
+                self,
+                queue_handle,
+                queue_name,
+                start,
+                max_expected_runtime.saturating_add(hwm),
+            ).expect("Unable to create StallDetectorGuard, giving up")
+        })
     }
 
     pub(crate) fn arm(&self, threshold: Duration) -> nix::Result<()> {
@@ -163,6 +198,7 @@ impl Drop for StallDetector {
 
 pub(crate) struct StallDetectorGuard<'detector> {
     detector: &'detector StallDetector,
+    queue_handle: TaskQueueHandle,
     queue_name: String,
     start: Instant,
     threshold: Duration,
@@ -171,13 +207,15 @@ pub(crate) struct StallDetectorGuard<'detector> {
 impl<'detector> StallDetectorGuard<'detector> {
     fn new(
         detector: &'detector StallDetector,
+        queue_handle: TaskQueueHandle,
         queue_name: String,
         start: Instant,
         threshold: Duration,
     ) -> nix::Result<Self> {
-        detector.arm(threshold).unwrap();
+        detector.arm(threshold).expect("Unable to arm stall detector, giving up");
         Ok(Self {
             detector,
+            queue_handle,
             queue_name,
             start,
             threshold,
@@ -203,10 +241,11 @@ impl<'detector> Drop for StallDetectorGuard<'detector> {
         strace.resolve();
         self.detector.stall_handler.stall(StallDetection {
             executor: self.detector.id,
-            task_queue: &self.queue_name,
+            queue_name: &self.queue_name,
+            queue_handle: self.queue_handle,
             trace: strace,
             budget: self.threshold,
-            overage: elapsed,
+            overage: elapsed.saturating_sub(self.threshold),
         });
     }
 }
