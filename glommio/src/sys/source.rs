@@ -63,7 +63,7 @@ pub(crate) enum SourceType {
     LinkRings,
     ForeignNotifier(u64, bool),
     Statx(CString, Box<RefCell<libc::statx>>),
-    Timeout(TimeSpec64),
+    Timeout(TimeSpec64, u32),
     Connect(SockAddr),
     Accept(SockAddrStorage),
     Rename(PathBuf, PathBuf),
