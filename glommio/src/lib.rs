@@ -476,6 +476,8 @@ pub use crate::{
         Result,
     },
     executor::{
+        allocate_dma_buffer,
+        allocate_dma_buffer_global,
         executor,
         spawn_local,
         spawn_local_into,
