@@ -942,18 +942,18 @@ impl SleepableRing {
         self.ring.raw().ring_fd
     }
 
-    fn arm_timer(&mut self, d: Duration, min_events: u32) -> Source {
+    /// This function prepares a timer that fires unconditionally after a
+    /// certain duration. The timer is added at the front of the queue such
+    /// that it will be the first SQE submitted the next time we enter the
+    /// latency ring
+    fn prepare_latency_preemption_timer(&mut self, d: Duration) -> Source {
         let source = Source::new(
             IoRequirements::default(),
             -1,
-            SourceType::Timeout(TimeSpec64::from(d), min_events),
+            SourceType::Timeout(TimeSpec64::from(d), 0),
             None,
             None,
         );
-        let new_id = self
-            .source_map
-            .borrow_mut()
-            .add_source(&source, self.submission_queue.clone());
         let op = match &*source.source_type() {
             SourceType::Timeout(ts, events) => {
                 UringOpDescriptor::Timeout(&ts.raw as *const _, *events)
@@ -961,20 +961,19 @@ impl SleepableRing {
             _ => unreachable!(),
         };
 
-        // This assumes SQEs will be processed in the order they are
-        // seen. Because remove does not do anything asynchronously
-        // and is processed inline there is no need to link sqes.
-        let q = self.submission_queue();
-        let mut queue = q.borrow_mut();
-        queue.submissions.push_front(UringDescriptor {
-            args: op,
-            fd: -1,
-            flags: SubmissionFlags::empty(),
-            user_data: to_user_data(new_id),
-        });
-        // No need to submit, the next ring enter will submit for us. Because
-        // we just flushed, and we got put in front of the queue we should get a `SQE`.
-        // Still it would be nice to verify if we did.
+        self.submission_queue()
+            .borrow_mut()
+            .submissions
+            .push_front(UringDescriptor {
+                args: op,
+                fd: -1,
+                flags: SubmissionFlags::empty(),
+                user_data: to_user_data(
+                    self.source_map
+                        .borrow_mut()
+                        .add_source(&source, self.submission_queue.clone()),
+                ),
+            });
         source
     }
 
@@ -1192,7 +1191,7 @@ pub(crate) struct Reactor {
     latency_ring: RefCell<SleepableRing>,
     poll_ring: RefCell<PollRing>,
 
-    timeout_src: Cell<Option<Source>>,
+    latency_preemption_timeout_src: Cell<Option<Source>>,
 
     link_fd: RawFd,
 
@@ -1331,7 +1330,7 @@ impl Reactor {
             main_ring: RefCell::new(main_ring),
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
-            timeout_src: Cell::new(None),
+            latency_preemption_timeout_src: Cell::new(None),
             blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
             link_fd,
             notifier,
@@ -1771,7 +1770,7 @@ impl Reactor {
         //
         // But if we will sleep, there might be a timer registered that needs
         // to be removed otherwise we'll wake up when it expires.
-        drop(self.timeout_src.take());
+        drop(self.latency_preemption_timeout_src.take());
 
         // This will only dispatch if we run out of sqes. Which means until
         // flush_rings! nothing is really send to the kernel...
@@ -1793,7 +1792,8 @@ impl Reactor {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
-                self.timeout_src.set(Some(lat_ring.arm_timer(dur, 0)));
+                self.latency_preemption_timeout_src
+                    .set(Some(lat_ring.prepare_latency_preemption_timer(dur)));
                 if flush_rings!(lat_ring)? != 1 {
                     // we failed to submit the timeout SQE: it isn't safe to sleep
                     return Ok(false);
@@ -1822,7 +1822,8 @@ impl Reactor {
                 self.notifier.wake_up();
             }
         } else if let Some(preempt) = preempt_timer {
-            self.timeout_src.set(Some(lat_ring.arm_timer(preempt)));
+            self.latency_preemption_timeout_src
+                .set(Some(lat_ring.prepare_latency_preemption_timer(preempt)));
             assert!(flush_rings!(lat_ring)? >= 1);
         }
 
