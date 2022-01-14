@@ -341,7 +341,7 @@ struct ExecutorQueues {
     available_executors: AHashMap<usize, Rc<RefCell<TaskQueue>>>,
     active_executing: Option<Rc<RefCell<TaskQueue>>>,
     executor_index: usize,
-    last_vruntime: u64,
+    default_vruntime: u64,
     preempt_timer_duration: Duration,
     default_preempt_timer_duration: Duration,
     spin_before_park: Option<Duration>,
@@ -355,7 +355,7 @@ impl ExecutorQueues {
             available_executors: AHashMap::new(),
             active_executing: None,
             executor_index: 1, // 0 is the default
-            last_vruntime: 0,
+            default_vruntime: 0,
             preempt_timer_duration,
             default_preempt_timer_duration: preempt_timer_duration,
             spin_before_park,
@@ -378,7 +378,7 @@ impl ExecutorQueues {
     fn maybe_activate(&mut self, queue: Rc<RefCell<TaskQueue>>) {
         let mut state = queue.borrow_mut();
         if !state.is_active() {
-            state.vruntime = self.last_vruntime;
+            state.vruntime = self.default_vruntime + 1;
             state.active = true;
             drop(state);
             self.active_executors.push(queue);
@@ -1235,7 +1235,7 @@ impl LocalExecutor {
 
                 let runtime = time.elapsed();
 
-                let (need_repush, last_vruntime) = {
+                let (need_repush, vruntime) = {
                     let mut state = queue.borrow_mut();
                     let last_vruntime = state.account_vruntime(runtime);
                     (state.is_active(), last_vruntime)
@@ -1245,8 +1245,7 @@ impl LocalExecutor {
                 tq.active_executing = None;
                 tq.stats.executor_runtime += runtime;
                 tq.stats.tasks_executed += tasks_executed_this_loop;
-
-                tq.last_vruntime = match last_vruntime {
+                let vruntime = match vruntime {
                     Some(x) => x,
                     None => {
                         for queue in tq.available_executors.values() {
@@ -1262,6 +1261,17 @@ impl LocalExecutor {
                 } else {
                     tq.reevaluate_preempt_timer();
                 }
+
+                // Compute the smallest vruntime out of all the active task queues
+                // This value is used to set the vruntime of deactivated task queues when they
+                // are woken up.
+                tq.default_vruntime = tq
+                    .active_executors
+                    .iter()
+                    .map(|x| x.borrow().vruntime)
+                    .min()
+                    .unwrap_or(vruntime);
+
                 true
             }
             None => false,
