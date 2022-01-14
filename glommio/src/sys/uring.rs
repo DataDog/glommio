@@ -977,6 +977,49 @@ impl SleepableRing {
         source
     }
 
+    /// This function prepares a timer that fires only after a given number of
+    /// CQEs are available on the main ring. This timer is linked with a write
+    /// to the latency ring's event fd such that this timer triggers a
+    /// preemption via the latency ring.
+    fn prepare_throughput_preemption_timer(&mut self, min_events: u32, event_fd: RawFd) -> Source {
+        assert!(min_events >= 1, "min_events should be at least 1");
+        let timer_source = Source::new(
+            IoRequirements::default(),
+            -1,
+            SourceType::Timeout(TimeSpec64::from(Duration::MAX), min_events),
+            None,
+            None,
+        );
+
+        const EVENTFD_WAKEUP: &[u64; 1] = &[1u64; 1];
+        let write_op = UringDescriptor {
+            fd: event_fd,
+            flags: SubmissionFlags::empty(),
+            user_data: 0,
+            args: UringOpDescriptor::Write(EVENTFD_WAKEUP as *const u64 as _, 8, 0),
+        };
+
+        let op = match &*timer_source.source_type() {
+            SourceType::Timeout(ts, events) => {
+                UringOpDescriptor::Timeout(&ts.raw as *const _, *events)
+            }
+            _ => unreachable!(),
+        };
+        let queue = self.submission_queue();
+        queue.borrow_mut().submissions.push_front(write_op);
+        queue.borrow_mut().submissions.push_front(UringDescriptor {
+            args: op,
+            fd: -1,
+            flags: SubmissionFlags::IO_LINK,
+            user_data: to_user_data(
+                self.source_map
+                    .borrow_mut()
+                    .add_source(&timer_source, queue.clone()),
+            ),
+        });
+        timer_source
+    }
+
     fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
         if let Some(mut sqe) = self.ring.sq().prepare_sqe() {
             // Now must wait on the `eventfd` in case someone wants to wake us up.
@@ -1192,6 +1235,7 @@ pub(crate) struct Reactor {
     poll_ring: RefCell<PollRing>,
 
     latency_preemption_timeout_src: Cell<Option<Source>>,
+    throughput_preemption_timeout_src: Cell<Option<Source>>,
 
     link_fd: RawFd,
 
@@ -1331,6 +1375,7 @@ impl Reactor {
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
             latency_preemption_timeout_src: Cell::new(None),
+            throughput_preemption_timeout_src: Cell::new(None),
             blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
             link_fd,
             notifier,
@@ -1764,6 +1809,9 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
+        // consume all events from the rings
+        consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
+
         // Cancel the old timer regardless of whether we can sleep:
         // if we won't sleep, we will register the new timer with its new
         // value.
@@ -1772,17 +1820,26 @@ impl Reactor {
         // to be removed otherwise we'll wake up when it expires.
         drop(self.latency_preemption_timeout_src.take());
 
+        // Schedule the throughput-based timeout immediately: it won't matter if we end
+        // up sleeping.
+        self.throughput_preemption_timeout_src.replace(Some(
+            main_ring.prepare_throughput_preemption_timer(
+                self.ring_depth() as u32,
+                self.eventfd_src.raw(),
+            ),
+        ));
+
         // This will only dispatch if we run out of sqes. Which means until
         // flush_rings! nothing is really send to the kernel...
         flush_cancellations!(into &mut woke; lat_ring, poll_ring, main_ring);
         // ... which happens right here. If you ever reorder this code just
         // be careful about this dependency.
         flush_rings!(lat_ring, poll_ring, main_ring)?;
+        // pick up the results of any cancellations
         consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
-        let preempt_timer = preempt_timer();
-        let should_sleep = preempt_timer.is_none()
+        let should_sleep = preempt_timer().is_none()
             && (woke == 0)
             && poll_ring.can_sleep()
             && main_ring.can_sleep()
@@ -1794,10 +1851,7 @@ impl Reactor {
             if let Some(dur) = user_timer {
                 self.latency_preemption_timeout_src
                     .set(Some(lat_ring.prepare_latency_preemption_timer(dur)));
-                if flush_rings!(lat_ring)? != 1 {
-                    // we failed to submit the timeout SQE: it isn't safe to sleep
-                    return Ok(false);
-                }
+                assert!(flush_rings!(lat_ring)? > 0);
             }
             // From this moment on the remote executors are aware that we are sleeping
             // We have to sweep the remote channels function once more because since
@@ -1821,10 +1875,12 @@ impl Reactor {
                 // Woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
             }
-        } else if let Some(preempt) = preempt_timer {
+        }
+
+        if let Some(preempt) = preempt_timer() {
             self.latency_preemption_timeout_src
                 .set(Some(lat_ring.prepare_latency_preemption_timer(preempt)));
-            assert!(flush_rings!(lat_ring)? >= 1);
+            assert!(flush_rings!(lat_ring, main_ring)? > 0);
         }
 
         // A Note about `need_preempt`:
