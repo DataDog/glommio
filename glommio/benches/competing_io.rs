@@ -1,8 +1,8 @@
-use futures::future::join;
-use futures_lite::{stream, AsyncWriteExt, StreamExt};
+use futures::future::{join, join_all};
+use futures_lite::AsyncWriteExt;
 use glommio::{
     enclose,
-    io::{ImmutableFile, ImmutableFileBuilder, MergedBufferLimit, ReadAmplificationLimit},
+    io::{ImmutableFile, ImmutableFileBuilder},
     Latency,
     LocalExecutorBuilder,
     Placement,
@@ -10,14 +10,14 @@ use glommio::{
 };
 use rand::Rng;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
     time::{Duration, Instant},
 };
 
 fn main() {
-    let handle = LocalExecutorBuilder::new(Placement::Fixed(0))
+    let handle = LocalExecutorBuilder::new(Placement::Fixed(0)).preempt_timer(Duration::from_millis(10))
         .spawn(|| async move {
             let filename = match std::env::var("GLOMMIO_TEST_POLLIO_ROOTDIR") {
                 Ok(path) => {
@@ -44,44 +44,50 @@ fn main() {
                 let file = sink.seal().await.unwrap();
 
                 let lat_tq = glommio::executor().create_task_queue(
-                    Shares::Static(1000),
-                    Latency::Matters(Duration::from_millis(1)),
+                    Shares::Static(100),
+                    Latency::NotImportant,
                     "lat",
                 );
                 let throughput_tq = glommio::executor().create_task_queue(
-                    Shares::Static(1000),
+                    Shares::Static(100),
                     Latency::NotImportant,
                     "throughput",
                 );
                 let gate = Rc::new(Cell::new(true));
 
-                let t1 = glommio::executor()
-                    .spawn_local_into(
-                        enclose!((gate)
-                        async move {
-                            // simulate a very CPU intensive but highly cooperative task
-                            while gate.get() {
-                                glommio::yield_if_needed().await;
-                            }
-                        }),
-                        throughput_tq,
-                    )
-                    .unwrap();
+                const IO_TO_PERFORM: usize = 1_000_000;
 
-                let t2 = glommio::executor()
-                    .spawn_local_into(
-                        enclose!((gate)
-                        async move {
-                            for x in 0..4 {
-                                run_io(&format!("iteration: {}", x), &file, 1_000_000, 4096).await;
-                            }
-                            gate.replace(false);
-                        }),
-                        lat_tq,
-                    )
-                    .unwrap();
+                for x in 0..4 {
+                    gate.set(true);
+                    let t1 = glommio::executor()
+                        .spawn_local_into(
+                            enclose!((gate)
+                            async move {
+                                let now = Instant::now();
+                                let mut counter = 0u64;
+                                // simulate a very CPU intensive but highly cooperative task
+                                while gate.get() {
+                                    counter += 1;
+                                    glommio::yield_if_needed().await;
+                                }
+                                println!("[measured] CPU task ran at {} Mops/s", (counter as f64 / now.elapsed().as_secs_f64()) as u64 / 1_000_000);
+                            }),
+                            throughput_tq,
+                        )
+                        .unwrap();
 
-                join(t1, t2).await;
+                    let t2 = glommio::executor()
+                        .spawn_local_into(
+                            enclose!((gate, file)
+                            async move {
+                                run_io(&format!("iteration: {}", x), &file, IO_TO_PERFORM, 4096).await;
+                                gate.replace(false);
+                            }),
+                            lat_tq,
+                        )
+                        .unwrap();
+                    join(t1, t2).await;
+                }
             };
         })
         .unwrap();
@@ -89,33 +95,41 @@ fn main() {
 }
 
 async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
-    let mut rand = rand::thread_rng();
     let blocks = file.file_size() / size as u64 - 1;
-    let mut hist = hdrhistogram::Histogram::<u64>::new(4).unwrap();
+    let hist = Rc::new(RefCell::new(
+        hdrhistogram::Histogram::<u64>::new(4).unwrap(),
+    ));
     let started_at = Instant::now();
 
-    file.read_many(
-        stream::repeat_with(|| IOVec {
-            vec: (rand.gen_range(0..blocks) * size as u64, size),
-            at: Instant::now(),
+    let tasks: Vec<_> = (0..2 << 10)
+        .into_iter()
+        .map(|_| {
+            let file = file.clone();
+            let hist = hist.clone();
+            glommio::spawn_local(async move {
+                let mut rand = rand::thread_rng();
+                for _ in 0..count / (2 << 10) {
+                    let now = Instant::now();
+                    file.read_at(rand.gen_range(0..blocks) * size as u64, size)
+                        .await
+                        .unwrap();
+                    hist.borrow_mut()
+                        .record(now.elapsed().as_micros() as u64)
+                        .unwrap();
+                }
+            })
         })
-        .take(count),
-        MergedBufferLimit::NoMerging,
-        ReadAmplificationLimit::NoAmplification,
-    )
-    .for_each(|res| {
-        let (io, _) = res.unwrap();
-        hist.record(io.at.elapsed().as_micros() as u64).unwrap();
-    })
-    .await;
+        .collect();
 
-    assert_eq!(hist.len() as usize, count);
+    join_all(tasks).await;
+
+    let hist = Rc::try_unwrap(hist).unwrap().into_inner();
 
     println!("\n --- {} ---", name);
     println!(
-        "performed {} read IO at {} IOPS (took {:.2}s)",
-        count,
-        (count as f64 / started_at.elapsed().as_secs_f64()) as usize,
+        "performed {}k read IO at {}k IOPS (took {:.2}s)",
+        count / 1_000,
+        ((count as f64 / started_at.elapsed().as_secs_f64()) / 1_000f64) as usize,
         started_at.elapsed().as_secs_f64()
     );
     println!(
@@ -129,19 +143,4 @@ async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
         Duration::from_micros(hist.value_at_quantile(0.99999)).as_micros(),
         Duration::from_micros(hist.max()).as_micros(),
     );
-}
-
-struct IOVec<T: glommio::io::IoVec> {
-    vec: T,
-    at: Instant,
-}
-
-impl<T: glommio::io::IoVec> glommio::io::IoVec for IOVec<T> {
-    fn pos(&self) -> u64 {
-        self.vec.pos()
-    }
-
-    fn size(&self) -> usize {
-        self.vec.size()
-    }
 }
