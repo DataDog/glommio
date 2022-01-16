@@ -279,6 +279,12 @@ pin_project! {
     }
 }
 
+impl FromRawFd for UnixStream {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        UnixStream { stream: GlommioStream::from_raw_fd(fd as _) }
+    }
+}
+
 impl UnixStream {
     /// Creates an unnamed pair of connected Unix stream sockets.
     ///
