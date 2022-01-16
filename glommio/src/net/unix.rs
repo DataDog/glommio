@@ -281,7 +281,9 @@ pin_project! {
 
 impl FromRawFd for UnixStream {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
-        UnixStream { stream: GlommioStream::from_raw_fd(fd as _) }
+        UnixStream {
+            stream: GlommioStream::from_raw_fd(fd as _),
+        }
     }
 }
 
