@@ -227,7 +227,6 @@ mod ref_count {
                 yield_now().await;
                 assert_eq!(2, TaskDebugger::task_count());
                 handle.await.unwrap();
-                assert_eq!(1, TaskDebugger::task_count());
             }),
             LocalExecutorBuilder::default().spawn(move || async move {
                 let receiver = receiver.connect().await;
@@ -258,7 +257,6 @@ mod ref_count {
                 yield_now().await;
                 assert_eq!(2, TaskDebugger::task_count());
                 handle.await.unwrap();
-                assert_eq!(1, TaskDebugger::task_count());
             }),
             LocalExecutorBuilder::default().spawn(move || async move {
                 let receiver = receiver.connect().await;
