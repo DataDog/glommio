@@ -662,6 +662,7 @@ pub(crate) trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
     fn waiting_kernel_submission(&self) -> usize;
+    fn in_kernel(&self) -> usize;
     fn waiting_kernel_collection(&self) -> usize;
     fn needs_kernel_enter(&self) -> bool;
     fn can_sleep(&self) -> bool;
@@ -775,12 +776,11 @@ struct PollRing {
     ring: iou::IoUring,
     size: usize,
     submission_queue: ReactorQueue,
-    submitted: u64,
-    completed: u64,
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
     task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
     source_map: Rc<RefCell<SourceMap>>,
+    in_kernel: usize,
 }
 
 impl PollRing {
@@ -795,8 +795,6 @@ impl PollRing {
             iou::SetupFeatures::empty(),
         )?;
         Ok(PollRing {
-            submitted: 0,
-            completed: 0,
             size,
             ring,
             submission_queue: UringQueueState::with_capacity(size * 4),
@@ -804,6 +802,7 @@ impl PollRing {
             stats: RingIoStats::default(),
             task_queue_stats: AHashMap::new(),
             source_map,
+            in_kernel: 0,
         })
     }
 
@@ -833,7 +832,7 @@ impl UringCommon for PollRing {
         // We need to enter the kernel to submit and collect CQEs so if the number of
         // submitted requests doesn't match the number of request we collected, we need
         // to poll.
-        self.submitted != self.completed
+        self.in_kernel > 0 || self.waiting_kernel_submission() > 0
     }
 
     fn can_sleep(&self) -> bool {
@@ -842,6 +841,10 @@ impl UringCommon for PollRing {
 
     fn waiting_kernel_submission(&self) -> usize {
         self.ring.sq().ready() as usize
+    }
+
+    fn in_kernel(&self) -> usize {
+        self.in_kernel
     }
 
     fn waiting_kernel_collection(&self) -> usize {
@@ -853,12 +856,9 @@ impl UringCommon for PollRing {
     }
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
-        if self.submitted != self.completed {
-            let res = self.ring.submit_sqes()?;
-            Ok(res as usize)
-        } else {
-            Ok(0)
-        }
+        let x = self.ring.submit_sqes()? as usize;
+        self.in_kernel += x;
+        Ok(x)
     }
 
     fn consume_one_event(&mut self) -> Option<bool> {
@@ -873,7 +873,7 @@ impl UringCommon for PollRing {
             source_map,
         )
         .map(|x| {
-            self.completed += 1;
+            self.in_kernel -= 1;
             x
         })
     }
@@ -890,7 +890,6 @@ impl UringCommon for PollRing {
                     continue;
                 }
 
-                self.submitted += ops.len() as u64;
                 for (op, mut sqe) in ops.into_iter().zip(sqes.into_iter()) {
                     let allocator = self.allocator.clone();
                     fill_sqe(
@@ -918,6 +917,7 @@ struct SleepableRing {
     stats: RingIoStats,
     task_queue_stats: AHashMap<TaskQueueHandle, RingIoStats>,
     source_map: Rc<RefCell<SourceMap>>,
+    in_kernel: usize,
 }
 
 impl SleepableRing {
@@ -937,6 +937,7 @@ impl SleepableRing {
             stats: RingIoStats::default(),
             task_queue_stats: AHashMap::new(),
             source_map,
+            in_kernel: 0,
         })
     }
 
@@ -1168,6 +1169,10 @@ impl UringCommon for SleepableRing {
         self.ring.sq().ready() as usize
     }
 
+    fn in_kernel(&self) -> usize {
+        self.in_kernel
+    }
+
     fn waiting_kernel_collection(&self) -> usize {
         self.ring.cq().ready() as usize
     }
@@ -1178,6 +1183,7 @@ impl UringCommon for SleepableRing {
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
         let x = self.ring.submit_sqes()? as usize;
+        self.in_kernel += x;
         Ok(x)
     }
 
@@ -1198,6 +1204,10 @@ impl UringCommon for SleepableRing {
             },
             source_map,
         )
+        .map(|x| {
+            self.in_kernel -= 1;
+            x
+        })
     }
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
