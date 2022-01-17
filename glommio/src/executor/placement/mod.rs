@@ -184,6 +184,26 @@ impl PoolPlacement {
     pub fn generate_cpu_set(self) -> Result<CpuSetGenerator> {
         CpuSetGenerator::pool(self)
     }
+
+    /// Shrinks the pool placement policy to the first `len` placements.
+    ///
+    /// If `len` is greater than the number of placements in the pool, this has
+    /// no effect.
+    pub(super) fn shrink_to(self, count: usize) -> Self {
+        if count > self.executor_count() {
+            return self;
+        }
+        match self {
+            PoolPlacement::Unbound(_) => PoolPlacement::Unbound(count),
+            PoolPlacement::Fenced(_, set) => PoolPlacement::Fenced(count, set),
+            PoolPlacement::MaxSpread(_, set) => PoolPlacement::MaxSpread(count, set),
+            PoolPlacement::MaxPack(_, set) => PoolPlacement::MaxPack(count, set),
+            PoolPlacement::Custom(mut cpus) => {
+                cpus.truncate(count);
+                PoolPlacement::Custom(cpus)
+            }
+        }
+    }
 }
 
 impl From<Placement> for PoolPlacement {

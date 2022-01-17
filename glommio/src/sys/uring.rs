@@ -13,7 +13,6 @@ use rlimit::Resource;
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::VecDeque,
-    convert::TryInto,
     ffi::CStr,
     fmt,
     io,
@@ -33,7 +32,7 @@ use crate::{
     iou::sqe::{FsyncFlags, SockAddrStorage, StatxFlags, StatxMode, SubmissionFlags, TimeoutFlags},
     sys::{
         self,
-        blocking::{BlockingThread, BlockingThreadOp},
+        blocking::{BlockingThreadOp, BlockingThreadPool},
         dma_buffer::{BufferStorage, DmaBuffer},
         DirectIo,
         EnqueuedSource,
@@ -50,6 +49,7 @@ use crate::{
     IoRequirements,
     IoStats,
     Latency,
+    PoolPlacement,
     ReactorErrorKind,
     RingIoStats,
     TaskQueueHandle,
@@ -643,6 +643,10 @@ impl UringQueueState {
         }))
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.submissions.is_empty() && self.cancellations.is_empty()
+    }
+
     pub(crate) fn cancel_request(&mut self, id: SourceId) {
         self.cancellations.push_back(UringDescriptor {
             args: UringOpDescriptor::Cancel(to_user_data(id)),
@@ -661,7 +665,10 @@ pub(crate) trait ReactorRing {
 trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
+    fn waiting_kernel_submission(&self) -> usize;
+    fn waiting_kernel_collection(&self) -> usize;
     fn needs_kernel_enter(&self) -> bool;
+    fn can_sleep(&self) -> bool;
     /// None if it wasn't possible to acquire an `sqe`. `Some(true)` if it was
     /// possible and there was something to dispatch. `Some(false)` if there
     /// was nothing to dispatch
@@ -786,10 +793,6 @@ impl PollRing {
         })
     }
 
-    fn can_sleep(&self) -> bool {
-        self.submitted == self.completed
-    }
-
     pub(crate) fn alloc_dma_buffer(&mut self, size: usize) -> DmaBuffer {
         self.allocator.new_buffer(size).unwrap()
     }
@@ -815,11 +818,22 @@ impl UringCommon for PollRing {
     }
 
     fn needs_kernel_enter(&self) -> bool {
-        // If we submitted anything, we will have the submission count differing from
-        // the completion count and can_sleep will be false.
-        //
-        // So only need to check for that.
-        !self.can_sleep()
+        // We need to enter the kernel to submit and collect CQEs so if the number of
+        // submitted requests doesn't match the number of request we collected, we need
+        // to poll.
+        self.submitted != self.completed
+    }
+
+    fn can_sleep(&self) -> bool {
+        self.submission_queue.borrow().is_empty() && !self.needs_kernel_enter()
+    }
+
+    fn waiting_kernel_submission(&self) -> usize {
+        self.ring.sq().ready() as usize
+    }
+
+    fn waiting_kernel_collection(&self) -> usize {
+        self.ring.cq().ready() as usize
     }
 
     fn submission_queue(&mut self) -> ReactorQueue {
@@ -857,7 +871,7 @@ impl UringCommon for PollRing {
         let now = Instant::now();
 
         while let Some(chain) = peek_one_chain(queue, self.size) {
-            return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
+            return if let Some(sqes) = self.ring.sq().prepare_sqes(chain.len() as u32) {
                 let ops = extract_one_chain(source_map, queue, chain, now);
                 if ops.is_empty() {
                     // all the sources in the ring were cancelled
@@ -887,7 +901,6 @@ struct SleepableRing {
     ring: iou::IoUring,
     size: usize,
     submission_queue: ReactorQueue,
-    waiting_submission: usize,
     name: &'static str,
     allocator: Rc<UringBufferAllocator>,
     stats: RingIoStats,
@@ -907,7 +920,6 @@ impl SleepableRing {
             ring: iou::IoUring::new(size as _)?,
             size,
             submission_queue: UringQueueState::with_capacity(size * 4),
-            waiting_submission: 0,
             name,
             allocator,
             stats: RingIoStats::default(),
@@ -955,8 +967,7 @@ impl SleepableRing {
     }
 
     fn install_eventfd(&mut self, eventfd_src: &Source) -> bool {
-        if let Some(mut sqe) = self.ring.prepare_sqe() {
-            self.waiting_submission += 1;
+        if let Some(mut sqe) = self.ring.sq().prepare_sqe() {
             // Now must wait on the `eventfd` in case someone wants to wake us up.
             // If we can't then we can't sleep and will just bail immediately
             let op = UringDescriptor {
@@ -1002,9 +1013,13 @@ impl SleepableRing {
     }
 
     fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
-        if let Some(mut sqe) = self.ring.prepare_sqe() {
-            self.waiting_submission += 1;
-
+        assert_eq!(
+            self.waiting_kernel_submission(),
+            0,
+            "sleeping with pending SQEs"
+        );
+        if let Some(mut sqe) = self.ring.sq().prepare_sqe() {
+            let sqe_ptr = unsafe { sqe.raw_mut() as *mut _ };
             let op = UringDescriptor {
                 fd: link.raw(),
                 flags: SubmissionFlags::empty(),
@@ -1021,12 +1036,26 @@ impl SleepableRing {
                 DmaBuffer::new,
                 &mut *self.source_map.borrow_mut(),
             );
-            self.ring.submit_sqes_and_wait(1).map(|x| x as usize)
+
+            // We have now prepared the SQE that links the two rings. We now need to submit
+            // it successfully to be able to safely sleep.
+
+            if self.ring.submit_sqes()? != 1 {
+                // We failed to submit the `SQE` that links the rings. Just can't sleep.
+                // Waiting here is unsafe because we could end up waiting much longer than
+                // needed.
+                // We make the SQE a no-op and return
+                unsafe { crate::uring_sys::io_uring_prep_nop(sqe_ptr) };
+                Err(io::Error::from_raw_os_error(libc::EBUSY))
+            } else {
+                // The rings are linked. Goodnight!
+                self.ring.cq().wait(1).map(|_| 1)
+            }
         } else {
             // Can't link rings because we ran out of `CQE`s. Just can't sleep.
             // Submit what we have, once we're out of here we'll consume them
             // and at some point will be able to sleep again.
-            self.ring.submit_sqes().map(|x| x as usize)
+            self.submit_sqes()
         }
     }
 }
@@ -1051,7 +1080,23 @@ impl UringCommon for SleepableRing {
     }
 
     fn needs_kernel_enter(&self) -> bool {
-        self.waiting_submission > 0
+        // We only need to enter the kernel to submit SQEs, not to collect CQEs (the
+        // kernel posts the CQEs asynchronously for us)
+        self.waiting_kernel_submission() > 0
+    }
+
+    fn can_sleep(&self) -> bool {
+        self.submission_queue.borrow().is_empty()
+            && self.waiting_kernel_submission() == 0
+            && self.waiting_kernel_collection() == 0
+    }
+
+    fn waiting_kernel_submission(&self) -> usize {
+        self.ring.sq().ready() as usize
+    }
+
+    fn waiting_kernel_collection(&self) -> usize {
+        self.ring.cq().ready() as usize
     }
 
     fn submission_queue(&mut self) -> ReactorQueue {
@@ -1060,7 +1105,6 @@ impl UringCommon for SleepableRing {
 
     fn submit_sqes(&mut self) -> io::Result<usize> {
         let x = self.ring.submit_sqes()? as usize;
-        self.waiting_submission -= x;
         Ok(x)
     }
 
@@ -1088,14 +1132,13 @@ impl UringCommon for SleepableRing {
         let now = Instant::now();
 
         while let Some(chain) = peek_one_chain(queue, self.size) {
-            return if let Some(sqes) = self.ring.prepare_sqes(chain.len() as u32) {
+            return if let Some(sqes) = self.ring.sq().prepare_sqes(chain.len() as u32) {
                 let ops = extract_one_chain(source_map, queue, chain, now);
                 if ops.is_empty() {
                     // all the sources in the ring were cancelled
                     continue;
                 }
 
-                self.waiting_submission += ops.len();
                 for (op, mut sqe) in ops.into_iter().zip(sqes.into_iter()) {
                     let allocator = self.allocator.clone();
                     fill_sqe(
@@ -1133,7 +1176,7 @@ pub(crate) struct Reactor {
     eventfd_src: Source,
     source_map: Rc<RefCell<SourceMap>>,
 
-    syscall_thread: BlockingThread,
+    blocking_thread: BlockingThreadPool,
 
     rings_depth: usize,
 }
@@ -1166,11 +1209,14 @@ macro_rules! flush_cancellations {
 
 macro_rules! flush_rings {
     ($( $ring:expr ),+ ) => {{
+        let mut ret = 0;
         $(
-            $ring.consume_submission_queue()?;
+            ret += $ring.consume_submission_queue()
+                .or_else(Reactor::busy_ok)
+                .or_else(Reactor::again_ok)
+                .or_else(Reactor::intr_ok)?;
         )*
-        let ret : io::Result<()> = Ok(());
-        ret
+        io::Result::Ok(ret)
     }}
 }
 
@@ -1183,6 +1229,7 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
         ring_depth: usize,
+        thread_pool_placement: PoolPlacement,
     ) -> crate::Result<Reactor, ()> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
@@ -1256,7 +1303,7 @@ impl Reactor {
             latency_ring: RefCell::new(latency_ring),
             poll_ring: RefCell::new(poll_ring),
             timeout_src: Cell::new(None),
-            syscall_thread: BlockingThread::new(notifier.clone()),
+            blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
             link_fd,
             notifier,
             eventfd_src,
@@ -1394,24 +1441,15 @@ impl Reactor {
         self.queue_standard_request(source, op);
     }
 
-    fn blocking_syscall(&self, source: &Source, op: BlockingThreadOp) {
-        let src = source.inner.clone();
-
-        self.syscall_thread.push(
-            op,
-            Box::new(move |res| {
-                let mut inner_source = src.borrow_mut();
-                let res: io::Result<usize> = res.try_into().expect("not a syscall result!");
-
-                inner_source.wakers.result.replace(res);
-                inner_source.wakers.wake_waiters();
-            }),
-        );
+    fn enqueue_blocking_request(&self, source: &Source, op: BlockingThreadOp) {
+        self.blocking_thread
+            .push(op, source.inner.clone())
+            .expect("failed to spawn blocking request");
     }
 
     pub(crate) fn truncate(&self, source: &Source, size: u64) {
         let op = BlockingThreadOp::Truncate(source.raw(), size as _);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn rename(&self, source: &Source) {
@@ -1421,7 +1459,7 @@ impl Reactor {
         };
 
         let op = BlockingThreadOp::Rename(old_path, new_path);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn create_dir(&self, source: &Source, mode: libc::c_int) {
@@ -1431,7 +1469,7 @@ impl Reactor {
         };
 
         let op = BlockingThreadOp::CreateDir(path, mode);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn remove_file(&self, source: &Source) {
@@ -1441,7 +1479,14 @@ impl Reactor {
         };
 
         let op = BlockingThreadOp::Remove(path);
-        self.blocking_syscall(source, op);
+        self.enqueue_blocking_request(source, op);
+    }
+
+    pub(crate) fn run_blocking(&self, source: &Source, f: Box<dyn FnOnce() + Send + 'static>) {
+        assert!(matches!(&*source.source_type(), SourceType::BlockingFn));
+
+        let op = BlockingThreadOp::Fn(f);
+        self.enqueue_blocking_request(source, op);
     }
 
     pub(crate) fn close(&self, source: &Source) {
@@ -1475,13 +1520,37 @@ impl Reactor {
         self.queue_standard_request(source, UringOpDescriptor::Nop)
     }
 
-    /// io_uring can return `EBUSY` when the CQE queue is full, and we try to
-    /// push more requests. This is fine: we just need to make sure that we
+    /// io_uring can return `EBUSY` when submitting more requests would
+    /// over-commit the system. This is fine: we just need to make sure that we
     /// don't sleep and that we don't failed rushed polls. So we just ignore
     /// this error
     fn busy_ok(x: std::io::Error) -> io::Result<usize> {
         match x.raw_os_error() {
             Some(libc::EBUSY) => Ok(0),
+            Some(_) => Err(x),
+            None => Err(x),
+        }
+    }
+
+    /// io_uring can return `EAGAIN` when the CQE queue is full, and we try to
+    /// push more requests. This is fine: we just need to make sure that we
+    /// don't sleep and that we don't failed rushed polls. So we just ignore
+    /// this error
+    fn again_ok(x: std::io::Error) -> io::Result<usize> {
+        match x.raw_os_error() {
+            Some(libc::EAGAIN) => Ok(0),
+            Some(_) => Err(x),
+            None => Err(x),
+        }
+    }
+
+    /// io_uring can return `EINTR` if the syscall was interrupted by a signal
+    /// delivery. This is fine: we just need to make sure that we
+    /// don't sleep and that we don't failed rushed polls. So we just ignore
+    /// this error
+    fn intr_ok(x: std::io::Error) -> io::Result<usize> {
+        match x.raw_os_error() {
+            Some(libc::EINTR) => Ok(0),
             Some(_) => Err(x),
             None => Err(x),
         }
@@ -1502,13 +1571,21 @@ impl Reactor {
             None,
             None,
         );
-        ring.sleep(&mut link_rings).or_else(Self::busy_ok)?;
-        Ok(())
+        ring.sleep(&mut link_rings)
+            .or_else(Self::busy_ok)
+            .map(|_| {})
     }
 
     fn simple_poll(ring: &RefCell<dyn UringCommon>, woke: &mut usize) -> io::Result<()> {
         let mut ring = ring.borrow_mut();
-        ring.consume_submission_queue().or_else(Self::busy_ok)?;
+        ring.consume_cancellation_queue()
+            .or_else(Self::busy_ok)
+            .or_else(Self::again_ok)
+            .or_else(Self::intr_ok)?;
+        ring.consume_submission_queue()
+            .or_else(Self::busy_ok)
+            .or_else(Self::again_ok)
+            .or_else(Self::intr_ok)?;
         ring.consume_completion_queue(woke);
         Ok(())
     }
@@ -1583,11 +1660,6 @@ impl Reactor {
         let mut main_ring = self.main_ring.borrow_mut();
         let mut lat_ring = self.latency_ring.borrow_mut();
 
-        // we need to make sure we consume the latency ring before setting the
-        // preemption timer because consuming this ring may wake up some previously
-        // asleep task queues.
-        consume_rings!(into &mut woke; lat_ring);
-
         // Cancel the old timer regardless of whether we can sleep:
         // if we won't sleep, we will register the new timer with its new
         // value.
@@ -1595,35 +1667,32 @@ impl Reactor {
         // But if we will sleep, there might be a timer registered that needs
         // to be removed otherwise we'll wake up when it expires.
         drop(self.timeout_src.take());
-        let mut should_sleep = match preempt_timer() {
-            None => true,
-            Some(dur) => {
-                self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
-                false
-            }
-        };
 
         // This will only dispatch if we run out of sqes. Which means until
         // flush_rings! nothing is really send to the kernel...
-        flush_cancellations!(into &mut woke; main_ring, lat_ring, poll_ring);
+        flush_cancellations!(into &mut woke; lat_ring, poll_ring, main_ring);
         // ... which happens right here. If you ever reorder this code just
         // be careful about this dependency.
-        flush_rings!(main_ring, lat_ring, poll_ring)?;
+        flush_rings!(lat_ring, poll_ring, main_ring)?;
         consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
-        should_sleep &= (woke == 0)
+        let preempt_timer = preempt_timer();
+        let should_sleep = preempt_timer.is_none()
+            && (woke == 0)
             && poll_ring.can_sleep()
-            && main_ring.submission_queue.borrow().submissions.is_empty()
-            && lat_ring.submission_queue.borrow().submissions.is_empty()
-            && poll_ring.submission_queue.borrow().submissions.is_empty();
+            && main_ring.can_sleep()
+            && lat_ring.can_sleep();
 
         if should_sleep {
             // We are about to go to sleep. It's ok to sleep, but if there
             // is a timer set, we need to make sure we wake up to handle it.
             if let Some(dur) = user_timer {
                 self.timeout_src.set(Some(lat_ring.arm_timer(dur)));
-                flush_rings!(lat_ring)?;
+                if flush_rings!(lat_ring)? != 1 {
+                    // we failed to submit the timeout SQE: it isn't safe to sleep
+                    return Ok(false);
+                }
             }
             // From this moment on the remote executors are aware that we are sleeping
             // We have to sweep the remote channels function once more because since
@@ -1640,13 +1709,16 @@ impl Reactor {
                     self.link_rings_and_sleep(&mut main_ring)
                         .expect("some error");
                     // May have new cancellations related to the link ring fd.
-                    flush_cancellations!(into &mut 0; main_ring);
-                    flush_rings!(main_ring)?;
+                    flush_cancellations!(into &mut 0; lat_ring, poll_ring, main_ring);
+                    flush_rings!(lat_ring, poll_ring, main_ring)?;
                     consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
                 }
                 // Woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
             }
+        } else if let Some(preempt) = preempt_timer {
+            self.timeout_src.set(Some(lat_ring.arm_timer(preempt)));
+            assert!(flush_rings!(lat_ring)? >= 1);
         }
 
         // A Note about `need_preempt`:
@@ -1660,7 +1732,7 @@ impl Reactor {
     }
 
     pub(crate) fn flush_syscall_thread(&self) -> usize {
-        self.syscall_thread.flush()
+        self.blocking_thread.flush()
     }
 
     pub(crate) fn preempt_pointers(&self) -> (*const u32, *const u32) {
@@ -1838,7 +1910,7 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0, 128).unwrap();
+        let reactor = Reactor::new(notifier, 0, 128, PoolPlacement::Unbound(1)).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(

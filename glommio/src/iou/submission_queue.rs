@@ -1,11 +1,4 @@
-use std::{
-    fmt,
-    io,
-    marker::PhantomData,
-    ptr::NonNull,
-    sync::atomic::{self, Ordering},
-    time::Duration,
-};
+use std::{fmt, io, marker::PhantomData, ptr::NonNull, time::Duration};
 
 use super::{resultify, IoUring, SQEs, SQE};
 use crate::uring_sys;
@@ -37,13 +30,29 @@ impl<'ring> SubmissionQueue<'ring> {
     /// Returns new [`SQE`s](crate::sqe::SQE) until the queue size is reached.
     /// After that, will return `None`.
     pub fn prepare_sqe(&mut self) -> Option<SQE<'_>> {
-        unsafe { prepare_sqe(self.ring.as_mut()) }
+        unsafe {
+            let sqe = uring_sys::io_uring_get_sqe(self.ring.as_mut());
+            if !sqe.is_null() {
+                uring_sys::io_uring_prep_nop(sqe);
+                Some(SQE::new(&mut *sqe))
+            } else {
+                None
+            }
+        }
     }
 
+    /// Returns the next `count` [`SQE`]s which can be prepared to submit as an
+    /// iterator.
+    ///
+    /// See the [`SQEs`] type for more information about how these multiple SQEs
+    /// can be used.
     pub fn prepare_sqes(&mut self, count: u32) -> Option<SQEs<'_>> {
         unsafe {
-            let sq: &mut uring_sys::io_uring_sq = &mut (*self.ring.as_ptr()).sq;
-            prepare_sqes(sq, count)
+            if self.space_left() >= count {
+                Some(SQEs::new(self.ring.as_mut(), count))
+            } else {
+                None
+            }
         }
     }
 
@@ -106,29 +115,3 @@ impl fmt::Debug for SubmissionQueue<'_> {
 
 unsafe impl<'ring> Send for SubmissionQueue<'ring> {}
 unsafe impl<'ring> Sync for SubmissionQueue<'ring> {}
-
-pub(crate) unsafe fn prepare_sqe<'a>(ring: &mut uring_sys::io_uring) -> Option<SQE<'a>> {
-    let sqe = uring_sys::io_uring_get_sqe(ring);
-    if !sqe.is_null() {
-        let mut sqe = SQE::new(&mut *sqe);
-        sqe.clear();
-        Some(sqe)
-    } else {
-        None
-    }
-}
-
-pub(crate) unsafe fn prepare_sqes(sq: &mut uring_sys::io_uring_sq, count: u32) -> Option<SQEs<'_>> {
-    atomic::fence(Ordering::Acquire);
-
-    let head: u32 = *sq.khead;
-    let next: u32 = sq.sqe_tail + count;
-
-    if next - head <= *sq.kring_entries {
-        let first = sq.sqe_tail;
-        sq.sqe_tail = next;
-        Some(SQEs::new(sq, first, count))
-    } else {
-        None
-    }
-}

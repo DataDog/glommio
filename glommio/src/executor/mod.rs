@@ -46,9 +46,11 @@ use std::{
     future::Future,
     io,
     marker::PhantomData,
+    mem::MaybeUninit,
+    ops::DerefMut,
     pin::Pin,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     task::{Context, Poll},
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -208,7 +210,7 @@ impl TaskQueue {
     }
 }
 
-fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
+pub(crate) fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> Result<()> {
     let mut cpuset = nix::sched::CpuSet::new();
     for cpu in cpus {
         cpuset.set(cpu).map_err(|e| to_io_error!(e))?;
@@ -339,7 +341,7 @@ struct ExecutorQueues {
     available_executors: AHashMap<usize, Rc<RefCell<TaskQueue>>>,
     active_executing: Option<Rc<RefCell<TaskQueue>>>,
     executor_index: usize,
-    last_vruntime: u64,
+    default_vruntime: u64,
     preempt_timer_duration: Duration,
     default_preempt_timer_duration: Duration,
     spin_before_park: Option<Duration>,
@@ -353,7 +355,7 @@ impl ExecutorQueues {
             available_executors: AHashMap::new(),
             active_executing: None,
             executor_index: 1, // 0 is the default
-            last_vruntime: 0,
+            default_vruntime: 0,
             preempt_timer_duration,
             default_preempt_timer_duration: preempt_timer_duration,
             spin_before_park,
@@ -376,7 +378,7 @@ impl ExecutorQueues {
     fn maybe_activate(&mut self, queue: Rc<RefCell<TaskQueue>>) {
         let mut state = queue.borrow_mut();
         if !state.is_active() {
-            state.vruntime = self.last_vruntime;
+            state.vruntime = self.default_vruntime + 1;
             state.active = true;
             drop(state);
             self.active_executors.push(queue);
@@ -462,6 +464,10 @@ pub struct LocalExecutorBuilder {
     preempt_timer_duration: Duration,
     /// Whether to record the latencies of individual IO requests
     record_io_latencies: bool,
+    /// The placement policy of the blocking thread pool
+    /// Defaults to one thread using the same placement strategy as the host
+    /// executor
+    blocking_thread_pool_placement: PoolPlacement,
 }
 
 impl LocalExecutorBuilder {
@@ -472,13 +478,14 @@ impl LocalExecutorBuilder {
     /// how many and which CPUs to use.
     pub fn new(placement: Placement) -> LocalExecutorBuilder {
         LocalExecutorBuilder {
-            placement,
+            placement: placement.clone(),
             spin_before_park: None,
             name: String::from(DEFAULT_EXECUTOR_NAME),
             io_memory: DEFAULT_IO_MEMORY,
             ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
             preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
             record_io_latencies: false,
+            blocking_thread_pool_placement: PoolPlacement::from(placement),
         }
     }
 
@@ -547,6 +554,18 @@ impl LocalExecutorBuilder {
         self
     }
 
+    /// The placement policy of the blocking thread pool.
+    /// Defaults to one thread using the same placement strategy as the host
+    /// executor.
+    #[must_use = "The builder must be built to be useful"]
+    pub fn blocking_thread_pool_placement(
+        mut self,
+        placement: PoolPlacement,
+    ) -> LocalExecutorBuilder {
+        self.blocking_thread_pool_placement = placement;
+        self
+    }
+
     /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and
     /// returns a [`Result`](crate::Result) to the executor.
     /// # Examples
@@ -561,12 +580,15 @@ impl LocalExecutorBuilder {
         let mut cpu_set_gen = placement::CpuSetGenerator::one(self.placement)?;
         let mut le = LocalExecutor::new(
             notifier,
-            self.io_memory,
-            self.ring_depth,
-            self.preempt_timer_duration,
-            self.record_io_latencies,
             cpu_set_gen.next().cpu_binding(),
-            self.spin_before_park,
+            LocalExecutorConfig {
+                io_memory: self.io_memory,
+                ring_depth: self.ring_depth,
+                preempt_timer: self.preempt_timer_duration,
+                record_io_latencies: self.record_io_latencies,
+                spin_before_park: self.spin_before_park,
+                thread_pool_placement: self.blocking_thread_pool_placement,
+            },
         )?;
         le.init();
         Ok(le)
@@ -630,18 +652,22 @@ impl LocalExecutorBuilder {
         let preempt_timer_duration = self.preempt_timer_duration;
         let spin_before_park = self.spin_before_park;
         let record_io_latencies = self.record_io_latencies;
+        let blocking_thread_pool_placement = self.blocking_thread_pool_placement;
 
         Builder::new()
             .name(name)
             .spawn(move || {
                 let mut le = LocalExecutor::new(
                     notifier,
-                    io_memory,
-                    ring_depth,
-                    preempt_timer_duration,
-                    record_io_latencies,
                     cpu_set_gen.next().cpu_binding(),
-                    spin_before_park,
+                    LocalExecutorConfig {
+                        io_memory,
+                        ring_depth,
+                        preempt_timer: preempt_timer_duration,
+                        record_io_latencies,
+                        spin_before_park,
+                        thread_pool_placement: blocking_thread_pool_placement,
+                    },
                 )?;
                 le.init();
                 le.run(async move { Ok(fut_gen().await) })
@@ -702,6 +728,10 @@ pub struct LocalExecutorPoolBuilder {
     placement: PoolPlacement,
     /// Whether to record the latencies of individual IO requests
     record_io_latencies: bool,
+    /// The placement policy of the blocking thread pools. Each executor has
+    /// its own pool. Defaults to 1 thread per pool, bound using the same
+    /// placement strategy as its host executor
+    blocking_thread_pool_placement: PoolPlacement,
 }
 
 impl LocalExecutorPoolBuilder {
@@ -717,8 +747,9 @@ impl LocalExecutorPoolBuilder {
             io_memory: DEFAULT_IO_MEMORY,
             ring_depth: DEFAULT_RING_SUBMISSION_DEPTH,
             preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
-            placement,
+            placement: placement.clone(),
             record_io_latencies: false,
+            blocking_thread_pool_placement: placement.shrink_to(1),
         }
     }
 
@@ -772,6 +803,15 @@ impl LocalExecutorPoolBuilder {
     #[must_use = "The builder must be built to be useful"]
     pub fn record_io_latencies(mut self, enabled: bool) -> Self {
         self.record_io_latencies = enabled;
+        self
+    }
+
+    /// The placement policy of the blocking thread pool.
+    /// Defaults to one thread using the same placement strategy as the host
+    /// executor.
+    #[must_use = "The builder must be built to be useful"]
+    pub fn blocking_thread_pool_placement(mut self, placement: PoolPlacement) -> Self {
+        self.blocking_thread_pool_placement = placement;
         self
     }
 
@@ -837,6 +877,7 @@ impl LocalExecutorPoolBuilder {
             let preempt_timer_duration = self.preempt_timer_duration;
             let spin_before_park = self.spin_before_park;
             let record_io_latencies = self.record_io_latencies;
+            let blocking_thread_pool_placement = self.blocking_thread_pool_placement.clone();
             let latch = Latch::clone(latch);
 
             move || {
@@ -845,12 +886,15 @@ impl LocalExecutorPoolBuilder {
                 if latch.arrive_and_wait() == LatchState::Ready {
                     let mut le = LocalExecutor::new(
                         notifier,
-                        io_memory,
-                        ring_depth,
-                        preempt_timer_duration,
-                        record_io_latencies,
                         cpu_binding,
-                        spin_before_park,
+                        LocalExecutorConfig {
+                            io_memory,
+                            ring_depth,
+                            preempt_timer: preempt_timer_duration,
+                            record_io_latencies,
+                            spin_before_park,
+                            thread_pool_placement: blocking_thread_pool_placement,
+                        },
                     )?;
                     le.init();
                     le.run(async move { Ok(fut_gen().await) })
@@ -926,6 +970,15 @@ pub(crate) fn maybe_activate(tq: Rc<RefCell<TaskQueue>>) {
     })
 }
 
+pub struct LocalExecutorConfig {
+    pub io_memory: usize,
+    pub ring_depth: usize,
+    pub preempt_timer: Duration,
+    pub record_io_latencies: bool,
+    pub spin_before_park: Option<Duration>,
+    pub thread_pool_placement: PoolPlacement,
+}
+
 /// Single-threaded executor.
 ///
 /// The executor can only be run on the thread that created it.
@@ -978,12 +1031,8 @@ impl LocalExecutor {
 
     fn new(
         notifier: Arc<sys::SleepNotifier>,
-        io_memory: usize,
-        ring_depth: usize,
-        preempt_timer: Duration,
-        record_io_latencies: bool,
         cpu_binding: Option<impl IntoIterator<Item = usize>>,
-        mut spin_before_park: Option<Duration>,
+        mut config: LocalExecutorConfig,
     ) -> Result<LocalExecutor> {
         // Linux's default memory policy is "local allocation" which allocates memory
         // on the NUMA node containing the CPU where the allocation takes place.
@@ -995,10 +1044,10 @@ impl LocalExecutor {
         // https://www.kernel.org/doc/html/latest/admin-guide/mm/numa_memory_policy.html
         match cpu_binding {
             Some(cpu_set) => bind_to_cpu_set(cpu_set)?,
-            None => spin_before_park = None,
+            None => config.spin_before_park = None,
         }
         let p = parking::Parker::new();
-        let queues = ExecutorQueues::new(preempt_timer, spin_before_park);
+        let queues = ExecutorQueues::new(config.preempt_timer, config.spin_before_park);
         trace!(id = notifier.id(), "Creating executor");
         Ok(LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
@@ -1006,9 +1055,10 @@ impl LocalExecutor {
             id: notifier.id(),
             reactor: Rc::new(reactor::Reactor::new(
                 notifier,
-                io_memory,
-                ring_depth,
-                record_io_latencies,
+                config.io_memory,
+                config.ring_depth,
+                config.record_io_latencies,
+                config.thread_pool_placement,
             )?),
         })
     }
@@ -1185,7 +1235,7 @@ impl LocalExecutor {
 
                 let runtime = time.elapsed();
 
-                let (need_repush, last_vruntime) = {
+                let (need_repush, vruntime) = {
                     let mut state = queue.borrow_mut();
                     let last_vruntime = state.account_vruntime(runtime);
                     (state.is_active(), last_vruntime)
@@ -1195,8 +1245,7 @@ impl LocalExecutor {
                 tq.active_executing = None;
                 tq.stats.executor_runtime += runtime;
                 tq.stats.tasks_executed += tasks_executed_this_loop;
-
-                tq.last_vruntime = match last_vruntime {
+                let vruntime = match vruntime {
                     Some(x) => x,
                     None => {
                         for queue in tq.available_executors.values() {
@@ -1212,6 +1261,17 @@ impl LocalExecutor {
                 } else {
                     tq.reevaluate_preempt_timer();
                 }
+
+                // Compute the smallest vruntime out of all the active task queues
+                // This value is used to set the vruntime of deactivated task queues when they
+                // are woken up.
+                tq.default_vruntime = tq
+                    .active_executors
+                    .iter()
+                    .map(|x| x.borrow().vruntime)
+                    .min()
+                    .unwrap_or(vruntime);
+
                 true
             }
             None => false,
@@ -1267,8 +1327,14 @@ impl LocalExecutor {
                 // requests that are latency sensitive we want them out of the
                 // ring ASAP (before we run the task queues). We will also use
                 // the opportunity to install the timer.
-                self.parker.poll_io(|| Some(self.preempt_timer_duration()));
+                self.parker
+                    .poll_io(|| Some(self.preempt_timer_duration()))
+                    .expect("Failed to poll io! This is actually pretty bad!");
+
+                // run user code
                 let run = self.run_task_queues();
+
+                // account for runtime and poll/sleep if possible
                 let cur_time = Instant::now();
                 self.queues.borrow_mut().stats.total_runtime += cur_time - pre_time;
                 pre_time = cur_time;
@@ -1282,7 +1348,9 @@ impl LocalExecutor {
                     } else {
                         while !self.reactor.spin_poll_io().unwrap() {
                             if pre_time.elapsed() > spin_before_park {
-                                self.parker.park();
+                                self.parker
+                                    .park()
+                                    .expect("Failed to park! This is actually pretty bad!");
                                 break;
                             }
                         }
@@ -2377,6 +2445,65 @@ impl ExecutorProxy {
                 .map(|x| ScopedTask::<'a, T>(x, PhantomData))
         })
     }
+
+    /// Spawns a blocking task into a background thread where blocking is
+    /// acceptable.
+    ///
+    /// Glommio depends on cooperation from tasks in order to drive IO and meet
+    /// latency requirements. Unyielding tasks are detrimental to the
+    /// performance of the overall system, not just to the performance of
+    /// the one stalling task.
+    ///
+    /// `spawn_blocking` is there as a last resort when a blocking task needs to
+    /// be executed and cannot be made cooperative. Examples are:
+    /// * Expensive syscalls that cannot use `io_uring`, such as `mmap`
+    ///   (especially with `MAP_POPULATE`)
+    /// * Calls to synchronous third-party code (compression, encoding, etc.)
+    ///
+    /// # Note
+    ///
+    /// *This method is not meant to be a way to achieve compute parallelism.*
+    /// Distributing work across executors is the better way to achieve that.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{LocalExecutor, Task};
+    /// use std::time::Duration;
+    ///
+    /// let local_ex = LocalExecutor::default();
+    ///
+    /// local_ex.run(async {
+    ///     let task = glommio::executor()
+    ///         .spawn_blocking(|| {
+    ///             std::thread::sleep(Duration::from_millis(100));
+    ///         })
+    ///         .await;
+    /// });
+    /// ```
+    pub fn spawn_blocking<F, R>(&self, func: F) -> impl Future<Output = R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let result = Arc::new(Mutex::new(MaybeUninit::<R>::uninit()));
+        let f_inner = enclose::enclose!((result) move || {result.lock().unwrap().write(func());});
+        let source =
+            LOCAL_EX.with(move |local_ex| local_ex.reactor.run_blocking(Box::new(f_inner)));
+
+        async move {
+            assert!(source.collect_rw().await.is_ok());
+            unsafe {
+                let res_arc = Arc::try_unwrap(result).expect("leak");
+                let ret = std::mem::replace(
+                    &mut *res_arc.lock().unwrap().deref_mut(),
+                    MaybeUninit::<R>::uninit(),
+                )
+                .assume_init();
+                ret
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2389,7 +2516,7 @@ mod test {
     };
     use core::mem::MaybeUninit;
     use futures::{
-        future::{join_all, poll_fn},
+        future::{join, join_all, poll_fn},
         join,
     };
     use std::{
@@ -3638,5 +3765,73 @@ mod test {
             .detach();
             timer::sleep(Duration::from_millis(1)).await;
         });
+    }
+
+    #[test]
+    fn blocking_function() {
+        LocalExecutor::default().run(async {
+            let started = Instant::now();
+
+            let blocking = executor().spawn_blocking(enclose!((started) move || {
+                let now = Instant::now();
+                while now.elapsed() < Duration::from_millis(100) {}
+                started.elapsed()
+            }));
+            let coop = enclose!((started) async move {
+                let now = Instant::now();
+                while now.elapsed() < Duration::from_millis(100) {
+                    yield_if_needed().await;
+                }
+                started.elapsed()
+            });
+
+            let (blocking, coop) = join(blocking, coop).await;
+
+            assert!(blocking.as_millis() >= 100 && blocking.as_millis() < 150);
+            assert!(coop.as_millis() >= 100 && coop.as_millis() < 150);
+        });
+    }
+
+    #[test]
+    fn blocking_function_parallelism() {
+        LocalExecutorBuilder::new(Placement::Unbound)
+            .blocking_thread_pool_placement(PoolPlacement::Unbound(4))
+            .spawn(|| async {
+                let started = Instant::now();
+                let mut blocking = vec![];
+
+                for _ in 0..5 {
+                    blocking.push(executor().spawn_blocking(enclose!((started) move || {
+                        let now = Instant::now();
+                        while now.elapsed() < Duration::from_millis(100) {}
+                        started.elapsed()
+                    })));
+                }
+
+                // we created 5 blocking jobs each taking 100ms but our thread pool only has 4
+                // threads. SWe expect one of those jobs to take twice as long as the others.
+
+                let mut ts = join_all(blocking.into_iter()).await;
+                assert_eq!(ts.len(), 5);
+
+                ts.sort_unstable();
+                for ts in ts.iter().take(4) {
+                    assert!(ts.as_millis() >= 100 && ts.as_millis() < 150);
+                }
+                assert!(ts[4].as_millis() >= 200 && ts[4].as_millis() < 250);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn blocking_pool_invalid_placement() {
+        let ret = LocalExecutorBuilder::new(Placement::Unbound)
+            .blocking_thread_pool_placement(PoolPlacement::Unbound(0))
+            .spawn(|| async {})
+            .unwrap()
+            .join();
+        assert!(ret.is_err());
     }
 }
