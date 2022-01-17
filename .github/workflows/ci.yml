@@ -57,12 +57,12 @@ jobs:
         run: |
           cat << EOF > "run-gha-workflow.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
-          echo "`nproc` CPU(s) availble"
+          echo "`nproc` CPU(s) available"
           rustup install nightly
           rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
           rustup show
           rustup default stable
           cargo install cargo-sort
-          cargo test --all-features -- --test-threads=1
+          cargo test --all-features -- --test-threads=`nproc`
           EOF
           sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"
