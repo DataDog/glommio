@@ -77,6 +77,19 @@ pub struct TcpListener {
     listener: net::TcpListener,
 }
 
+impl FromRawFd for TcpListener {
+    /// Convert an already bound and listening RawFd into a TcpListener
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        let sk = Socket::from_raw_fd(fd);
+        let listener = sk.into_tcp_listener();
+
+        TcpListener {
+            reactor: Rc::downgrade(&crate::executor().reactor()),
+            listener,
+        }
+    }
+}
+
 impl TcpListener {
     /// Creates a TCP listener bound to the specified address.
     ///
