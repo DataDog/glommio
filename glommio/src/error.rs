@@ -218,6 +218,10 @@ pub enum GlommioError<T> {
     /// variant needs to return the actual item sent into the channel.
     Closed(ResourceType<T>),
 
+    /// The resource can not be closed because certain conditions are not
+    /// satisfied
+    CanNotBeClosed(ResourceType<T>, &'static str),
+
     /// Error encapsulating the `WouldBlock` error for types that don't have
     /// errors originating in the standard library. Glommio also has
     /// nonblocking types that need to indicate if they are blocking or not.
@@ -254,7 +258,7 @@ impl<T> fmt::Display for GlommioError<T> {
                 source, op, path, fd
             ),
             GlommioError::ExecutorError(err) => write!(f, "Executor error: {}", err),
-            GlommioError::BuilderError(err) => write!(f, "Executror builder error: {}", err),
+            GlommioError::BuilderError(err) => write!(f, "Executor builder error: {}", err),
             GlommioError::Closed(rt) => match rt {
                 ResourceType::Semaphore {
                     requested,
@@ -270,6 +274,11 @@ impl<T> fmt::Display for GlommioError<T> {
                 ResourceType::File(msg) => write!(f, "File is closed ({})", msg),
                 ResourceType::Gate => write!(f, "Gate is closed"),
             },
+            GlommioError::CanNotBeClosed(_, s) => write!(
+                f,
+                "Can not be closed because certain conditions are not satisfied. {}",
+                *s
+            ),
             GlommioError::WouldBlock(rt) => match rt {
                 ResourceType::Semaphore {
                     requested,
@@ -404,6 +413,22 @@ impl<T> Debug for GlommioError<T> {
                 ResourceType::File(msg) => write!(f, "File is closed (\"{}\")", msg),
                 ResourceType::Gate => write!(f, "Gate is closed"),
             },
+            GlommioError::CanNotBeClosed(resource, str) => match resource {
+                ResourceType::RwLock => write!(f, "RwLock can not be closed (\"{}\")", *str),
+                ResourceType::Channel(_) => write!(f, "Channel can not be closed (\"{}\")", *str),
+                ResourceType::File(msg) => {
+                    write!(f, "File can not be closed : (\"{}\"). (\"{}\")", *str, msg)
+                }
+                ResourceType::Gate => write!(f, "Gate can not be closed: {}", *str),
+                ResourceType::Semaphore {
+                    requested,
+                    available,
+                } => write!(
+                    f,
+                    "Semaphore can not be closed: {}. {{ requested {}, available: {} }}",
+                    *str, requested, available
+                ),
+            },
             GlommioError::WouldBlock(resource) => match resource {
                 ResourceType::Semaphore {
                     requested,
@@ -473,6 +498,9 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::IoError(io_err) => io_err,
             GlommioError::WouldBlock(_) => io::Error::new(io::ErrorKind::WouldBlock, display_err),
             GlommioError::Closed(_) => io::Error::new(io::ErrorKind::BrokenPipe, display_err),
+            GlommioError::CanNotBeClosed(_, _) => {
+                io::Error::new(io::ErrorKind::BrokenPipe, display_err)
+            }
             GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => {
                 match kind {
                     QueueErrorKind::StillActive => io::Error::new(
@@ -512,8 +540,9 @@ impl<T> From<GlommioError<T>> for io::Error {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::{io, panic::panic_any};
+
+    use super::*;
 
     #[test]
     #[should_panic(
