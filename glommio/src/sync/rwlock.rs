@@ -383,11 +383,6 @@ impl<'a, T> Deref for RwLockReadGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        let state = self.rw.state.borrow();
-        if state.closed {
-            panic!("Related RwLock is already closed");
-        }
-
         self.value_ref.as_ref().unwrap()
     }
 }
@@ -424,12 +419,6 @@ impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        let state = self.rw.state.borrow();
-
-        if state.closed {
-            panic!("Related RwLock is already closed");
-        }
-
         self.value_ref.as_ref().unwrap()
     }
 }
@@ -722,6 +711,11 @@ impl<T> RwLock<T> {
     /// be released and all subsequent calls to the methods to request lock
     /// access will return `Err`.
     ///
+    /// # Errors
+    ///
+    /// This function will return an error if RwLock is still hold by any
+    /// reader(s) or writer
+    ///
     /// # Examples
     ///
     ///```
@@ -763,17 +757,23 @@ impl<T> RwLock<T> {
     ///     dead_locker.await;
     /// });
     /// ```
-    pub fn close(&self) {
+    pub fn close(&self) -> LockResult<()> {
         let mut state = self.state.borrow_mut();
         if state.closed {
-            return;
+            return Ok(());
         }
-        state.writers = 0;
-        state.readers = 0;
+
+        if state.writers > 0 || state.readers > 0 {
+            return Err(GlommioError::CanNotBeClosed(
+                ResourceType::RwLock,
+                "Lock is still hold by fibers",
+            ));
+        }
 
         state.closed = true;
 
         Self::wake_up_fibers(&mut state);
+        Ok(())
     }
 
     /// Consumes this [`RwLock`], returning the underlying data.
@@ -808,7 +808,7 @@ impl<T> RwLock<T> {
 
         drop(state);
 
-        self.close();
+        self.close().unwrap();
 
         let value = self.value.borrow_mut().take().unwrap();
         Ok(value)
@@ -917,7 +917,7 @@ impl<T: Default> Default for RwLock<T> {
 
 impl<T> Drop for RwLock<T> {
     fn drop(&mut self) {
-        self.close();
+        self.close().unwrap();
         assert!(self.state.borrow().waiters_queue.is_empty());
     }
 }
@@ -976,66 +976,30 @@ mod test {
     }
 
     #[test]
-    fn test_close_wr() {
+    fn test_close_w() {
         test_executor!(async move {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
             crate::spawn_local(async move {
                 let _lock = rc2.write().await.unwrap();
-                rc2.close();
+                assert!(rc2.close().is_err());
             })
             .await;
-
-            assert!(rc.read().await.is_err());
         });
     }
 
     #[test]
-    fn test_close_ww() {
-        test_executor!(async move {
-            let rc = Rc::new(RwLock::new(1));
-            let rc2 = rc.clone();
-
-            crate::spawn_local(async move {
-                let _lock = rc2.write().await.unwrap();
-                rc2.close();
-            })
-            .await;
-
-            assert!(rc.write().await.is_err());
-        });
-    }
-
-    #[test]
-    fn test_close_rr() {
+    fn test_close_r() {
         test_executor!(async move {
             let rc = Rc::new(RwLock::new(1));
             let rc2 = rc.clone();
 
             crate::spawn_local(async move {
                 let _lock = rc2.read().await.unwrap();
-                rc2.close();
+                assert!(rc2.close().is_err());
             })
             .await;
-
-            assert!(rc.read().await.is_err());
-        });
-    }
-
-    #[test]
-    fn test_close_rw() {
-        test_executor!(async move {
-            let rc = Rc::new(RwLock::new(1));
-            let rc2 = rc.clone();
-
-            crate::spawn_local(async move {
-                let _lock = rc2.read().await.unwrap();
-                rc2.close();
-            })
-            .await;
-
-            assert!(rc.write().await.is_err());
         });
     }
 
@@ -1272,7 +1236,7 @@ mod test {
     #[test]
     fn test_into_inner_close() {
         let lock = RwLock::new(());
-        lock.close();
+        lock.close().unwrap();
 
         assert!(lock.is_closed());
         let into_inner_result = lock.into_inner();
@@ -1292,7 +1256,7 @@ mod test {
     #[test]
     fn test_get_mut_close() {
         let mut lock = RwLock::new(());
-        lock.close();
+        lock.close().unwrap();
 
         assert!(lock.is_closed());
         let get_mut_result = lock.get_mut();
