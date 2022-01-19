@@ -4,6 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2022 Datadog, Inc.
 //
 
+use crate::executor::TaskQueueHandle;
 use nix::sys;
 use std::{
     fmt,
@@ -14,7 +15,6 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
-use crate::executor::TaskQueueHandle;
 
 pub struct StallDetection<'a> {
     executor: usize,
@@ -55,7 +55,11 @@ impl fmt::Display for StallDetection<'_> {
 pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     /// How far past the preemption timer should qualify as a stall
     /// If None is returned, don't use the stall detector for this task queue.
-    fn high_water_mark(&self, queue_handle: TaskQueueHandle, max_expected_runtime: Duration) -> Option<Duration>;
+    fn high_water_mark(
+        &self,
+        queue_handle: TaskQueueHandle,
+        max_expected_runtime: Duration,
+    ) -> Option<Duration>;
 
     /// What signal number to use; see values in libc::SIG*
     fn signal(&self) -> u8;
@@ -66,15 +70,19 @@ pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
 
 /// Default settings for signal number, high water mark and stall handler.
 /// By default, the high water mark to consider a task queue stalled is set to
-/// 10% of the expected run time. The default handler will log a stack trace of the currently
-/// executing task queue. The default signal number is SIGUSR1.
+/// 10% of the expected run time. The default handler will log a stack trace of
+/// the currently executing task queue. The default signal number is SIGUSR1.
 #[derive(Debug)]
 pub struct DefaultStallDetectionHandler {}
 
 impl StallDetectionHandler for DefaultStallDetectionHandler {
     /// The default high water mark is 10% of the preemption time,
     /// capped at 10ms.
-    fn high_water_mark(&self, _queue_handle: TaskQueueHandle, max_expected_runtime: Duration) -> Option<Duration> {
+    fn high_water_mark(
+        &self,
+        _queue_handle: TaskQueueHandle,
+        max_expected_runtime: Duration,
+    ) -> Option<Duration> {
         // We consider a queue to be stalling the system if it failed to yield in due
         // time. For a given maximum expected runtime, we allow a margin of error f 10%
         // (and an absolute minimum of 10ms) after which we record a stacktrace. i.e. a
@@ -84,8 +92,10 @@ impl StallDetectionHandler for DefaultStallDetectionHandler {
         // triggers if it doesn't yield after running for 110ms.
         // * If a task queue has a preempt timer of 5ms the the stall detector
         // triggers if it doesn't yield after running for 15ms.
-        Some(Duration::from_millis((max_expected_runtime.as_millis() as f64 * 0.1) as u64)
-            .max(Duration::from_millis(10)))
+        Some(
+            Duration::from_millis((max_expected_runtime.as_millis() as f64 * 0.1) as u64)
+                .max(Duration::from_millis(10)),
+        )
     }
 
     /// The default signal is SIGUSR1.
@@ -155,15 +165,18 @@ impl StallDetector {
         start: Instant,
         max_expected_runtime: Duration,
     ) -> Option<StallDetectorGuard<'_>> {
-        self.stall_handler.high_water_mark(queue_handle, max_expected_runtime).map(|hwm| {
-            StallDetectorGuard::new(
-                self,
-                queue_handle,
-                queue_name,
-                start,
-                max_expected_runtime.saturating_add(hwm),
-            ).expect("Unable to create StallDetectorGuard, giving up")
-        })
+        self.stall_handler
+            .high_water_mark(queue_handle, max_expected_runtime)
+            .map(|hwm| {
+                StallDetectorGuard::new(
+                    self,
+                    queue_handle,
+                    queue_name,
+                    start,
+                    max_expected_runtime.saturating_add(hwm),
+                )
+                .expect("Unable to create StallDetectorGuard, giving up")
+            })
     }
 
     pub(crate) fn arm(&self, threshold: Duration) -> nix::Result<()> {
@@ -212,7 +225,9 @@ impl<'detector> StallDetectorGuard<'detector> {
         start: Instant,
         threshold: Duration,
     ) -> nix::Result<Self> {
-        detector.arm(threshold).expect("Unable to arm stall detector, giving up");
+        detector
+            .arm(threshold)
+            .expect("Unable to arm stall detector, giving up");
         Ok(Self {
             detector,
             queue_handle,
@@ -253,90 +268,171 @@ impl<'detector> Drop for StallDetectorGuard<'detector> {
 #[cfg(test)]
 mod test {
     use crate::{
-        executor::stall::DefaultStallDetectionHandler,
+        executor::{
+            stall::{StallDetection, StallDetectionHandler},
+            TaskQueueHandle,
+        },
         timer::sleep,
         LocalExecutorBuilder,
     };
-    use logtest::Logger;
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::{Arc, RwLock},
+        thread,
+        time::Duration,
+    };
 
-    enum ExpectedLog {
-        Expected(&'static str),
-        NotExpected(&'static str),
+    #[derive(Debug)]
+    pub struct TestStallDetection {
+        executor: usize,
+        queue_handle: TaskQueueHandle,
+        queue_name: String,
+        trace: backtrace::Backtrace,
+        budget: Duration,
+        overage: Duration,
     }
 
-    fn search_logs_for(logger: &mut Logger, expected: ExpectedLog) -> bool {
-        let mut found = false;
-        while let Some(event) = logger.pop() {
-            match expected {
-                ExpectedLog::Expected(str) => found |= event.args().contains(str),
-                ExpectedLog::NotExpected(str) => found |= event.args().contains(str),
+    #[derive(Debug)]
+    struct InnerTestHandler {
+        detections: Vec<TestStallDetection>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestHandler {
+        inner: Arc<RwLock<InnerTestHandler>>,
+    }
+
+    impl TestHandler {
+        fn new() -> Self {
+            TestHandler {
+                inner: Arc::new(RwLock::new(InnerTestHandler {
+                    detections: Vec::new(),
+                })),
             }
         }
+    }
 
-        match expected {
-            ExpectedLog::Expected(_) => found,
-            ExpectedLog::NotExpected(_) => !found,
+    impl StallDetectionHandler for TestHandler {
+        fn high_water_mark(
+            &self,
+            _queue_handle: TaskQueueHandle,
+            max_expected_runtime: Duration,
+        ) -> Option<Duration> {
+            Some(
+                Duration::from_millis((max_expected_runtime.as_millis() as f64 * 0.1) as u64)
+                    .max(Duration::from_millis(10)),
+            )
+        }
+
+        fn signal(&self) -> u8 {
+            nix::libc::SIGUSR1 as u8
+        }
+
+        fn stall(&self, detection: StallDetection<'_>) {
+            let mut inner = self.inner.write().unwrap();
+            inner.detections.push(TestStallDetection {
+                executor: detection.executor,
+                queue_handle: detection.queue_handle,
+                queue_name: detection.queue_name.to_owned(),
+                trace: detection.trace,
+                budget: detection.budget,
+                overage: detection.overage,
+            });
         }
     }
 
     #[test]
     fn executor_stall_detector() {
+        let stall_handler = TestHandler::new();
         LocalExecutorBuilder::default()
-            .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})))
+            .detect_stalls(Some(Box::new(stall_handler.clone())))
             .preempt_timer(Duration::from_millis(50))
             .make()
             .unwrap()
             .run(async {
-                let mut logger = Logger::start();
-                let now = Instant::now();
-
                 // will trigger the stall detector because we go over budget
-                while now.elapsed() < Duration::from_millis(100) {}
+                thread::sleep(Duration::from_millis(100));
 
-                assert!(search_logs_for(
-                    &mut logger,
-                    ExpectedLog::NotExpected("task queue default went over-budget"),
-                ));
+                let exec = crate::executor();
+                assert!(stall_handler.inner.read().unwrap().detections.is_empty());
 
-                crate::executor().yield_task_queue_now().await; // yield the queue
+                exec.yield_task_queue_now().await; // yield the queue
 
-                assert!(search_logs_for(
-                    &mut logger,
-                    ExpectedLog::Expected("task queue default went over-budget")
-                ));
+                assert!(
+                    stall_handler
+                        .inner
+                        .write()
+                        .unwrap()
+                        .detections
+                        .pop()
+                        .is_some()
+                );
 
                 // no stall because < 50ms of un-cooperativeness
-                let now = Instant::now();
-                while now.elapsed() < Duration::from_millis(40) {}
+                thread::sleep(Duration::from_millis(40));
 
-                assert!(search_logs_for(
-                    &mut logger,
-                    ExpectedLog::NotExpected("task queue default went over-budget"),
-                ));
+                assert!(stall_handler.inner.read().unwrap().detections.is_empty());
 
-                crate::executor().yield_task_queue_now().await; // yield the queue
+                exec.yield_task_queue_now().await; // yield the queue
 
                 // no stall because a timer yields internally
                 sleep(Duration::from_millis(100)).await;
 
-                crate::executor().yield_task_queue_now().await; // yield the queue
+                exec.yield_task_queue_now().await; // yield the queue
 
-                assert!(search_logs_for(
-                    &mut logger,
-                    ExpectedLog::NotExpected("task queue default went over-budget"),
-                ));
+                assert!(stall_handler.inner.read().unwrap().detections.is_empty());
 
                 // trigger one last time
-                let now = Instant::now();
-                while now.elapsed() < Duration::from_millis(100) {}
+                thread::sleep(Duration::from_millis(100));
 
-                crate::executor().yield_task_queue_now().await; // yield the queue
+                exec.yield_task_queue_now().await; // yield the queue
 
-                assert!(search_logs_for(
-                    &mut logger,
-                    ExpectedLog::Expected("task queue default went over-budget")
-                ));
+                assert!(
+                    stall_handler
+                        .inner
+                        .write()
+                        .unwrap()
+                        .detections
+                        .pop()
+                        .is_some()
+                );
+
+                // Make sure nothing else was reported
+                exec.yield_task_queue_now().await; // yield the queue
+                assert!(stall_handler.inner.read().unwrap().detections.is_empty());
             });
+    }
+
+    #[test]
+    fn stall_detector_correct_signal_handler() {
+        let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(10);
+        for i in 1..11 {
+            let handler = TestHandler::new();
+            let tname = format!("exec{}", i);
+            let builder = LocalExecutorBuilder::default()
+                .name(&tname)
+                .detect_stalls(Some(Box::new(handler.clone())))
+                .preempt_timer(Duration::from_millis(50));
+            build_handlers.push((handler, builder));
+        }
+        let mut handles = Vec::with_capacity(10);
+        for (handler, builder) in build_handlers.drain(..) {
+            let join_handle = builder.spawn(move || async move {
+                let exec = crate::executor();
+                // will trigger the stall detector because we go over budget
+                thread::sleep(Duration::from_millis(100));
+
+                assert!(handler.inner.read().unwrap().detections.is_empty());
+
+                exec.yield_task_queue_now().await; // yield the queue
+
+                let detection = handler.inner.write().unwrap().detections.pop();
+                assert!(detection.is_some());
+                assert_eq!(detection.unwrap().executor, exec.id())
+            });
+            handles.push(join_handle.unwrap());
+        }
+        for handle in handles.drain(..) {
+            handle.join().unwrap();
+        }
     }
 }
