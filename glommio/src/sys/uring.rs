@@ -670,6 +670,7 @@ pub(crate) trait UringCommon {
     /// Return `None` if no event is completed, `Some(true)` for a task is woken
     /// up and `Some(false)` for not.
     fn consume_one_event(&mut self) -> Option<bool>;
+    fn wait_for_events(&mut self, events: u32) -> io::Result<()>;
     fn name(&self) -> &'static str;
     fn io_stats_mut(&mut self) -> &mut RingIoStats;
     fn io_stats_for_task_queue_mut(&mut self, handle: TaskQueueHandle) -> &mut RingIoStats;
@@ -730,29 +731,56 @@ pub(crate) trait UringCommon {
         completed
     }
 
-    /// It is important to process cancellations as soon as we see them,
-    /// which is why they go into a separate queue. The reason is that
-    /// cancellations can be racy if they are left to their own devices.
+    /// Used when we absolutely need to flush at least min_requests requests
+    /// from queue. This function blocks if it has to.
     ///
-    /// Imagine that you have a write request to fd 3 and wants to cancel it.
-    /// But before the cancellation is run fd 3 gets closed and another file
-    /// is opened with the same fd.
-    fn flush_cancellations(&mut self, woke: &mut usize) {
-        let mut cnt = 0;
+    /// min_requests does not account for SQEs waiting to be sent to the kernel.
+    /// If we have 2 items in the queue and 8 SQEs pending submission then
+    /// min_requests = 1 will submit all 8 SQEs + the first item in the queue.
+    ///
+    /// The function returns the number of elements submitted. This can be lower
+    /// than min_requests if there were fewer requests in the queue.
+    fn force_flush_ring(
+        &mut self,
+        queue: &mut VecDeque<UringDescriptor>,
+        mut min_requests: usize,
+        woke: &mut usize,
+    ) -> usize {
+        // we can't submit more request than what's there to submit + pending SQEs
+        min_requests = min_requests.min(queue.len()) + self.waiting_kernel_submission();
+
+        // if we fail to submit we need to make sure we collect CQEs before sleeping
+        let mut consumed = false;
+        let mut submitted = 0;
         loop {
-            if self.consume_cancellation_queue().is_ok() {
+            match self.consume_sqe_queue(queue, true) {
+                Err(err) => {
+                    if !consumed {
+                        consumed = true;
+                    } else {
+                        warn!(
+                            "failed to flush the required minimum of events ({}/{}): {}; waiting \
+                             for {} CQEs",
+                            submitted,
+                            min_requests,
+                            err,
+                            min_requests - submitted
+                        );
+                        self.wait_for_events((min_requests - submitted) as u32)
+                            .expect("failed to wait for CQE. Game over");
+                        consumed = false;
+                    }
+                    self.consume_completion_queue(woke);
+                }
+                Ok(x) => submitted += x,
+            }
+
+            if submitted >= min_requests {
                 break;
             }
-            self.consume_completion_queue(woke);
-            cnt += 1;
-            if cnt > 1_000_000 {
-                panic!(
-                    "i tried literally a million times but couldn't flush to the {} ring",
-                    self.name()
-                );
-            }
         }
-        self.consume_completion_queue(woke);
+
+        submitted
     }
 
     fn poll(&mut self, woke: &mut usize) -> io::Result<()> {
@@ -874,6 +902,10 @@ impl UringCommon for PollRing {
             self.completed += 1;
             x
         })
+    }
+
+    fn wait_for_events(&mut self, events: u32) -> io::Result<()> {
+        self.ring.cq().wait(events)
     }
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
@@ -1198,6 +1230,10 @@ impl UringCommon for SleepableRing {
         )
     }
 
+    fn wait_for_events(&mut self, events: u32) -> io::Result<()> {
+        self.ring.cq().wait(events)
+    }
+
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         let source_map = &mut *self.source_map.borrow_mut();
         let now = Instant::now();
@@ -1271,10 +1307,21 @@ macro_rules! consume_rings {
         consumed
     }}
 }
+
+/// It is important to process cancellations as soon as we see them,
+/// which is why they go into a separate queue. The reason is that
+/// cancellations can be racy if they are left to their own devices.
+///
+/// Imagine that you have a write request to fd 3 and wants to cancel it.
+/// But before the cancellation is run fd 3 gets closed and another file
+/// is opened with the same fd.
 macro_rules! flush_cancellations {
     (into $output:expr; $( $ring:expr ),+ ) => {{
         $(
-            $ring.flush_cancellations($output);
+            let q = $ring.submission_queue();
+            let mut queue = q.borrow_mut();
+            let min = queue.cancellations.len();
+            $ring.force_flush_ring(&mut queue.cancellations, min, $output);
         )*
     }}
 }
@@ -1289,6 +1336,18 @@ macro_rules! flush_rings {
                 .or_else(Reactor::intr_ok)?;
         )*
         io::Result::Ok(ret)
+    }}
+}
+
+macro_rules! force_flush_rings {
+     (into $output:expr; $min:expr, $( $ring:expr ),+ ) => {{
+        let mut ret = 0;
+        $(
+            let q = $ring.submission_queue();
+            let mut queue = q.borrow_mut();
+            ret += $ring.force_flush_ring(&mut queue.submissions, $min, &mut ret);
+        )*
+        ret
     }}
 }
 
@@ -1829,11 +1888,7 @@ impl Reactor {
             ),
         ));
 
-        // This will only dispatch if we run out of sqes. Which means until
-        // flush_rings! nothing is really send to the kernel...
         flush_cancellations!(into &mut woke; lat_ring, poll_ring, main_ring);
-        // ... which happens right here. If you ever reorder this code just
-        // be careful about this dependency.
         flush_rings!(lat_ring, poll_ring, main_ring)?;
         // pick up the results of any cancellations
         consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
@@ -1880,7 +1935,7 @@ impl Reactor {
         if let Some(preempt) = preempt_timer() {
             self.latency_preemption_timeout_src
                 .set(Some(lat_ring.prepare_latency_preemption_timer(preempt)));
-            assert!(flush_rings!(lat_ring, main_ring)? > 0);
+            assert!(force_flush_rings!(into &mut 0; 1, lat_ring, main_ring) > 0);
         }
 
         // A Note about `need_preempt`:
