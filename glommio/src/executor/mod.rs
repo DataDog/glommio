@@ -49,13 +49,12 @@ use std::{
     io,
     marker::PhantomData,
     mem::MaybeUninit,
-    ops::Deref,
-    ops::DerefMut,
+    ops::{Deref, DerefMut},
     pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex},
     task::{Context, Poll},
-    thread::{self, Builder, JoinHandle},
+    thread::{Builder, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -64,6 +63,8 @@ use scoped_tls::scoped_thread_local;
 
 use log::warn;
 
+#[cfg(doc)]
+use crate::executor::stall::DefaultStallDetectionHandler;
 use crate::{
     error::BuilderErrorKind,
     executor::stall::StallDetector,
@@ -79,8 +80,6 @@ use crate::{
     Reactor,
     Shares,
 };
-#[cfg(doc)]
-use crate::executor::stall::DefaultStallDetectionHandler;
 use ahash::AHashMap;
 
 pub(crate) const DEFAULT_EXECUTOR_NAME: &str = "unnamed";
@@ -477,8 +476,8 @@ pub struct LocalExecutorBuilder {
     /// executor
     blocking_thread_pool_placement: PoolPlacement,
     /// Whether to detect stalls in unyielding tasks.
-    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1, so
-    /// is disabled by default.
+    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1,
+    /// so is disabled by default.
     detect_stalls: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
 }
 
@@ -580,8 +579,8 @@ impl LocalExecutorBuilder {
     }
 
     /// Whether to detect stalls in unyielding tasks.
-    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1, so
-    /// is disabled by default.
+    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1,
+    /// so is disabled by default.
     /// # Examples
     ///
     /// ```
@@ -770,8 +769,8 @@ pub struct LocalExecutorPoolBuilder {
     /// placement strategy as its host executor
     blocking_thread_pool_placement: PoolPlacement,
     /// Factory function to generate the stall detection handler.
-    /// [`DefaultStallDetectionHandler installs`] a signal handler for SIGUSR1, so
-    /// is disabled by default.
+    /// [`DefaultStallDetectionHandler installs`] a signal handler for SIGUSR1,
+    /// so is disabled by default.
     handler_gen: Option<Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>>>,
 }
 
@@ -1100,8 +1099,6 @@ pub struct LocalExecutor {
     parker: parking::Parker,
     id: usize,
     reactor: Rc<reactor::Reactor>,
-
-    signal_id: Option<signal_hook::SigId>,
     stall_detector: Option<StallDetector>,
 }
 
@@ -1154,10 +1151,9 @@ impl LocalExecutor {
                 config.record_io_latencies,
                 config.thread_pool_placement,
             )?),
-            signal_id: None,
             stall_detector: None,
         };
-        exec = exec.detect_stalls(config.detect_stalls)?;
+        exec.detect_stalls(config.detect_stalls)?;
 
         Ok(exec)
     }
@@ -1172,46 +1168,14 @@ impl LocalExecutor {
     /// local_ex.detect_stalls(true);
     /// ```
     pub fn detect_stalls(
-        mut self,
+        &mut self,
         handler: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
-    ) -> Result<LocalExecutor> {
-        match handler {
-            Some(handler) => {
-                if self.signal_id.is_none() {
-                    unsafe {
-                        let signal_num = handler.signal();
-                        let stall_detector = StallDetector::new(self.id, handler)?;
-                        let tx = stall_detector.tx.clone();
-                        let exec_thread = thread::current().id();
-                        self.signal_id = Some(
-                            signal_hook::low_level::register(signal_num.into(), move || {
-                                // Bail if we can't send or if we've gotten a signal
-                                // from an unexpected thread (i.e., a signal targeting the process)
-                                if tx.is_full() || thread::current().id() != exec_thread {
-                                    return;
-                                }
-
-                                backtrace::trace_unsynchronized(|frame| {
-                                    tx.try_send(backtrace::BacktraceFrame::from(frame.clone()))
-                                        .is_ok()
-                                });
-                            })
-                            .map_err(GlommioError::from)?,
-                        );
-                        self.stall_detector = Some(stall_detector);
-                    }
-                }
-            }
-            None => {
-                if let Some(signal_id) = self.signal_id.take() {
-                    signal_hook::low_level::unregister(signal_id);
-                }
-                if let Some(stall_detector) = self.stall_detector.take() {
-                    stall_detector.disarm().map_err(std::io::Error::from)?;
-                }
-            }
-        }
-        Ok(self)
+    ) -> Result<()> {
+        self.stall_detector = match handler {
+            Some(handler) => Some(StallDetector::new(self.id, handler)?),
+            None => None,
+        };
+        Ok(())
     }
 
     /// Returns a unique identifier for this Executor.

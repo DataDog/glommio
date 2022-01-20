@@ -12,7 +12,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread::JoinHandle,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -116,10 +116,10 @@ pub(crate) struct StallDetector {
     timer_handler: Option<JoinHandle<()>>,
     id: usize,
     terminated: Arc<AtomicBool>,
+    signal_id: signal_hook::SigId,
     // NOTE: we don't use signal_hook::low_level::channel as backtraces
     // have too many elements
-    pub(crate) tx: crossbeam::channel::Sender<backtrace::BacktraceFrame>,
-    pub(crate) rx: crossbeam::channel::Receiver<backtrace::BacktraceFrame>,
+    rx: crossbeam::channel::Receiver<backtrace::BacktraceFrame>,
 }
 
 impl StallDetector {
@@ -134,18 +134,12 @@ impl StallDetector {
             )
             .map_err(std::io::Error::from)?,
         );
-        let tid = unsafe { nix::libc::pthread_self() };
         let terminated = Arc::new(AtomicBool::new(false));
         let sig = stall_handler.signal();
-        let timer_handler = std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
-            while timer.wait().is_ok() {
-                if terminated.load(Ordering::Relaxed) {
-                    return
-                }
-                unsafe { nix::libc::pthread_kill(tid, sig.into()) };
-            }
-        }});
         let (tx, rx) = crossbeam::channel::bounded(1 << 10);
+        let timer_handler =
+            StallDetector::install_trigger(terminated.clone(), timer.clone(), sig.into());
+        let signal_id = StallDetector::install_handler(tx, sig)?;
 
         Ok(Self {
             timer,
@@ -153,9 +147,48 @@ impl StallDetector {
             stall_handler,
             id: executor_id,
             terminated,
-            tx,
+            signal_id,
             rx,
         })
+    }
+
+    fn install_handler(
+        tx: crossbeam::channel::Sender<backtrace::BacktraceFrame>,
+        signal: u8,
+    ) -> std::io::Result<signal_hook::SigId> {
+        let exec_thread = thread::current().id();
+        unsafe {
+            let signal_id = signal_hook::low_level::register(signal.into(), move || {
+                // Bail if we can't send or if we've gotten a signal
+                // from an unexpected thread (i.e., a signal targeting the process)
+                if tx.is_full() || thread::current().id() != exec_thread {
+                    return;
+                }
+
+                backtrace::trace_unsynchronized(|frame| {
+                    tx.try_send(backtrace::BacktraceFrame::from(frame.clone()))
+                        .is_ok()
+                });
+            })?;
+            //.map_err::<io::Error, GlommioError<()>>(GlommioError::from)?;
+            Ok(signal_id)
+        }
+    }
+
+    fn install_trigger(
+        terminated: Arc<AtomicBool>,
+        timer: Arc<sys::timerfd::TimerFd>,
+        signal: i32,
+    ) -> JoinHandle<()> {
+        let tid = unsafe { nix::libc::pthread_self() };
+        std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
+            while timer.wait().is_ok() {
+                if terminated.load(Ordering::Relaxed) {
+                    return
+                }
+                unsafe { nix::libc::pthread_kill(tid, signal) };
+            }
+        }})
     }
 
     pub(crate) fn enter_task_queue(
@@ -193,6 +226,7 @@ impl StallDetector {
 
 impl Drop for StallDetector {
     fn drop(&mut self) {
+        signal_hook::low_level::unregister(self.signal_id);
         let timer_handler = self.timer_handler.take().unwrap();
         self.terminated.store(true, Ordering::Relaxed);
 
@@ -441,8 +475,13 @@ mod test {
 
     #[test]
     fn stall_detector_multiple_signals() {
-        let mut signals = vec![nix::libc::SIGALRM as u8, nix::libc::SIGUSR1 as u8, nix::libc::SIGUSR2 as u8];
-        let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(signals.len());
+        let mut signals = vec![
+            nix::libc::SIGALRM as u8,
+            nix::libc::SIGUSR1 as u8,
+            nix::libc::SIGUSR2 as u8,
+        ];
+        let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> =
+            Vec::with_capacity(signals.len());
         let mut handles = Vec::with_capacity(signals.len());
         for (i, signal) in signals.drain(..).enumerate() {
             let handler = TestHandler::new(signal);
