@@ -6,6 +6,7 @@
 use crate::{
     io::{
         bulk_io::{
+            BulkIo,
             CoalescedReads,
             IoVec,
             MergedBufferLimit,
@@ -17,7 +18,6 @@ use crate::{
         glommio_file::GlommioFile,
         open_options::OpenOptions,
         read_result::ReadResult,
-        ScheduledSource,
     },
     sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
 };
@@ -319,7 +319,7 @@ impl DmaFile {
         iovs: S,
         buffer_limit: MergedBufferLimit,
         read_amp_limit: ReadAmplificationLimit,
-    ) -> ReadManyResult<V, impl Stream<Item = (ScheduledSource, ReadManyArgs<V>)>>
+    ) -> ReadManyResult<V, impl BulkIo<ReadManyArgs<V>>>
     where
         V: IoVec + Unpin,
         S: Stream<Item = V> + Unpin,
