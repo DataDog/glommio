@@ -14,6 +14,7 @@ use crate::{
             ReadAmplificationLimit,
             ReadManyArgs,
             ReadManyResult,
+            UnorderedBulkIo,
         },
         glommio_file::GlommioFile,
         open_options::OpenOptions,
@@ -302,6 +303,9 @@ impl DmaFile {
     /// Submit many reads and process the results in a stream-like fashion via a
     /// [`ReadManyResult`].
     ///
+    /// The resulting stream yields [`ReadResult`]s in the order of the input
+    /// `IOVec`s
+    ///
     /// This API will optimistically coalesce and deduplicate IO requests such
     /// that two overlapping or adjacent reads will result in a single IO
     /// request. This is transparent for the consumer, you will still
@@ -360,6 +364,58 @@ impl DmaFile {
         });
         ReadManyResult {
             inner: OrderedBulkIo::new(self.clone(), crate::executor().reactor().ring_depth(), it),
+            current: Default::default(),
+        }
+    }
+
+    /// A variant of [`DmaFile::read_many`] that yields [`ReadResult`]s in the
+    /// order of IO completion.
+    pub fn read_many_unordered<V, S>(
+        self: &Rc<DmaFile>,
+        iovs: S,
+        buffer_limit: MergedBufferLimit,
+        read_amp_limit: ReadAmplificationLimit,
+    ) -> ReadManyResult<V, impl BulkIo<ReadManyArgs<V>>>
+    where
+        V: IoVec + Unpin,
+        S: Stream<Item = V> + Unpin,
+    {
+        let max_merged_buffer_size = match buffer_limit {
+            MergedBufferLimit::NoMerging => 0,
+            MergedBufferLimit::DeviceMaxSingleRequest => self.max_sectors_size,
+            MergedBufferLimit::Custom(limit) => {
+                self.align_down(limit.min(self.max_segment_size) as u64) as usize
+            }
+        };
+
+        let max_read_amp = match read_amp_limit {
+            ReadAmplificationLimit::NoAmplification => Some(0),
+            ReadAmplificationLimit::Custom(limit) => Some(limit),
+            ReadAmplificationLimit::NoLimit => None,
+        };
+
+        let file = self.clone();
+        let reactor = file.file.reactor.upgrade().unwrap();
+        let it = CoalescedReads::new(
+            max_merged_buffer_size,
+            max_read_amp,
+            Some(self.o_direct_alignment),
+            iovs,
+        )
+        .map(move |iov| {
+            let fd = file.as_raw_fd();
+            let pollable = file.pollable;
+            let scheduler = file.file.scheduler.borrow();
+            (
+                reactor.read_dma(fd, iov.pos(), iov.size(), pollable, scheduler.as_ref()),
+                ReadManyArgs {
+                    user_reads: iov.coalesced_user_iovecs,
+                    system_read: (iov.pos, iov.size),
+                },
+            )
+        });
+        ReadManyResult {
+            inner: UnorderedBulkIo::new(self.clone(), crate::executor().reactor().ring_depth(), it),
             current: Default::default(),
         }
     }
@@ -954,6 +1010,42 @@ pub(crate) mod test {
             .await;
 
         assert_eq!(*total_reads.borrow(), 511);
+        let io_stats = crate::executor().io_stats().all_rings();
+        assert_eq!(io_stats.file_reads().0, 4096 / new_file.o_direct_alignment);
+        assert_eq!(io_stats.post_reactor_io_scheduler_latency_us().count(), 1);
+        assert_eq!(io_stats.io_latency_us().count(), 1);
+        new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(file_many_unordered_reads, path, _k, {
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+
+        let total_reads = Rc::new(RefCell::new(0));
+        let last_read = Rc::new(RefCell::new(-1));
+
+        let mut iovs: Vec<(u64, usize)> = (0..512).map(|x| (x * 8, 8)).collect();
+        iovs.shuffle(&mut thread_rng());
+        new_file
+            .read_many_unordered(
+                stream::iter(iovs.into_iter()),
+                MergedBufferLimit::Custom(4096),
+                ReadAmplificationLimit::NoAmplification,
+            )
+            .enumerate()
+            .for_each(enclose! {(total_reads, last_read) |x| {
+                *total_reads.borrow_mut() += 1;
+                let res = x.1.unwrap();
+                assert_eq!(res.0.size(), 8);
+                assert_eq!(res.1.len(), 8);
+                assert_eq!(*last_read.borrow() + 1, x.0 as i64);
+                for i in 0..res.1.len() {
+                    assert_eq!(res.1[i], (res.0.pos() + i as u64) as u8);
+                }
+                *last_read.borrow_mut() = x.0 as i64;
+            }})
+            .await;
+        assert_eq!(*total_reads.borrow(), 512);
+
         let io_stats = crate::executor().io_stats().all_rings();
         assert_eq!(io_stats.file_reads().0, 4096 / new_file.o_direct_alignment);
         assert_eq!(io_stats.post_reactor_io_scheduler_latency_us().count(), 1);
