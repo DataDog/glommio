@@ -584,10 +584,10 @@ impl LocalExecutorBuilder {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{stall::DefaultStallDetectionHandler, LocalExecutorBuilder};
+    /// use glommio::{DefaultStallDetectionHandler, LocalExecutorBuilder};
     ///
     /// let local_ex = LocalExecutorBuilder::default()
-    ///     .detect_stalls(Some(|| Box::new(DefaultStallDetectionHandler {})))
+    ///     .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})))
     ///     .make()
     ///     .unwrap();
     /// ```
@@ -886,12 +886,21 @@ impl LocalExecutorPoolBuilder {
     /// # Examples
     ///
     /// ```
-    /// use glommio::{stall::DefaultStallDetectionHandler, LocalExecutorPoolBuilder};
+    /// use glommio::{
+    ///     timer::Timer,
+    ///     DefaultStallDetectionHandler,
+    ///     LocalExecutorPoolBuilder,
+    ///     PoolPlacement,
+    /// };
     ///
-    /// let local_ex = LocalExecutorPoolBuilder::default()
-    ///     .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})))
-    ///     .make()
-    ///     .unwrap();
+    /// let local_ex = LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(4))
+    ///     .detect_stalls(Some(Box::new(|| Box::new(DefaultStallDetectionHandler {}))))
+    ///     .on_all_shards(move || async {
+    ///         Timer::new(std::time::Duration::from_millis(100)).await;
+    ///         println!("Hello world!");
+    ///     })
+    ///     .expect("failed to spawn local executors")
+    ///     .join_all();
     /// ```
     #[must_use = "The builder must be built to be useful"]
     pub fn detect_stalls(
@@ -1162,10 +1171,10 @@ impl LocalExecutor {
     ///
     /// # Examples
     /// ```
-    /// use glommio::LocalExecutor;
+    /// use glommio::{DefaultStallDetectionHandler, LocalExecutor};
     ///
-    /// let local_ex = LocalExecutor::default();
-    /// local_ex.detect_stalls(true);
+    /// let local_ex = LocalExecutor::default()
+    ///     .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})));
     /// ```
     pub fn detect_stalls(
         &mut self,
