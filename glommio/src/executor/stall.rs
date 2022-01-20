@@ -281,6 +281,7 @@ mod test {
         time::Duration,
     };
 
+    #[allow(dead_code)]
     #[derive(Debug)]
     pub struct TestStallDetection {
         executor: usize,

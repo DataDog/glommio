@@ -79,6 +79,8 @@ use crate::{
     Reactor,
     Shares,
 };
+#[cfg(doc)]
+use crate::executor::stall::DefaultStallDetectionHandler;
 use ahash::AHashMap;
 
 pub(crate) const DEFAULT_EXECUTOR_NAME: &str = "unnamed";
@@ -475,7 +477,7 @@ pub struct LocalExecutorBuilder {
     /// executor
     blocking_thread_pool_placement: PoolPlacement,
     /// Whether to detect stalls in unyielding tasks.
-    /// DefaultStallDetectionHandler installs a signal handler for SIGUSR1, so
+    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1, so
     /// is disabled by default.
     detect_stalls: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
 }
@@ -578,7 +580,7 @@ impl LocalExecutorBuilder {
     }
 
     /// Whether to detect stalls in unyielding tasks.
-    /// DefaultStallDetectionHandler installs a signal handler for SIGUSR1, so
+    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1, so
     /// is disabled by default.
     /// # Examples
     ///
@@ -768,7 +770,7 @@ pub struct LocalExecutorPoolBuilder {
     /// placement strategy as its host executor
     blocking_thread_pool_placement: PoolPlacement,
     /// Factory function to generate the stall detection handler.
-    /// DefaultStallDetectionHandler installs a signal handler for SIGUSR1, so
+    /// [`DefaultStallDetectionHandler installs`] a signal handler for SIGUSR1, so
     /// is disabled by default.
     handler_gen: Option<Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>>>,
 }
@@ -880,7 +882,7 @@ impl LocalExecutorPoolBuilder {
     /// Whether to detect stalls in unyielding tasks.
     /// This method takes a closure of `handler_gen`, which will be called on
     /// each new thread to generate the stall detection handler to be used in
-    /// that executor. DefaultStallDetectionHandler installs a signal
+    /// that executor. [`DefaultStallDetectionHandler`] installs a signal
     /// handler for SIGUSR1, so is disabled by default.
     /// # Examples
     ///
