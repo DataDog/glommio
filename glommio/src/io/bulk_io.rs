@@ -298,6 +298,36 @@ impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReads<V,
     }
 }
 
+/// A trait that limits the number of IO concurrency of [`BulkIo`] streams
+///
+/// Multiple concurrency limits are available and exist in parallel: whichever
+/// limit triggers first wins.
+pub trait IoConcurrencyLimiter {
+    /// Sets the maximum concurrency of the stream in terms of number of
+    /// inflight IO requests. A request is inflight if it is pending IO
+    /// completion or if it is waiting for the user to consume the stream.
+    fn set_concurrency_limit(&mut self, limit: usize);
+
+    /// Sets the maximum concurrency of the stream in terms of memory
+    /// consumption. Usage correspond to the amount of IO buffers the
+    /// stream has a reference to.
+    fn set_memory_limit(&mut self, limit: Option<usize>);
+
+    /// Whether this stream has reached maximum concurrency
+    ///
+    /// If true, this stream will not schedule any more IO until some IO results
+    /// have been successfully consumed
+    fn is_full(&self) -> bool;
+}
+
+/// A trait for streams that perform many IO requests concurrently
+pub trait BulkIo<U: IoVec + Unpin>:
+    Stream<Item = (ScheduledSource, U)> + Unpin + IoConcurrencyLimiter
+{
+    /// The file behind this stream
+    fn file(&self) -> &Rc<DmaFile>;
+}
+
 #[derive(Debug)]
 pub(crate) struct OrderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
     file: Rc<DmaFile>,
@@ -323,8 +353,12 @@ impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> OrderedBu
             terminated: false,
         }
     }
+}
 
-    pub(crate) fn set_concurrency_limit(&mut self, limit: usize) {
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> IoConcurrencyLimiter
+    for OrderedBulkIo<U, S>
+{
+    fn set_concurrency_limit(&mut self, limit: usize) {
         assert!(limit > 0);
         assert!(
             !self.terminated && self.inflight.is_empty(),
@@ -334,7 +368,7 @@ impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> OrderedBu
         self.concurrency_cap = limit
     }
 
-    pub(crate) fn set_memory_limit(&mut self, limit: Option<usize>) {
+    fn set_memory_limit(&mut self, limit: Option<usize>) {
         assert!(limit.unwrap_or(usize::MAX) > 0);
         assert!(
             !self.terminated && self.inflight.is_empty(),
@@ -417,6 +451,14 @@ impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> Stream
     }
 }
 
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> BulkIo<U>
+    for OrderedBulkIo<U, S>
+{
+    fn file(&self) -> &Rc<DmaFile> {
+        &self.file
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ReadManyArgs<V: IoVec + Unpin> {
     pub(crate) user_reads: VecDeque<V>,
@@ -437,17 +479,12 @@ impl<V: IoVec + Unpin> IoVec for ReadManyArgs<V> {
 ///
 /// See [`DmaFile::read_many`] for more information
 #[derive(Debug)]
-pub struct ReadManyResult<
-    V: IoVec + Unpin,
-    S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin,
-> {
-    pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>, S>,
+pub struct ReadManyResult<V: IoVec + Unpin, B: BulkIo<ReadManyArgs<V>>> {
+    pub(crate) inner: B,
     pub(crate) current: Option<(ScheduledSource, ReadManyArgs<V>)>,
 }
 
-impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin>
-    ReadManyResult<V, S>
-{
+impl<V: IoVec + Unpin, B: BulkIo<ReadManyArgs<V>>> ReadManyResult<V, B> {
     /// Set the amount of IO concurrency of this stream, i.e., the number of IO
     /// requests this stream will submit at any one time
     ///
@@ -488,9 +525,7 @@ impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Un
     }
 }
 
-impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin> Stream
-    for ReadManyResult<V, S>
-{
+impl<V: IoVec + Unpin, B: BulkIo<ReadManyArgs<V>>> Stream for ReadManyResult<V, B> {
     type Item = super::Result<(V, ReadResult)>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -511,7 +546,7 @@ impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Un
         match ready!(self.inner.poll_next(cx)) {
             None => Poll::Ready(None),
             Some((source, args)) => {
-                enhanced_try!(source.result().unwrap(), "Reading", self.inner.file)?;
+                enhanced_try!(source.result().unwrap(), "Reading", self.inner.file())?;
                 self.current = Some((source, args));
                 self.poll_next(cx)
             }

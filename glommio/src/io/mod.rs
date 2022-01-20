@@ -161,7 +161,14 @@ pub use self::{
         StreamWriter,
         StreamWriterBuilder,
     },
-    bulk_io::{IoVec, MergedBufferLimit, ReadAmplificationLimit, ReadManyResult},
+    bulk_io::{
+        BulkIo,
+        IoConcurrencyLimiter,
+        IoVec,
+        MergedBufferLimit,
+        ReadAmplificationLimit,
+        ReadManyResult,
+    },
     directory::Directory,
     dma_file::{CloseResult, DmaFile},
     dma_file_stream::{

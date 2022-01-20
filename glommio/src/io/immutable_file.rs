@@ -12,7 +12,6 @@ use crate::io::{
     IoVec,
     ReadManyResult,
     ReadResult,
-    ScheduledSource,
 };
 use futures_lite::{future::poll_fn, io::AsyncWrite, Stream};
 use std::{
@@ -23,6 +22,8 @@ use std::{
     rc::Rc,
     task::{Context, Poll},
 };
+use crate::io::bulk_io::BulkIo;
+
 type Result<T> = crate::Result<T, ()>;
 
 #[derive(Debug)]
@@ -402,7 +403,7 @@ impl ImmutableFile {
         iovs: S,
         buffer_limit: MergedBufferLimit,
         read_amp_limit: ReadAmplificationLimit,
-    ) -> ReadManyResult<V, impl Stream<Item = (ScheduledSource, ReadManyArgs<V>)>>
+    ) -> ReadManyResult<V, impl BulkIo<ReadManyArgs<V>>>
     where
         V: IoVec + Unpin,
         S: Stream<Item = V> + Unpin,
