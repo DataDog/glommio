@@ -766,7 +766,7 @@ impl<T> RwLock<T> {
         if state.writers > 0 || state.readers > 0 {
             return Err(GlommioError::CanNotBeClosed(
                 ResourceType::RwLock,
-                "Lock is still hold by fibers",
+                "Lock is still held by fiber(s)",
             ));
         }
 
@@ -917,6 +917,7 @@ impl<T: Default> Default for RwLock<T> {
 
 impl<T> Drop for RwLock<T> {
     fn drop(&mut self) {
+        //Lifetime annotation prohibits guards to outlive RwLock so such unwrap is safe.
         self.close().unwrap();
         assert!(self.state.borrow().waiters_queue.is_empty());
     }
