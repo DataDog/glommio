@@ -26,6 +26,7 @@
 
 use std::{
     fmt,
+    io,
     panic::{RefUnwindSafe, UnwindSafe},
     rc::Rc,
     time::Duration,
@@ -50,8 +51,8 @@ impl Parker {
     }
 
     /// Blocks until notified and then goes back into sleeping state.
-    pub(crate) fn park(&self) {
-        self.inner.park(|| None);
+    pub(crate) fn park(&self) -> io::Result<bool> {
+        self.inner.park(|| None)
     }
 
     /// Performs non-sleepable pool and install a preemption timeout into the
@@ -59,8 +60,8 @@ impl Parker {
     /// installing a preemption timer. Tasks executing in the CPU right after
     /// this will be able to check if the timer has elapsed and yield the
     /// CPU if that is the case.
-    pub(crate) fn poll_io(&self, timeout: impl Fn() -> Option<Duration>) {
-        self.inner.park(timeout);
+    pub(crate) fn poll_io(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<bool> {
+        self.inner.park(timeout)
     }
 }
 
@@ -82,10 +83,7 @@ impl fmt::Debug for Parker {
 struct Inner {}
 
 impl Inner {
-    fn park(&self, timeout: impl Fn() -> Option<Duration>) -> bool {
-        // If the timeout is zero, then there is no need to actually block.
-        // Process available I/O events.
-        let _ = crate::executor().reactor().react(timeout);
-        false
+    fn park(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<bool> {
+        crate::executor().reactor().react(timeout)
     }
 }

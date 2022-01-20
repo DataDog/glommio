@@ -440,10 +440,11 @@ mod test {
 
     #[test]
     fn stall_detector_multiple_signals() {
-        let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(3);
-        let signals = vec![nix::libc::SIGALRM as u8, nix::libc::SIGUSR1 as u8, nix::libc::SIGUSR2 as u8];
-        for i in 1..3 {
-            let handler = TestHandler::new(signals[i]);
+        let mut signals = vec![nix::libc::SIGALRM as u8, nix::libc::SIGUSR1 as u8, nix::libc::SIGUSR2 as u8];
+        let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(signals.len());
+        let mut handles = Vec::with_capacity(signals.len());
+        for (i, signal) in signals.drain(..).enumerate() {
+            let handler = TestHandler::new(signal);
             let tname = format!("exec{}", i);
             let builder = LocalExecutorBuilder::default()
                 .name(&tname)
@@ -451,7 +452,6 @@ mod test {
                 .preempt_timer(Duration::from_millis(50));
             build_handlers.push((handler, builder));
         }
-        let mut handles = Vec::with_capacity(3);
         for (handler, builder) in build_handlers.drain(..) {
             let join_handle = builder.spawn(move || async move {
                 let exec = crate::executor();

@@ -1,14 +1,23 @@
-use crate::sys::{create_eventfd, read_eventfd, write_eventfd, SleepNotifier};
-use crossbeam::queue::ArrayQueue;
+use crate::{
+    executor::bind_to_cpu_set,
+    sys::{InnerSource, SleepNotifier},
+    PoolPlacement,
+};
+use ahash::AHashMap;
+use alloc::rc::Rc;
+use core::fmt::{Debug, Formatter};
+use crossbeam::channel::{Receiver, Sender};
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
-    convert::TryFrom,
+    convert::{TryFrom, TryInto},
     ffi::CString,
     io,
+    io::ErrorKind,
     os::unix::{ffi::OsStrExt, prelude::*},
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
+    thread::JoinHandle,
 };
 
 // So hard to copy/clone io::Error, plus need to send between threads. Best to
@@ -47,12 +56,26 @@ macro_rules! c_str {
     };
 }
 
-#[derive(Clone, Debug)]
 pub(super) enum BlockingThreadOp {
     Rename(PathBuf, PathBuf),
     Remove(PathBuf),
     CreateDir(PathBuf, libc::c_int),
     Truncate(RawFd, i64),
+    Fn(Box<dyn FnOnce() + Send + 'static>),
+}
+
+impl Debug for BlockingThreadOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            BlockingThreadOp::Rename(from, to) => write!(f, "rename `{:?}` -> `{:?}`", from, to),
+            BlockingThreadOp::Remove(path) => write!(f, "remove `{:?}`", path),
+            BlockingThreadOp::CreateDir(path, flags) => {
+                write!(f, "create dir `{:?}` (`{:b}`)", path, flags)
+            }
+            BlockingThreadOp::Truncate(fd, to) => write!(f, "truncate `{}` -> `{}`", fd, to),
+            BlockingThreadOp::Fn(_) => write!(f, "user function"),
+        }
+    }
 }
 
 impl BlockingThreadOp {
@@ -74,13 +97,18 @@ impl BlockingThreadOp {
             BlockingThreadOp::Truncate(fd, sz) => {
                 raw_syscall!(ftruncate(fd, sz))
             }
+            BlockingThreadOp::Fn(f) => {
+                f();
+                BlockingThreadResult::Fn
+            }
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) enum BlockingThreadResult {
     Syscall(i64),
+    Fn,
 }
 
 impl TryFrom<BlockingThreadResult> for std::io::Result<usize> {
@@ -89,93 +117,138 @@ impl TryFrom<BlockingThreadResult> for std::io::Result<usize> {
     fn try_from(value: BlockingThreadResult) -> Result<Self, Self::Error> {
         match value {
             BlockingThreadResult::Syscall(x) => Ok(to_result(x)),
+            BlockingThreadResult::Fn => Ok(Ok(0)),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct BlockingThreadReq {
     op: BlockingThreadOp,
+    latency_sensitive: bool,
     id: u64,
 }
 
-#[derive(Clone, Debug)]
 pub(super) struct BlockingThreadResp {
     id: u64,
     res: BlockingThreadResult,
 }
 
-pub(super) type BlockingThreadHandler = Box<dyn Fn(BlockingThreadResult)>;
-
-pub(super) struct BlockingThread {
-    eventfd: RawFd,
-    queue: Arc<ArrayQueue<BlockingThreadReq>>,
-    responses: Arc<ArrayQueue<BlockingThreadResp>>,
-    waiters: RefCell<BTreeMap<u64, BlockingThreadHandler>>,
-    requests: Cell<u64>,
-}
+#[derive(Debug)]
+struct BlockingThread(JoinHandle<()>);
 
 impl BlockingThread {
-    pub(super) fn push(&self, op: BlockingThreadOp, action: Box<dyn Fn(BlockingThreadResult)>) {
-        let id = self.requests.get();
-        self.requests.set(id + 1);
+    pub(super) fn new(
+        reactor_sleep_notifier: Arc<SleepNotifier>,
+        rx: Arc<Receiver<BlockingThreadReq>>,
+        tx: Arc<Sender<BlockingThreadResp>>,
+        bindings: Option<impl IntoIterator<Item = usize> + Send + 'static>,
+    ) -> Self {
+        Self(std::thread::spawn(move || {
+            if let Some(bindings) = bindings {
+                bind_to_cpu_set(bindings).expect("failed to bind blocking thread");
+            }
+            while let Ok(el) = rx.recv() {
+                let res = el.op.execute();
+                let id = el.id;
+                let resp = BlockingThreadResp { id, res };
 
-        let req = BlockingThreadReq { op, id };
+                if tx.send(resp).is_err() {
+                    panic!("failed to send response");
+                }
+                reactor_sleep_notifier.notify(el.latency_sensitive);
+            }
+        }))
+    }
+}
 
-        if self.queue.push(req).is_err() {
-            panic!("syscall queue full!");
+#[derive(Debug)]
+pub(crate) struct BlockingThreadPool {
+    tx: Sender<BlockingThreadReq>,
+    rx: Receiver<BlockingThreadResp>,
+    sources: RefCell<AHashMap<u64, Pin<Rc<RefCell<InnerSource>>>>>,
+    requests: Cell<u64>,
+    _threads: Vec<BlockingThread>,
+}
+
+impl BlockingThreadPool {
+    pub(crate) fn new(
+        placement: PoolPlacement,
+        sleep_notifier: Arc<SleepNotifier>,
+    ) -> crate::Result<Self, ()> {
+        let (in_tx, in_rx) = crossbeam::channel::unbounded();
+        let (out_tx, out_rx) = crossbeam::channel::unbounded();
+        let in_rx = Arc::new(in_rx);
+        let out_tx = Arc::new(out_tx);
+
+        let thread_count = placement.executor_count();
+        let mut placements = placement.generate_cpu_set()?;
+        let mut threads = Vec::with_capacity(thread_count);
+        for _ in 0..thread_count {
+            let bindings = placements.next().cpu_binding();
+            threads.push(BlockingThread::new(
+                sleep_notifier.clone(),
+                in_rx.clone(),
+                out_tx.clone(),
+                bindings,
+            ));
         }
 
-        let mut waiters = self.waiters.borrow_mut();
-        waiters.insert(id, action);
+        Ok(Self {
+            _threads: threads,
+            tx: in_tx,
+            rx: out_rx,
+            sources: RefCell::new(Default::default()),
+            requests: Cell::new(0),
+        })
+    }
 
-        write_eventfd(self.eventfd);
+    pub(super) fn push(
+        &self,
+        op: BlockingThreadOp,
+        source: Pin<Rc<RefCell<InnerSource>>>,
+    ) -> io::Result<()> {
+        let id = self.requests.get();
+        self.requests.set(id.overflowing_add(1).0);
+
+        let req = BlockingThreadReq {
+            op,
+            id,
+            latency_sensitive: matches!(
+                source.borrow().io_requirements.latency_req,
+                crate::Latency::Matters(_)
+            ),
+        };
+
+        self.tx.send(req).map_err(|_| {
+            io::Error::new(
+                ErrorKind::WouldBlock,
+                "failed to enqueue blocking operation",
+            )
+        })?;
+
+        let mut waiters = self.sources.borrow_mut();
+        assert!(waiters.insert(id, source).is_none());
+        Ok(())
     }
 
     pub(super) fn flush(&self) -> usize {
         let mut woke = 0;
-        let mut waiters = self.waiters.borrow_mut();
-        while let Some(x) = self.responses.pop() {
+        let mut waiters = self.sources.borrow_mut();
+        for x in self.rx.try_iter() {
             let id = x.id;
             let res = x.res;
-            let func = waiters.remove(&id).unwrap();
-            func(res);
+
+            let src = waiters.remove(&id).unwrap();
+            let mut inner_source = src.borrow_mut();
+            inner_source.wakers.result.replace(
+                res.try_into()
+                    .expect("not a valid blocking operation's result"),
+            );
+            inner_source.wakers.wake_waiters();
+
             woke += 1;
         }
         woke
-    }
-
-    pub(super) fn new(reactor_sleep_notifier: Arc<SleepNotifier>) -> Self {
-        let eventfd = create_eventfd().unwrap();
-        let queue = Arc::new(ArrayQueue::<BlockingThreadReq>::new(1024));
-        let responses = Arc::new(ArrayQueue::<BlockingThreadResp>::new(1024));
-        let waiters = RefCell::new(BTreeMap::new());
-        let requests = Cell::new(0);
-
-        let tq = queue.clone();
-        let rsp = responses.clone();
-
-        std::thread::spawn(move || {
-            loop {
-                read_eventfd(eventfd);
-                while let Some(el) = tq.pop() {
-                    let res = el.op.execute();
-                    let id = el.id;
-                    let resp = BlockingThreadResp { id, res };
-
-                    if rsp.push(resp).is_err() {
-                        panic!("Could not add response to syscall response queue");
-                    }
-                }
-                reactor_sleep_notifier.notify(false);
-            }
-        });
-        BlockingThread {
-            eventfd,
-            queue,
-            responses,
-            waiters,
-            requests,
-        }
     }
 }

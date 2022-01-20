@@ -2,7 +2,7 @@ use futures::future::join;
 use futures_lite::{stream, AsyncWriteExt, StreamExt};
 use glommio::{
     enclose,
-    io::{ImmutableFile, ImmutableFileBuilder},
+    io::{ImmutableFile, ImmutableFileBuilder, MergedBufferLimit, ReadAmplificationLimit},
     Latency,
     LocalExecutorBuilder,
     Placement,
@@ -100,8 +100,8 @@ async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
             at: Instant::now(),
         })
         .take(count),
-        0,
-        Some(0),
+        MergedBufferLimit::NoMerging,
+        ReadAmplificationLimit::NoAmplification,
     )
     .for_each(|res| {
         let (io, _) = res.unwrap();

@@ -5,7 +5,15 @@
 //
 use crate::{
     io::{
-        bulk_io::{CoalescedReads, IoVec, OrderedBulkIo, ReadManyArgs, ReadManyResult},
+        bulk_io::{
+            CoalescedReads,
+            IoVec,
+            MergedBufferLimit,
+            OrderedBulkIo,
+            ReadAmplificationLimit,
+            ReadManyArgs,
+            ReadManyResult,
+        },
         glommio_file::GlommioFile,
         open_options::OpenOptions,
         read_result::ReadResult,
@@ -58,6 +66,8 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
 pub struct DmaFile {
     file: GlommioFile,
     o_direct_alignment: u64,
+    max_sectors_size: usize,
+    max_segment_size: usize,
     pollable: PollableStatus,
 }
 
@@ -143,10 +153,16 @@ impl DmaFile {
         {
             pollable = PollableStatus::NonPollable(DirectIo::Enabled);
         }
+        let max_sectors_size =
+            sysfs::BlockDevice::max_sectors_size(file.dev_major as _, file.dev_minor as _);
+        let max_segment_size =
+            sysfs::BlockDevice::max_segment_size(file.dev_major as _, file.dev_minor as _);
 
         Ok(DmaFile {
             file,
             o_direct_alignment: 4096,
+            max_sectors_size,
+            max_segment_size,
             pollable,
         })
     }
@@ -289,29 +305,39 @@ impl DmaFile {
     /// This API will optimistically coalesce and deduplicate IO requests such
     /// that two overlapping or adjacent reads will result in a single IO
     /// request. This is transparent for the consumer, you will still
-    /// receive individual ReadResults corresponding to what you asked for.
+    /// receive individual [`ReadResult`]s corresponding to what you asked for.
     ///
     /// The first argument is a stream of [`IoVec`]. The last two
     /// arguments control how aggressive the IO coalescing should be:
-    /// * `max_merged_buffer_size` controls how large a merged IO request can
-    ///   be. A value of 0 disables merging completely.
-    /// * `max_read_amp` is optional and defines the maximum read amplification
-    ///   you are comfortable with. If two read requests are separated by a
-    ///   distance less than this value, they will be merged. A value `None`
-    ///   disables all read amplification limitation.
+    /// * `buffer_limit` controls how large a merged IO request can get;
+    /// * `read_amp_limit` controls how much read amplification is acceptable.
     ///
     /// It is not necessary to respect the `O_DIRECT` alignment of the file, and
-    /// this API will internally convert the positions and sizes to match.
+    /// this API will internally align the reads appropriately.
     pub fn read_many<V, S>(
         self: &Rc<DmaFile>,
         iovs: S,
-        max_merged_buffer_size: usize,
-        max_read_amp: Option<usize>,
+        buffer_limit: MergedBufferLimit,
+        read_amp_limit: ReadAmplificationLimit,
     ) -> ReadManyResult<V, impl Stream<Item = (ScheduledSource, ReadManyArgs<V>)>>
     where
         V: IoVec + Unpin,
         S: Stream<Item = V> + Unpin,
     {
+        let max_merged_buffer_size = match buffer_limit {
+            MergedBufferLimit::NoMerging => 0,
+            MergedBufferLimit::DeviceMaxSingleRequest => self.max_sectors_size,
+            MergedBufferLimit::Custom(limit) => {
+                self.align_down(limit.min(self.max_segment_size) as u64) as usize
+            }
+        };
+
+        let max_read_amp = match read_amp_limit {
+            ReadAmplificationLimit::NoAmplification => Some(0),
+            ReadAmplificationLimit::Custom(limit) => Some(limit),
+            ReadAmplificationLimit::NoLimit => None,
+        };
+
         let file = self.clone();
         let reactor = file.file.reactor.upgrade().unwrap();
         let it = CoalescedReads::new(
@@ -838,7 +864,11 @@ pub(crate) mod test {
         let mut iovs: Vec<(u64, usize)> = (0..512).map(|x| (x * 8, 8)).collect();
         iovs.shuffle(&mut thread_rng());
         new_file
-            .read_many(stream::iter(iovs.into_iter()), 4096, None)
+            .read_many(
+                stream::iter(iovs.into_iter()),
+                MergedBufferLimit::Custom(4096),
+                ReadAmplificationLimit::NoAmplification,
+            )
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
@@ -870,7 +900,11 @@ pub(crate) mod test {
         let mut iovs: Vec<(u64, usize)> = (0..511).map(|x| (x * 8 + 1, 7)).collect();
         iovs.shuffle(&mut thread_rng());
         new_file
-            .read_many(stream::iter(iovs.into_iter()), 4096, None)
+            .read_many(
+                stream::iter(iovs.into_iter()),
+                MergedBufferLimit::Custom(4096),
+                ReadAmplificationLimit::NoAmplification,
+            )
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
@@ -899,7 +933,11 @@ pub(crate) mod test {
         let last_read = Rc::new(RefCell::new(-1));
 
         new_file
-            .read_many(stream::iter((0..511).map(|x| (x * 8 + 1, 7))), 0, Some(0))
+            .read_many(
+                stream::iter((0..511).map(|x| (x * 8 + 1, 7))),
+                MergedBufferLimit::NoMerging,
+                ReadAmplificationLimit::NoAmplification,
+            )
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;

@@ -52,7 +52,7 @@ async fn server(conns: usize) -> Result<()> {
         s.await.unwrap()?;
     }
 
-    client_handle.join().unwrap();
+    client_handle.join().unwrap().unwrap();
     Ok(())
 }
 
@@ -108,6 +108,6 @@ fn main() -> Result<()> {
     //
     // Now can you adapt it, so it uses multiple executors and all CPUs in your
     // system?
-    server_handle.join().unwrap();
+    server_handle.join().unwrap().unwrap();
     Ok(())
 }

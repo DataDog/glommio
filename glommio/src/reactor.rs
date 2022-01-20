@@ -46,6 +46,7 @@ use crate::{
     IoRequirements,
     IoStats,
     Latency,
+    PoolPlacement,
     TaskQueueHandle,
 };
 use nix::poll::PollFlags;
@@ -137,25 +138,18 @@ impl Timers {
         // Split timers into ready and pending timers.
         let pending = self.timers.split_off(&(now, 0));
         let ready = mem::replace(&mut self.timers, pending);
-
-        // Calculate the duration until the next event.
-        let dur = if ready.is_empty() {
-            // Duration until the next timer.
-            self.timers
-                .keys()
-                .next()
-                .map(|(when, _)| when.saturating_duration_since(now))
-        } else {
-            // Timers are about to fire right now.
-            Some(Duration::from_secs(0))
-        };
-
         let woke = ready.len();
         for (_, waker) in ready {
             wake!(waker);
         }
 
-        (dur, woke)
+        // Calculate the duration until the next event.
+        let next = self
+            .timers
+            .keys()
+            .next()
+            .map(|(when, _)| when.saturating_duration_since(now));
+        (next, woke)
     }
 }
 
@@ -198,11 +192,11 @@ impl Reactor {
         io_memory: usize,
         ring_depth: usize,
         record_io_latencies: bool,
-    ) -> Reactor {
-        let sys = sys::Reactor::new(notifier, io_memory, ring_depth)
-            .expect("cannot initialize I/O event notification");
+        thread_pool_placement: PoolPlacement,
+    ) -> io::Result<Reactor> {
+        let sys = sys::Reactor::new(notifier, io_memory, ring_depth, thread_pool_placement)?;
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
-        Reactor {
+        Ok(Reactor {
             sys,
             timers: RefCell::new(Timers::new()),
             shared_channels: RefCell::new(SharedChannels::new()),
@@ -210,7 +204,7 @@ impl Reactor {
             record_io_latencies,
             preempt_ptr_head,
             preempt_ptr_tail: preempt_ptr_tail as _,
-        }
+        })
     }
 
     pub(crate) fn io_stats(&self) -> IoStats {
@@ -636,6 +630,12 @@ impl Reactor {
         source
     }
 
+    pub(crate) fn run_blocking(&self, func: Box<dyn FnOnce() + Send + 'static>) -> Source {
+        let source = self.new_source(-1, SourceType::BlockingFn, None);
+        self.sys.run_blocking(&source, func);
+        source
+    }
+
     pub(crate) fn close(&self, raw: RawFd) -> Source {
         let source = self.new_source(
             raw,
@@ -733,7 +733,7 @@ impl Reactor {
 
     /// Processes ready timers and extends the list of wakers to wake.
     ///
-    /// Returns the duration until the next timer before this method was called.
+    /// Returns the duration until the next timer
     fn process_timers(&self) -> (Option<Duration>, usize) {
         let mut timers = self.timers.borrow_mut();
         timers.process_timers()
@@ -789,7 +789,7 @@ impl Reactor {
     }
 
     /// Processes new events, blocking until the first event or the timeout.
-    pub(crate) fn react(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<()> {
+    pub(crate) fn react(&self, timeout: impl Fn() -> Option<Duration>) -> io::Result<bool> {
         // Process ready timers.
         let (next_timer, woke) = self.process_external_events();
 
@@ -801,13 +801,10 @@ impl Reactor {
             // Don't wait for the next loop to process timers or shared channels
             Ok(true) => {
                 self.process_external_events();
-                Ok(())
+                Ok(true)
             }
 
-            Ok(false) => Ok(()),
-
-            // The syscall was interrupted.
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),
+            Ok(false) => Ok(false),
 
             // An actual error occurred.
             Err(err) => Err(err),

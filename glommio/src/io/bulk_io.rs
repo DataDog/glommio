@@ -14,6 +14,59 @@ use std::{
     rc::Rc,
 };
 
+/// Set a limit to the size of merged IO requests.
+#[derive(Debug)]
+pub enum MergedBufferLimit {
+    /// Disables request coalescing
+    NoMerging,
+
+    /// Sets the limit to the maximum the kernel allows for the underlying
+    /// device without breaking down the request into smaller ones
+    /// (/sys/block/.../queue/max_sectors_kb)
+    DeviceMaxSingleRequest,
+
+    /// Sets a custom limit.
+    /// This value should be a multiple of the file's alignment. If it is not,
+    /// it'll be aligned down.
+    Custom(usize),
+}
+
+impl Default for MergedBufferLimit {
+    fn default() -> Self {
+        Self::DeviceMaxSingleRequest
+    }
+}
+
+/// Set a limit to the amount of read amplification in-between two mergeable IO
+/// requests.
+#[derive(Debug)]
+pub enum ReadAmplificationLimit {
+    /// Deny read amplification.
+    ///
+    /// Note that, because IO request coalescing is done _before_ buffers are
+    /// aligned, requests may be merged if they are smaller than the minimum IO
+    /// size. For instance, if the minimum IO size is 4KiB and the user reads
+    /// [0..256] and [2048..2560] then the two will be merged into [0..4096] to
+    /// accommodate the 4KiB minimum IO size.
+    NoAmplification,
+
+    /// Merge two consecutive IO requests if the read amplification is below a
+    /// limit.
+    ///
+    /// This value doesn't have any alignment constrain.
+    Custom(usize),
+
+    /// Always merge successive IO requests if possible, no matter the distance
+    /// between them. This is likely not what you want.
+    NoLimit,
+}
+
+impl Default for ReadAmplificationLimit {
+    fn default() -> Self {
+        Self::NoAmplification
+    }
+}
+
 /// An interface to an IO vector.
 pub trait IoVec {
     /// The read position (the offset) in the file

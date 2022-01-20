@@ -486,6 +486,7 @@ pub use crate::{
         stall::{DefaultStallDetectionHandler, StallDetectionHandler},
         yield_if_needed,
         CpuSet,
+        ExecutorJoinHandle,
         ExecutorProxy,
         ExecutorStats,
         LocalExecutor,

@@ -61,12 +61,20 @@ pub enum QueueErrorKind {
 pub enum ReactorErrorKind {
     /// Indicates an incorrect source type.
     IncorrectSourceType,
+
+    /// Reactor unable to lock memory (max allowed, min required)
+    MemLockLimit(u64, u64),
 }
 
 impl fmt::Display for ReactorErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReactorErrorKind::IncorrectSourceType => write!(f, "Incorrect source type!"),
+            ReactorErrorKind::MemLockLimit(max, min) => write!(
+                f,
+                "The memlock resource limit is too low: {} (recommended {})",
+                max, min
+            ),
         }
     }
 }
@@ -449,6 +457,7 @@ impl<T> Debug for GlommioError<T> {
             GlommioError::ReactorError(kind) => {
                 let kind = match kind {
                     ReactorErrorKind::IncorrectSourceType => "IncorrectSourceType",
+                    ReactorErrorKind::MemLockLimit(_, _) => "MemLockLimit",
                 };
                 write!(f, "ReactorError {{ kind: '{}' }}", kind)
             }
