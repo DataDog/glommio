@@ -299,14 +299,16 @@ mod test {
     #[derive(Clone, Debug)]
     struct TestHandler {
         inner: Arc<RwLock<InnerTestHandler>>,
+        signal: u8,
     }
 
     impl TestHandler {
-        fn new() -> Self {
+        fn new(signal: u8) -> Self {
             TestHandler {
                 inner: Arc::new(RwLock::new(InnerTestHandler {
                     detections: Vec::new(),
                 })),
+                signal,
             }
         }
     }
@@ -324,7 +326,7 @@ mod test {
         }
 
         fn signal(&self) -> u8 {
-            nix::libc::SIGUSR1 as u8
+            self.signal
         }
 
         fn stall(&self, detection: StallDetection<'_>) {
@@ -342,7 +344,7 @@ mod test {
 
     #[test]
     fn executor_stall_detector() {
-        let stall_handler = TestHandler::new();
+        let stall_handler = TestHandler::new(nix::libc::SIGUSR1 as u8);
         LocalExecutorBuilder::default()
             .detect_stalls(Some(Box::new(stall_handler.clone())))
             .preempt_timer(Duration::from_millis(50))
@@ -406,7 +408,7 @@ mod test {
     fn stall_detector_correct_signal_handler() {
         let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(10);
         for i in 1..11 {
-            let handler = TestHandler::new();
+            let handler = TestHandler::new(nix::libc::SIGUSR1 as u8);
             let tname = format!("exec{}", i);
             let builder = LocalExecutorBuilder::default()
                 .name(&tname)
@@ -415,6 +417,41 @@ mod test {
             build_handlers.push((handler, builder));
         }
         let mut handles = Vec::with_capacity(10);
+        for (handler, builder) in build_handlers.drain(..) {
+            let join_handle = builder.spawn(move || async move {
+                let exec = crate::executor();
+                // will trigger the stall detector because we go over budget
+                thread::sleep(Duration::from_millis(100));
+
+                assert!(handler.inner.read().unwrap().detections.is_empty());
+
+                exec.yield_task_queue_now().await; // yield the queue
+
+                let detection = handler.inner.write().unwrap().detections.pop();
+                assert!(detection.is_some());
+                assert_eq!(detection.unwrap().executor, exec.id())
+            });
+            handles.push(join_handle.unwrap());
+        }
+        for handle in handles.drain(..) {
+            handle.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn stall_detector_multiple_signals() {
+        let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(3);
+        let signals = vec![nix::libc::SIGALRM as u8, nix::libc::SIGUSR1 as u8, nix::libc::SIGUSR2 as u8];
+        for i in 1..3 {
+            let handler = TestHandler::new(signals[i]);
+            let tname = format!("exec{}", i);
+            let builder = LocalExecutorBuilder::default()
+                .name(&tname)
+                .detect_stalls(Some(Box::new(handler.clone())))
+                .preempt_timer(Duration::from_millis(50));
+            build_handlers.push((handler, builder));
+        }
+        let mut handles = Vec::with_capacity(3);
         for (handler, builder) in build_handlers.drain(..) {
             let join_handle = builder.spawn(move || async move {
                 let exec = crate::executor();
