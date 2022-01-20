@@ -53,7 +53,7 @@ use std::{
     rc::Rc,
     sync::Arc,
     task::{Context, Poll},
-    thread::{Builder, JoinHandle},
+    thread::{self, Builder, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -1110,9 +1110,12 @@ impl LocalExecutor {
                         let signal_num = handler.signal();
                         let stall_detector = StallDetector::new(self.id, handler)?;
                         let tx = stall_detector.tx.clone();
+                        let exec_thread = thread::current().id();
                         self.signal_id = Some(
                             signal_hook::low_level::register(signal_num.into(), move || {
-                                if tx.is_full() {
+                                // Bail if we can't send or if we've gotten a signal
+                                // from an unexpected thread (i.e., a signal targeting the process)
+                                if tx.is_full() || thread::current().id() != exec_thread {
                                     return;
                                 }
 
