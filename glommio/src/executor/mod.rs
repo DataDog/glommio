@@ -64,7 +64,7 @@ use scoped_tls::scoped_thread_local;
 use log::warn;
 
 #[cfg(doc)]
-use crate::executor::stall::DefaultStallDetectionHandler;
+use crate::executor::stall::LoggingStallDetectionHandler;
 use crate::{
     error::BuilderErrorKind,
     executor::stall::StallDetector,
@@ -476,8 +476,8 @@ pub struct LocalExecutorBuilder {
     /// executor
     blocking_thread_pool_placement: PoolPlacement,
     /// Whether to detect stalls in unyielding tasks.
-    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1,
-    /// so is disabled by default.
+    /// [`LoggingStallDetectionHandler`] installs a signal handler for
+    /// [`nix::libc::SIGUSR1`], so is disabled by default.
     detect_stalls: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
 }
 
@@ -579,15 +579,15 @@ impl LocalExecutorBuilder {
     }
 
     /// Whether to detect stalls in unyielding tasks.
-    /// [`DefaultStallDetectionHandler`] installs a signal handler for SIGUSR1,
-    /// so is disabled by default.
+    /// [`LoggingStallDetectionHandler`] installs a signal handler for
+    /// [`nix::libc::SIGUSR1`], so is disabled by default.
     /// # Examples
     ///
     /// ```
-    /// use glommio::{DefaultStallDetectionHandler, LocalExecutorBuilder};
+    /// use glommio::{LocalExecutorBuilder, LoggingStallDetectionHandler};
     ///
     /// let local_ex = LocalExecutorBuilder::default()
-    ///     .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})))
+    ///     .detect_stalls(Some(Box::new(LoggingStallDetectionHandler::default())))
     ///     .make()
     ///     .unwrap();
     /// ```
@@ -769,8 +769,8 @@ pub struct LocalExecutorPoolBuilder {
     /// placement strategy as its host executor
     blocking_thread_pool_placement: PoolPlacement,
     /// Factory function to generate the stall detection handler.
-    /// [`DefaultStallDetectionHandler installs`] a signal handler for SIGUSR1,
-    /// so is disabled by default.
+    /// [`LoggingStallDetectionHandler installs`] a signal handler for
+    /// [`nix::libc::SIGUSR1`], so is disabled by default.
     handler_gen: Option<Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>>>,
 }
 
@@ -881,20 +881,22 @@ impl LocalExecutorPoolBuilder {
     /// Whether to detect stalls in unyielding tasks.
     /// This method takes a closure of `handler_gen`, which will be called on
     /// each new thread to generate the stall detection handler to be used in
-    /// that executor. [`DefaultStallDetectionHandler`] installs a signal
-    /// handler for SIGUSR1, so is disabled by default.
+    /// that executor. [`LoggingStallDetectionHandler`] installs a signal
+    /// handler for [`nix::libc::SIGUSR1`], so is disabled by default.
     /// # Examples
     ///
     /// ```
     /// use glommio::{
     ///     timer::Timer,
-    ///     DefaultStallDetectionHandler,
     ///     LocalExecutorPoolBuilder,
+    ///     LoggingStallDetectionHandler,
     ///     PoolPlacement,
     /// };
     ///
     /// let local_ex = LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(4))
-    ///     .detect_stalls(Some(Box::new(|| Box::new(DefaultStallDetectionHandler {}))))
+    ///     .detect_stalls(Some(Box::new(|| {
+    ///         Box::new(LoggingStallDetectionHandler::default())
+    ///     })))
     ///     .on_all_shards(move || async {
     ///         Timer::new(std::time::Duration::from_millis(100)).await;
     ///         println!("Hello world!");
@@ -1171,10 +1173,10 @@ impl LocalExecutor {
     ///
     /// # Examples
     /// ```
-    /// use glommio::{DefaultStallDetectionHandler, LocalExecutor};
+    /// use glommio::{LocalExecutor, LoggingStallDetectionHandler};
     ///
     /// let local_ex = LocalExecutor::default()
-    ///     .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})));
+    ///     .detect_stalls(Some(Box::new(LoggingStallDetectionHandler::default())));
     /// ```
     pub fn detect_stalls(
         &mut self,
