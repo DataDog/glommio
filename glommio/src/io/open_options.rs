@@ -80,8 +80,9 @@ impl OpenOptions {
     /// data at the end of it.
     ///
     /// The file must be opened with write access for append to work.
-    pub fn append(&mut self, append: bool) {
+    pub fn append(&mut self, append: bool) -> &mut Self {
         self.append = append;
+        self
     }
 
     /// Sets the option for truncating a previous file.
