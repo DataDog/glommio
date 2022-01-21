@@ -457,6 +457,7 @@ pub mod channels;
 pub mod controllers;
 mod error;
 mod executor;
+mod intrusive_collections_ext;
 pub mod io;
 pub mod net;
 mod shares;

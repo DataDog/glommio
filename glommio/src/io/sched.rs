@@ -1,9 +1,10 @@
 use crate::{
+    intrusive_adapter_no_send,
     io::glommio_file::Identity,
     sys::{Reactor, Source},
     IoRequirements,
 };
-use intrusive_collections::{intrusive_adapter, Bound, KeyAdapter, RBTree, RBTreeLink};
+use intrusive_collections::{Bound, KeyAdapter, RBTree, RBTreeLink};
 use std::{
     cell::{Cell, RefCell},
     ops::{Deref, Range},
@@ -71,7 +72,7 @@ struct FileSchedulerInner {
     sources: RefCell<RBTree<ScheduledSourceAdapter>>,
 }
 
-intrusive_adapter!(FileSchedulerAdapter = Rc<FileSchedulerInner>: FileSchedulerInner { link: RBTreeLink });
+intrusive_adapter_no_send!(FileSchedulerAdapter = Rc<FileSchedulerInner>: FileSchedulerInner { link: RBTreeLink });
 impl<'a> KeyAdapter<'a> for FileSchedulerAdapter {
     type Key = Identity;
     fn get_key(&self, s: &'a FileSchedulerInner) -> Self::Key {
@@ -177,7 +178,7 @@ struct ScheduledSourceInner {
     data_range: Range<u64>,
 }
 
-intrusive_adapter!(ScheduledSourceAdapter = Rc<ScheduledSourceInner>: ScheduledSourceInner { link: RBTreeLink });
+intrusive_adapter_no_send!(ScheduledSourceAdapter = Rc<ScheduledSourceInner>: ScheduledSourceInner { link: RBTreeLink });
 impl<'a> KeyAdapter<'a> for ScheduledSourceAdapter {
     type Key = u64;
     fn get_key(&self, s: &'a ScheduledSourceInner) -> Self::Key {
