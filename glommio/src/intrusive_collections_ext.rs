@@ -41,7 +41,7 @@
 ///
 /// ```
 /// use intrusive_collections::{LinkedListLink, RBTreeLink};
-/// use intrusive_collections::intrusive_adapter;
+/// use glommio::intrusive_adapter_no_send;
 ///
 /// pub struct Test {
 ///     link: LinkedListLink,
