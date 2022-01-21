@@ -65,6 +65,10 @@ pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     fn signal(&self) -> u8;
 
     /// Handler called when a task exceeds its budget
+    ///
+    /// **NOTE**: This callback is invoked from inside the reactor.
+    /// Do not perform blocking syscalls, acquire locks, spawn tasks
+    /// or otherwise block here.
     fn stall(&self, detection: StallDetection<'_>);
 }
 
@@ -198,7 +202,6 @@ impl StallDetector {
                         .is_ok()
                 });
             })?;
-            //.map_err::<io::Error, GlommioError<()>>(GlommioError::from)?;
             Ok(signal_id)
         }
     }
@@ -343,15 +346,9 @@ mod test {
         time::Duration,
     };
 
-    #[allow(dead_code)]
     #[derive(Debug)]
     pub struct TestStallDetection {
         executor: usize,
-        queue_handle: TaskQueueHandle,
-        queue_name: String,
-        trace: backtrace::Backtrace,
-        budget: Duration,
-        overage: Duration,
     }
 
     #[derive(Debug)]
@@ -396,11 +393,6 @@ mod test {
             let mut inner = self.inner.write().unwrap();
             inner.detections.push(TestStallDetection {
                 executor: detection.executor,
-                queue_handle: detection.queue_handle,
-                queue_name: detection.queue_name.to_owned(),
-                trace: detection.trace,
-                budget: detection.budget,
-                overage: detection.overage,
             });
         }
     }
@@ -435,9 +427,8 @@ mod test {
                 // no stall because < 50ms of un-cooperativeness
                 thread::sleep(Duration::from_millis(40));
 
-                assert!(stall_handler.inner.read().unwrap().detections.is_empty());
-
                 exec.yield_task_queue_now().await; // yield the queue
+                assert!(stall_handler.inner.read().unwrap().detections.is_empty());
 
                 // no stall because a timer yields internally
                 sleep(Duration::from_millis(100)).await;
@@ -480,7 +471,7 @@ mod test {
             build_handlers.push((handler, builder));
         }
         let mut handles = Vec::with_capacity(10);
-        for (handler, builder) in build_handlers.drain(..) {
+        for (handler, builder) in build_handlers {
             let join_handle = builder.spawn(move || async move {
                 let exec = crate::executor();
                 // will trigger the stall detector because we go over budget
@@ -496,14 +487,14 @@ mod test {
             });
             handles.push(join_handle.unwrap());
         }
-        for handle in handles.drain(..) {
+        for handle in handles {
             handle.join().unwrap();
         }
     }
 
     #[test]
     fn stall_detector_multiple_signals() {
-        let mut signals = vec![
+        let signals = vec![
             nix::libc::SIGALRM as u8,
             nix::libc::SIGUSR1 as u8,
             nix::libc::SIGUSR2 as u8,
@@ -511,8 +502,8 @@ mod test {
         let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> =
             Vec::with_capacity(signals.len());
         let mut handles = Vec::with_capacity(signals.len());
-        for (i, signal) in signals.drain(..).enumerate() {
-            let handler = TestHandler::new(signal);
+        for (i, signal) in signals.iter().enumerate() {
+            let handler = TestHandler::new(*signal);
             let tname = format!("exec{}", i);
             let builder = LocalExecutorBuilder::default()
                 .name(&tname)
@@ -520,7 +511,7 @@ mod test {
                 .preempt_timer(Duration::from_millis(50));
             build_handlers.push((handler, builder));
         }
-        for (handler, builder) in build_handlers.drain(..) {
+        for (handler, builder) in build_handlers {
             let join_handle = builder.spawn(move || async move {
                 let exec = crate::executor();
                 // will trigger the stall detector because we go over budget
@@ -536,7 +527,7 @@ mod test {
             });
             handles.push(join_handle.unwrap());
         }
-        for handle in handles.drain(..) {
+        for handle in handles {
             handle.join().unwrap();
         }
     }
