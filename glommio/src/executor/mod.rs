@@ -776,23 +776,18 @@ pub struct LocalExecutorPoolBuilder {
 
 impl fmt::Debug for LocalExecutorPoolBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let gen = self
-            .handler_gen
-            .as_ref()
-            .map(|_| "Some(Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>)");
-        write!(
-            f,
-            "spin_before_park:{:?}, name:{}, io_memory:{}, ring_depth:{}, \
-             preempt_timer_duration:{:?}, placement:{:?}, record_io_latencies:{}, handler_gen:{:?}",
-            self.spin_before_park,
-            self.name,
-            self.io_memory,
-            self.ring_depth,
-            self.preempt_timer_duration,
-            self.placement,
-            self.record_io_latencies,
-            gen
-        )
+        f.debug_struct("LocalExecutorPoolBuilder")
+            .field("spin_before_park", &self.spin_before_park)
+            .field("name", &self.name)
+            .field("io_memory", &self.io_memory)
+            .field("ring_depth", &self.ring_depth)
+            .field("preempt_timer_duration", &self.preempt_timer_duration)
+            .field("record_io_latencies", &self.record_io_latencies)
+            .field(
+                "blocking_thread_pool_placement",
+                &self.blocking_thread_pool_placement,
+            )
+            .finish_non_exhaustive()
     }
 }
 
