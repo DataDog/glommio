@@ -55,91 +55,42 @@ impl fmt::Display for StallDetection<'_> {
 pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     /// How far past the preemption timer should qualify as a stall
     /// If None is returned, don't use the stall detector for this task queue.
-    fn high_water_mark(
-        &self,
-        queue_handle: TaskQueueHandle,
-        max_expected_runtime: Duration,
-    ) -> Option<Duration>;
-
-    /// What signal number to use; see values in libc::SIG*
-    fn signal(&self) -> u8;
-
-    /// Handler called when a task exceeds its budget
-    ///
-    /// **NOTE**: This callback is invoked from inside the reactor.
-    /// Do not perform blocking syscalls, acquire locks, spawn tasks
-    /// or otherwise block here.
-    fn stall(&self, detection: StallDetection<'_>);
-}
-
-/// Default settings for signal number, high water mark and stall handler.
-/// By default, the high water mark to consider a task queue stalled is set to
-/// 10% of the expected run time. The default handler will log a stack trace of
-/// the currently executing task queue. The default signal number is
-/// [`nix::libc::SIGUSR1`].
-#[derive(Debug)]
-pub struct LoggingStallDetectionHandler {
-    /// What signal to use to trigger stall detection
-    pub signal: u8,
-    /// What percentage of the original expected runtime to allow before
-    /// triggering a stall
-    pub overage_ratio: f64,
-    /// Absolute minimum duration before triggering a stall
-    pub min_duration: Duration,
-}
-
-impl LoggingStallDetectionHandler {
-    fn new(signal: u8, overage_ratio: f64, min_duration: Duration) -> Self {
-        LoggingStallDetectionHandler {
-            signal,
-            overage_ratio,
-            min_duration,
-        }
-    }
-}
-
-impl Default for LoggingStallDetectionHandler {
-    fn default() -> Self {
-        Self::new(nix::libc::SIGUSR1 as u8, 0.1, Duration::from_millis(10))
-    }
-}
-
-impl StallDetectionHandler for LoggingStallDetectionHandler {
-    /// We consider a queue to be stalling the system if it failed to yield in
-    /// due time. For a given maximum expected runtime, we allow a margin of
-    /// error of [`LoggingStallDetectionHandler::overage_ratio`]
-    /// (and an absolute minimum of
-    /// [`LoggingStallDetectionHandler::min_duration`]) after which we record a
-    /// stacktrace. i.e. a task queue has should return shortly after
-    /// `need_preempt()` returns true or the stall detector triggers. For
-    /// example::
-    /// * If a task queue has a preempt timer of 100ms the the stall detector
-    /// triggers if it doesn't yield after running for 110ms.
-    /// * If a task queue has a preempt timer of 5ms the the stall detector
-    /// triggers if it doesn't yield after running for 15ms.
-    fn high_water_mark(
+    /// The default implementation considers anything running 10ms over
+    /// expected runtime to be stalling the reactor.
+    fn threshold(
         &self,
         _queue_handle: TaskQueueHandle,
         max_expected_runtime: Duration,
     ) -> Option<Duration> {
-        Some(
-            Duration::from_millis(
-                (max_expected_runtime.as_millis() as f64 * self.overage_ratio) as u64,
-            )
-            .max(self.min_duration),
-        )
+        Some(max_expected_runtime + Duration::from_millis(10))
     }
 
-    /// The default signal is [`nix::libc::SIGUSR1`].
+    /// What signal number to use; see values in libc::SIG*.
+    /// The default is [`nix::libc::SIGUSR1`].
     fn signal(&self) -> u8 {
-        self.signal
+        nix::libc::SIGUSR1 as u8
     }
 
-    /// The default stall reporting mechanism is to log a warning.
+    /// Handler called when a task exceeds its budget. The default
+    /// implementation is to log a warning.
+    ///
+    /// **NOTE**: This callback is invoked from inside the reactor.
+    /// Do not perform blocking syscalls, acquire locks, spawn tasks
+    /// or otherwise block here.
     fn stall(&self, detection: StallDetection<'_>) {
         log::warn!("{}", detection);
     }
 }
+
+/// Default settings for signal number, threshold and stall handler.
+/// By default, the threshold to consider a task queue stalled is set to
+/// 10ms over the expected run time. The default handler will log a stack trace
+/// of the currently executing task queue. The default signal number is
+/// [`nix::libc::SIGUSR1`].
+#[derive(Debug)]
+pub struct DefaultStallDetectionHandler {}
+
+impl StallDetectionHandler for DefaultStallDetectionHandler {}
 
 #[derive(Debug)]
 pub(crate) struct StallDetector {
@@ -230,14 +181,14 @@ impl StallDetector {
         max_expected_runtime: Duration,
     ) -> Option<StallDetectorGuard<'_>> {
         self.stall_handler
-            .high_water_mark(queue_handle, max_expected_runtime)
-            .map(|hwm| {
+            .threshold(queue_handle, max_expected_runtime)
+            .map(|threshold| {
                 StallDetectorGuard::new(
                     self,
                     queue_handle,
                     queue_name,
                     start,
-                    max_expected_runtime.saturating_add(hwm),
+                    max_expected_runtime.saturating_add(threshold),
                 )
                 .expect("Unable to create StallDetectorGuard, giving up")
             })
@@ -374,7 +325,7 @@ mod test {
     }
 
     impl StallDetectionHandler for TestHandler {
-        fn high_water_mark(
+        fn threshold(
             &self,
             _queue_handle: TaskQueueHandle,
             max_expected_runtime: Duration,
