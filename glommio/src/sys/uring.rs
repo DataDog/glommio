@@ -1040,7 +1040,13 @@ impl SleepableRing {
             // We have now prepared the SQE that links the two rings. We now need to submit
             // it successfully to be able to safely sleep.
 
-            if self.ring.submit_sqes()? != 1 {
+            if self
+                .submit_sqes()
+                .or_else(Reactor::busy_ok)
+                .or_else(Reactor::again_ok)
+                .or_else(Reactor::intr_ok)?
+                != 1
+            {
                 // We failed to submit the `SQE` that links the rings. Just can't sleep.
                 // Waiting here is unsafe because we could end up waiting much longer than
                 // needed.
@@ -1049,13 +1055,22 @@ impl SleepableRing {
                 Err(io::Error::from_raw_os_error(libc::EBUSY))
             } else {
                 // The rings are linked. Goodnight!
-                self.ring.cq().wait(1).map(|_| 1)
+                self.ring
+                    .cq()
+                    .wait(1)
+                    .map(|_| 1)
+                    .or_else(Reactor::busy_ok)
+                    .or_else(Reactor::again_ok)
+                    .or_else(Reactor::intr_ok)
             }
         } else {
             // Can't link rings because we ran out of `CQE`s. Just can't sleep.
             // Submit what we have, once we're out of here we'll consume them
             // and at some point will be able to sleep again.
             self.submit_sqes()
+                .or_else(Reactor::busy_ok)
+                .or_else(Reactor::again_ok)
+                .or_else(Reactor::intr_ok)
         }
     }
 }
@@ -1524,9 +1539,9 @@ impl Reactor {
     /// over-commit the system. This is fine: we just need to make sure that we
     /// don't sleep and that we don't failed rushed polls. So we just ignore
     /// this error
-    fn busy_ok(x: std::io::Error) -> io::Result<usize> {
+    fn busy_ok<T: Default>(x: std::io::Error) -> io::Result<T> {
         match x.raw_os_error() {
-            Some(libc::EBUSY) => Ok(0),
+            Some(libc::EBUSY) => Ok(Default::default()),
             Some(_) => Err(x),
             None => Err(x),
         }
@@ -1536,9 +1551,9 @@ impl Reactor {
     /// push more requests. This is fine: we just need to make sure that we
     /// don't sleep and that we don't failed rushed polls. So we just ignore
     /// this error
-    fn again_ok(x: std::io::Error) -> io::Result<usize> {
+    fn again_ok<T: Default>(x: std::io::Error) -> io::Result<T> {
         match x.raw_os_error() {
-            Some(libc::EAGAIN) => Ok(0),
+            Some(libc::EAGAIN) => Ok(Default::default()),
             Some(_) => Err(x),
             None => Err(x),
         }
@@ -1548,9 +1563,9 @@ impl Reactor {
     /// delivery. This is fine: we just need to make sure that we
     /// don't sleep and that we don't failed rushed polls. So we just ignore
     /// this error
-    fn intr_ok(x: std::io::Error) -> io::Result<usize> {
+    fn intr_ok<T: Default>(x: std::io::Error) -> io::Result<T> {
         match x.raw_os_error() {
-            Some(libc::EINTR) => Ok(0),
+            Some(libc::EINTR) => Ok(Default::default()),
             Some(_) => Err(x),
             None => Err(x),
         }
