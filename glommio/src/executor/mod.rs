@@ -1171,7 +1171,7 @@ impl LocalExecutor {
     /// let local_ex =
     ///     LocalExecutor::default().detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})));
     /// ```
-    pub fn detect_stalls(
+    fn detect_stalls(
         &mut self,
         handler: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
     ) -> Result<()> {
