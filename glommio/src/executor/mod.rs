@@ -35,6 +35,7 @@
 mod latch;
 mod multitask;
 mod placement;
+pub mod stall;
 
 use latch::{Latch, LatchState};
 pub use placement::{CpuSet, Placement, PoolPlacement};
@@ -43,11 +44,12 @@ use tracing::trace;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BinaryHeap},
+    fmt,
     future::Future,
     io,
     marker::PhantomData,
     mem::MaybeUninit,
-    ops::DerefMut,
+    ops::{Deref, DerefMut},
     pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -59,8 +61,13 @@ use std::{
 use futures_lite::pin;
 use scoped_tls::scoped_thread_local;
 
+use log::warn;
+
+#[cfg(doc)]
+use crate::executor::stall::DefaultStallDetectionHandler;
 use crate::{
     error::BuilderErrorKind,
+    executor::stall::StallDetector,
     io::DmaBuffer,
     parking,
     reactor,
@@ -123,7 +130,7 @@ pub(crate) struct TaskQueue {
     shares: Shares,
     vruntime: u64,
     io_requirements: IoRequirements,
-    _name: String,
+    name: String,
     last_adjustment: Instant,
     // for dynamic shares classes
     yielded: bool,
@@ -168,7 +175,7 @@ impl TaskQueue {
             shares,
             vruntime: 0,
             io_requirements: ioreq,
-            _name: name.into(),
+            name: name.into(),
             last_adjustment: Instant::now(),
             yielded: false,
         }))
@@ -468,6 +475,10 @@ pub struct LocalExecutorBuilder {
     /// Defaults to one thread using the same placement strategy as the host
     /// executor
     blocking_thread_pool_placement: PoolPlacement,
+    /// Whether to detect stalls in unyielding tasks.
+    /// [`DefaultStallDetectionHandler`] installs a signal handler for
+    /// [`nix::libc::SIGUSR1`], so is disabled by default.
+    detect_stalls: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
 }
 
 impl LocalExecutorBuilder {
@@ -486,6 +497,7 @@ impl LocalExecutorBuilder {
             preempt_timer_duration: DEFAULT_PREEMPT_TIMER,
             record_io_latencies: false,
             blocking_thread_pool_placement: PoolPlacement::from(placement),
+            detect_stalls: None,
         }
     }
 
@@ -566,6 +578,28 @@ impl LocalExecutorBuilder {
         self
     }
 
+    /// Whether to detect stalls in unyielding tasks.
+    /// [`DefaultStallDetectionHandler`] installs a signal handler for
+    /// [`nix::libc::SIGUSR1`], so is disabled by default.
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{DefaultStallDetectionHandler, LocalExecutorBuilder};
+    ///
+    /// let local_ex = LocalExecutorBuilder::default()
+    ///     .detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})))
+    ///     .make()
+    ///     .unwrap();
+    /// ```
+    #[must_use = "The builder must be built to be useful"]
+    pub fn detect_stalls(
+        mut self,
+        handler: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
+    ) -> Self {
+        self.detect_stalls = handler;
+        self
+    }
+
     /// Make a new [`LocalExecutor`] by taking ownership of the Builder, and
     /// returns a [`Result`](crate::Result) to the executor.
     /// # Examples
@@ -588,6 +622,7 @@ impl LocalExecutorBuilder {
                 record_io_latencies: self.record_io_latencies,
                 spin_before_park: self.spin_before_park,
                 thread_pool_placement: self.blocking_thread_pool_placement,
+                detect_stalls: self.detect_stalls,
             },
         )?;
         le.init();
@@ -651,6 +686,7 @@ impl LocalExecutorBuilder {
         let ring_depth = self.ring_depth;
         let preempt_timer_duration = self.preempt_timer_duration;
         let spin_before_park = self.spin_before_park;
+        let detect_stalls = self.detect_stalls;
         let record_io_latencies = self.record_io_latencies;
         let blocking_thread_pool_placement = self.blocking_thread_pool_placement;
 
@@ -667,6 +703,7 @@ impl LocalExecutorBuilder {
                         record_io_latencies,
                         spin_before_park,
                         thread_pool_placement: blocking_thread_pool_placement,
+                        detect_stalls,
                     },
                 )?;
                 le.init();
@@ -705,7 +742,6 @@ impl Default for LocalExecutorBuilder {
 ///
 /// handles.join_all();
 /// ```
-#[derive(Debug)]
 pub struct LocalExecutorPoolBuilder {
     /// Spin for duration before parking a reactor
     spin_before_park: Option<Duration>,
@@ -732,6 +768,27 @@ pub struct LocalExecutorPoolBuilder {
     /// its own pool. Defaults to 1 thread per pool, bound using the same
     /// placement strategy as its host executor
     blocking_thread_pool_placement: PoolPlacement,
+    /// Factory function to generate the stall detection handler.
+    /// [`DefaultStallDetectionHandler installs`] a signal handler for
+    /// [`nix::libc::SIGUSR1`], so is disabled by default.
+    handler_gen: Option<Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>>>,
+}
+
+impl fmt::Debug for LocalExecutorPoolBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalExecutorPoolBuilder")
+            .field("spin_before_park", &self.spin_before_park)
+            .field("name", &self.name)
+            .field("io_memory", &self.io_memory)
+            .field("ring_depth", &self.ring_depth)
+            .field("preempt_timer_duration", &self.preempt_timer_duration)
+            .field("record_io_latencies", &self.record_io_latencies)
+            .field(
+                "blocking_thread_pool_placement",
+                &self.blocking_thread_pool_placement,
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl LocalExecutorPoolBuilder {
@@ -750,6 +807,7 @@ impl LocalExecutorPoolBuilder {
             placement: placement.clone(),
             record_io_latencies: false,
             blocking_thread_pool_placement: placement.shrink_to(1),
+            handler_gen: None,
         }
     }
 
@@ -812,6 +870,39 @@ impl LocalExecutorPoolBuilder {
     #[must_use = "The builder must be built to be useful"]
     pub fn blocking_thread_pool_placement(mut self, placement: PoolPlacement) -> Self {
         self.blocking_thread_pool_placement = placement;
+        self
+    }
+
+    /// Whether to detect stalls in unyielding tasks.
+    /// This method takes a closure of `handler_gen`, which will be called on
+    /// each new thread to generate the stall detection handler to be used in
+    /// that executor. [`DefaultStallDetectionHandler`] installs a signal
+    /// handler for [`nix::libc::SIGUSR1`], so is disabled by default.
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{
+    ///     timer::Timer,
+    ///     DefaultStallDetectionHandler,
+    ///     LocalExecutorPoolBuilder,
+    ///     PoolPlacement,
+    /// };
+    ///
+    /// let local_ex = LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(4))
+    ///     .detect_stalls(Some(Box::new(|| Box::new(DefaultStallDetectionHandler {}))))
+    ///     .on_all_shards(move || async {
+    ///         Timer::new(std::time::Duration::from_millis(100)).await;
+    ///         println!("Hello world!");
+    ///     })
+    ///     .expect("failed to spawn local executors")
+    ///     .join_all();
+    /// ```
+    #[must_use = "The builder must be built to be useful"]
+    pub fn detect_stalls(
+        mut self,
+        handler_gen: Option<Box<dyn Fn() -> Box<dyn stall::StallDetectionHandler + 'static>>>,
+    ) -> Self {
+        self.handler_gen = handler_gen;
         self
     }
 
@@ -878,6 +969,7 @@ impl LocalExecutorPoolBuilder {
             let spin_before_park = self.spin_before_park;
             let record_io_latencies = self.record_io_latencies;
             let blocking_thread_pool_placement = self.blocking_thread_pool_placement.clone();
+            let detect_stalls = self.handler_gen.as_ref().map(|x| (*x.deref())());
             let latch = Latch::clone(latch);
 
             move || {
@@ -894,6 +986,7 @@ impl LocalExecutorPoolBuilder {
                             record_io_latencies,
                             spin_before_park,
                             thread_pool_placement: blocking_thread_pool_placement,
+                            detect_stalls,
                         },
                     )?;
                     le.init();
@@ -977,6 +1070,7 @@ pub struct LocalExecutorConfig {
     pub record_io_latencies: bool,
     pub spin_before_park: Option<Duration>,
     pub thread_pool_placement: PoolPlacement,
+    pub detect_stalls: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
 }
 
 /// Single-threaded executor.
@@ -1009,6 +1103,7 @@ pub struct LocalExecutor {
     parker: parking::Parker,
     id: usize,
     reactor: Rc<reactor::Reactor>,
+    stall_detector: Option<StallDetector>,
 }
 
 impl LocalExecutor {
@@ -1049,7 +1144,7 @@ impl LocalExecutor {
         let p = parking::Parker::new();
         let queues = ExecutorQueues::new(config.preempt_timer, config.spin_before_park);
         trace!(id = notifier.id(), "Creating executor");
-        Ok(LocalExecutor {
+        let mut exec = LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
@@ -1060,7 +1155,31 @@ impl LocalExecutor {
                 config.record_io_latencies,
                 config.thread_pool_placement,
             )?),
-        })
+            stall_detector: None,
+        };
+        exec.detect_stalls(config.detect_stalls)?;
+
+        Ok(exec)
+    }
+
+    /// Enable or disable task stall detection at runtime
+    ///
+    /// # Examples
+    /// ```
+    /// use glommio::{DefaultStallDetectionHandler, LocalExecutor};
+    ///
+    /// let local_ex =
+    ///     LocalExecutor::default().detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})));
+    /// ```
+    fn detect_stalls(
+        &mut self,
+        handler: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
+    ) -> Result<()> {
+        self.stall_detector = match handler {
+            Some(handler) => Some(StallDetector::new(self.id, handler)?),
+            None => None,
+        };
+        Ok(())
     }
 
     /// Returns a unique identifier for this Executor.
@@ -1217,23 +1336,36 @@ impl LocalExecutor {
                     now
                 };
 
-                let mut tasks_executed_this_loop = 0;
-                loop {
-                    let mut queue_ref = queue.borrow_mut();
-                    if self.need_preempt() || queue_ref.yielded() {
-                        break;
-                    }
+                let (runtime, tasks_executed_this_loop) = {
+                    let guard = self.stall_detector.as_ref().map(|x| {
+                        let queue = queue.borrow_mut();
+                        x.enter_task_queue(
+                            queue.stats.index,
+                            queue.name.clone(),
+                            time,
+                            self.preempt_timer_duration(),
+                        )
+                    });
 
-                    if let Some(r) = queue_ref.get_task() {
-                        drop(queue_ref);
-                        r.run();
-                        tasks_executed_this_loop += 1;
-                    } else {
-                        break;
-                    }
-                }
+                    let mut tasks_executed_this_loop = 0;
+                    loop {
+                        let mut queue_ref = queue.borrow_mut();
+                        if self.need_preempt() || queue_ref.yielded() {
+                            break;
+                        }
 
-                let runtime = time.elapsed();
+                        if let Some(r) = queue_ref.get_task() {
+                            drop(queue_ref);
+                            r.run();
+                            tasks_executed_this_loop += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let elapsed = time.elapsed();
+                    drop(guard);
+                    (elapsed, tasks_executed_this_loop)
+                };
 
                 let (need_repush, vruntime) = {
                     let mut state = queue.borrow_mut();

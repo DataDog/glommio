@@ -483,6 +483,7 @@ pub use crate::{
         spawn_local_into,
         spawn_scoped_local,
         spawn_scoped_local_into,
+        stall::{DefaultStallDetectionHandler, StallDetectionHandler},
         yield_if_needed,
         CpuSet,
         ExecutorJoinHandle,
