@@ -2619,10 +2619,11 @@ impl ExecutorProxy {
     {
         let result = Arc::new(Mutex::new(MaybeUninit::<R>::uninit()));
         let f_inner = enclose::enclose!((result) move || {result.lock().unwrap().write(func());});
-        let source =
+        let waiter =
             LOCAL_EX.with(move |local_ex| local_ex.reactor.run_blocking(Box::new(f_inner)));
 
         async move {
+            let source = waiter.await;
             assert!(source.collect_rw().await.is_ok());
             unsafe {
                 let res_arc = Arc::try_unwrap(result).expect("leak");

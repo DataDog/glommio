@@ -15,6 +15,7 @@ use std::{
     collections::VecDeque,
     ffi::CStr,
     fmt,
+    future::Future,
     io,
     ops::Range,
     os::unix::io::RawFd,
@@ -1579,52 +1580,62 @@ impl Reactor {
         );
     }
 
-    fn enqueue_blocking_request(&self, source: &Source, op: BlockingThreadOp) {
-        self.blocking_thread
-            .push(op, source.inner.clone())
-            .expect("failed to spawn blocking request");
+    fn enqueue_blocking_request(
+        &self,
+        source: Pin<Rc<RefCell<InnerSource>>>,
+        op: BlockingThreadOp,
+    ) -> impl Future<Output = ()> {
+        self.blocking_thread.push(op, source)
     }
 
-    pub(crate) fn truncate(&self, source: &Source, size: u64) {
+    pub(crate) fn truncate(&self, source: &Source, size: u64) -> impl Future<Output = ()> {
         let op = BlockingThreadOp::Truncate(source.raw(), size as _);
-        self.enqueue_blocking_request(source, op);
+        self.enqueue_blocking_request(source.inner.clone(), op)
     }
 
-    pub(crate) fn rename(&self, source: &Source) {
+    pub(crate) fn rename(&self, source: &Source) -> impl Future<Output = ()> {
         let (old_path, new_path) = match &*source.source_type() {
             SourceType::Rename(o, n) => (o.clone(), n.clone()),
             _ => panic!("Unexpected source for rename operation"),
         };
 
         let op = BlockingThreadOp::Rename(old_path, new_path);
-        self.enqueue_blocking_request(source, op);
+        self.enqueue_blocking_request(source.inner.clone(), op)
     }
 
-    pub(crate) fn create_dir(&self, source: &Source, mode: libc::c_int) {
+    pub(crate) fn create_dir(
+        &self,
+        source: &Source,
+        mode: libc::c_int,
+    ) -> impl Future<Output = ()> {
         let path = match &*source.source_type() {
             SourceType::CreateDir(p) => p.clone(),
             _ => panic!("Unexpected source for rename operation"),
         };
 
         let op = BlockingThreadOp::CreateDir(path, mode);
-        self.enqueue_blocking_request(source, op);
+        self.enqueue_blocking_request(source.inner.clone(), op)
     }
 
-    pub(crate) fn remove_file(&self, source: &Source) {
+    pub(crate) fn remove_file(&self, source: &Source) -> impl Future<Output = ()> {
         let path = match &*source.source_type() {
             SourceType::Remove(path) => path.clone(),
             _ => panic!("Unexpected source for remove operation"),
         };
 
         let op = BlockingThreadOp::Remove(path);
-        self.enqueue_blocking_request(source, op);
+        self.enqueue_blocking_request(source.inner.clone(), op)
     }
 
-    pub(crate) fn run_blocking(&self, source: &Source, f: Box<dyn FnOnce() + Send + 'static>) {
+    pub(crate) fn run_blocking(
+        &self,
+        source: &Source,
+        f: Box<dyn FnOnce() + Send + 'static>,
+    ) -> impl Future<Output = ()> {
         assert!(matches!(&*source.source_type(), SourceType::BlockingFn));
 
         let op = BlockingThreadOp::Fn(f);
-        self.enqueue_blocking_request(source, op);
+        self.enqueue_blocking_request(source.inner.clone(), op)
     }
 
     pub(crate) fn close(&self, source: &Source) {

@@ -80,7 +80,7 @@ impl Directory {
     /// Similar to create() in the standard library, but returns a DMA file
     pub async fn create<P: AsRef<Path>>(path: P) -> Result<Directory> {
         let path = path.as_ref().to_owned();
-        let source = crate::executor().reactor().create_dir(&*path, 0o777);
+        let source = crate::executor().reactor().create_dir(&*path, 0o777).await;
 
         enhanced_try!(
             match source.collect_rw().await {
