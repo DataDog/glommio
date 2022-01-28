@@ -6,13 +6,13 @@ use crate::{
 use ahash::AHashMap;
 use alloc::rc::Rc;
 use core::fmt::{Debug, Formatter};
-use crossbeam::channel::{Receiver, Sender};
+use flume::{Receiver, Sender};
 use std::{
     cell::{Cell, RefCell},
     convert::{TryFrom, TryInto},
     ffi::CString,
+    future::Future,
     io,
-    io::ErrorKind,
     os::unix::{ffi::OsStrExt, prelude::*},
     path::{Path, PathBuf},
     pin::Pin,
@@ -164,7 +164,7 @@ impl BlockingThread {
 
 #[derive(Debug)]
 pub(crate) struct BlockingThreadPool {
-    tx: Sender<BlockingThreadReq>,
+    tx: Rc<Sender<BlockingThreadReq>>,
     rx: Receiver<BlockingThreadResp>,
     sources: RefCell<AHashMap<u64, Pin<Rc<RefCell<InnerSource>>>>>,
     requests: Cell<u64>,
@@ -176,8 +176,8 @@ impl BlockingThreadPool {
         placement: PoolPlacement,
         sleep_notifier: Arc<SleepNotifier>,
     ) -> crate::Result<Self, ()> {
-        let (in_tx, in_rx) = crossbeam::channel::unbounded();
-        let (out_tx, out_rx) = crossbeam::channel::unbounded();
+        let (in_tx, in_rx) = flume::bounded(4 << 10);
+        let (out_tx, out_rx) = flume::bounded(4 << 10);
         let in_rx = Arc::new(in_rx);
         let out_tx = Arc::new(out_tx);
 
@@ -196,7 +196,7 @@ impl BlockingThreadPool {
 
         Ok(Self {
             _threads: threads,
-            tx: in_tx,
+            tx: Rc::new(in_tx),
             rx: out_rx,
             sources: RefCell::new(Default::default()),
             requests: Cell::new(0),
@@ -207,10 +207,9 @@ impl BlockingThreadPool {
         &self,
         op: BlockingThreadOp,
         source: Pin<Rc<RefCell<InnerSource>>>,
-    ) -> io::Result<()> {
+    ) -> impl Future<Output = ()> {
         let id = self.requests.get();
         self.requests.set(id.overflowing_add(1).0);
-
         let req = BlockingThreadReq {
             op,
             id,
@@ -219,17 +218,15 @@ impl BlockingThreadPool {
                 crate::Latency::Matters(_)
             ),
         };
-
-        self.tx.send(req).map_err(|_| {
-            io::Error::new(
-                ErrorKind::WouldBlock,
-                "failed to enqueue blocking operation",
-            )
-        })?;
-
         let mut waiters = self.sources.borrow_mut();
         assert!(waiters.insert(id, source).is_none());
-        Ok(())
+        let tx = self.tx.clone();
+
+        async move {
+            tx.send_async(req)
+                .await
+                .expect("failed to enqueue blocking operation");
+        }
     }
 
     pub(super) fn flush(&self) -> usize {

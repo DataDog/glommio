@@ -138,7 +138,7 @@ pub(super) type Result<T> = crate::Result<T, ()>;
 /// rename an existing file.
 pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) -> Result<()> {
     let reactor = crate::executor().reactor();
-    let source = reactor.rename(old_path.as_ref(), new_path.as_ref());
+    let source = reactor.rename(old_path.as_ref(), new_path.as_ref()).await;
     source.collect_rw().await?;
     Ok(())
 }
@@ -146,7 +146,7 @@ pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(old_path: P, new_path: Q) ->
 /// remove an existing file given its name
 pub async fn remove<P: AsRef<Path>>(path: P) -> Result<()> {
     let reactor = crate::executor().reactor();
-    let source = reactor.remove_file(path.as_ref());
+    let source = reactor.remove_file(path.as_ref()).await;
     source.collect_rw().await?;
     Ok(())
 }

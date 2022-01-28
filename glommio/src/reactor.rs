@@ -10,6 +10,7 @@ use std::{
     collections::BTreeMap,
     ffi::CString,
     fmt,
+    future::Future,
     io,
     mem,
     os::unix::{ffi::OsStrExt, io::RawFd},
@@ -597,13 +598,17 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn truncate(&self, raw: RawFd, size: u64) -> Source {
+    pub(crate) fn truncate(&self, raw: RawFd, size: u64) -> impl Future<Output = Source> {
         let source = self.new_source(raw, SourceType::Truncate, None);
-        self.sys.truncate(&source, size);
-        source
+        let waiter = self.sys.truncate(&source, size);
+
+        async move {
+            waiter.await;
+            source
+        }
     }
 
-    pub(crate) fn rename<P, Q>(&self, old_path: P, new_path: Q) -> Source
+    pub(crate) fn rename<P, Q>(&self, old_path: P, new_path: Q) -> impl Future<Output = Source>
     where
         P: AsRef<Path>,
         Q: AsRef<Path>,
@@ -613,26 +618,49 @@ impl Reactor {
             SourceType::Rename(old_path.as_ref().to_owned(), new_path.as_ref().to_owned()),
             None,
         );
-        self.sys.rename(&source);
-        source
+        let waiter = self.sys.rename(&source);
+
+        async move {
+            waiter.await;
+            source
+        }
     }
 
-    pub(crate) fn remove_file<P: AsRef<Path>>(&self, path: P) -> Source {
+    pub(crate) fn remove_file<P: AsRef<Path>>(&self, path: P) -> impl Future<Output = Source> {
         let source = self.new_source(-1, SourceType::Remove(path.as_ref().to_owned()), None);
-        self.sys.remove_file(&source);
-        source
+        let waiter = self.sys.remove_file(&source);
+
+        async move {
+            waiter.await;
+            source
+        }
     }
 
-    pub(crate) fn create_dir<P: AsRef<Path>>(&self, path: P, mode: libc::c_int) -> Source {
+    pub(crate) fn create_dir<P: AsRef<Path>>(
+        &self,
+        path: P,
+        mode: libc::c_int,
+    ) -> impl Future<Output = Source> {
         let source = self.new_source(-1, SourceType::CreateDir(path.as_ref().to_owned()), None);
-        self.sys.create_dir(&source, mode);
-        source
+        let waiter = self.sys.create_dir(&source, mode);
+
+        async move {
+            waiter.await;
+            source
+        }
     }
 
-    pub(crate) fn run_blocking(&self, func: Box<dyn FnOnce() + Send + 'static>) -> Source {
+    pub(crate) fn run_blocking(
+        &self,
+        func: Box<dyn FnOnce() + Send + 'static>,
+    ) -> impl Future<Output = Source> {
         let source = self.new_source(-1, SourceType::BlockingFn, None);
-        self.sys.run_blocking(&source, func);
-        source
+        let waiter = self.sys.run_blocking(&source, func);
+
+        async move {
+            waiter.await;
+            source
+        }
     }
 
     pub(crate) fn close(&self, raw: RawFd) -> Source {

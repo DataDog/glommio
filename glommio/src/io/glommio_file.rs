@@ -215,7 +215,8 @@ impl GlommioFile {
             .reactor
             .upgrade()
             .unwrap()
-            .truncate(self.as_raw_fd(), size);
+            .truncate(self.as_raw_fd(), size)
+            .await;
 
         source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
@@ -250,7 +251,7 @@ impl GlommioFile {
 
     pub(crate) async fn remove(&self) -> Result<()> {
         let path = self.path_required("remove")?;
-        let source = self.reactor.upgrade().unwrap().remove_file(&*path);
+        let source = self.reactor.upgrade().unwrap().remove_file(&*path).await;
 
         source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
