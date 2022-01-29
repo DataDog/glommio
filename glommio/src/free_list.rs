@@ -47,7 +47,7 @@ impl<T> Default for FreeList<T> {
     fn default() -> Self {
         FreeList {
             first_free: None,
-            slots: Vec::new(),
+            slots: Vec::with_capacity(8 << 10),
         }
     }
 }
