@@ -29,14 +29,30 @@ LocalExecutorBuilder::default().spawn(|| async move {
 .join();
 ```
 
-Please note Glommio requires at least 512 KiB of locked memory for `io_uring` to work. You can increase the `memlock`
-resource limit (rlimit) as follows:
+For more details check out our [docs page](https://docs.rs/glommio/latest/glommio/) and
+an [introductory article.](https://www.datadoghq.com/blog/engineering/introducing-glommio/)
+
+## Supported Rust Versions
+
+Glommio is built against the latest stable release. The minimum supported version is 1.58. The current Glommio version
+is not guaranteed to build on Rust versions earlier than the minimum supported version.
+
+## Supported Linux kernels
+
+Glommio requires a kernel with a recent enough `io_uring` support, at least current enough to run discovery probes. The
+minimum version at this time is 5.8.
+
+Please also note Glommio requires at least 512 KiB of locked memory for `io_uring` to work. You can increase the
+`memlock` resource limit (rlimit) as follows:
 
 ```sh
 $ vi /etc/security/limits.conf
 *    hard    memlock        512
 *    soft    memlock        512
 ```
+
+> Please note that 512 KiB is the minimum needed to spawn a single executor. Spawning multiple executors may require you
+> to raise the limit accordingly.
 
 To make the new limits effective, you need to log in to the machine again. You can verify that the limits are updated by
 running the following:
@@ -45,12 +61,6 @@ running the following:
 $ ulimit -l
 512
 ```
-
-Glommio also requires a kernel with a recent enough `io_uring` support, at least current enough to run discovery probes.
-The minimum version at this time is 5.8.
-
-For more details check out our [docs page](https://docs.rs/glommio/latest/glommio/) and
-an [introductory article.](https://www.datadoghq.com/blog/engineering/introducing-glommio/)
 
 ## Contributing
 
