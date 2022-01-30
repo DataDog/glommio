@@ -848,9 +848,9 @@ pub(crate) mod test {
             .task_queue_io_stats(q2)
             .expect("failed to retrieve task queue io stats");
         assert_eq!(stats.all_rings().files_opened(), 1);
-        assert_eq!(stats.latency_ring.files_opened(), 1);
+        assert_eq!(stats.main_ring.files_opened(), 1);
         assert_eq!(stats.all_rings().files_closed(), 1);
-        assert_eq!(stats.latency_ring.files_closed(), 1);
+        assert_eq!(stats.main_ring.files_closed(), 1);
         assert_eq!(stats.all_rings().file_reads().0, 2);
         assert_eq!(stats.all_rings().file_writes().0, 1);
     });
