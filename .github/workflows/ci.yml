@@ -53,13 +53,14 @@ jobs:
       - name: Cache setup
         uses: ./.github/actions/cache-setup
 
-      - name: Install cargo helpers and test all targets 
+      - name: Install cargo helpers and test all targets
         run: |
           cat << EOF > "run-gha-workflow.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
           echo "`nproc` CPU(s) available"
           rustup install nightly
           rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
+          rustup install 1.58
           rustup show
           rustup default stable
           cargo install cargo-sort
