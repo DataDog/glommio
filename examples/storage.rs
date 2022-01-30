@@ -169,7 +169,7 @@ impl Reader {
     ) {
         match &self {
             Reader::Direct(file) => {
-                file.read_many(
+                file.read_many_unordered(
                     futures_lite::stream::iter(iovs),
                     MergedBufferLimit::Custom(max_buffer_size),
                     ReadAmplificationLimit::NoAmplification,
@@ -324,7 +324,7 @@ fn main() {
     let mut dir = PathBuf::from(path);
     assert!(dir.exists());
     dir.push("benchfiles");
-    assert!(!dir.exists(), "{:?} already exists", dir);
+    let _ = std::fs::remove_dir_all(&dir);
     let dir = BenchDirectory::new(dir);
 
     let total_memory = sys_info::mem_info().unwrap().total << 10;
