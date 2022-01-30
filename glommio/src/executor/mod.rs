@@ -32,39 +32,6 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
-mod latch;
-mod multitask;
-mod placement;
-pub mod stall;
-
-use latch::{Latch, LatchState};
-pub use placement::{CpuSet, Placement, PoolPlacement};
-use tracing::trace;
-
-use std::{
-    cell::RefCell,
-    collections::{hash_map::Entry, BinaryHeap},
-    fmt,
-    future::Future,
-    io,
-    marker::PhantomData,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-    rc::Rc,
-    sync::{Arc, Mutex},
-    task::{Context, Poll},
-    thread::{Builder, JoinHandle},
-    time::{Duration, Instant},
-};
-
-use futures_lite::pin;
-use scoped_tls::scoped_thread_local;
-
-use log::warn;
-
-#[cfg(doc)]
-use crate::executor::stall::DefaultStallDetectionHandler;
 use crate::{
     error::BuilderErrorKind,
     executor::stall::StallDetector,
@@ -81,6 +48,33 @@ use crate::{
     Shares,
 };
 use ahash::AHashMap;
+use futures_lite::pin;
+use latch::{Latch, LatchState};
+use log::warn;
+pub use placement::{CpuSet, Placement, PoolPlacement};
+use scoped_tls::scoped_thread_local;
+use std::{
+    cell::RefCell,
+    collections::{hash_map::Entry, BinaryHeap},
+    fmt,
+    future::Future,
+    io,
+    marker::PhantomData,
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    rc::Rc,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+    thread::{Builder, JoinHandle},
+    time::{Duration, Instant},
+};
+use tracing::trace;
+
+mod latch;
+mod multitask;
+mod placement;
+pub mod stall;
 
 pub(crate) const DEFAULT_EXECUTOR_NAME: &str = "unnamed";
 pub(crate) const DEFAULT_PREEMPT_TIMER: Duration = Duration::from_millis(100);
@@ -476,7 +470,7 @@ pub struct LocalExecutorBuilder {
     /// executor
     blocking_thread_pool_placement: PoolPlacement,
     /// Whether to detect stalls in unyielding tasks.
-    /// [`DefaultStallDetectionHandler`] installs a signal handler for
+    /// [`stall::DefaultStallDetectionHandler`] installs a signal handler for
     /// [`nix::libc::SIGUSR1`], so is disabled by default.
     detect_stalls: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
 }
@@ -579,7 +573,7 @@ impl LocalExecutorBuilder {
     }
 
     /// Whether to detect stalls in unyielding tasks.
-    /// [`DefaultStallDetectionHandler`] installs a signal handler for
+    /// [`stall::DefaultStallDetectionHandler`] installs a signal handler for
     /// [`nix::libc::SIGUSR1`], so is disabled by default.
     /// # Examples
     ///
@@ -876,7 +870,7 @@ impl LocalExecutorPoolBuilder {
     /// Whether to detect stalls in unyielding tasks.
     /// This method takes a closure of `handler_gen`, which will be called on
     /// each new thread to generate the stall detection handler to be used in
-    /// that executor. [`DefaultStallDetectionHandler`] installs a signal
+    /// that executor. [`stall::DefaultStallDetectionHandler`] installs a signal
     /// handler for [`nix::libc::SIGUSR1`], so is disabled by default.
     /// # Examples
     ///
@@ -1103,7 +1097,7 @@ pub struct LocalExecutor {
     parker: parking::Parker,
     id: usize,
     reactor: Rc<reactor::Reactor>,
-    stall_detector: Option<StallDetector>,
+    stall_detector: RefCell<Option<StallDetector>>,
 }
 
 impl LocalExecutor {
@@ -1143,11 +1137,12 @@ impl LocalExecutor {
         }
         let p = parking::Parker::new();
         let queues = ExecutorQueues::new(config.preempt_timer, config.spin_before_park);
-        trace!(id = notifier.id(), "Creating executor");
-        let mut exec = LocalExecutor {
+        let id = notifier.id();
+        trace!(id = id, "Creating executor");
+        Ok(LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
-            id: notifier.id(),
+            id,
             reactor: Rc::new(reactor::Reactor::new(
                 notifier,
                 config.io_memory,
@@ -1155,11 +1150,13 @@ impl LocalExecutor {
                 config.record_io_latencies,
                 config.thread_pool_placement,
             )?),
-            stall_detector: None,
-        };
-        exec.detect_stalls(config.detect_stalls)?;
-
-        Ok(exec)
+            stall_detector: RefCell::new(
+                config
+                    .detect_stalls
+                    .map(|x| StallDetector::new(id, x))
+                    .transpose()?,
+            ),
+        })
     }
 
     /// Enable or disable task stall detection at runtime
@@ -1171,14 +1168,15 @@ impl LocalExecutor {
     /// let local_ex =
     ///     LocalExecutor::default().detect_stalls(Some(Box::new(DefaultStallDetectionHandler {})));
     /// ```
-    fn detect_stalls(
-        &mut self,
+    pub fn detect_stalls(
+        &self,
         handler: Option<Box<dyn stall::StallDetectionHandler + 'static>>,
     ) -> Result<()> {
-        self.stall_detector = match handler {
-            Some(handler) => Some(StallDetector::new(self.id, handler)?),
-            None => None,
-        };
+        self.stall_detector.replace(
+            handler
+                .map(|x| StallDetector::new(self.id, x))
+                .transpose()?,
+        );
         Ok(())
     }
 
@@ -1337,7 +1335,8 @@ impl LocalExecutor {
                 };
 
                 let (runtime, tasks_executed_this_loop) = {
-                    let guard = self.stall_detector.as_ref().map(|x| {
+                    let detector = self.stall_detector.borrow();
+                    let guard = detector.as_ref().map(|x| {
                         let queue = queue.borrow_mut();
                         x.enter_task_queue(
                             queue.stats.index,
@@ -2640,17 +2639,7 @@ impl ExecutorProxy {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::{
-        enclose,
-        timer::{self, sleep, Timer},
-        SharesManager,
-    };
     use core::mem::MaybeUninit;
-    use futures::{
-        future::{join, join_all, poll_fn},
-        join,
-    };
     use std::{
         cell::Cell,
         collections::HashMap,
@@ -2661,6 +2650,19 @@ mod test {
         },
         task::Waker,
     };
+
+    use futures::{
+        future::{join, join_all, poll_fn},
+        join,
+    };
+
+    use crate::{
+        enclose,
+        timer::{self, sleep, Timer},
+        SharesManager,
+    };
+
+    use super::*;
 
     #[test]
     fn create_and_destroy_executor() {
