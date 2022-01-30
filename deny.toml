@@ -10,7 +10,8 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MPL-2.0",
-    "Unlicense"
+    "Unlicense",
+    "Zlib"
 ]
 copyleft = "deny"
 default = "deny"
