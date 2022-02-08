@@ -2956,17 +2956,14 @@ mod test {
         Duration::from_secs(v.tv_sec as u64) + Duration::from_micros(v.tv_usec as u64)
     }
 
-    fn getrusage() -> libc::rusage {
+    fn getrusage() -> Duration {
         let mut s0 = MaybeUninit::<libc::rusage>::uninit();
         let err = unsafe { libc::getrusage(libc::RUSAGE_THREAD, s0.as_mut_ptr()) };
         if err != 0 {
             panic!("getrusage error = {}", err);
         }
-        unsafe { s0.assume_init() }
-    }
-
-    fn getrusage_utime() -> Duration {
-        from_timeval(getrusage().ru_utime)
+        let usage = unsafe { s0.assume_init() };
+        from_timeval(usage.ru_utime) + from_timeval(usage.ru_stime)
     }
 
     #[test]
@@ -2977,7 +2974,7 @@ mod test {
             Latency::Matters(Duration::from_millis(10)),
             "my_tq",
         );
-        let start = getrusage_utime();
+        let start = getrusage();
         ex.run(async {
             crate::spawn_local_into(
                 async { timer::sleep(Duration::from_secs(1)).await },
@@ -2988,7 +2985,7 @@ mod test {
         });
 
         assert!(
-            getrusage_utime() - start < Duration::from_millis(2),
+            getrusage() - start < Duration::from_millis(2),
             "expected user time on LE is less than 2 millisecond"
         );
     }
@@ -2997,30 +2994,34 @@ mod test {
     fn test_spin() {
         let dur = Duration::from_secs(1);
         let ex0 = LocalExecutorBuilder::default().make().unwrap();
-        let ex0_ru_start = getrusage_utime();
-        ex0.run(async { timer::sleep(dur).await });
-        let ex0_ru_finish = getrusage_utime();
+        ex0.run(async {
+            let ex0_ru_start = getrusage();
+            timer::sleep(dur).await;
+            let ex0_ru_finish = getrusage();
+
+            assert!(
+                ex0_ru_finish - ex0_ru_start < Duration::from_millis(10),
+                "expected user time on LE0 is less than 10 millisecond"
+            );
+        });
 
         let ex = LocalExecutorBuilder::new(Placement::Fixed(0))
             .spin_before_park(Duration::from_millis(100))
             .make()
             .unwrap();
-        let ex_ru_start = getrusage_utime();
-        ex.run(async {
-            crate::spawn_local(async move { timer::sleep(dur).await }).await;
-        });
-        let ex_ru_finish = getrusage_utime();
 
-        assert!(
-            ex0_ru_finish - ex0_ru_start < Duration::from_millis(10),
-            "expected user time on LE0 is less than 10 millisecond"
-        );
-        // 100 ms may have passed without us running for 100ms in case
-        // there are other threads. Need to be a bit more relaxed
-        assert!(
-            ex_ru_finish - ex_ru_start >= Duration::from_millis(50),
-            "expected user time on LE is much greater than 50 millisecond"
-        );
+        ex.run(async {
+            let ex_ru_start = getrusage();
+            timer::sleep(dur).await;
+            let ex_ru_finish = getrusage();
+
+            // 100 ms may have passed without us running for 100ms in case
+            // there are other threads. Need to be a bit more relaxed
+            assert!(
+                ex_ru_finish - ex_ru_start >= Duration::from_millis(50),
+                "expected user time on LE is much greater than 50 millisecond",
+            );
+        });
     }
 
     #[test]
