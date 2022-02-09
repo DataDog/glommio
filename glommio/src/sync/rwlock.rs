@@ -728,33 +728,16 @@ impl<T> RwLock<T> {
     /// let lock = Rc::new(RwLock::new(()));
     /// let c_lock = lock.clone();
     ///
-    /// let semaphore = Rc::new(Semaphore::new(0));
-    /// let c_semaphore = semaphore.clone();
-    ///
     /// let ex = LocalExecutor::default();
     /// ex.run(async move {
-    ///     let closer = glommio::spawn_local(async move {
-    ///         //await till read lock will be acquired
-    ///         c_semaphore.acquire(1).await.unwrap();
-    ///         c_lock.close();
+    ///     let lock = RwLock::new(());
+    ///     let guard = lock.read().await.unwrap();
+    ///     assert!(lock.close().is_err());
     ///
-    ///         assert!(c_lock.try_write().is_err());
-    ///     })
-    ///     .detach();
+    ///     drop(guard);
+    ///     lock.close().unwrap();
     ///
-    ///     let dead_locker = glommio::spawn_local(async move {
-    ///         let _r = lock.read().await.unwrap();
-    ///
-    ///         //allow another fiber close RwLock
-    ///         semaphore.signal(1);
-    ///
-    ///         // this situation leads to deadlock unless lock is closed
-    ///         let lock_result = lock.write().await;
-    ///         assert!(lock_result.is_err());
-    ///     })
-    ///     .detach();
-    ///
-    ///     dead_locker.await;
+    ///     assert!(lock.read().await.is_err());
     /// });
     /// ```
     pub fn close(&self) -> LockResult<()> {
@@ -917,7 +900,8 @@ impl<T: Default> Default for RwLock<T> {
 
 impl<T> Drop for RwLock<T> {
     fn drop(&mut self) {
-        //Lifetime annotation prohibits guards to outlive RwLock so such unwrap is safe.
+        //Lifetime annotation prohibits guards to outlive RwLock so such unwrap is
+        // safe.
         self.close().unwrap();
         assert!(self.state.borrow().waiters_queue.is_empty());
     }
