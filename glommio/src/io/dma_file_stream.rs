@@ -1376,10 +1376,7 @@ impl AsyncWrite for DmaStreamWriter {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        io::dma_file::{align_up, test::make_test_directories},
-        timer::Timer,
-    };
+    use crate::{io::dma_file::align_up, test_utils::make_test_directories, timer::Timer};
     use futures::{task::noop_waker_ref, AsyncRead, AsyncReadExt, AsyncWriteExt};
     use std::{io::ErrorKind, path::Path, time::Duration};
 
