@@ -452,37 +452,17 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{enclose, test_utils::*, ByteSliceMutExt, Latency, Shares};
+    use crate::{
+        enclose,
+        test_utils::{make_test_directories, TestDirectoryKind},
+        ByteSliceMutExt,
+        Latency,
+        Shares,
+    };
     use futures::join;
     use futures_lite::{stream, StreamExt};
     use rand::{seq::SliceRandom, thread_rng};
     use std::{cell::RefCell, path::PathBuf, time::Duration};
-
-    #[cfg(test)]
-    pub(crate) fn make_test_directories(test_name: &str) -> std::vec::Vec<TestDirectory> {
-        let mut vec = Vec::new();
-
-        // Glommio currently only supports NVMe-backed volumes formatted with XFS or
-        // EXT4. We therefore let the user decide what directory glommio should
-        // use to host the unit tests in. For more information regarding this
-        // limitation, see the README
-        match std::env::var("GLOMMIO_TEST_POLLIO_ROOTDIR") {
-            Err(_) => {
-                eprintln!(
-                    "Glommio currently only supports NVMe-backed volumes formatted with XFS or \
-                     EXT4. To run poll io-related tests, please set GLOMMIO_TEST_POLLIO_ROOTDIR \
-                     to a NVMe-backed directory path in your environment.\nPoll io tests will not \
-                     run."
-                );
-            }
-            Ok(path) => {
-                vec.push(make_poll_test_directory(path, test_name));
-            }
-        };
-
-        vec.push(make_tmp_test_directory(test_name));
-        vec
-    }
 
     macro_rules! dma_file_test {
         ( $name:ident, $dir:ident, $kind:ident, $code:block) => {

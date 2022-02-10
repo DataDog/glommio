@@ -249,7 +249,7 @@ impl BufferedFile {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::io::dma_file::test::make_test_directories;
+    use crate::test_utils::make_test_directories;
 
     macro_rules! buffered_file_test {
         ( $name:ident, $dir:ident, $kind:ident, $code:block) => {

@@ -691,7 +691,7 @@ impl AsyncBufRead for Stdin {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::io::dma_file::test::make_test_directories;
+    use crate::test_utils::make_test_directories;
     use futures_lite::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
     use std::io::ErrorKind;
 

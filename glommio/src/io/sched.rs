@@ -242,8 +242,9 @@ impl Drop for ScheduledSource {
 pub(crate) mod test {
     use super::*;
     use crate::{
-        io::{dma_file::test::make_test_directories, DmaFile, OpenOptions, ReadResult},
+        io::{DmaFile, OpenOptions, ReadResult},
         sys::SourceType,
+        test_utils::make_test_directories,
     };
     use futures::join;
     use std::rc::Rc;

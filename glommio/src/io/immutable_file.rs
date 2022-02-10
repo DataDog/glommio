@@ -450,7 +450,7 @@ impl ImmutableFile {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{enclose, io::DmaFile, test_utils::make_tmp_test_directory};
+    use crate::{enclose, io::DmaFile, test_utils::make_test_directories};
     use futures::{AsyncReadExt, AsyncWriteExt};
     use futures_lite::stream::{self, StreamExt};
 
@@ -458,9 +458,10 @@ mod test {
         ( $name:ident, $dir:ident, $code:block) => {
             #[test]
             fn $name() {
-                let tmpdir = make_tmp_test_directory(stringify!($name));
-                let $dir = tmpdir.path.clone();
-                test_executor!(async move { $code });
+                for dir in make_test_directories(&format!("immutable-dma-{}", stringify!($name))) {
+                    let $dir = dir.path.clone();
+                    test_executor!(async move { $code });
+                }
             }
         };
 
@@ -468,9 +469,10 @@ mod test {
             #[test]
             #[should_panic]
             fn $name() {
-                let tmpdir = make_tmp_test_directory(stringify!($name));
-                let $dir = tmpdir.path.clone();
-                test_executor!(async move { $code });
+                for dir in make_test_directories(&format!("immutable-dma-{}", stringify!($name))) {
+                    let $dir = dir.path.clone();
+                    test_executor!(async move { $code });
+                }
             }
         };
     }
