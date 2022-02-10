@@ -1891,7 +1891,7 @@ impl Reactor {
         if let Some(preempt) = preempt_timer() {
             self.latency_preemption_timeout_src
                 .set(Some(lat_ring.prepare_latency_preemption_timer(preempt)));
-            assert!(flush_rings!(lat_ring, main_ring)? > 0);
+            flush_rings!(lat_ring, main_ring)?;
         }
 
         // A Note about `need_preempt`:

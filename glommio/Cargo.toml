@@ -1,13 +1,13 @@
 [package]
 name = "glommio"
-version = "0.6.0"
+version = "0.7.0"
 authors = [
     "Glauber Costa <glommer@gmail.com>",
     "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
     "DataDog <info@datadoghq.com>"
 ]
 edition = "2018"
-description = "Glommio is a thread-per-core framework that aims to make the task of writing highly parallel asynchronous applications in a thread-per-core architecture easier for rustaceans"
+description = "Glommio is a thread-per-core crate that makes writing highly parallel asynchronous applications in a thread-per-core architecture easier for rustaceans."
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/DataDog/glommio"
 homepage = "https://github.com/DataDog/glommio"
@@ -17,7 +17,7 @@ readme = "../README.md"
 
 [dependencies]
 ahash = "0.7"
-backtrace = { version = "~0.3.58" }
+backtrace = { version = "0.3" }
 bitflags = "1.3"
 bitmaps = "3.1"
 buddy-alloc = "0.4"
