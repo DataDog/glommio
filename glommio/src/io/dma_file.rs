@@ -6,7 +6,6 @@
 use crate::{
     io::{
         bulk_io::{
-            BulkIo,
             CoalescedReads,
             IoVec,
             MergedBufferLimit,
@@ -20,6 +19,7 @@ use crate::{
         open_options::OpenOptions,
         read_result::ReadResult,
     },
+    reactor::Reactor,
     sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
 };
 use futures_lite::{Stream, StreamExt};
@@ -31,6 +31,8 @@ use std::{
     path::Path,
     rc::Rc,
 };
+
+use super::ScheduledSource;
 
 pub(super) type Result<T> = crate::Result<T, ()>;
 
@@ -88,6 +90,62 @@ impl DmaFile {
 impl AsRawFd for DmaFile {
     fn as_raw_fd(&self) -> RawFd {
         self.file.as_raw_fd()
+    }
+}
+
+#[derive(Debug)]
+pub struct CoalescedReadsMapped<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> {
+    stream: CoalescedReads<V, S>,
+    file: Rc<DmaFile>,
+    reactor: Rc<Reactor>,
+}
+
+impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> CoalescedReadsMapped<V, S> {
+    pub(crate) fn new(
+        max_merged_buffer_size: usize,
+        max_read_amp: Option<usize>,
+        alignment: Option<u64>,
+        iter: S,
+        file: Rc<DmaFile>,
+    ) -> Self {
+        let reactor = file.file.reactor.upgrade().unwrap();
+        CoalescedReadsMapped {
+            stream: CoalescedReads::new(max_merged_buffer_size, max_read_amp, alignment, iter),
+            file,
+            reactor,
+        }
+    }
+}
+
+impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReadsMapped<V, S> {
+    type Item = (ScheduledSource, ReadManyArgs<V>);
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let res = futures_lite::ready!(this.stream.poll_next(cx));
+        let res = match res {
+            Some(iov) => {
+                let fd = this.file.as_raw_fd();
+                let pollable = this.file.pollable;
+                let scheduler = this.file.file.scheduler.borrow();
+                Some((
+                    this.reactor
+                        .read_dma(fd, iov.pos(), iov.size(), pollable, scheduler.as_ref()),
+                    ReadManyArgs {
+                        user_reads: iov.coalesced_user_iovecs,
+                        system_read: (iov.pos, iov.size),
+                    },
+                ))
+            }
+            None => None,
+        };
+        std::task::Poll::Ready(res)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
     }
 }
 
@@ -323,7 +381,7 @@ impl DmaFile {
         iovs: S,
         buffer_limit: MergedBufferLimit,
         read_amp_limit: ReadAmplificationLimit,
-    ) -> ReadManyResult<V, impl BulkIo<ReadManyArgs<V>>>
+    ) -> ReadManyResult<V, OrderedBulkIo<ReadManyArgs<V>, CoalescedReadsMapped<V, S>>>
     where
         V: IoVec + Unpin,
         S: Stream<Item = V> + Unpin,
@@ -342,26 +400,13 @@ impl DmaFile {
             ReadAmplificationLimit::NoLimit => None,
         };
 
-        let file = self.clone();
-        let reactor = file.file.reactor.upgrade().unwrap();
-        let it = CoalescedReads::new(
+        let it = CoalescedReadsMapped::new(
             max_merged_buffer_size,
             max_read_amp,
             Some(self.o_direct_alignment),
             iovs,
-        )
-        .map(move |iov| {
-            let fd = file.as_raw_fd();
-            let pollable = file.pollable;
-            let scheduler = file.file.scheduler.borrow();
-            (
-                reactor.read_dma(fd, iov.pos(), iov.size(), pollable, scheduler.as_ref()),
-                ReadManyArgs {
-                    user_reads: iov.coalesced_user_iovecs,
-                    system_read: (iov.pos, iov.size),
-                },
-            )
-        });
+            self.clone(),
+        );
         ReadManyResult {
             inner: OrderedBulkIo::new(self.clone(), crate::executor().reactor().ring_depth(), it),
             current: Default::default(),
@@ -375,7 +420,7 @@ impl DmaFile {
         iovs: S,
         buffer_limit: MergedBufferLimit,
         read_amp_limit: ReadAmplificationLimit,
-    ) -> ReadManyResult<V, impl BulkIo<ReadManyArgs<V>>>
+    ) -> ReadManyResult<V, UnorderedBulkIo<ReadManyArgs<V>, CoalescedReadsMapped<V, S>>>
     where
         V: IoVec + Unpin,
         S: Stream<Item = V> + Unpin,
@@ -394,26 +439,14 @@ impl DmaFile {
             ReadAmplificationLimit::NoLimit => None,
         };
 
-        let file = self.clone();
-        let reactor = file.file.reactor.upgrade().unwrap();
-        let it = CoalescedReads::new(
+        let it = CoalescedReadsMapped::new(
             max_merged_buffer_size,
             max_read_amp,
             Some(self.o_direct_alignment),
             iovs,
-        )
-        .map(move |iov| {
-            let fd = file.as_raw_fd();
-            let pollable = file.pollable;
-            let scheduler = file.file.scheduler.borrow();
-            (
-                reactor.read_dma(fd, iov.pos(), iov.size(), pollable, scheduler.as_ref()),
-                ReadManyArgs {
-                    user_reads: iov.coalesced_user_iovecs,
-                    system_read: (iov.pos, iov.size),
-                },
-            )
-        });
+            self.clone(),
+        );
+
         ReadManyResult {
             inner: UnorderedBulkIo::new(self.clone(), crate::executor().reactor().ring_depth(), it),
             current: Default::default(),

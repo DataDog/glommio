@@ -156,6 +156,7 @@ impl IoVec for (u64, usize) {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct MergedIOVecs<V: IoVec> {
     pub(crate) coalesced_user_iovecs: VecDeque<V>,
     pub(crate) pos: u64,
@@ -201,6 +202,7 @@ impl<V: IoVec> Iterator for MergedIOVecs<V> {
     }
 }
 
+#[derive(Debug)]
 struct IOVecMerger<V: IoVec> {
     max_merged_buffer_size: usize,
     max_read_amp: Option<usize>,
@@ -265,6 +267,7 @@ impl<V: IoVec> IOVecMerger<V> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct CoalescedReads<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> {
     iter: S,
     merger: Option<IOVecMerger<V>>,
@@ -400,7 +403,7 @@ pub trait BulkIo<U: IoVec + Unpin>:
 }
 
 #[derive(Debug)]
-pub(crate) struct OrderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
+pub struct OrderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
     file: Rc<DmaFile>,
     iovs: S,
 
@@ -531,8 +534,7 @@ impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> BulkIo<U>
 }
 
 #[derive(Debug)]
-pub(crate) struct UnorderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin>
-{
+pub struct UnorderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
     file: Rc<DmaFile>,
     iovs: S,
 
