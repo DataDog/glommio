@@ -134,23 +134,20 @@ impl DmaFile {
         // if this is in-memory.
         let file = GlommioFile::open_at(dir, path, flags, mode).await?;
 
+        let (major, minor) = (file.dev_major as usize, file.dev_minor as usize);
         let buf = statfs(path).unwrap();
         let fstype = buf.filesystem_type();
-        let mut pollable;
-
-        if fstype == TMPFS_MAGIC {
-            pollable = PollableStatus::NonPollable(DirectIo::Disabled);
+        let pollable = if fstype == TMPFS_MAGIC {
+            PollableStatus::NonPollable(DirectIo::Disabled)
         } else {
-            pollable = PollableStatus::Pollable;
             sys::direct_io_ify(file.as_raw_fd(), flags)?;
-        }
-        let (major, minor) = (file.dev_major as usize, file.dev_minor as usize);
-
-        // Docker overlay can show as dev_major 0.
-        // Anything like that is obviously not something that supports the poll ring.
-        if file.dev_major == 0 || sysfs::BlockDevice::is_md(major, minor) {
-            pollable = PollableStatus::NonPollable(DirectIo::Enabled);
-        }
+            let reactor = file.reactor.upgrade().unwrap();
+            if reactor.probe_iopoll_support(file.as_raw_fd()).await {
+                PollableStatus::Pollable
+            } else {
+                PollableStatus::NonPollable(DirectIo::Enabled)
+            }
+        };
         let max_sectors_size =
             sysfs::BlockDevice::max_sectors_size(file.dev_major as _, file.dev_minor as _);
         let max_segment_size =

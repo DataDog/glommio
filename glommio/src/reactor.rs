@@ -247,6 +247,22 @@ impl Reactor {
         self.io_scheduler.inform_requirements(req);
     }
 
+    pub(crate) async fn probe_iopoll_support(&self, raw: RawFd) -> bool {
+        // In order to probe support for iopoll, we issue a read of size 0 and assert we
+        // don't receive `ENOTSUP`, which signal that iopoll isn't supported.
+        // This method purposefully ignores other kind of errors: we are only interested
+        // is `ENOTSUP`.
+
+        let source = self.new_source(raw, SourceType::Read(PollableStatus::Pollable, None), None);
+        self.sys.read_dma(&source, 0, 0);
+        if let Err(err) = source.collect_rw().await {
+            if let Some(libc::ENOTSUP) = err.raw_os_error() {
+                return false;
+            }
+        }
+        true
+    }
+
     pub(crate) fn register_shared_channel<F>(&self, test_function: Box<F>) -> u64
     where
         F: Fn() -> usize + 'static,
