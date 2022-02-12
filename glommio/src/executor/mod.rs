@@ -94,6 +94,7 @@ static mut LOCAL_EX: *const LocalExecutor = std::ptr::null();
 scoped_tls::scoped_thread_local!(static LOCAL_EX: LocalExecutor);
 
 /// Returns a proxy struct to the [`LocalExecutor`]
+#[inline(always)]
 pub fn executor() -> ExecutorProxy {
     ExecutorProxy {}
 }
@@ -1899,7 +1900,7 @@ impl<'a, T> Future for ScopedTask<'a, T> {
 /// and should be preferred over unconditional yielding methods like
 /// [`ExecutorProxy::yield_now`] and
 /// [`ExecutorProxy::yield_task_queue_now`].
-#[inline]
+#[inline(always)]
 pub async fn yield_if_needed() {
     executor().yield_if_needed().await
 }
@@ -2083,51 +2084,6 @@ pub unsafe fn spawn_scoped_local_into<'a, T>(
 pub struct ExecutorProxy {}
 
 impl ExecutorProxy {
-    async fn cond_yield<F>(cond: F)
-    where
-        F: FnOnce(&LocalExecutor) -> bool,
-    {
-        #[cfg(not(feature = "native-tls"))]
-        {
-            let need_yield = if LOCAL_EX.is_set() {
-                LOCAL_EX.with(|local_ex| {
-                    if cond(local_ex) {
-                        local_ex.mark_me_for_yield();
-                        true
-                    } else {
-                        false
-                    }
-                })
-            } else {
-                // We are not in a glommio context
-                false
-            };
-
-            if need_yield {
-                futures_lite::future::yield_now().await;
-            }
-        }
-
-        #[cfg(feature = "native-tls")]
-        {
-            let need_yield = if let Some(local_ex) = unsafe { LOCAL_EX.as_ref() } {
-                if cond(local_ex) {
-                    local_ex.mark_me_for_yield();
-                    true
-                } else {
-                    false
-                }
-            } else {
-                // We are not in a glommio context
-                false
-            };
-
-            if need_yield {
-                futures_lite::future::yield_now().await;
-            }
-        }
-    }
-
     /// Checks if this task has run for too long and need to be preempted. This
     /// is useful for situations where we can't call .await, for instance,
     /// if a [`RefMut`] is held. If this tests true, then the user is
@@ -2162,8 +2118,8 @@ impl ExecutorProxy {
         return unsafe {
             LOCAL_EX
                 .as_ref()
-                .expect("this thread doesn't have a LocalExecutor running")
-                .need_preempt()
+                .map(|ex| ex.need_preempt())
+                .unwrap_or_default()
         };
     }
 
@@ -2182,9 +2138,36 @@ impl ExecutorProxy {
     /// and should be preferred over unconditional yielding methods like
     /// [`ExecutorProxy::yield_now`] and
     /// [`ExecutorProxy::yield_task_queue_now`].
-    #[inline]
+    #[inline(always)]
     pub async fn yield_if_needed(&self) {
-        Self::cond_yield(|local_ex| local_ex.need_preempt()).await;
+        #[cfg(not(feature = "native-tls"))]
+        {
+            let need_yield = if LOCAL_EX.is_set() {
+                LOCAL_EX.with(|local_ex| {
+                    if local_ex.need_preempt() {
+                        local_ex.mark_me_for_yield();
+                        true
+                    } else {
+                        false
+                    }
+                })
+            } else {
+                // We are not in a glommio context
+                false
+            };
+
+            if need_yield {
+                futures_lite::future::yield_now().await;
+            }
+        }
+
+        #[cfg(feature = "native-tls")]
+        unsafe {
+            if self.need_preempt() {
+                (*LOCAL_EX).mark_me_for_yield();
+                futures_lite::future::yield_now().await;
+            }
+        }
     }
 
     /// Unconditionally yields the current task and forces the scheduler
@@ -2193,6 +2176,7 @@ impl ExecutorProxy {
     ///
     /// Unless you know you need to yield right now, using
     /// [`ExecutorProxy::yield_if_needed`] instead is the better choice.
+    #[inline(always)]
     pub async fn yield_now(&self) {
         futures_lite::future::yield_now().await
     }
@@ -2203,11 +2187,28 @@ impl ExecutorProxy {
     ///
     /// Unless you know you need to yield right now, using
     /// [`ExecutorProxy::yield_if_needed`] instead is the better choice.
+    #[inline(always)]
     pub async fn yield_task_queue_now(&self) {
-        Self::cond_yield(|_| true).await
+        #[cfg(not(feature = "native-tls"))]
+        {
+            if LOCAL_EX.is_set() {
+                LOCAL_EX.with(|local_ex| {
+                    local_ex.mark_me_for_yield();
+                })
+            }
+            futures_lite::future::yield_now().await;
+        }
+
+        #[cfg(feature = "native-tls")]
+        {
+            if let Some(local_ex) = unsafe { LOCAL_EX.as_ref() } {
+                local_ex.mark_me_for_yield();
+            }
+            futures_lite::future::yield_now().await;
+        }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn reactor(&self) -> Rc<reactor::Reactor> {
         #[cfg(not(feature = "native-tls"))]
         return LOCAL_EX.with(|local_ex| local_ex.get_reactor());
