@@ -287,6 +287,8 @@
 //! ```
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 #![cfg_attr(doc, deny(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(feature = "native-tls", feature(thread_local))]
+
 #[macro_use]
 extern crate nix;
 extern crate alloc;
