@@ -46,6 +46,7 @@ pub(crate) struct BlockDevice {
     max_sectors_size: usize,
     max_segment_size: usize,
     cache: StorageCache,
+    iopoll: Option<bool>,
     subcomponents: Vec<PathBuf>,
 }
 
@@ -57,6 +58,18 @@ macro_rules! block_property {
             let bdev = map.entry(key).or_insert_with(|| BlockDevice::new(key));
 
             bdev.$property.clone()
+        })
+    };
+}
+
+macro_rules! set_block_property {
+    ( $map:expr, $property:tt, $major:expr, $minor:expr, $value:expr ) => {
+        DEV_MAP.with(|x| {
+            let key = ($major, $minor);
+            let mut map = x.borrow_mut();
+            let bdev = map.entry(key).or_insert_with(|| BlockDevice::new(key));
+
+            bdev.$property = $value;
         })
     };
 }
@@ -82,6 +95,7 @@ impl BlockDevice {
             max_sectors_size: 128 << 10,
             max_segment_size: (u32::MAX - 1) as usize,
             cache: StorageCache::WriteBack,
+            iopoll: Some(false),
             subcomponents: Vec::new(),
         }
     }
@@ -125,6 +139,7 @@ impl BlockDevice {
             max_sectors_size: max_sectors_kb << 10,
             max_segment_size,
             cache,
+            iopoll: None,
             subcomponents,
         }
     }
@@ -163,6 +178,14 @@ impl BlockDevice {
 
     pub(crate) fn is_md(major: usize, minor: usize) -> bool {
         !block_property!(DEV_MAP, subcomponents, major, minor).is_empty()
+    }
+
+    pub(crate) fn iopoll(major: usize, minor: usize) -> Option<bool> {
+        block_property!(DEV_MAP, iopoll, major, minor)
+    }
+
+    pub(crate) fn set_iopoll_support(major: usize, minor: usize, supported: bool) {
+        set_block_property!(DEV_MAP, iopoll, major, minor, Some(supported))
     }
 }
 
