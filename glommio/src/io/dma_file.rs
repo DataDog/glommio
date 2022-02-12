@@ -142,16 +142,17 @@ impl DmaFile {
         } else {
             sys::direct_io_ify(file.as_raw_fd(), flags)?;
             let reactor = file.reactor.upgrade().unwrap();
-            if reactor.probe_iopoll_support(file.as_raw_fd()).await {
+            if reactor
+                .probe_iopoll_support(file.as_raw_fd(), major, minor)
+                .await
+            {
                 PollableStatus::Pollable
             } else {
                 PollableStatus::NonPollable(DirectIo::Enabled)
             }
         };
-        let max_sectors_size =
-            sysfs::BlockDevice::max_sectors_size(file.dev_major as _, file.dev_minor as _);
-        let max_segment_size =
-            sysfs::BlockDevice::max_segment_size(file.dev_major as _, file.dev_minor as _);
+        let max_sectors_size = sysfs::BlockDevice::max_sectors_size(major, minor);
+        let max_segment_size = sysfs::BlockDevice::max_segment_size(major, minor);
 
         Ok(DmaFile {
             file,

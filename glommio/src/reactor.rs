@@ -25,6 +25,7 @@ use std::{
 };
 
 use ahash::AHashMap;
+use log::error;
 use nix::sys::socket::{MsgFlags, SockAddr};
 use smallvec::SmallVec;
 
@@ -35,6 +36,7 @@ use crate::{
         self,
         common_flags,
         read_flags,
+        sysfs,
         DirectIo,
         DmaBuffer,
         IoBuffer,
@@ -247,20 +249,40 @@ impl Reactor {
         self.io_scheduler.inform_requirements(req);
     }
 
-    pub(crate) async fn probe_iopoll_support(&self, raw: RawFd) -> bool {
-        // In order to probe support for iopoll, we issue a read of size 0 and assert we
-        // don't receive `ENOTSUP`, which signal that iopoll isn't supported.
-        // This method purposefully ignores other kind of errors: we are only interested
-        // is `ENOTSUP`.
+    pub(crate) async fn probe_iopoll_support(
+        &self,
+        raw: RawFd,
+        major: usize,
+        minor: usize,
+    ) -> bool {
+        match sysfs::BlockDevice::iopoll(major, minor) {
+            None => {
+                // In order to probe support for iopoll, we issue a read of size 0 and assert we
+                // don't receive `ENOTSUP`, which signal that iopoll isn't supported.
 
-        let source = self.new_source(raw, SourceType::Read(PollableStatus::Pollable, None), None);
-        self.sys.read_dma(&source, 0, 0);
-        if let Err(err) = source.collect_rw().await {
-            if let Some(libc::ENOTSUP) = err.raw_os_error() {
-                return false;
+                let source =
+                    self.new_source(raw, SourceType::Read(PollableStatus::Pollable, None), None);
+                self.sys.read_dma(&source, 0, 0);
+                let iopoll = if let Err(err) = source.collect_rw().await {
+                    if let Some(libc::ENOTSUP) = err.raw_os_error() {
+                        false
+                    } else {
+                        // The IO requests failed, but not because the poll ring doesn't work.
+                        error!(
+                            "got unexpected error when probing iopoll support for file {} hosted \
+                             on ({}, {}); the poll ring will be disabled for this device: {}",
+                            raw, major, minor, err
+                        );
+                        false
+                    }
+                } else {
+                    true
+                };
+                sysfs::BlockDevice::set_iopoll_support(major, minor, iopoll);
+                iopoll
             }
+            Some(iopoll) => iopoll,
         }
-        true
     }
 
     pub(crate) fn register_shared_channel<F>(&self, test_function: Box<F>) -> u64
