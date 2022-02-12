@@ -59,6 +59,7 @@ cc = "1.0"
 [features]
 bench = []
 debugging = []
+native-tls = []
 
 [[bench]]
 name = "executor"
