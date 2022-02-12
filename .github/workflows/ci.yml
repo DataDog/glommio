@@ -24,7 +24,23 @@ jobs:
         run: which deadlinks || cargo install cargo-deadlinks
 
       - name: Generate documentation
-        run: cargo doc --all-features
+        run: cargo doc --all
+
+  doc-nightly:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: Install cargo-deadlinks
+        run: which deadlinks || cargo install cargo-deadlinks
+
+      - name: Generate documentation
+        run: cargo +nightly doc --features=nightly --all
 
     # temporarily disabled.
     # - name: Validate links
@@ -41,7 +57,21 @@ jobs:
         uses: ./.github/actions/cache-setup
 
       - name: Build all targets
-        run: cargo build --all --all-targets --all-features
+        run: cargo build --all --all-targets
+
+  build-nightly:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: Build all targets on the nigthly channel
+        run: cargo build --all --all-targets --features=nightly
+
 
   test:
     runs-on: ubuntu-latest
@@ -64,6 +94,29 @@ jobs:
           rustup show
           rustup default stable
           cargo install cargo-sort
-          cargo test --all-features -- --test-threads=`nproc`
+          cargo test -- --test-threads=`nproc`
           EOF
           sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"
+
+    test-nightly:
+      runs-on: ubuntu-latest
+
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v2
+
+        - name: Cache setup
+          uses: ./.github/actions/cache-setup
+
+        - name: Install cargo helpers and test all targets on the nigthly channel
+          run: |
+            cat << EOF > "run-gha-workflow.sh"
+            PATH=$PATH:/usr/share/rust/.cargo/bin
+            echo "`nproc` CPU(s) available"
+            rustup install nightly
+            rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
+            rustup install 1.58
+            rustup show
+            cargo test --features=nightly -- --test-threads=`nproc`
+            EOF
+            sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"

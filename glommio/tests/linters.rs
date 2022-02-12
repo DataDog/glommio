@@ -22,14 +22,7 @@ mod tests {
     #[test]
     fn check_clippy() {
         let status = Command::new("cargo")
-            .args([
-                "clippy",
-                "--all-targets",
-                "--all-features",
-                "--",
-                "-D",
-                "warnings",
-            ])
+            .args(["+stable", "clippy", "--all-targets", "--", "-D", "warnings"])
             .status()
             .unwrap();
         assert!(status.success());
