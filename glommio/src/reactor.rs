@@ -252,26 +252,37 @@ impl Reactor {
     pub(crate) async fn probe_iopoll_support(
         &self,
         raw: RawFd,
+        alignment: u64,
         major: usize,
         minor: usize,
+        path: &Path,
     ) -> bool {
         match sysfs::BlockDevice::iopoll(major, minor) {
             None => {
-                // In order to probe support for iopoll, we issue a read of size 0 and assert we
-                // don't receive `ENOTSUP`, which signal that iopoll isn't supported.
+                // This routine exercises the iopoll code path in the kernel and asserts that we
+                // can successfully read something. If we can't and receive `ENOTSUP` then
+                // the kernel doesn't support iopoll for this device.
+                //
+                // In a perfect world, we would issue a read of size 0 because we are not
+                // interested in any data, just to check whether we _could_. Unfortunately it
+                // seems we are not allowed to have nice things, and the kernel can
+                // short-circuit its internal logic and return an early
+                // "success" for reads of size 0. We are therefore forced to do
+                // an actual read.
 
                 let source =
                     self.new_source(raw, SourceType::Read(PollableStatus::Pollable, None), None);
-                self.sys.read_dma(&source, 0, 0);
+                self.sys.read_dma(&source, 0, alignment as usize);
                 let iopoll = if let Err(err) = source.collect_rw().await {
                     if let Some(libc::ENOTSUP) = err.raw_os_error() {
                         false
                     } else {
                         // The IO requests failed, but not because the poll ring doesn't work.
                         error!(
-                            "got unexpected error when probing iopoll support for file {} hosted \
-                             on ({}, {}); the poll ring will be disabled for this device: {}",
-                            raw, major, minor, err
+                            "got unexpected error when probing iopoll support for file {:?} (fd: \
+                             {}) hosted on ({}, {}); the poll ring will be disabled for this \
+                             device: {}",
+                            path, raw, major, minor, err
                         );
                         false
                     }
