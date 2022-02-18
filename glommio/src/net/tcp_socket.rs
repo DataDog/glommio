@@ -81,7 +81,7 @@ impl FromRawFd for TcpListener {
     /// Convert an already bound and listening RawFd into a TcpListener
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         let sk = Socket::from_raw_fd(fd);
-        let listener = sk.into_tcp_listener();
+        let listener = sk.into();
 
         TcpListener {
             reactor: Rc::downgrade(&crate::executor().reactor()),
@@ -118,16 +118,16 @@ impl TcpListener {
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
 
         let domain = if addr.is_ipv6() {
-            Domain::ipv6()
+            Domain::IPV6
         } else {
-            Domain::ipv4()
+            Domain::IPV4
         };
-        let sk = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
+        let sk = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
         let addr = socket2::SockAddr::from(addr);
         sk.set_reuse_port(true)?;
         sk.bind(&addr)?;
         sk.listen(1024)?;
-        let listener = sk.into_tcp_listener();
+        let listener = sk.into();
 
         Ok(TcpListener {
             reactor: Rc::downgrade(&crate::executor().reactor()),
@@ -314,7 +314,7 @@ impl AcceptedTcpStream {
         let socket = unsafe { Socket::from_raw_fd(self.fd) };
         let sock_addr = socket.peer_addr()?;
         socket.into_raw_fd();
-        Ok(sock_addr.as_std().unwrap())
+        Ok(sock_addr.as_socket().unwrap())
     }
 
     /// Binds this `AcceptedTcpStream` to the current executor
@@ -395,11 +395,11 @@ impl FromRawFd for TcpStream {
 
 fn make_tcp_socket(addr: &SocketAddr) -> io::Result<(SockAddr, Socket)> {
     let domain = if addr.is_ipv6() {
-        Domain::ipv6()
+        Domain::IPV6
     } else {
-        Domain::ipv4()
+        Domain::IPV4
     };
-    let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     let inet = InetAddr::from_std(addr);
     let addr = SockAddr::new_inet(inet);
     Ok((addr, socket))
