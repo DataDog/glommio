@@ -70,11 +70,11 @@ impl UdpSocket {
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
 
         let domain = if addr.is_ipv6() {
-            Domain::ipv6()
+            Domain::IPV6
         } else {
-            Domain::ipv4()
+            Domain::IPV4
         };
-        let sk = Socket::new(domain, Type::dgram(), Some(Protocol::udp()))?;
+        let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
         let addr = socket2::SockAddr::from(addr);
         sk.set_reuse_port(true)?;
         sk.bind(&addr)?;

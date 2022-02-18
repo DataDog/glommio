@@ -40,7 +40,7 @@ scopeguard = "1.1"
 signal-hook = { version = "0.3" }
 sketches-ddsketch = "0.1"
 smallvec = { version = "1.7", features = ["union"] }
-socket2 = { version = "0.3", features = ["unix", "reuseport"] }
+socket2 = { version = "0.4", features = ["all"] }
 tracing = "0.1"
 typenum = "1.15"
 

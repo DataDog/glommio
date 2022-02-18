@@ -91,12 +91,12 @@ impl UnixListener {
     /// });
     /// ```
     pub fn bind<A: AsRef<Path>>(addr: A) -> Result<UnixListener> {
-        let sk = Socket::new(Domain::unix(), Type::stream(), None)?;
+        let sk = Socket::new(Domain::UNIX, Type::STREAM, None)?;
         let addr = socket2::SockAddr::unix(addr.as_ref())?;
 
         sk.bind(&addr)?;
         sk.listen(128)?;
-        let listener = sk.into_unix_listener();
+        let listener = sk.into();
 
         Ok(UnixListener {
             reactor: Rc::downgrade(&crate::executor().reactor()),
@@ -328,7 +328,7 @@ impl UnixStream {
     pub async fn connect<A: AsRef<Path>>(addr: A) -> Result<UnixStream> {
         let reactor = crate::executor().reactor();
 
-        let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
+        let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
         let addr = SockAddr::new_unix(addr.as_ref())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let source = reactor.connect(socket.as_raw_fd(), addr);
@@ -492,7 +492,7 @@ impl UnixDatagram {
     /// });
     /// ```
     pub fn bind<A: AsRef<Path>>(addr: A) -> Result<UnixDatagram> {
-        let sk = Socket::new(Domain::unix(), Type::dgram(), None)?;
+        let sk = Socket::new(Domain::UNIX, Type::DGRAM, None)?;
         let addr = socket2::SockAddr::unix(addr.as_ref())?;
         sk.bind(&addr)?;
         Ok(Self {
@@ -502,7 +502,7 @@ impl UnixDatagram {
 
     /// Creates a Unix Datagram socket which is not bound to any address.
     pub fn unbound() -> Result<UnixDatagram> {
-        let sk = Socket::new(Domain::unix(), Type::dgram(), None)?;
+        let sk = Socket::new(Domain::UNIX, Type::DGRAM, None)?;
         Ok(Self {
             socket: GlommioDatagram::from(sk),
         })
