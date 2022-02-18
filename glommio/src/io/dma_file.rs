@@ -130,20 +130,24 @@ impl DmaFile {
         flags: libc::c_int,
         mode: libc::mode_t,
     ) -> io::Result<DmaFile> {
-        // Allow this to work on non direct I/O devices, but only
-        // if this is in-memory.
         let file = GlommioFile::open_at(dir, path, flags, mode).await?;
-
         let (major, minor) = (file.dev_major as usize, file.dev_minor as usize);
         let buf = statfs(path).unwrap();
         let fstype = buf.filesystem_type();
+        let max_sectors_size = sysfs::BlockDevice::max_sectors_size(major, minor);
+        let max_segment_size = sysfs::BlockDevice::max_segment_size(major, minor);
+        let o_direct_alignment = (sysfs::BlockDevice::minimum_io_size(major, minor))
+            .max(sysfs::BlockDevice::logical_block_size(major, minor))
+            .max(512) as u64; // make sure the alignment is at least 512 in any case
+
         let pollable = if fstype == TMPFS_MAGIC {
             PollableStatus::NonPollable(DirectIo::Disabled)
         } else {
+            // Allow this to work on non direct I/O devices, but only if this is in-memory
             sys::direct_io_ify(file.as_raw_fd(), flags)?;
             let reactor = file.reactor.upgrade().unwrap();
             if reactor
-                .probe_iopoll_support(file.as_raw_fd(), major, minor)
+                .probe_iopoll_support(file.as_raw_fd(), o_direct_alignment, major, minor, path)
                 .await
             {
                 PollableStatus::Pollable
@@ -151,14 +155,10 @@ impl DmaFile {
                 PollableStatus::NonPollable(DirectIo::Enabled)
             }
         };
-        let max_sectors_size = sysfs::BlockDevice::max_sectors_size(major, minor);
-        let max_segment_size = sysfs::BlockDevice::max_segment_size(major, minor);
 
         Ok(DmaFile {
             file,
-            o_direct_alignment: (sysfs::BlockDevice::minimum_io_size(major, minor) as u64)
-                .max(sysfs::BlockDevice::logical_block_size(major, minor) as u64)
-                .max(512), // make sure the alignment is at least 512 in any case
+            o_direct_alignment,
             max_sectors_size,
             max_segment_size,
             pollable,
