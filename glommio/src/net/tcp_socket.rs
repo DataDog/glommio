@@ -233,7 +233,7 @@ impl TcpListener {
         Ok(a.bind_to_executor())
     }
 
-    /// Poll version of [`accepet`].
+    /// Poll version of [`accept`].
     ///
     /// [`accept`]: TcpListener::accept
     pub fn poll_accept(&self, cx: &mut Context<'_>) -> Poll<Result<TcpStream>> {
@@ -597,6 +597,8 @@ impl<B: RxBuf> TcpStream<B> {
     }
 
     /// Polling version of [`shutdown`].
+    ///
+    /// [`shutdown`]: TcpStream::shutdown
     pub fn poll_shutdown(&self, cx: &mut Context<'_>, how: Shutdown) -> Poll<Result<()>> {
         match ready!(self.stream.poll_shutdown(cx, how)) {
             Ok(()) => Poll::Ready(Ok(())),
