@@ -171,19 +171,6 @@ impl TcpListener {
     /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
     pub async fn shared_accept(&self) -> Result<AcceptedTcpStream> {
         poll_fn(|cx| self.poll_shared_accept(cx)).await
-        // let reactor = self.reactor.upgrade().unwrap();
-        // let raw_fd = self.listener.as_raw_fd();
-        // if let Some(r) = yolo_accept(raw_fd) {
-        //     match r {
-        //         Ok(fd) => {
-        //             return Ok(AcceptedTcpStream { fd });
-        //         }
-        //         Err(err) => return Err(GlommioError::IoError(err)),
-        //     }
-        // }
-        // let source = reactor.accept(self.listener.as_raw_fd());
-        // let fd = source.collect_rw().await?;
-        // Ok(AcceptedTcpStream { fd: fd as RawFd })
     }
 
     /// Poll version of [`shared_accept`].
@@ -606,9 +593,15 @@ impl<B: RxBuf> TcpStream<B> {
 
     /// Shuts down the read, write, or both halves of this connection.
     pub async fn shutdown(&self, how: Shutdown) -> Result<()> {
-        poll_fn(|cx| self.stream.poll_shutdown(cx, how))
-            .await
-            .map_err(Into::into)
+        poll_fn(|cx| self.poll_shutdown(cx, how)).await
+    }
+
+    /// Polling version of [`shutdown`].
+    pub fn poll_shutdown(&self, cx: &mut Context<'_>, how: Shutdown) -> Poll<Result<()>> {
+        match ready!(self.stream.poll_shutdown(cx, how)) {
+            Ok(()) => Poll::Ready(Ok(())),
+            Err(err) => Poll::Ready(Err(err.into())),
+        }
     }
 
     /// Sets the value of the `TCP_NODELAY` option on this socket.
