@@ -62,6 +62,7 @@ use nix::sys::{
 };
 use smallvec::SmallVec;
 
+const MAX_I64_DURATION: Duration = Duration::new(i64::MAX as u64, 999_999_999);
 const MSG_ZEROCOPY: i32 = 0x4000000;
 
 #[allow(dead_code)]
@@ -987,7 +988,7 @@ impl SleepableRing {
         let timer_source = Source::new(
             IoRequirements::default(),
             -1,
-            SourceType::Timeout(TimeSpec64::from(Duration::MAX), min_events),
+            SourceType::Timeout(TimeSpec64::from(MAX_I64_DURATION), min_events),
             None,
             None,
         );
