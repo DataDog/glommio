@@ -994,11 +994,12 @@ mod test {
 
         test_executor!(async move {
             let mut si = StreamExt::fuse(stdin().lines());
-            let fut = crate::timer::timeout(Duration::from_millis(5), async move {
-                si.select_next_some()
-                    .await
-                    .map_err(|err| GlommioError::IoError(err))
-            });
+            let fut =
+                crate::timer::timeout(Duration::from_millis(1), async move {
+                    StreamExt::next(&mut si).await.ok_or(GlommioError::IoError(
+                        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin closed"),
+                    ))
+                });
             assert!(matches!(fut.await, Err(GlommioError::TimedOut(_))));
         });
     }
