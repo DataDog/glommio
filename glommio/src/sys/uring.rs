@@ -13,6 +13,7 @@ use rlimit::Resource;
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::VecDeque,
+    convert::TryFrom,
     ffi::CStr,
     fmt,
     future::Future,
@@ -951,7 +952,7 @@ impl SleepableRing {
         let source = Source::new(
             IoRequirements::default(),
             -1,
-            SourceType::Timeout(TimeSpec64::from(d), 0),
+            SourceType::Timeout(TimeSpec64::try_from(d).unwrap(), 0),
             None,
             None,
         );
@@ -987,7 +988,7 @@ impl SleepableRing {
         let timer_source = Source::new(
             IoRequirements::default(),
             -1,
-            SourceType::Timeout(TimeSpec64::from(Duration::MAX), min_events),
+            SourceType::Timeout(TimeSpec64::MAX, min_events),
             None,
             None,
         );
@@ -2052,7 +2053,10 @@ mod tests {
             let source = Source::new(
                 IoRequirements::default(),
                 -1,
-                SourceType::Timeout(TimeSpec64::from(Duration::from_millis(millis)), 0),
+                SourceType::Timeout(
+                    TimeSpec64::try_from(Duration::from_millis(millis)).unwrap(),
+                    0,
+                ),
                 None,
                 None,
             );

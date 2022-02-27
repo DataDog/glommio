@@ -188,7 +188,7 @@ pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
 use smallvec::SmallVec;
-use std::{ops::Deref, sync::atomic::AtomicBool};
+use std::{convert::TryFrom, ops::Deref, sync::atomic::AtomicBool};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -411,7 +411,12 @@ pub(crate) struct TimeSpec64 {
 
 impl Default for TimeSpec64 {
     fn default() -> TimeSpec64 {
-        TimeSpec64::from(Duration::default())
+        TimeSpec64 {
+            raw: uring_sys::__kernel_timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+        }
     }
 }
 
@@ -434,15 +439,34 @@ impl From<TimeSpec64> for Duration {
     }
 }
 
-impl From<Duration> for TimeSpec64 {
-    fn from(dur: Duration) -> Self {
-        TimeSpec64 {
-            raw: uring_sys::__kernel_timespec {
-                tv_sec: dur.as_secs() as i64,
-                tv_nsec: dur.subsec_nanos() as libc::c_longlong,
-            },
+impl TryFrom<Duration> for TimeSpec64 {
+    type Error = TimeSpec64;
+
+    /// Tries to convert the [`std::time::Duration`] into a [`TimeSpec64`].
+    /// Returns [`Ok(TimeSpec64)`] if the duration can be natively represented
+    /// or [`Err(TimeSpec64)`] if the duration was truncated to
+    /// [`TimeSpec64::MAX`].
+    fn try_from(dur: Duration) -> Result<Self, Self::Error> {
+        if let Ok(secs) = i64::try_from(dur.as_secs()) {
+            Ok(TimeSpec64 {
+                raw: uring_sys::__kernel_timespec {
+                    tv_sec: secs,
+                    tv_nsec: dur.subsec_nanos() as libc::c_longlong,
+                },
+            })
+        } else {
+            Err(TimeSpec64::MAX)
         }
     }
+}
+
+impl TimeSpec64 {
+    pub const MAX: TimeSpec64 = TimeSpec64 {
+        raw: uring_sys::__kernel_timespec {
+            tv_sec: i64::MAX,
+            tv_nsec: 999_999_999,
+        },
+    };
 }
 
 pub(super) struct Latencies {

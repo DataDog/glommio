@@ -190,7 +190,9 @@ impl Source {
         let mut inner = self.inner.borrow_mut();
         let t = &mut inner.timeout;
         let old = *t;
-        *t = Some(TimeSpec64::from(d));
+        match TimeSpec64::try_from(d) {
+            Ok(dur) | Err(dur) => *t = Some(dur),
+        }
         old.map(Duration::from)
     }
 
