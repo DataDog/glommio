@@ -61,7 +61,8 @@ bench = []
 debugging = []
 
 # Unstable features based on nightly
-nightly = []
+native-tls = []
+nightly = ["native-tls"]
 
 [[bench]]
 name = "executor"
