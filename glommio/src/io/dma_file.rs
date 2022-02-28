@@ -136,9 +136,9 @@ impl DmaFile {
         let fstype = buf.filesystem_type();
         let max_sectors_size = sysfs::BlockDevice::max_sectors_size(major, minor);
         let max_segment_size = sysfs::BlockDevice::max_segment_size(major, minor);
-        let o_direct_alignment = (sysfs::BlockDevice::minimum_io_size(major, minor))
-            .max(sysfs::BlockDevice::logical_block_size(major, minor))
-            .max(512) as u64; // make sure the alignment is at least 512 in any case
+        // make sure the alignment is at least 512 in any case
+        let o_direct_alignment =
+            sysfs::BlockDevice::logical_block_size(major, minor).max(512) as u64;
 
         let pollable = if fstype == TMPFS_MAGIC {
             PollableStatus::NonPollable(DirectIo::Disabled)
