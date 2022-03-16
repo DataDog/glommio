@@ -80,6 +80,10 @@ pub(crate) const DEFAULT_PREEMPT_TIMER: Duration = Duration::from_millis(100);
 pub(crate) const DEFAULT_IO_MEMORY: usize = 10 << 20;
 pub(crate) const DEFAULT_RING_SUBMISSION_DEPTH: usize = 128;
 
+/// The maximum number of tasks the scheduler runs in a given queue before
+/// considering running another queue.
+const QUANTUM_MAX_TASKS_PER_QUEUE: i32 = 8;
+
 /// Result type alias that removes the need to specify a type parameter
 /// that's only valid in the channel variants of the error. Otherwise, it
 /// might be confused with the error (`E`) that a result usually has in
@@ -1371,7 +1375,7 @@ impl LocalExecutor {
                     });
 
                     let mut tasks_executed_this_loop = 0;
-                    loop {
+                    for _ in 0..QUANTUM_MAX_TASKS_PER_QUEUE {
                         let mut queue_ref = queue.borrow_mut();
                         if self.need_preempt() || queue_ref.yielded() {
                             break;
