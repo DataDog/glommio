@@ -3182,8 +3182,8 @@ mod test {
         });
 
         assert!(
-            getrusage() - start < Duration::from_millis(2),
-            "expected user time on LE is less than 2 millisecond"
+            getrusage() - start < Duration::from_millis(10),
+            "expected user time on LE is less than 10 millisecond"
         );
     }
 
