@@ -1085,7 +1085,12 @@ mod test {
             action.join().await;
             // When action completes we are halfway through the count
             assert_ne!(*(exec2.borrow()), 11);
-            Timer::new(Duration::from_millis(100)).await;
+
+            // TODO(issue#540): Ideally waiting 60ms (10 + 10*10 - 50) should
+            // be enough, but we need as large as 200ms for this test to pass
+            // in an ARM VM. It might be worth looking into the root cause and
+            // a fix.
+            Timer::new(Duration::from_millis(200)).await;
 
             // But because it is detached then it completes the count
             assert_eq!(*(exec2.borrow()), 11);
@@ -1116,6 +1121,7 @@ mod test {
         make_shared_var_mut!(0, exec1, exec2);
 
         test_executor!(async move {
+            let now = Instant::now();
             let repeat = TimerActionRepeat::repeat(move || {
                 let ex = exec1.clone();
                 async move {
@@ -1127,11 +1133,11 @@ mod test {
                     }
                 }
             });
-            Timer::new(Duration::from_millis(100)).await;
-            let value = *(exec2.borrow());
-            assert!(value == 10);
             let v = repeat.join().await;
             assert!(v.is_some());
+            assert!(now.elapsed() >= Duration::from_millis(45));
+            let value = *(exec2.borrow());
+            assert_eq!(value, 10);
         });
     }
 
