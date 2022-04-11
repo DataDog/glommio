@@ -1878,7 +1878,7 @@ impl Reactor {
             // From this moment on the remote executors are aware that we are sleeping
             // We have to sweep the remote channels function once more because since
             // last time until now it could be that something happened in a remote executor
-            // that opened up room. If if did we bail on sleep and go process it.
+            // that opened up room. If it did we bail on sleep and go process it.
             self.notifier.prepare_to_sleep();
             // See https://www.scylladb.com/2018/02/15/memory-barriers-seastar-linux/ for
             // details. This translates to `sys_membarrier()` /

@@ -647,7 +647,7 @@ impl LocalExecutorBuilder {
     ///
     /// The indirection of `fut_gen()` here (instead of taking a `Future`)
     /// allows for futures that may not be `Send`-able once started. As this
-    /// executor is thread- it can guarantee that the futures will not
+    /// executor is thread-local it can guarantee that the futures will not
     /// be Sent once started.
     ///
     /// # Panics

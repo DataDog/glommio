@@ -85,7 +85,7 @@ pub struct ConnectedReceiver<T: Send + Sized> {
     notifier: Arc<SleepNotifier>,
 }
 
-/// The `ConnectedReceiver` is the sending end of the Shared Channel.
+/// The `ConnectedSender` is the sending end of the Shared Channel.
 pub struct ConnectedSender<T: Send + Sized> {
     id: u64,
     state: Rc<SenderState<T>>,
@@ -212,7 +212,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
     ///     .name("receiver")
     ///     .spawn(move || async move {
     ///         let mut receiver = receiver.connect().await;
-    ///         receiver.next().await.unwrap(); // now we have capacity again
+    ///         receiver.next().await.unwrap();
     ///     })
     ///     .unwrap();
     /// producer.join().unwrap();
@@ -358,7 +358,7 @@ impl<T: Send + Sized> ConnectedReceiver<T> {
     /// Receives data from this channel
     ///
     /// If the sender is no longer available it returns [`None`]. Otherwise,
-    /// block until an item is available and returns it wrapped in [`Some`]
+    /// blocks until an item is available and returns it wrapped in [`Some`].
     ///
     /// Notice that this is also available as a Stream. Whether to consume from
     /// a stream or `recv` is up to the application. The biggest difference
