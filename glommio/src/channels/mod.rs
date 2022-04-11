@@ -18,7 +18,7 @@ pub mod spsc_queue;
 /// of tasks with their own priority.
 ///
 /// The `local_channel` is an abstraction similar to the [`channel`] that can be
-/// used for this purpose
+/// used for this purpose.
 ///
 /// The communication between sender and receiver is broken when one of them
 /// goes out of scope. They however behave differently:
@@ -69,7 +69,7 @@ pub mod spsc_queue;
 /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
 pub mod local_channel;
 
-/// Allow data to be transmitted across two tasks in the different executors.
+/// Allow data to be transmitted across two tasks in different executors.
 ///
 /// Most useful thread-per-core applications will heavily process data locally
 /// to their executor, but at times inter-executor communication is unavoidable
@@ -94,7 +94,7 @@ pub mod local_channel;
 /// However, note that connecting a channel will involve a blocking operation as
 /// we need to synchronize and exchange information between peers. That can
 /// block the executor, although in practice that will only happen if it races
-/// with the creation of a new executor. Because of that, The best performance
+/// with the creation of a new executor. Because of that, the best performance
 /// pattern when using shared channels is to create both the executors and
 /// channels early, connect the channels as soon as they start, and keep them
 /// alive.
@@ -125,14 +125,14 @@ pub mod local_channel;
 /// ```
 /// use glommio::{channels::shared_channel, LocalExecutorBuilder};
 ///
-/// // creates both ends of the channel. This is done outside the executors
-/// // and we will not pass the sender to ex1 and the receiver to ex2
+/// // Creates both ends of the channel. This is done outside the executors
+/// // and we will then pass the sender to ex1 and the receiver to ex2
 /// let (sender, receiver) = shared_channel::new_bounded(1);
 ///
 /// let ex1 = LocalExecutorBuilder::default()
 ///     .spawn(move || async move {
 ///         // Before using we have to connect. Connecting this endpoint
-///         // binds it this executor as the connected endpoint is not Send.
+///         // binds it to this executor as the connected endpoint is not Send.
 ///         let sender = sender.connect().await;
 ///         // Channel has room for 1 element so this will always succeed
 ///         sender.try_send(100).unwrap();

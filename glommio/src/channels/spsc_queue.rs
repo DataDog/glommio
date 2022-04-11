@@ -184,20 +184,18 @@ impl<T> Buffer<T> {
         self.pcache.consumer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether it was already
+    /// Disconnects the producer, and returns whether it was already
     /// disconnected
     pub(crate) fn disconnect_producer(&self) -> bool {
         self.ccache.producer_id.swap(usize::MAX, Ordering::Release) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether it was already
-    /// disconnected
+    /// Returns whether the producer is disconnected.
     pub(crate) fn producer_disconnected(&self) -> bool {
         self.ccache.producer_id.load(Ordering::Acquire) == usize::MAX
     }
 
-    /// Disconnects the consumer, and returns whether it was already
-    /// disconnected
+    /// Returns whether the consumer is disconnected.
     pub(crate) fn consumer_disconnected(&self) -> bool {
         self.pcache.consumer_id.load(Ordering::Acquire) == usize::MAX
     }

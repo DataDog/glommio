@@ -19,7 +19,7 @@ pub type HandlerResult = Pin<Box<dyn Future<Output = ()>>>;
 
 /// Trait for handling sharded messages
 pub trait Handler<T>: Clone {
-    /// Handle a message either received from an external stream of forwarded
+    /// Handle a message either received from an external stream or forwarded
     /// from another peer.
     /// * `msg` - The message to handle.
     /// * `src_shard` - ID of the shard where the msg is from.
@@ -108,7 +108,7 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
 
     /// Sends an individual message to a given shard.
     ///
-    /// This functions returns [`GlommioError::Closed`] if this [`Sharded`] is
+    /// This function returns [`GlommioError::Closed`] if this [`Sharded`] is
     /// closed, or [`InvalidInput`] if the destination id is invalid.
     ///
     /// This function ignores the sharding function.
@@ -124,7 +124,7 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
     /// The correct shard is calculated using the sharding function in this
     /// `Sharded` object.
     ///
-    /// This functions returns [`GlommioError::Closed`] if this [`Sharded`] is
+    /// This function returns [`GlommioError::Closed`] if this [`Sharded`] is
     /// closed.
     ///
     /// [`GlommioError::Closed`]: crate::GlommioError::Closed
