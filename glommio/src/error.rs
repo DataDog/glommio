@@ -57,10 +57,10 @@ pub enum QueueErrorKind {
 }
 
 /// Errors coming from the reactor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReactorErrorKind {
     /// Indicates an incorrect source type.
-    IncorrectSourceType,
+    IncorrectSourceType(String),
 
     /// Reactor unable to lock memory (max allowed, min required)
     MemLockLimit(u64, u64),
@@ -69,7 +69,9 @@ pub enum ReactorErrorKind {
 impl fmt::Display for ReactorErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReactorErrorKind::IncorrectSourceType => write!(f, "Incorrect source type!"),
+            ReactorErrorKind::IncorrectSourceType(x) => {
+                write!(f, "Incorrect source type: {:?}!", x)
+            }
             ReactorErrorKind::MemLockLimit(max, min) => write!(
                 f,
                 "The memlock resource limit is too low: {} (recommended {})",
@@ -479,13 +481,14 @@ impl<T> Debug for GlommioError<T> {
                 "EnhancedIoError {{ source: {:?}, op: {:?}, path: {:?}, fd: {:?} }}",
                 source, op, path, fd
             ),
-            GlommioError::ReactorError(kind) => {
-                let kind = match kind {
-                    ReactorErrorKind::IncorrectSourceType => "IncorrectSourceType",
-                    ReactorErrorKind::MemLockLimit(_, _) => "MemLockLimit",
-                };
-                write!(f, "ReactorError {{ kind: '{}' }}", kind)
-            }
+            GlommioError::ReactorError(kind) => match kind {
+                ReactorErrorKind::IncorrectSourceType(x) => {
+                    write!(f, "ReactorError {{ kind: IncorrectSourceType {:?} }}", x)
+                }
+                ReactorErrorKind::MemLockLimit(a, b) => {
+                    write!(f, "ReactorError {{ kind: MemLockLimit({:?}/{:?}) }}", a, b)
+                }
+            },
             GlommioError::TimedOut(dur) => write!(f, "TimedOut {{ dur {:?} }}", dur),
         }
     }
@@ -527,9 +530,16 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::EnhancedIoError { source, .. } => {
                 io::Error::new(source.kind(), display_err)
             }
-            GlommioError::ReactorError(_) => {
-                io::Error::new(io::ErrorKind::InvalidData, "Incorrect source type!")
-            }
+            GlommioError::ReactorError(e) => match e {
+                ReactorErrorKind::IncorrectSourceType(x) => io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("IncorrectSourceType {:?}", x),
+                ),
+                ReactorErrorKind::MemLockLimit(a, b) => io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("MemLockLimit({:?}/{:?})", a, b),
+                ),
+            },
             GlommioError::TimedOut(dur) => io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("timed out after {:#?}", dur),
