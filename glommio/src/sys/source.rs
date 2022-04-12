@@ -81,8 +81,8 @@ impl TryFrom<SourceType> for libc::statx {
     fn try_from(value: SourceType) -> Result<Self, Self::Error> {
         match value {
             SourceType::Statx(_, buf) => Ok(buf.into_inner()),
-            _ => Err(GlommioError::ReactorError(
-                ReactorErrorKind::IncorrectSourceType,
+            src => Err(GlommioError::ReactorError(
+                ReactorErrorKind::IncorrectSourceType(format!("{:?}", src)),
             )),
         }
     }
