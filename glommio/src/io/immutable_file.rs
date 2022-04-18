@@ -522,7 +522,7 @@ mod test {
         assert_eq!(immutable.current_flushed_pos(), 0);
 
         let written = immutable.write(&[6, 7, 8, 9]).await.unwrap();
-        assert_eq!(written, 6);
+        assert_eq!(written, 4);
 
         let stream = immutable.seal().await.unwrap();
         let mut reader = stream.stream_reader().build();
