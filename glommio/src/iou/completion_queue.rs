@@ -31,7 +31,7 @@ impl<'ring> CompletionQueue<'ring> {
     /// Returns the next CQE if any are available.
     pub fn peek_for_cqe(&mut self) -> Option<CQE> {
         unsafe {
-            let mut cqe = MaybeUninit::uninit();
+            let mut cqe = MaybeUninit::zeroed();
             uring_sys::io_uring_peek_cqe(self.ring.as_ptr(), cqe.as_mut_ptr());
             let cqe = cqe.assume_init();
             if !cqe.is_null() {
@@ -64,7 +64,7 @@ impl<'ring> CompletionQueue<'ring> {
     #[inline(always)]
     fn wait_inner(&mut self, count: u32) -> io::Result<&mut uring_sys::io_uring_cqe> {
         unsafe {
-            let mut cqe = MaybeUninit::uninit();
+            let mut cqe = MaybeUninit::zeroed();
 
             resultify(uring_sys::io_uring_wait_cqes(
                 self.ring.as_ptr(),
