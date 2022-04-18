@@ -1000,7 +1000,7 @@ impl Drop for DmaStreamWriter {
 /// struct.DmaStreamReader.html#method.get_buffer_aligned
 /// [`AsyncWrite`]: https://docs.rs/futures/0.3.5/futures/io/trait.AsyncWrite.html
 pub struct DmaStreamWriter {
-    file: Option<Rc<DmaFile>>,
+    file: RefCell<Option<Rc<DmaFile>>>,
     state: Rc<RefCell<DmaStreamWriterState>>,
 }
 
@@ -1022,7 +1022,7 @@ impl DmaStreamWriter {
 
         let state = Rc::new(RefCell::new(state));
         DmaStreamWriter {
-            file: Some(builder.file),
+            file: RefCell::new(Some(builder.file)),
             state,
         }
     }
@@ -1100,7 +1100,7 @@ impl DmaStreamWriter {
         let (target_pos, mut pending) = {
             let mut state = self.state.borrow_mut();
             let pos = if partial && state.buffer_pos > 0 {
-                state.flush_padded(self.state.clone(), self.file.clone().unwrap());
+                state.flush_padded(self.state.clone(), self.file.borrow().clone().unwrap());
                 state.current_pos()
             } else {
                 state.aligned_pos
@@ -1124,7 +1124,7 @@ impl DmaStreamWriter {
             (state.flushed_pos(), state.synced_pos)
         };
         if presync_pos < flushed_pos {
-            self.file.clone().unwrap().fdatasync().await?;
+            self.file.borrow().clone().unwrap().fdatasync().await?;
             self.state.borrow_mut().synced_pos = flushed_pos;
         } else {
             assert_eq!(presync_pos, flushed_pos);
@@ -1291,6 +1291,24 @@ impl AsyncWrite for DmaStreamWriter {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &*self).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut &*self).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut &*self).poll_close(cx)
+    }
+}
+
+impl<'a> AsyncWrite for &'a DmaStreamWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
         let mut state = self.state.borrow_mut();
         if let Some(err) = current_error!(state) {
             return Poll::Ready(err);
@@ -1303,6 +1321,7 @@ impl AsyncWrite for DmaStreamWriter {
                     if state.pending_flush_count() < state.write_behind {
                         state.current_buffer = Some(
                             self.file
+                                .borrow()
                                 .as_ref()
                                 .unwrap()
                                 .alloc_dma_buffer(state.buffer_size),
@@ -1319,7 +1338,7 @@ impl AsyncWrite for DmaStreamWriter {
                         state.flush_one_buffer(
                             buffer,
                             self.state.clone(),
-                            self.file.clone().unwrap(),
+                            self.file.borrow().clone().unwrap(),
                         );
                         state.aligned_pos += state.buffer_size as u64;
                         state.buffer_pos = 0;
@@ -1346,13 +1365,13 @@ impl AsyncWrite for DmaStreamWriter {
         if state.flushed_pos() == state.current_pos() {
             return Poll::Ready(Ok(()));
         }
-        state.flush_padded(self.state.clone(), self.file.clone().unwrap());
+        state.flush_padded(self.state.clone(), self.file.borrow().clone().unwrap());
         state.add_waker(cx.waker().clone());
         Poll::Pending
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let file = self.file.take();
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let file = self.file.borrow_mut().take();
         let mut state = self.state.borrow_mut();
         match state.file_status {
             FileStatus::Open => {
