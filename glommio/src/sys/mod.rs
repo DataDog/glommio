@@ -74,14 +74,21 @@ pub(crate) fn duplicate_file(fd: RawFd) -> io::Result<RawFd> {
     syscall!(dup(fd))
 }
 
-pub(crate) fn create_eventfd() -> io::Result<RawFd> {
-    syscall!(eventfd(0, libc::O_CLOEXEC))
+pub(crate) fn create_eventfd(flags: OFlag) -> io::Result<RawFd> {
+    syscall!(eventfd(0, flags.bits()))
 }
 
 pub(crate) fn write_eventfd(eventfd: RawFd) {
     let buf = [1u64; 1];
     let ret = syscall!(write(eventfd, &buf as *const u64 as _, 8)).unwrap();
     assert_eq!(ret, 8);
+}
+
+pub(crate) fn read_eventfd(eventfd: RawFd) -> io::Result<u64> {
+    let mut buf = [0u8; 8];
+    let ret = syscall!(read(eventfd, buf.as_mut_ptr() as *mut libc::c_void, 8))?;
+    assert_eq!(ret, 8);
+    Ok(u64::from_ne_bytes(buf))
 }
 
 pub(crate) fn send_syscall(fd: RawFd, buf: *const u8, len: usize, flags: i32) -> io::Result<usize> {
@@ -187,6 +194,7 @@ mod uring;
 pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
+use nix::fcntl::OFlag;
 use smallvec::SmallVec;
 use std::{convert::TryFrom, ops::Deref, sync::atomic::AtomicBool};
 
@@ -292,7 +300,7 @@ pub(crate) fn get_sleep_notifier_for(id: usize) -> Option<Arc<SleepNotifier>> {
 
 impl SleepNotifier {
     pub(crate) fn new(id: usize) -> io::Result<Arc<Self>> {
-        let eventfd = unsafe { std::fs::File::from_raw_fd(create_eventfd()?) };
+        let eventfd = unsafe { std::fs::File::from_raw_fd(create_eventfd(OFlag::O_CLOEXEC)?) };
         let (waker_sender, foreign_wakes) = crossbeam::channel::unbounded();
 
         Ok(Arc::new(Self {

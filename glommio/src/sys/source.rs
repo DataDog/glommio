@@ -60,7 +60,6 @@ pub(crate) enum SourceType {
     Fallocate,
     Truncate,
     Close,
-    LinkRings,
     ForeignNotifier(u64, bool),
     Statx(CString, Box<RefCell<libc::statx>>),
     Timeout(TimeSpec64, u32),

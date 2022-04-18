@@ -11,7 +11,7 @@ use nix::{
 };
 use rlimit::Resource;
 use std::{
-    cell::{Cell, Ref, RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     collections::VecDeque,
     convert::TryFrom,
     ffi::CStr,
@@ -35,7 +35,9 @@ use crate::{
     sys::{
         self,
         blocking::{BlockingThreadOp, BlockingThreadPool},
+        create_eventfd,
         dma_buffer::{BufferStorage, DmaBuffer},
+        read_eventfd,
         DirectIo,
         EnqueuedSource,
         EnqueuedStatus,
@@ -57,9 +59,12 @@ use crate::{
 };
 use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
-use nix::sys::{
-    socket::{MsgFlags, SockAddr, SockFlag},
-    stat::Mode as OpenMode,
+use nix::{
+    poll::PollFd,
+    sys::{
+        socket::{MsgFlags, SockAddr, SockFlag},
+        stat::Mode as OpenMode,
+    },
 };
 use smallvec::SmallVec;
 
@@ -557,14 +562,12 @@ fn extract_one_chain(
         .collect()
 }
 
-fn process_one_event<F, R>(
+fn process_one_event<R>(
     cqe: Option<iou::CQE>,
-    try_process: F,
     post_process: R,
     source_map: Rc<RefCell<SourceMap>>,
 ) -> Option<bool>
 where
-    F: FnOnce(Ref<'_, InnerSource>) -> Option<()>,
     R: FnOnce(RefMut<'_, InnerSource>, io::Result<usize>) -> io::Result<usize>,
 {
     if let Some(value) = cqe {
@@ -579,14 +582,10 @@ where
 
         let result = value.result();
 
-        let mut woke = false;
-        if try_process(src.borrow()).is_none() {
-            let res = Some(post_process(src.borrow_mut(), transmute_error(result)));
-            let mut inner_source = src.borrow_mut();
-            inner_source.wakers.result = res;
-            woke = inner_source.wakers.wake_waiters();
-        }
-        return Some(woke);
+        let res = Some(post_process(src.borrow_mut(), transmute_error(result)));
+        let mut inner_source = src.borrow_mut();
+        inner_source.wakers.result = res;
+        return Some(inner_source.wakers.wake_waiters());
     }
     None
 }
@@ -865,7 +864,6 @@ impl UringCommon for PollRing {
         let source_map = self.source_map.clone();
         process_one_event(
             self.ring.peek_for_cqe(),
-            |_| None,
             |mut src, res| {
                 record_stats(self, &mut src, &res);
                 res
@@ -939,10 +937,6 @@ impl SleepableRing {
             source_map,
             in_kernel: 0,
         })
-    }
-
-    fn ring_fd(&self) -> RawFd {
-        self.ring.raw().ring_fd
     }
 
     /// This function prepares a timer that fires unconditionally after a
@@ -1068,68 +1062,6 @@ impl SleepableRing {
             false
         }
     }
-
-    fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
-        assert_eq!(
-            self.waiting_kernel_submission(),
-            0,
-            "sleeping with pending SQEs"
-        );
-        if let Some(mut sqe) = self.ring.sq().prepare_sqe() {
-            let sqe_ptr = unsafe { sqe.raw_mut() as *mut _ };
-            let op = UringDescriptor {
-                fd: link.raw(),
-                flags: SubmissionFlags::empty(),
-                user_data: to_user_data(
-                    self.source_map
-                        .borrow_mut()
-                        .add_source(link, self.submission_queue.clone()),
-                ),
-                args: UringOpDescriptor::PollAdd(common_flags() | read_flags()),
-            };
-            fill_sqe(
-                &mut sqe,
-                &op,
-                DmaBuffer::new,
-                &mut *self.source_map.borrow_mut(),
-            );
-
-            // We have now prepared the SQE that links the two rings. We now need to submit
-            // it successfully to be able to safely sleep.
-
-            if self
-                .submit_sqes()
-                .or_else(Reactor::busy_ok)
-                .or_else(Reactor::again_ok)
-                .or_else(Reactor::intr_ok)?
-                != 1
-            {
-                // We failed to submit the `SQE` that links the rings. Just can't sleep.
-                // Waiting here is unsafe because we could end up waiting much longer than
-                // needed.
-                // We make the SQE a no-op and return
-                unsafe { crate::uring_sys::io_uring_prep_nop(sqe_ptr) };
-                Err(io::Error::from_raw_os_error(libc::EBUSY))
-            } else {
-                // The rings are linked. Goodnight!
-                self.ring
-                    .cq()
-                    .wait(1)
-                    .map(|_| 1)
-                    .or_else(Reactor::busy_ok)
-                    .or_else(Reactor::again_ok)
-                    .or_else(Reactor::intr_ok)
-            }
-        } else {
-            // Can't link rings because we ran out of `CQE`s. Just can't sleep.
-            // Submit what we have, once we're out of here we'll consume them
-            // and at some point will be able to sleep again.
-            self.submit_sqes()
-                .or_else(Reactor::busy_ok)
-                .or_else(Reactor::again_ok)
-                .or_else(Reactor::intr_ok)
-        }
-    }
 }
 
 impl UringCommon for SleepableRing {
@@ -1191,10 +1123,6 @@ impl UringCommon for SleepableRing {
         let source_map = self.source_map.clone();
         process_one_event(
             self.ring.peek_for_cqe(),
-            |source| match source.source_type {
-                SourceType::LinkRings => Some(()),
-                _ => None,
-            },
             |mut src, res| {
                 record_stats(self, &mut src, &res);
                 if let SourceType::ForeignNotifier(_, installed) = &mut src.source_type {
@@ -1249,7 +1177,10 @@ pub(crate) struct Reactor {
     latency_preemption_timeout_src: Cell<Option<Source>>,
     throughput_preemption_timeout_src: Cell<Option<Source>>,
 
-    link_fd: RawFd,
+    // An eventfd written to by the kernel whenever a CQE is posted on one of the sleepable rings
+    // (the main ring and the latency ring)
+    // We use this eventfd as a way to sleep when there are no events to collect or submit
+    cqe_events_fd: RawFd,
 
     // This keeps the `eventfd` alive. Drop will close it when we're done
     notifier: Arc<sys::SleepNotifier>,
@@ -1337,6 +1268,12 @@ impl Reactor {
         let mut latency_ring =
             SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
 
+        let cqe_events_fd = create_eventfd(OFlag::O_CLOEXEC | OFlag::O_NONBLOCK).unwrap();
+
+        // Register the eventfd
+        main_ring.registrar().register_eventfd(cqe_events_fd)?;
+        latency_ring.registrar().register_eventfd(cqe_events_fd)?;
+
         match main_ring.registrar().register_buffers_by_ref(&registry) {
             Err(x) => warn!(
                 "Error: registering buffers in the main ring. Skipping{:#?}",
@@ -1368,8 +1305,6 @@ impl Reactor {
             },
         }
 
-        let link_fd = latency_ring.ring_fd();
-
         let eventfd_src = Source::new(
             IoRequirements::default(),
             notifier.eventfd_fd(),
@@ -1389,7 +1324,7 @@ impl Reactor {
             latency_preemption_timeout_src: Cell::new(None),
             throughput_preemption_timeout_src: Cell::new(None),
             blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
-            link_fd,
+            cqe_events_fd,
             notifier,
             eventfd_src,
             source_map,
@@ -1736,24 +1671,30 @@ impl Reactor {
         }
     }
 
-    /// We want to go to sleep, but we can only go to sleep in one of the rings,
-    /// as we only have one thread. There are more than one sleepable rings, so
-    /// what we do is we take advantage of the fact that the ring's `ring_fd` is
-    /// pollable and register a `POLL_ADD` event into the ring we will wait on.
-    ///
-    /// We may not be able to register an `SQE` at this point, so we return an
-    /// Error and will just not sleep.
-    fn link_rings_and_sleep(&self, ring: &mut SleepableRing) -> io::Result<()> {
-        let mut link_rings = Source::new(
-            IoRequirements::default(),
-            self.link_fd,
-            SourceType::LinkRings,
-            None,
-            None,
-        );
-        ring.sleep(&mut link_rings)
-            .or_else(Self::busy_ok)
-            .map(|_| {})
+    /// Sleep until we get an event or for the specified duration (whichever
+    /// comes first)
+    fn sleep(&self, timeout: Option<Duration>) -> io::Result<()> {
+        defer!({
+            // Flush the eventfd!
+            let _ = read_eventfd(self.cqe_events_fd);
+        });
+
+        // Take the number of milliseconds to wait for as an i32 (saturating if the
+        // Duration encodes more than what we can represent)
+        let timeout = timeout
+            .map(|d| d.as_millis())
+            .unwrap_or(u128::MAX)
+            .min(i32::MAX as u128) as i32;
+
+        // Poll both the local eventfd and the remote notifier one
+        let events = PollFd::new(self.cqe_events_fd, common_flags() | read_flags());
+        let notifier = PollFd::new(self.eventfd_src.raw(), common_flags() | read_flags());
+        nix::poll::poll(&mut [events, notifier], timeout)
+            .map(|_| ())
+            .map_err(|errno| io::Error::from_raw_os_error(errno as i32))
+            .or_else(Self::intr_ok)?;
+
+        Ok(())
     }
 
     pub(crate) fn poll_io(&self, woke: &mut usize) -> io::Result<()> {
@@ -1861,6 +1802,10 @@ impl Reactor {
         consume_rings!(into &mut woke; lat_ring, poll_ring, main_ring);
 
         // If we generated any event so far, we can't sleep. Need to handle them.
+        // Flush the local events counter as well. We do this before checking if we can
+        // go to sleep such that we are safe from races if an event comes back
+        // in-between checking if we can sleep and sleeping.
+        let _ = read_eventfd(self.cqe_events_fd);
         let should_sleep = preempt_timer().is_none()
             && (woke == 0)
             && poll_ring.can_sleep()
@@ -1868,13 +1813,6 @@ impl Reactor {
             && lat_ring.can_sleep();
 
         if should_sleep {
-            // We are about to go to sleep. It's ok to sleep, but if there
-            // is a timer set, we need to make sure we wake up to handle it.
-            if let Some(dur) = user_timer {
-                self.latency_preemption_timeout_src
-                    .set(Some(lat_ring.prepare_latency_preemption_timer(dur)));
-                assert!(flush_rings!(lat_ring)? > 0);
-            }
             // From this moment on the remote executors are aware that we are sleeping
             // We have to sweep the remote channels function once more because since
             // last time until now it could be that something happened in a remote executor
@@ -1886,14 +1824,8 @@ impl Reactor {
             membarrier::heavy();
             let events = process_remote_channels() + self.flush_syscall_thread();
             if events == 0 {
-                if self.eventfd_src.is_installed().unwrap() {
-                    self.link_rings_and_sleep(&mut main_ring)
-                        .expect("some error");
-                    // May have new cancellations related to the link ring fd.
-                    flush_cancellations!(into &mut 0; lat_ring, poll_ring, main_ring);
-                    flush_rings!(lat_ring, poll_ring, main_ring)?;
-                    consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
-                }
+                self.sleep(user_timer).expect("some error");
+                consume_rings!(into &mut 0; lat_ring, poll_ring, main_ring);
                 // Woke up, so no need to notify us anymore.
                 self.notifier.wake_up();
             }
