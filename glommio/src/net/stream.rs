@@ -25,7 +25,7 @@ type Result<T> = crate::Result<T, ()>;
 pub trait RxBuf {
     fn read(&mut self, buf: &mut [u8]) -> usize;
     fn peek(&self, buf: &mut [u8]) -> usize;
-    fn is_empty(&mut self) -> bool;
+    fn is_empty(&self) -> bool;
     fn as_bytes(&self) -> &[u8];
     fn consume(&mut self, amt: usize);
     fn buffer_size(&self) -> usize;
@@ -45,7 +45,7 @@ impl RxBuf for NonBuffered {
         0
     }
 
-    fn is_empty(&mut self) -> bool {
+    fn is_empty(&self) -> bool {
         true
     }
 
@@ -125,7 +125,7 @@ impl RxBuf for Preallocated {
         sz
     }
 
-    fn is_empty(&mut self) -> bool {
+    fn is_empty(&self) -> bool {
         self.head >= self.tail
     }
 
