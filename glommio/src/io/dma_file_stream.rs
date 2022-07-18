@@ -862,33 +862,48 @@ impl DmaStreamWriterState {
                 flush.await;
             }
 
-            // safe to borrow now across yield points as no more flushers
-            let mut state = state.borrow_mut();
+            let (has_error, must_adjust, must_truncate) = {
+                let state = state.borrow();
+                let has_error = state.error.is_some();
 
-            if state.error.is_some() {
+                assert_eq!(state.flushed_pos(), final_pos);
+
+                let must_adjust = state.sync_on_close && state.synced_pos < final_pos;
+                let must_truncate = state.must_truncate();
+                (has_error, must_adjust, must_truncate)
+            };
+
+            if has_error {
                 return;
             }
 
-            assert_eq!(state.flushed_pos(), final_pos);
-
-            if state.sync_on_close && state.synced_pos < final_pos {
+            if must_adjust {
                 let res = file.fdatasync().await;
-                if collect_error!(state, res) {
-                    return;
+                {
+                    let mut state = state.borrow_mut();
+                    if collect_error!(state, res) {
+                        return;
+                    }
+                    state.synced_pos = final_pos;
                 }
-                state.synced_pos = final_pos;
             }
 
-            if state.must_truncate() {
+            if must_truncate {
                 let res = file.truncate(final_pos).await;
-                if collect_error!(state, res) {
-                    return;
+                {
+                    let mut state = state.borrow_mut();
+                    if collect_error!(state, res) {
+                        return;
+                    }
                 }
             }
 
             if do_close {
                 let res = file.close_rc().await;
-                collect_error!(state, res);
+                {
+                    let mut state = state.borrow_mut();
+                    collect_error!(state, res);
+                }
             }
         })
         .detach();
@@ -1124,7 +1139,8 @@ impl DmaStreamWriter {
             (state.flushed_pos(), state.synced_pos)
         };
         if presync_pos < flushed_pos {
-            self.file.borrow().clone().unwrap().fdatasync().await?;
+            let file = self.file.borrow().clone();
+            file.unwrap().fdatasync().await?;
             self.state.borrow_mut().synced_pos = flushed_pos;
         } else {
             assert_eq!(presync_pos, flushed_pos);
