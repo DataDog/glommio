@@ -36,6 +36,7 @@ use crate::{
         self,
         blocking::{BlockingThreadOp, BlockingThreadPool},
         dma_buffer::{BufferStorage, DmaBuffer},
+        membarrier,
         DirectIo,
         EnqueuedSource,
         EnqueuedStatus,
