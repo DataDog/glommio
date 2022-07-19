@@ -183,7 +183,7 @@ type SharedChannel<T> = (
 type SharedChannels<T> = Vec<Vec<SharedChannel<T>>>;
 
 /// The role an executor plays in the mesh
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     /// The executor produces message
     Producer,

@@ -239,9 +239,9 @@ impl DmaStreamReaderState {
                 }
             }
             state.pending.remove(&buffer_id);
-            let wakers = state.wakermap.remove(&buffer_id);
+            let mut wakers = state.wakermap.remove(&buffer_id);
             drop(state);
-            for w in wakers.into_iter() {
+            if let Some(w) = wakers.take() {
                 w.wake();
             }
         })
@@ -862,20 +862,15 @@ impl DmaStreamWriterState {
                 flush.await;
             }
 
-            let (has_error, must_adjust, must_truncate) = {
+            let must_adjust = {
                 let state = state.borrow();
-                let has_error = state.error.is_some();
+                if state.error.is_some() {
+                    return;
+                }
 
                 assert_eq!(state.flushed_pos(), final_pos);
-
-                let must_adjust = state.sync_on_close && state.synced_pos < final_pos;
-                let must_truncate = state.must_truncate();
-                (has_error, must_adjust, must_truncate)
+                state.sync_on_close && state.synced_pos < final_pos
             };
-
-            if has_error {
-                return;
-            }
 
             if must_adjust {
                 let res = file.fdatasync().await;
@@ -887,6 +882,11 @@ impl DmaStreamWriterState {
                     state.synced_pos = final_pos;
                 }
             }
+
+            let must_truncate = {
+                let state = state.borrow();
+                state.must_truncate()
+            };
 
             if must_truncate {
                 let res = file.truncate(final_pos).await;

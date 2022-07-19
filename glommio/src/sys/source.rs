@@ -224,7 +224,7 @@ impl Source {
     }
 
     pub(crate) fn buffer(&self) -> Ref<'_, IoBuffer> {
-        Ref::map(self.source_type(), |stype| match &*stype {
+        Ref::map(self.source_type(), |stype| match stype {
             SourceType::Read(_, Some(buffer)) => buffer,
             SourceType::Write(_, buffer) => buffer,
             x => panic!("Could not extract buffer. Source: {:?}", x),
