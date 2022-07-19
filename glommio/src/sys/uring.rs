@@ -1055,7 +1055,7 @@ impl SleepableRing {
                         BufferStorage::EventFd(buffer_ptr),
                     ))
                 },
-                &mut *self.source_map.borrow_mut(),
+                &mut self.source_map.borrow_mut(),
             );
 
             match &mut *eventfd_src.source_type_mut() {
@@ -1092,7 +1092,7 @@ impl SleepableRing {
                 &mut sqe,
                 &op,
                 DmaBuffer::new,
-                &mut *self.source_map.borrow_mut(),
+                &mut self.source_map.borrow_mut(),
             );
 
             // We have now prepared the SQE that links the two rings. We now need to submit
@@ -1439,7 +1439,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1455,7 +1455,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1465,7 +1465,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1475,7 +1475,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1485,7 +1485,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1500,7 +1500,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1523,7 +1523,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1533,7 +1533,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1543,7 +1543,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1556,7 +1556,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1569,7 +1569,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1578,7 +1578,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             UringOpDescriptor::FDataSync,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1588,7 +1588,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1656,7 +1656,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1673,7 +1673,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1687,7 +1687,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
