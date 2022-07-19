@@ -224,10 +224,10 @@ impl<T> Drop for Buffer<T> {
         // We don't want to run any destructors here, because we didn't run
         // any of the constructors through the vector. And whatever object was
         // in fact still alive we popped above.
-        unsafe {
+        let _drop = unsafe {
             let ptr = from_raw_parts_mut(self.buffer_storage, self.capacity) as *mut [Slot<T>];
-            Box::from_raw(ptr);
-        }
+            Box::from_raw(ptr)
+        };
     }
 }
 
@@ -305,20 +305,17 @@ pub(crate) trait BufferHalf {
 impl<T> BufferHalf for Producer<T> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
-        &*self.buffer
+        &self.buffer
     }
 
     fn connect(&self, id: usize) {
         assert_ne!(id, 0);
         assert_ne!(id, usize::MAX);
-        (*self.buffer)
-            .ccache
-            .producer_id
-            .store(id, Ordering::Release);
+        self.buffer.ccache.producer_id.store(id, Ordering::Release);
     }
 
     fn peer_id(&self) -> usize {
-        (*self.buffer).pcache.consumer_id.load(Ordering::Acquire)
+        self.buffer.pcache.consumer_id.load(Ordering::Acquire)
     }
 }
 
@@ -363,20 +360,17 @@ impl<T> Producer<T> {
 impl<T> BufferHalf for Consumer<T> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
-        &(*self.buffer)
+        &self.buffer
     }
 
     fn connect(&self, id: usize) {
         assert_ne!(id, usize::MAX);
         assert_ne!(id, 0);
-        (*self.buffer)
-            .pcache
-            .consumer_id
-            .store(id, Ordering::Release);
+        self.buffer.pcache.consumer_id.store(id, Ordering::Release);
     }
 
     fn peer_id(&self) -> usize {
-        (*self.buffer).ccache.producer_id.load(Ordering::Acquire)
+        self.buffer.ccache.producer_id.load(Ordering::Acquire)
     }
 }
 

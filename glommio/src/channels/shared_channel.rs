@@ -992,10 +992,12 @@ mod test {
         let ex2 = LocalExecutorBuilder::default()
             .spawn(move || async move {
                 let receiver = receiver.connect().await;
-                let _lck = cv_mtx_3
-                    .0
-                    .wait_while(cv_mtx_3.1.lock().unwrap(), |l| *l < 2)
-                    .unwrap();
+                {
+                    let _lck = cv_mtx_3
+                        .0
+                        .wait_while(cv_mtx_3.1.lock().unwrap(), |l| *l < 2)
+                        .unwrap();
+                };
                 while let Some(v) = receiver.recv().await {
                     assert!(0 <= v);
                 }

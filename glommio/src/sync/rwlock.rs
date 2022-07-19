@@ -425,7 +425,7 @@ impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
 
 impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let state = (*self.rw).state.borrow();
+        let state = self.rw.state.borrow();
 
         if state.closed {
             panic!("Related RwLock is already closed");

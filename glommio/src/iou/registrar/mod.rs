@@ -259,7 +259,7 @@ mod tests {
     #[should_panic(expected = "No such device or address")]
     fn empty_unregister_err() {
         let ring = IoUring::new(1).unwrap();
-        let _ = ring.registrar().unregister_files().unwrap();
+        ring.registrar().unregister_files().unwrap();
     }
 
     #[test]

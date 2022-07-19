@@ -250,7 +250,7 @@ impl GlommioFile {
     }
 
     pub(crate) async fn remove(&self) -> Result<()> {
-        let path = self.path_required("remove")?;
+        let path = self.path_required("remove")?.to_owned();
         let source = self.reactor.upgrade().unwrap().remove_file(&*path).await;
 
         source.collect_rw().await.map_err(|source| {
@@ -266,7 +266,7 @@ impl GlommioFile {
 
     // Retrieve file metadata, backed by the statx(2) syscall
     pub(crate) async fn statx(&self) -> Result<libc::statx> {
-        let path = self.path_required("stat")?;
+        let path = self.path_required("stat")?.to_owned();
 
         let source = self
             .reactor

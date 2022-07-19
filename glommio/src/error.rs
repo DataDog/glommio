@@ -560,11 +560,11 @@ mod test {
                     a buffer boundary (Buffer size 120)\")"
     )]
     fn extended_file_err_msg_unwrap() {
-        let _: () = Err(GlommioError::<()>::WouldBlock(ResourceType::File(format!(
+        let err: Result<(), ()> = Err(GlommioError::<()>::WouldBlock(ResourceType::File(format!(
             "Reading {} bytes from position {} would cross a buffer boundary (Buffer size {})",
             100, 90, 120
-        ))))
-        .unwrap();
+        ))));
+        err.unwrap();
     }
 
     #[test]
