@@ -146,7 +146,7 @@ impl<T> Buffer<T> {
         let index = (tail + self.lookahead) & self.mask;
         let slot = unsafe { &*self.buffer_storage.add(index) };
         if !slot.has_value.load(Ordering::Acquire) {
-            self.pcache.limit.set(tail + self.lookahead);
+            self.pcache.limit.set(tail + self.lookahead + 1);
             true
         } else {
             let slot = unsafe { &*self.buffer_storage.add(tail & self.mask) };
@@ -165,7 +165,7 @@ impl<T> Buffer<T> {
             return Some(v);
         }
         let tail = self.pcache.tail.load(Ordering::Relaxed);
-        if tail >= self.lookahead && !self.has_space(tail) {
+        if tail >= self.pcache.limit.get() && !self.has_space(tail) {
             return Some(v);
         }
         let slot = unsafe {
