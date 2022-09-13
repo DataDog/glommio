@@ -6,7 +6,7 @@ publish = false
 edition = "2018"
 
 [dev-dependencies]
-ansi_term = "~0.12.1"
+yansi = "~0.5.1"
 clap = "2.33"
 fastrand = "1.4.0"
 futures = "~0.3.5"
