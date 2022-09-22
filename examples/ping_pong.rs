@@ -20,7 +20,7 @@ fn main() {
                         println!("left");
                         *(left.borrow_mut()) = true;
                         println!("reset");
-                        *(right.borrow_mut()) = true
+                        *(right.borrow_mut()) = false
                     }
                     glommio::yield_if_needed().await;
 
