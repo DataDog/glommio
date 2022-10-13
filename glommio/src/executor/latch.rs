@@ -70,7 +70,7 @@ impl Latch {
     /// `count_down(0)`) is indicative that the state is either `Ready` or
     /// `Canceled`, other data may not yet be synchronized with other threads.
     pub fn count_down(&self, n: usize) -> Result<usize, usize> {
-        self.update(LatchState::Ready, |v| (v >= n).then(|| v - n))
+        self.update(LatchState::Ready, |v| (v >= n).then_some(v - n))
     }
 
     /// Cancels the latch.  Other threads will no longer wait.  If this call
@@ -79,7 +79,7 @@ impl Latch {
     ///
     /// The method does not synchronize with other threads.
     pub fn cancel(&self) -> Result<usize, LatchState> {
-        self.update(LatchState::Canceled, |v| (v != 0).then(|| 0))
+        self.update(LatchState::Canceled, |v| (v != 0).then_some(0))
             .map_err(|_| self.wait())
     }
 
