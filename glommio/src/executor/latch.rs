@@ -70,7 +70,8 @@ impl Latch {
     /// `count_down(0)`) is indicative that the state is either `Ready` or
     /// `Canceled`, other data may not yet be synchronized with other threads.
     pub fn count_down(&self, n: usize) -> Result<usize, usize> {
-        self.update(LatchState::Ready, |v| (v >= n).then_some(v - n))
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        self.update(LatchState::Ready, |v| (v >= n).then(|| v - n))
     }
 
     /// Cancels the latch.  Other threads will no longer wait.  If this call
