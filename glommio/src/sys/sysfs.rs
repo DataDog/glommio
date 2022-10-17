@@ -465,7 +465,7 @@ impl RangeIter<Checked> {
 
     fn ret(&mut self, v: usize) -> Option<usize> {
         self.last_item = Some(v);
-        (v <= self.end).then(|| v)
+        (v <= self.end).then_some(v)
     }
 }
 

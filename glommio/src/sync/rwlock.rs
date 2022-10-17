@@ -925,7 +925,7 @@ mod test {
             let lock = RwLock::new(());
             drop(lock.read().await.unwrap());
             drop(lock.write().await.unwrap());
-            #[allow(clippy::eval_order_dependence)]
+            #[allow(clippy::mixed_read_write_in_expression)]
             drop((lock.read().await.unwrap(), lock.read().await.unwrap()));
             drop(lock.read().await.unwrap());
         });
