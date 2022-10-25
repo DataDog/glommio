@@ -206,7 +206,7 @@ where
 
         // these two syscall are hints and are allowed to fail.
         if let Some(size) = self.pre_allocate {
-            let _ = file.pre_allocate(size).await;
+            let _ = file.pre_allocate(size, true).await;
         }
         if let Some(size) = self.hint_extent_size {
             let _ = file.hint_extent_size(size).await;

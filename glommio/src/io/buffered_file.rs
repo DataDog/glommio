@@ -192,9 +192,16 @@ impl BufferedFile {
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as
-    /// the size argument.
-    pub async fn pre_allocate(&self, size: u64) -> Result<()> {
-        self.file.pre_allocate(size).await.map_err(Into::into)
+    /// the size argument. No existing data in the range [0, size) is modified.
+    /// If `keep_size` is false, then anything in [current file length, size)
+    /// will report zeroed blocks until overwritten and the file size reported
+    /// will be `size`. If `keep_size` is true then the existing file size
+    /// is unchanged.
+    pub async fn pre_allocate(&self, size: u64, keep_size: bool) -> Result<()> {
+        self.file
+            .pre_allocate(size, keep_size)
+            .await
+            .map_err(Into::into)
     }
 
     /// Truncates a file to the specified size.
