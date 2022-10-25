@@ -80,6 +80,15 @@ impl OpenOptions {
     /// data at the end of it.
     ///
     /// The file must be opened with write access for append to work.
+    ///
+    /// NOTE: Caution is required if using this with [`dma_open`] as
+    /// [`write_at`] will cause the position to be reset to the end of file
+    /// before each write as documented for `O_APPEND` in the
+    /// [man page].
+    ///
+    /// [`dma_open`]: struct.OpenOptions.html#method.dma_open
+    /// [`write_at`]: ../struct.DmaFile.html#method.write_at
+    /// [man page]: https://man7.org/linux/man-pages/man2/open.2.html
     pub fn append(&mut self, append: bool) -> &mut Self {
         self.append = append;
         self

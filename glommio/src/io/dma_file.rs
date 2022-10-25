@@ -222,6 +222,12 @@ impl DmaFile {
     /// is the situation, for example, when the device runs out of space
     /// (See the man page for write(2) for details)
     ///
+    /// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+    /// <strong>Warning:</strong> If the file has been opened with `append`,
+    /// then the position will get ignored and the buffer will be written at
+    /// the current end of file. See the [man page] for `O_APPEND`
+    /// </p>
+    ///
     /// # Examples
     /// ```no_run
     /// use glommio::{io::DmaFile, LocalExecutor};
@@ -238,6 +244,7 @@ impl DmaFile {
     /// ```
     ///
     /// [`alloc_dma_buffer`]: struct.DmaFile.html#method.alloc_dma_buffer
+    /// [man page]: https://man7.org/linux/man-pages/man2/open.2.html
     pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> Result<usize> {
         let source = self.file.reactor.upgrade().unwrap().write_dma(
             self.as_raw_fd(),
