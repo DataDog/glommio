@@ -7,7 +7,7 @@
 mod tests {
     use std::process::Command;
     #[test]
-    fn check_formating() {
+    fn check_formatting() {
         let status = Command::new("cargo")
             .args(["+nightly", "fmt", "--all", "--", "--check"])
             .status()
