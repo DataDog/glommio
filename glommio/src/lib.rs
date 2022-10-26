@@ -230,8 +230,9 @@
 //! 512
 //! ```
 //!
-//! Glommio also requires a kernel with a recent enough `io_uring` support, at least recent enough to run discovery probes.
-//! The minimum version at this time is 5.8
+//! Glommio also requires a kernel with a recent enough `io_uring` support, at
+//! least recent enough to run discovery probes. The minimum version at this
+//! time is 5.8
 //!
 //!
 //! ## Examples
