@@ -185,8 +185,12 @@ impl GlommioFile {
             .map(|_| Ref::map(self.path.borrow(), |p| p.as_ref().unwrap().as_path()))
     }
 
-    pub(crate) async fn pre_allocate(&self, size: u64) -> Result<()> {
-        let flags = libc::FALLOC_FL_ZERO_RANGE;
+    pub(crate) async fn pre_allocate(&self, size: u64, keep_size: bool) -> Result<()> {
+        let flags = if keep_size {
+            libc::FALLOC_FL_KEEP_SIZE
+        } else {
+            0
+        };
         let source = self
             .reactor
             .upgrade()

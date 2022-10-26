@@ -376,9 +376,13 @@ impl DmaFile {
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as
-    /// the size argument.
-    pub async fn pre_allocate(&self, size: u64) -> Result<()> {
-        self.file.pre_allocate(size).await
+    /// the size argument. No existing data in the range [0, size) is modified.
+    /// If `keep_size` is false, then anything in [current file length, size)
+    /// will report zeroed blocks until overwritten and the file size reported
+    /// will be `size`. If `keep_size` is true then the existing file size
+    /// is unchanged.
+    pub async fn pre_allocate(&self, size: u64, keep_size: bool) -> Result<()> {
+        self.file.pre_allocate(size, keep_size).await
     }
 
     /// Hint to the OS the size of increase of this file, to allow more
@@ -457,13 +461,7 @@ impl DmaFile {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{
-        enclose,
-        test_utils::{make_test_directories, TestDirectoryKind},
-        ByteSliceMutExt,
-        Latency,
-        Shares,
-    };
+    use crate::{enclose, test_utils::make_test_directories, ByteSliceMutExt, Latency, Shares};
     use futures::join;
     use futures_lite::{stream, StreamExt};
     use rand::{seq::SliceRandom, thread_rng};
@@ -541,17 +539,15 @@ pub(crate) mod test {
         new_file.close().await.expect("failed to close file");
     });
 
-    dma_file_test!(file_fallocate_alocatee, path, kind, {
+    dma_file_test!(file_fallocate_alocatee, path, _kind, {
         let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
 
-        let res = new_file.pre_allocate(4096).await;
-        if let TestDirectoryKind::TempFs = kind {
-            res.expect_err("fallocate should error on tmpfs");
-            return;
-        }
-        res.expect("fallocate failed");
+        new_file
+            .pre_allocate(4096, false)
+            .await
+            .expect("fallocate failed");
 
         std::assert_eq!(
             new_file.file_size().await.unwrap(),
@@ -562,7 +558,10 @@ pub(crate) mod test {
         std::assert_eq!(metadata.len(), 4096);
 
         // should be noop
-        new_file.pre_allocate(2048).await.expect("fallocate failed");
+        new_file
+            .pre_allocate(2048, false)
+            .await
+            .expect("fallocate failed");
 
         std::assert_eq!(
             new_file.file_size().await.unwrap(),
@@ -572,7 +571,36 @@ pub(crate) mod test {
         let metadata = std::fs::metadata(path.join("testfile")).unwrap();
         std::assert_eq!(metadata.len(), 4096);
 
+        let mut buf = new_file.alloc_dma_buffer(4096);
+        buf.as_bytes_mut()[0] = 1;
+        buf.as_bytes_mut()[4095] = 2;
+        new_file.write_at(buf, 0).await.expect("failed to write");
+
+        new_file
+            .pre_allocate(8192, true)
+            .await
+            .expect("fallocate failed");
+        let metadata = std::fs::metadata(path.join("testfile")).unwrap();
+        std::assert_eq!(metadata.len(), 4096);
+
+        new_file
+            .pre_allocate(8192, false)
+            .await
+            .expect("fallocate failed");
+        let metadata = std::fs::metadata(path.join("testfile")).unwrap();
+        std::assert_eq!(metadata.len(), 8192);
+
         new_file.close().await.expect("failed to close file");
+
+        let new_file = DmaFile::open(path.join("testfile"))
+            .await
+            .expect("failed to open file");
+        let read = new_file.read_at(0, 8192).await.expect("failed to read");
+        assert_eq!(read.len(), 8192);
+        assert_eq!(read[0], 1);
+        assert_eq!(read[4095], 2);
+        assert_eq!(read[4096], 0);
+        assert_eq!(read[8191], 0);
     });
 
     dma_file_test!(file_fallocate_zero, path, _k, {
@@ -580,7 +608,7 @@ pub(crate) mod test {
             .await
             .expect("failed to create file");
         new_file
-            .pre_allocate(0)
+            .pre_allocate(0, false)
             .await
             .expect_err("fallocate should fail with len == 0");
 
@@ -656,7 +684,7 @@ pub(crate) mod test {
             .await
             .expect_err("writes to read-only files should fail");
         new_file
-            .pre_allocate(4096)
+            .pre_allocate(4096, false)
             .await
             .expect_err("pre allocating read-only files should fail");
         new_file.close().await.expect("failed to close file");
