@@ -19,7 +19,7 @@ use crate::{
         read_result::ReadResult,
         ScheduledSource,
     },
-    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
+    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus, DmaSource},
 };
 use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
@@ -250,7 +250,7 @@ impl DmaFile {
     pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> Result<usize> {
         let source = self.file.reactor.upgrade().unwrap().write_dma(
             self.as_raw_fd(),
-            buf,
+            DmaSource::Owned(buf),
             pos,
             self.pollable,
         );
