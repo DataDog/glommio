@@ -13,6 +13,7 @@ use std::{
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    rc::Rc,
     sync::{atomic::Ordering, Arc, RwLock},
     task::Waker,
     time::Duration,
@@ -371,9 +372,38 @@ impl Drop for SleepNotifier {
 }
 
 #[derive(Debug)]
+pub(crate) enum DmaSource {
+    Owned(DmaBuffer),
+    Shared(Rc<DmaBuffer>),
+    Send(Arc<DmaBuffer>),
+}
+
+impl DmaSource {
+    fn uring_buffer_id(&self) -> Option<u32> {
+        match self {
+            DmaSource::Owned(buffer) => buffer.uring_buffer_id(),
+            DmaSource::Shared(buffer) => buffer.uring_buffer_id(),
+            DmaSource::Send(buffer) => buffer.uring_buffer_id(),
+        }
+    }
+}
+
+impl Deref for DmaSource {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match &self {
+            Self::Owned(buffer) => buffer.as_bytes(),
+            Self::Shared(buffer) => buffer.as_bytes(),
+            Self::Send(buffer) => buffer.as_bytes(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) enum IoBuffer {
     DmaSink(DmaBuffer),
-    DmaSource(DmaBuffer),
+    DmaSource(DmaSource),
     Buffered(Vec<u8>),
 }
 
@@ -383,7 +413,7 @@ impl Deref for IoBuffer {
     fn deref(&self) -> &Self::Target {
         match &self {
             IoBuffer::DmaSink(buffer) => buffer.as_bytes(),
-            IoBuffer::DmaSource(buffer) => buffer.as_bytes(),
+            IoBuffer::DmaSource(buffer) => buffer.deref(),
             IoBuffer::Buffered(buffer) => buffer.as_slice(),
         }
     }

@@ -39,6 +39,7 @@ use crate::{
         sysfs,
         DirectIo,
         DmaBuffer,
+        DmaSource,
         IoBuffer,
         PollableStatus,
         SleepNotifier,
@@ -337,7 +338,7 @@ impl Reactor {
     pub(crate) fn write_dma(
         &self,
         raw: RawFd,
-        buf: DmaBuffer,
+        buf: DmaSource,
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
