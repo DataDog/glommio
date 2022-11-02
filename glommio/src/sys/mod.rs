@@ -372,7 +372,8 @@ impl Drop for SleepNotifier {
 
 #[derive(Debug)]
 pub(crate) enum IoBuffer {
-    Dma(DmaBuffer),
+    DmaSink(DmaBuffer),
+    DmaSource(DmaBuffer),
     Buffered(Vec<u8>),
 }
 
@@ -381,7 +382,8 @@ impl Deref for IoBuffer {
 
     fn deref(&self) -> &Self::Target {
         match &self {
-            IoBuffer::Dma(buffer) => buffer.as_bytes(),
+            IoBuffer::DmaSink(buffer) => buffer.as_bytes(),
+            IoBuffer::DmaSource(buffer) => buffer.as_bytes(),
             IoBuffer::Buffered(buffer) => buffer.as_slice(),
         }
     }
