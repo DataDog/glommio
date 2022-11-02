@@ -354,7 +354,7 @@ impl Reactor {
 
         let source = self.new_source(
             raw,
-            SourceType::Write(pollable, IoBuffer::Dma(buf)),
+            SourceType::Write(pollable, IoBuffer::DmaSource(buf)),
             Some(stats),
         );
         self.sys.write_dma(&source, pos);

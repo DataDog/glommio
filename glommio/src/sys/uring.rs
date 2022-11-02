@@ -314,7 +314,7 @@ fn fill_sqe<F>(
                             // source. The kernel knows about that buffer already, and will write to
                             // it. So this can only be called if there is no buffer attached to it.
                             assert!(slot.is_none());
-                            *slot = Some(IoBuffer::Dma(buf));
+                            *slot = Some(IoBuffer::DmaSink(buf));
                         }
                         _ => unreachable!("Expected Read source type"),
                     }
@@ -370,7 +370,7 @@ fn fill_sqe<F>(
                     match &mut src.source_type {
                         SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
                             sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-                            *slot = Some(IoBuffer::Dma(buf));
+                            *slot = Some(IoBuffer::DmaSink(buf));
                         }
                         SourceType::Read(_, slot) => {
                             match buf.uring_buffer_id() {
@@ -381,7 +381,7 @@ fn fill_sqe<F>(
                                     sqe.prep_read_fixed(op.fd, buf.as_bytes_mut(), pos, idx);
                                 }
                             };
-                            *slot = Some(IoBuffer::Dma(buf));
+                            *slot = Some(IoBuffer::DmaSink(buf));
                         }
                         _ => unreachable!(),
                     };
@@ -1427,9 +1427,9 @@ impl Reactor {
         let op = match &*source.source_type() {
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIo::Disabled),
-                IoBuffer::Dma(buf),
+                IoBuffer::DmaSource(buf),
             ) => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
-            SourceType::Write(_, IoBuffer::Dma(buf)) => match buf.uring_buffer_id() {
+            SourceType::Write(_, IoBuffer::DmaSource(buf)) => match buf.uring_buffer_id() {
                 Some(id) => UringOpDescriptor::WriteFixed(buf.as_ptr(), buf.len(), pos, id),
                 None => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
             },
