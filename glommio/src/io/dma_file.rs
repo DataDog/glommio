@@ -19,7 +19,7 @@ use crate::{
         read_result::ReadResult,
         ScheduledSource,
     },
-    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus, DmaSource},
+    sys::{self, sysfs, DirectIo, DmaBuffer, DmaSource, PollableStatus},
 };
 use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
@@ -29,6 +29,7 @@ use std::{
     os::unix::io::{AsRawFd, RawFd},
     path::Path,
     rc::Rc,
+    sync::Arc,
 };
 
 use super::Stat;
@@ -251,6 +252,121 @@ impl DmaFile {
         let source = self.file.reactor.upgrade().unwrap().write_dma(
             self.as_raw_fd(),
             DmaSource::Owned(buf),
+            pos,
+            self.pollable,
+        );
+        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+    }
+
+    /// Equivalent to [`DmaFile::write_at`] except that the caller retains
+    /// non-mutable ownership of the underlying buffer. This can be useful if
+    /// you want to asynchronously process a page concurrently with writing it.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use futures::join;
+    /// use glommio::{io::{DmaFile, DmaBuffer}, timer::sleep, LocalExecutor};
+    /// use std::rc::Rc;
+    ///
+    /// fn populate(buf: &mut DmaBuffer) {
+    ///     buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
+    /// }
+    ///
+    /// async fn transform(buf: &[u8]) -> Vec<u8> {
+    ///     // Dummy implementation that just returns a copy of what was written.
+    ///     sleep(std::time::Duration::from_millis(100)).await;
+    ///     buf.iter().map(|a| if *a == 0 { 0 } else { *a + 1 }).collect()
+    /// }
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("test.txt").await.unwrap();
+    ///
+    ///     let mut buf = file.alloc_dma_buffer(4096);
+    ///     // Write some data into the buffer.
+    ///     populate(&mut buf);
+    ///
+    ///     // Seal the buffer by moving ownership to a non-threaded reference
+    ///     // counter on the heap.
+    ///     let buf = Rc::new(buf);
+    ///
+    ///     let (written, transformed) =
+    ///         join!(
+    ///              async { file.write_rc_at(buf.clone(), 0).await.unwrap() },
+    ///              transform(buf.as_bytes())
+    ///         );
+    ///     assert_eq!(written, 4096);
+    ///     file.close().await.unwrap();
+    ///
+    ///     // transformed AND buf can still be used even though the buffer got
+    ///     // written. Note that there may be performance issues if buf is large
+    ///     // and you remain hanging onto it.
+    /// });
+    /// ```
+    pub async fn write_rc_at(&self, buf: Rc<DmaBuffer>, pos: u64) -> Result<usize> {
+        let source = self.file.reactor.upgrade().unwrap().write_dma(
+            self.as_raw_fd(),
+            DmaSource::Shared(buf),
+            pos,
+            self.pollable,
+        );
+        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+    }
+
+    /// Equivalent to [`DmaFile::write_rc_at`] except that the immutable
+    /// reference may be shared across threads. This can be useful if you wish
+    /// to offload processing of the written buffer to a background thread
+    /// responsible for batch/non-blocking operations while the main thread
+    /// continues to respond to I/O.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use futures::join;
+    /// use glommio::{io::{DmaFile, DmaBuffer}, executor, LocalExecutor};
+    /// use std::sync::Arc;
+    ///
+    /// fn populate(buf: &mut DmaBuffer) {
+    ///     buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
+    /// }
+    ///
+    /// fn transform(buf: &[u8]) -> Vec<u8> {
+    ///     // Dummy implementation that just returns a copy of what was written.
+    ///     std::thread::sleep(std::time::Duration::from_millis(100));
+    ///     buf.iter().map(|a| if *a == 0 { 0 } else { *a + 1 }).collect()
+    /// }
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("test.txt").await.unwrap();
+    ///
+    ///     let mut buf = file.alloc_dma_buffer(4096);
+    ///     // Write some data into the buffer.
+    ///     populate(&mut buf);
+    ///
+    ///     // Seal the buffer by moving ownership to a non-threaded reference
+    ///     // counter on the heap.
+    ///     let write_buf = Arc::new(buf);
+    ///     let read_buf = write_buf.clone();
+    ///     let buf_view = unsafe { std::mem::transmute(read_buf.as_bytes()) };
+    ///
+    ///     let (written, transformed) =
+    ///         join!(
+    ///             async { file.write_arc_at(write_buf, 0).await.unwrap() },
+    ///             async { () }
+    ///         );
+    ///     let transformed = executor().spawn_blocking(move || async move { transform(buf_view) });
+    ///     assert_eq!(written, 4096);
+    ///     file.close().await.unwrap();
+    ///
+    ///     // transformed AND buf can still be used even though the buffer got
+    ///     // written. Note that there may be performance issues if buf is large
+    ///     // and you remain hanging onto it.
+    /// });
+    /// ```
+    pub async fn write_arc_at(&self, buf: Arc<DmaBuffer>, pos: u64) -> Result<usize> {
+        let source = self.file.reactor.upgrade().unwrap().write_dma(
+            self.as_raw_fd(),
+            DmaSource::Send(buf),
             pos,
             self.pollable,
         );
@@ -1098,5 +1214,136 @@ pub(crate) mod test {
         for i in rb.iter() {
             assert_eq!(*i, 0);
         }
+    });
+
+    dma_file_test!(file_rc_write, path, _k, {
+        let new_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .dma_open(path.join("testfile"))
+            .await
+            .expect("failed to create file");
+
+        let bytes = 4096;
+
+        let mut buf = new_file.alloc_dma_buffer(bytes);
+        for x in 0..bytes {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let buf = Rc::new(buf);
+        let res = new_file
+            .write_rc_at(buf.clone(), 0)
+            .await
+            .expect("failed to write");
+        assert_eq!(res, bytes);
+        new_file.fdatasync().await.expect("failed to sync disk");
+        new_file.close().await.expect("failed to close file");
+
+        assert_eq!(buf.as_bytes()[1], 1);
+    });
+
+    dma_file_test!(file_arc_write, path, _k, {
+        let new_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .dma_open(path.join("testfile"))
+            .await
+            .expect("failed to create file");
+
+        let bytes = 4096;
+
+        let mut buf = new_file.alloc_dma_buffer(bytes);
+        for x in 0..bytes {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let buf = Arc::new(buf);
+        let res = new_file
+            .write_arc_at(buf.clone(), 0)
+            .await
+            .expect("failed to write");
+        assert_eq!(res, bytes);
+        new_file.fdatasync().await.expect("failed to sync disk");
+        new_file.close().await.expect("failed to close file");
+
+        assert_eq!(buf.as_bytes()[1], 1);
+    });
+
+    dma_file_test!(mirror_buffer_to_two_files, path, _k, {
+        let (file1, file2) = join!(
+            async {
+                OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .read(true)
+                    .dma_open(path.join("testfile1"))
+                    .await
+                    .expect("failed to create file 1")
+            },
+            async {
+                OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .read(true)
+                    .dma_open(path.join("testfile2"))
+                    .await
+                    .expect("failed to create file 2")
+            }
+        );
+
+        let bytes = 4096;
+
+        let mut buf = file1.alloc_dma_buffer(bytes);
+        buf.memset(104);
+
+        let buf1 = Rc::new(buf);
+        let buf2 = buf1.clone();
+
+        let (written1, written2) = join!(
+            async {
+                file1
+                    .write_rc_at(buf1, 0)
+                    .await
+                    .expect("failed to write testfile1")
+            },
+            async {
+                file2
+                    .write_rc_at(buf2, 0)
+                    .await
+                    .expect("failed to write testfile2")
+            }
+        );
+
+        assert_eq!(written1, bytes);
+        assert_eq!(written2, bytes);
+
+        let (buf1, buf2) = join!(
+            async {
+                file1
+                    .read_at_aligned(0, bytes)
+                    .await
+                    .expect("failed to read testfile1")
+            },
+            async {
+                file2
+                    .read_at_aligned(0, bytes)
+                    .await
+                    .expect("failed to read testfile2")
+            }
+        );
+
+        join!(async move { file1.close().await.unwrap() }, async move {
+            file2.close().await.unwrap()
+        });
+
+        assert_eq!(buf1.len(), bytes);
+        assert_eq!(buf2.len(), bytes);
+
+        assert_eq!(*buf1, *buf2);
     });
 }
