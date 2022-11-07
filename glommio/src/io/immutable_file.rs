@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::io::{
-    bulk_io::{MergedBufferLimit, ReadAmplificationLimit, ReadManyArgs},
+    bulk_io::{BulkIo, MergedBufferLimit, ReadAmplificationLimit, ReadManyArgs},
     open_options::OpenOptions,
     DmaStreamReaderBuilder,
     DmaStreamWriter,
@@ -12,7 +12,6 @@ use crate::io::{
     IoVec,
     ReadManyResult,
     ReadResult,
-    ScheduledSource,
 };
 use futures_lite::{future::poll_fn, io::AsyncWrite, Stream};
 use std::{
@@ -23,6 +22,7 @@ use std::{
     rc::Rc,
     task::{Context, Poll},
 };
+
 type Result<T> = crate::Result<T, ()>;
 
 #[derive(Debug)]
@@ -402,7 +402,7 @@ impl ImmutableFile {
         iovs: S,
         buffer_limit: MergedBufferLimit,
         read_amp_limit: ReadAmplificationLimit,
-    ) -> ReadManyResult<V, impl Stream<Item = (ScheduledSource, ReadManyArgs<V>)>>
+    ) -> ReadManyResult<V, impl BulkIo<ReadManyArgs<V>>>
     where
         V: IoVec + Unpin,
         S: Stream<Item = V> + Unpin,
@@ -410,6 +410,23 @@ impl ImmutableFile {
         self.stream_builder
             .file
             .read_many(iovs, buffer_limit, read_amp_limit)
+    }
+
+    /// A variant of [`ImmutableFile::read_many`] that yields [`ReadResult`]s in
+    /// the order of IO completion.
+    pub fn read_many_unordered<V, S>(
+        &self,
+        iovs: S,
+        buffer_limit: MergedBufferLimit,
+        read_amp_limit: ReadAmplificationLimit,
+    ) -> ReadManyResult<V, impl BulkIo<ReadManyArgs<V>>>
+    where
+        V: IoVec + Unpin,
+        S: Stream<Item = V> + Unpin,
+    {
+        self.stream_builder
+            .file
+            .read_many_unordered(iovs, buffer_limit, read_amp_limit)
     }
 
     /// Rename this file.

@@ -1,17 +1,23 @@
-use crate::io::{
-    dma_file::{align_down, align_up},
-    DmaFile,
-    ReadResult,
-    ScheduledSource,
+use crate::{
+    io::{
+        dma_file::{align_down, align_up},
+        DmaFile,
+        ReadResult,
+        ScheduledSource,
+    },
+    task::waker_fn::dummy_waker,
 };
 use core::task::{Context, Poll};
 use futures_lite::{ready, Stream, StreamExt};
 use std::{
+    cell::RefCell,
     cmp::{max, min},
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
+    mem::ManuallyDrop,
     os::unix::io::AsRawFd,
     pin::Pin,
     rc::Rc,
+    task::{RawWaker, RawWakerVTable, Waker},
 };
 
 /// Set a limit to the size of merged IO requests.
@@ -67,6 +73,71 @@ impl Default for ReadAmplificationLimit {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ProxyWaker {
+    proxied: RefCell<Waker>,
+    awaken: RefCell<Vec<u64>>,
+}
+
+impl Default for ProxyWaker {
+    fn default() -> Self {
+        Self {
+            proxied: RefCell::new(dummy_waker()),
+            awaken: Default::default(),
+        }
+    }
+}
+
+impl ProxyWaker {
+    fn update(&self, new: Waker) {
+        self.proxied.replace(new);
+    }
+
+    fn pop_awaken(&self) -> Option<u64> {
+        self.awaken.borrow_mut().pop()
+    }
+
+    fn proxy(self: &Rc<Self>) -> (u64, Waker) {
+        unsafe fn clone_waker(waker: *const ()) -> RawWaker {
+            Rc::increment_strong_count(waker as *const ProxyWaker);
+            RawWaker::new(
+                waker as *const (),
+                &RawWakerVTable::new(clone_waker, wake, wake_by_ref, drop_waker),
+            )
+        }
+
+        unsafe fn wake(waker: *const ()) {
+            let waker = Rc::from_raw(waker as *const ProxyWaker);
+            waker.awaken.borrow_mut().push(Rc::as_ptr(&waker) as u64);
+
+            // since our proxied waker is behind an Rc we emulate `waker.clone().wake()`:
+            waker.proxied.borrow().wake_by_ref();
+        }
+
+        unsafe fn wake_by_ref(waker: *const ()) {
+            let waker = ManuallyDrop::new(Rc::from_raw(waker as *const ProxyWaker));
+            waker.awaken.borrow_mut().push(Rc::as_ptr(&waker) as u64);
+
+            waker.proxied.borrow().wake_by_ref();
+        }
+
+        unsafe fn drop_waker(waker: *const ()) {
+            Rc::decrement_strong_count(waker as *const ProxyWaker);
+        }
+
+        let rc = self.clone();
+        let id = Rc::as_ptr(&rc) as u64;
+        let waker = unsafe {
+            Waker::from_raw(RawWaker::new(
+                Rc::into_raw(rc) as *const _,
+                &RawWakerVTable::new(clone_waker, wake, wake_by_ref, drop_waker),
+            ))
+        };
+
+        (id, waker)
+    }
+}
+
 /// An interface to an IO vector.
 pub trait IoVec {
     /// The read position (the offset) in the file
@@ -85,6 +156,7 @@ impl IoVec for (u64, usize) {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct MergedIOVecs<V: IoVec> {
     pub(crate) coalesced_user_iovecs: VecDeque<V>,
     pub(crate) pos: u64,
@@ -130,6 +202,7 @@ impl<V: IoVec> Iterator for MergedIOVecs<V> {
     }
 }
 
+#[derive(Debug)]
 struct IOVecMerger<V: IoVec> {
     max_merged_buffer_size: usize,
     max_read_amp: Option<usize>,
@@ -194,6 +267,7 @@ impl<V: IoVec> IOVecMerger<V> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct CoalescedReads<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> {
     iter: S,
     merger: Option<IOVecMerger<V>>,
@@ -298,8 +372,38 @@ impl<V: IoVec + Unpin, S: Stream<Item = V> + Unpin> Stream for CoalescedReads<V,
     }
 }
 
+/// A trait that limits the number of IO concurrency of [`BulkIo`] streams
+///
+/// Multiple concurrency limits are available and exist in parallel: whichever
+/// limit triggers first wins.
+pub trait IoConcurrencyLimiter {
+    /// Sets the maximum concurrency of the stream in terms of number of
+    /// inflight IO requests. A request is inflight if it is pending IO
+    /// completion or if it is waiting for the user to consume the stream.
+    fn set_concurrency_limit(&mut self, limit: usize);
+
+    /// Sets the maximum concurrency of the stream in terms of memory
+    /// consumption. Usage correspond to the amount of IO buffers the
+    /// stream has a reference to.
+    fn set_memory_limit(&mut self, limit: Option<usize>);
+
+    /// Whether this stream has reached maximum concurrency
+    ///
+    /// If true, this stream will not schedule any more IO until some IO results
+    /// have been successfully consumed
+    fn is_full(&self) -> bool;
+}
+
+/// A trait for streams that perform many IO requests concurrently
+pub trait BulkIo<U: IoVec + Unpin>:
+    Stream<Item = (ScheduledSource, U)> + Unpin + IoConcurrencyLimiter
+{
+    /// The file behind this stream
+    fn file(&self) -> &Rc<DmaFile>;
+}
+
 #[derive(Debug)]
-pub(crate) struct OrderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
+pub struct OrderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
     file: Rc<DmaFile>,
     iovs: S,
 
@@ -323,8 +427,12 @@ impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> OrderedBu
             terminated: false,
         }
     }
+}
 
-    pub(crate) fn set_concurrency_limit(&mut self, limit: usize) {
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> IoConcurrencyLimiter
+    for OrderedBulkIo<U, S>
+{
+    fn set_concurrency_limit(&mut self, limit: usize) {
         assert!(limit > 0);
         assert!(
             !self.terminated && self.inflight.is_empty(),
@@ -334,7 +442,7 @@ impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> OrderedBu
         self.concurrency_cap = limit
     }
 
-    pub(crate) fn set_memory_limit(&mut self, limit: Option<usize>) {
+    fn set_memory_limit(&mut self, limit: Option<usize>) {
         assert!(limit.unwrap_or(usize::MAX) > 0);
         assert!(
             !self.terminated && self.inflight.is_empty(),
@@ -417,6 +525,144 @@ impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> Stream
     }
 }
 
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> BulkIo<U>
+    for OrderedBulkIo<U, S>
+{
+    fn file(&self) -> &Rc<DmaFile> {
+        &self.file
+    }
+}
+
+#[derive(Debug)]
+pub struct UnorderedBulkIo<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> {
+    file: Rc<DmaFile>,
+    iovs: S,
+
+    inflight: BTreeMap<u64, (ScheduledSource, U)>,
+    concurrency_cap: usize,
+    inflight_memory: usize,
+    memory_cap: usize,
+    terminated: bool,
+
+    waker: Rc<ProxyWaker>,
+}
+
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> UnorderedBulkIo<U, S> {
+    pub(crate) fn new(file: Rc<DmaFile>, concurrency: usize, iovs: S) -> UnorderedBulkIo<U, S> {
+        assert!(concurrency > 0);
+        UnorderedBulkIo {
+            file,
+            iovs,
+            inflight: Default::default(),
+            concurrency_cap: concurrency,
+            inflight_memory: 0,
+            memory_cap: usize::MAX,
+            terminated: false,
+            waker: Default::default(),
+        }
+    }
+}
+
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> IoConcurrencyLimiter
+    for UnorderedBulkIo<U, S>
+{
+    fn set_concurrency_limit(&mut self, limit: usize) {
+        assert!(limit > 0);
+        assert!(
+            !self.terminated && self.inflight.is_empty(),
+            "should be called before the first call to poll()"
+        );
+        self.concurrency_cap = limit
+    }
+
+    fn set_memory_limit(&mut self, limit: Option<usize>) {
+        assert!(limit.unwrap_or(usize::MAX) > 0);
+        assert!(
+            !self.terminated && self.inflight.is_empty(),
+            "should be called before the first call to poll()"
+        );
+        self.memory_cap = limit.unwrap_or(usize::MAX)
+    }
+
+    fn is_full(&self) -> bool {
+        self.inflight.len() == self.concurrency_cap || self.inflight_memory > self.memory_cap
+    }
+}
+
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> Stream
+    for UnorderedBulkIo<U, S>
+{
+    type Item = (ScheduledSource, U);
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        // update the waker
+        this.waker.update(cx.waker().clone());
+
+        // Poll the underlying stream and insert the resulting source, if any, in the
+        // local buffer
+        let poll_inner = |this: &mut Self, cx: &mut Context<'_>| match this.iovs.poll_next(cx) {
+            Poll::Ready(Some(res)) => {
+                this.inflight_memory += res.1.size();
+                let (id, proxy_waker) = this.waker.proxy();
+                res.0.add_waiter_many(proxy_waker);
+                this.inflight.insert(id, res);
+            }
+            Poll::Ready(None) => this.terminated = true,
+            _ => {}
+        };
+
+        // poll the local buffer for a fulfilled source, if any, and replace it with a
+        // new one from the underlying stream
+        let poll_buffer = |this: &mut Self, cx: &mut Context<'_>| {
+            if let Some(idx) = this.waker.pop_awaken() {
+                let ret = this.inflight.remove(&idx).unwrap();
+
+                if !this.terminated {
+                    poll_inner(this, cx);
+                }
+                this.inflight_memory -= ret.1.size();
+                Poll::Ready(Some(ret))
+            } else {
+                Poll::Pending
+            }
+        };
+
+        if this.is_full() || (this.terminated && !this.inflight.is_empty()) {
+            // The internal buffer is full so we consume them instead of creating new ones
+            poll_buffer(this, cx)
+        } else {
+            // fill the internal buffer as much as possible
+            while !this.is_full() && !this.terminated {
+                poll_inner(this, cx);
+            }
+
+            // if there is anything we can return immediately, do so
+            if !this.terminated || !this.inflight.is_empty() {
+                poll_buffer(this, cx)
+            } else {
+                Poll::Ready(None)
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self.iovs.size_hint() {
+            (low, Some(hi)) => (low + self.inflight.len(), Some(hi + self.inflight.len())),
+            (low, None) => (low + self.inflight.len(), None),
+        }
+    }
+}
+
+impl<U: IoVec + Unpin, S: Stream<Item = (ScheduledSource, U)> + Unpin> BulkIo<U>
+    for UnorderedBulkIo<U, S>
+{
+    fn file(&self) -> &Rc<DmaFile> {
+        &self.file
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ReadManyArgs<V: IoVec + Unpin> {
     pub(crate) user_reads: VecDeque<V>,
@@ -437,17 +683,12 @@ impl<V: IoVec + Unpin> IoVec for ReadManyArgs<V> {
 ///
 /// See [`DmaFile::read_many`] for more information
 #[derive(Debug)]
-pub struct ReadManyResult<
-    V: IoVec + Unpin,
-    S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin,
-> {
-    pub(crate) inner: OrderedBulkIo<ReadManyArgs<V>, S>,
+pub struct ReadManyResult<V: IoVec + Unpin, B: BulkIo<ReadManyArgs<V>>> {
+    pub(crate) inner: B,
     pub(crate) current: Option<(ScheduledSource, ReadManyArgs<V>)>,
 }
 
-impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin>
-    ReadManyResult<V, S>
-{
+impl<V: IoVec + Unpin, B: BulkIo<ReadManyArgs<V>>> ReadManyResult<V, B> {
     /// Set the amount of IO concurrency of this stream, i.e., the number of IO
     /// requests this stream will submit at any one time
     ///
@@ -488,9 +729,7 @@ impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Un
     }
 }
 
-impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Unpin> Stream
-    for ReadManyResult<V, S>
-{
+impl<V: IoVec + Unpin, B: BulkIo<ReadManyArgs<V>>> Stream for ReadManyResult<V, B> {
     type Item = super::Result<(V, ReadResult)>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -511,7 +750,7 @@ impl<V: IoVec + Unpin, S: Stream<Item = (ScheduledSource, ReadManyArgs<V>)> + Un
         match ready!(self.inner.poll_next(cx)) {
             None => Poll::Ready(None),
             Some((source, args)) => {
-                enhanced_try!(source.result().unwrap(), "Reading", self.inner.file)?;
+                enhanced_try!(source.result().unwrap(), "Reading", self.inner.file())?;
                 self.current = Some((source, args));
                 self.poll_next(cx)
             }
