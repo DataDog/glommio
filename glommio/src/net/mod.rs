@@ -111,9 +111,11 @@ mod stream;
 mod tcp_socket;
 mod udp_socket;
 mod unix;
+mod vsock;
 pub use self::{
     stream::{Buffered, Preallocated},
     tcp_socket::{AcceptedTcpStream, TcpListener, TcpStream},
     udp_socket::UdpSocket,
     unix::{AcceptedUnixStream, UnixDatagram, UnixListener, UnixStream},
+    vsock::{AcceptedVsockStream, VsockListener, VsockStream},
 };
