@@ -371,8 +371,26 @@ impl DmaFile {
     ///
     /// As this is a DMA file, the OS will not be caching this file; however,
     /// there may be caches on the drive itself.
+    ///
+    /// Unlike fsync, only metadata required for subsequent reads of this file
+    /// is flushed. Non-critical metadata like timestamps isn't flushed. If the
+    /// write changes the size of the file or new extents are allocated, that
+    /// metadata is synchronized.
     pub async fn fdatasync(&self) -> Result<()> {
-        self.file.fdatasync().await.map_err(Into::into)
+        self.file.fsync(true).await.map_err(Into::into)
+    }
+
+    /// Issues `fsync` for the underlying file, instructing the OS to flush
+    /// all writes to the device, providing durability even if the system
+    /// crashes or is rebooted.
+    ///
+    /// As this is a DMA file, the OS will not be caching this file; however,
+    /// there may be caches on the drive itself.
+    ///
+    /// Upon completion, all the metadata of the file is synced. Most users are
+    /// probably better off using fdatasync.
+    pub async fn fsync(&self) -> Result<()> {
+        self.file.fsync(false).await.map_err(Into::into)
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as
@@ -785,7 +803,7 @@ pub(crate) mod test {
         rfile.close().await.unwrap();
     });
 
-    async fn write_dma_file(path: PathBuf, bytes: usize) -> DmaFile {
+    async fn write_dma_file(path: PathBuf, bytes: usize, data_sync: bool) -> DmaFile {
         let new_file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -801,12 +819,17 @@ pub(crate) mod test {
         }
         let res = new_file.write_at(buf, 0).await.expect("failed to write");
         assert_eq!(res, bytes);
-        new_file.fdatasync().await.expect("failed to sync disk");
+        if data_sync {
+            new_file.fdatasync().await
+        } else {
+            new_file.fsync().await
+        }
+        .expect("failed to sync disk");
         new_file
     }
 
-    async fn read_write(path: std::path::PathBuf) {
-        let new_file = write_dma_file(path, 4096).await;
+    async fn read_write(path: std::path::PathBuf, data_sync: bool) {
+        let new_file = write_dma_file(path, 4096, data_sync).await;
         let read_buf = new_file.read_at(0, 500).await.expect("failed to read");
         std::assert_eq!(read_buf.len(), 500);
         for i in 0..read_buf.len() {
@@ -833,10 +856,10 @@ pub(crate) mod test {
             Latency::Matters(Duration::from_millis(1)),
             "q2",
         );
-        let task1 =
-            crate::spawn_local_into(read_write(path.join("q1")), q1).expect("failed to spawn task");
-        let task2 =
-            crate::spawn_local_into(read_write(path.join("q2")), q2).expect("failed to spawn task");
+        let task1 = crate::spawn_local_into(read_write(path.join("q1"), true), q1)
+            .expect("failed to spawn task");
+        let task2 = crate::spawn_local_into(read_write(path.join("q2"), false), q2)
+            .expect("failed to spawn task");
 
         join!(task1, task2);
 
@@ -866,7 +889,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_many_reads, path, _k, {
-        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096, true).await);
 
         println!("{:?}", new_file);
 
@@ -902,7 +925,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_many_reads_unaligned, path, _k, {
-        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096, false).await);
 
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));
@@ -935,7 +958,7 @@ pub(crate) mod test {
     });
 
     dma_file_test!(file_many_reads_no_coalescing, path, _k, {
-        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
+        let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096, true).await);
 
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));

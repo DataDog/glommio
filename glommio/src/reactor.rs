@@ -629,9 +629,9 @@ impl Reactor {
         }
     }
 
-    pub(crate) fn fdatasync(&self, raw: RawFd) -> Source {
+    pub(crate) fn fsync(&self, raw: RawFd, data_sync_only: bool) -> Source {
         let source = self.new_source(raw, SourceType::FdataSync, None);
-        self.sys.fdatasync(&source);
+        self.sys.fsync(&source, data_sync_only);
         source
     }
 

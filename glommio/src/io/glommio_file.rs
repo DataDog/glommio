@@ -240,8 +240,12 @@ impl GlommioFile {
         Ok(())
     }
 
-    pub(crate) async fn fdatasync(&self) -> Result<()> {
-        let source = self.reactor.upgrade().unwrap().fdatasync(self.as_raw_fd());
+    pub(crate) async fn fsync(&self, data_sync_only: bool) -> Result<()> {
+        let source = self
+            .reactor
+            .upgrade()
+            .unwrap()
+            .fsync(self.as_raw_fd(), data_sync_only);
         source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,

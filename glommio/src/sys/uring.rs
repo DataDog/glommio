@@ -78,7 +78,7 @@ enum UringOpDescriptor {
     Read(u64, usize),
     Open(*const u8, libc::c_int, u32),
     Close,
-    FDataSync,
+    FSync { data_sync_only: bool },
     Connect(*const SockAddr),
     LinkTimeout(*const uring_sys::__kernel_timespec),
     Accept(*mut SockAddrStorage),
@@ -329,8 +329,17 @@ fn fill_sqe<F>(
                     OpenMode::from_bits_truncate(mode),
                 );
             }
-            UringOpDescriptor::FDataSync => {
-                sqe.prep_fsync(op.fd, FsyncFlags::FSYNC_DATASYNC);
+            UringOpDescriptor::FSync {
+                data_sync_only: data_sync,
+            } => {
+                sqe.prep_fsync(
+                    op.fd,
+                    if data_sync {
+                        FsyncFlags::FSYNC_DATASYNC
+                    } else {
+                        0
+                    },
+                );
             }
             UringOpDescriptor::Connect(addr) => {
                 sqe.prep_connect(op.fd, &*addr);
@@ -1573,11 +1582,13 @@ impl Reactor {
         );
     }
 
-    pub(crate) fn fdatasync(&self, source: &Source) {
+    pub(crate) fn fsync(&self, source: &Source, data_sync_only: bool) {
         queue_request_into_ring(
             &mut *self.ring_for_source(source),
             source,
-            UringOpDescriptor::FDataSync,
+            UringOpDescriptor::FSync {
+                data_sync_only: data_sync_only,
+            },
             &mut self.source_map.borrow_mut(),
         );
     }

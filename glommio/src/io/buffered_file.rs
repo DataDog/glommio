@@ -188,7 +188,14 @@ impl BufferedFile {
     /// all writes to the device, providing durability even if the system
     /// crashes or is rebooted.
     pub async fn fdatasync(&self) -> Result<()> {
-        self.file.fdatasync().await.map_err(Into::into)
+        self.file.fsync(true).await.map_err(Into::into)
+    }
+
+    /// Issues `fsync` for the underlying file, instructing the OS to flush
+    /// all writes to the device including file metadata like size and published
+    /// extents, providing durability even if the system crashes or is rebooted.
+    pub async fn fsync(&self) -> Result<()> {
+        self.file.fsync(false).await.map_err(Into::into)
     }
 
     /// pre-allocates space in the filesystem to hold a file at least as big as
