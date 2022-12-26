@@ -191,15 +191,19 @@ impl GlommioFile {
         } else {
             0
         };
+        self.fallocate("Pre-allocate space", flags, 0, size).await
+    }
+
+    async fn fallocate(&self, op: &'static str, flags: i32, offset: u64, size: u64) -> Result<()> {
         let source = self
             .reactor
             .upgrade()
             .unwrap()
-            .fallocate(self.as_raw_fd(), 0, size, flags);
+            .fallocate(self.as_raw_fd(), offset, size, flags);
         source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
-                "Pre-allocate space",
+                op,
                 self.path.borrow().as_ref(),
                 Some(self.as_raw_fd()),
             )
