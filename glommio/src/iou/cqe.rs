@@ -49,7 +49,7 @@ impl CQE {
     }
 
     pub fn user_data(&self) -> u64 {
-        self.user_data as u64
+        self.user_data
     }
 
     pub fn result(&self) -> io::Result<u32> {
