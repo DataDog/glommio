@@ -2085,7 +2085,7 @@ mod tests {
             &mut *reactor.ring_for_source(&fast),
             &fast,
             op,
-            &mut *reactor.source_map.borrow_mut(),
+            &mut reactor.source_map.borrow_mut(),
         );
 
         let (slow, op) = timeout_source(150);
@@ -2093,7 +2093,7 @@ mod tests {
             &mut *reactor.ring_for_source(&slow),
             &slow,
             op,
-            &mut *reactor.source_map.borrow_mut(),
+            &mut reactor.source_map.borrow_mut(),
         );
 
         let (lethargic, op) = timeout_source(300);
@@ -2101,7 +2101,7 @@ mod tests {
             &mut *reactor.ring_for_source(&lethargic),
             &lethargic,
             op,
-            &mut *reactor.source_map.borrow_mut(),
+            &mut reactor.source_map.borrow_mut(),
         );
 
         let start = Instant::now();
