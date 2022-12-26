@@ -185,6 +185,12 @@ impl GlommioFile {
             .map(|_| Ref::map(self.path.borrow(), |p| p.as_ref().unwrap().as_path()))
     }
 
+    pub(crate) async fn deallocate(&self, offset: u64, size: u64) -> Result<()> {
+        let flags = libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE;
+        self.fallocate("Deallocate range", flags, offset, size)
+            .await
+    }
+
     pub(crate) async fn pre_allocate(&self, size: u64, keep_size: bool) -> Result<()> {
         let flags = if keep_size {
             libc::FALLOC_FL_KEEP_SIZE
@@ -195,11 +201,11 @@ impl GlommioFile {
     }
 
     async fn fallocate(&self, op: &'static str, flags: i32, offset: u64, size: u64) -> Result<()> {
-        let source = self
-            .reactor
-            .upgrade()
-            .unwrap()
-            .fallocate(self.as_raw_fd(), offset, size, flags);
+        let source =
+            self.reactor
+                .upgrade()
+                .unwrap()
+                .fallocate(self.as_raw_fd(), offset, size, flags);
         source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
