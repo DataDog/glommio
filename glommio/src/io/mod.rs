@@ -130,6 +130,7 @@ mod immutable_file;
 mod open_options;
 mod read_result;
 mod sched;
+mod stat;
 
 use std::path::Path;
 
@@ -173,6 +174,7 @@ pub use self::{
     immutable_file::{ImmutableFile, ImmutableFileBuilder, ImmutableFilePreSealSink},
     open_options::OpenOptions,
     read_result::ReadResult,
+    stat::Stat,
 };
 pub use crate::sys::DmaBuffer;
 

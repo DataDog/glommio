@@ -31,6 +31,8 @@ use std::{
     rc::Rc,
 };
 
+use super::Stat;
+
 pub(super) type Result<T> = crate::Result<T, ()>;
 
 /// Close result of [`DmaFile::close_rc()`]. Indicates which operation is
@@ -375,6 +377,19 @@ impl DmaFile {
         self.file.fdatasync().await.map_err(Into::into)
     }
 
+    /// Erases a range from the file without changing the size. Check the man
+    /// page for [`fallocate`] for a list of the supported filesystems.
+    /// Partial blocks are zeroed while whole blocks are simply unmapped
+    /// from the file. The reported file size (`file_size`) is unchanged but
+    /// the allocated file size may if you've erased whole filesystem blocks
+    /// ([`allocated_file_size`])
+    ///
+    /// [`fallocate`]: https://man7.org/linux/man-pages/man2/fallocate.2.html
+    /// [`allocated_file_size`]: struct.Stat.html#structfield.alloc_dma_buffer
+    pub async fn deallocate(&self, offset: u64, size: u64) -> Result<()> {
+        self.file.deallocate(offset, size).await
+    }
+
     /// pre-allocates space in the filesystem to hold a file at least as big as
     /// the size argument. No existing data in the range [0, size) is modified.
     /// If `keep_size` is false, then anything in [current file length, size)
@@ -436,6 +451,11 @@ impl DmaFile {
         self.file.file_size().await
     }
 
+    /// Returns the size of the filesystem cluster, in bytes
+    pub async fn stat(&self) -> Result<Stat> {
+        self.file.statx().await.map(Into::into)
+    }
+
     /// Closes this DMA file.
     pub async fn close(self) -> Result<()> {
         self.file.close().await
@@ -465,7 +485,7 @@ pub(crate) mod test {
     use futures::join;
     use futures_lite::{stream, StreamExt};
     use rand::{seq::SliceRandom, thread_rng};
-    use std::{cell::RefCell, path::PathBuf, time::Duration};
+    use std::{cell::RefCell, convert::TryInto, path::PathBuf, time::Duration};
 
     macro_rules! dma_file_test {
         ( $name:ident, $dir:ident, $kind:ident, $code:block) => {
@@ -973,5 +993,109 @@ pub(crate) mod test {
             4096 / new_file.o_direct_alignment
         );
         new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(write_past_end, path, _k, {
+        let writer = DmaFile::create(path.join("testfile")).await.unwrap();
+        let reader = DmaFile::open(path.join("testfile")).await.unwrap();
+
+        let stat = reader.stat().await.unwrap();
+        assert_eq!(stat.file_size, 0);
+        assert_eq!(stat.allocated_file_size, 0);
+
+        let cluster_size = stat.fs_cluster_size;
+        assert!(cluster_size >= 512, "{}", stat.fs_cluster_size);
+
+        let mut buffer = writer.alloc_dma_buffer(512);
+        for (elem, val) in buffer.as_bytes_mut().iter_mut().zip(1..513) {
+            *elem = val as u8;
+        }
+        let r = writer
+            .write_at(buffer, (cluster_size * 2).try_into().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(r, 512);
+
+        let stat = reader.stat().await.unwrap();
+        assert_eq!(stat.file_size, (cluster_size * 2 + 512).try_into().unwrap());
+        assert_eq!(stat.allocated_file_size, (cluster_size).try_into().unwrap());
+        assert_eq!(stat.fs_cluster_size, cluster_size);
+
+        let rb = reader
+            .read_at_aligned(0, (cluster_size * 2).try_into().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), (cluster_size * 2).try_into().unwrap());
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        let rb = reader
+            .read_at_aligned((cluster_size * 2).try_into().unwrap(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), 512);
+        for (idx, i) in rb.iter().enumerate() {
+            assert_eq!(*i, (idx + 1) as u8);
+        }
+
+        let mut buffer = writer.alloc_dma_buffer(512);
+        for (elem, val) in buffer.as_bytes_mut().iter_mut().zip(3..515) {
+            *elem = val as u8;
+        }
+        let r = writer.write_at(buffer, 512).await.unwrap();
+        assert_eq!(r, 512);
+
+        let stat = reader.stat().await.unwrap();
+        assert_eq!(stat.file_size, (cluster_size * 2 + 512).try_into().unwrap());
+        assert_eq!(
+            stat.allocated_file_size,
+            (cluster_size * 2).try_into().unwrap()
+        );
+        assert_eq!(stat.fs_cluster_size, cluster_size);
+
+        let rb = reader.read_at_aligned(0, 512).await.unwrap();
+        assert_eq!(rb.len(), 512);
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        let rb = reader.read_at_aligned(512, 512).await.unwrap();
+        assert_eq!(rb.len(), 512);
+        for (idx, i) in rb.iter().enumerate() {
+            assert_eq!(*i, (idx + 3) as u8);
+        }
+
+        let rb = reader
+            .read_at_aligned(1024, (cluster_size * 2 - 1024).try_into().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), (cluster_size * 2 - 1024).try_into().unwrap());
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        // Deallocating past the end of file doesn't matter. The size doesn't change.
+        writer.deallocate(
+            (cluster_size * 2).try_into().unwrap(),
+            (cluster_size * 2).try_into().unwrap(),
+        )
+        .await
+        .unwrap();
+        let stat = reader.stat().await.unwrap();
+        // File size remains unchanged.
+        assert_eq!(stat.file_size, (cluster_size * 2 + 512).try_into().unwrap());
+        // Only one allocated cluster remains.
+        assert_eq!(stat.allocated_file_size, cluster_size.try_into().unwrap());
+
+        // Deallocated range now returns 0s.
+        let rb = reader
+            .read_at_aligned((cluster_size * 2).try_into().unwrap(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), 512);
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
     });
 }
