@@ -268,7 +268,7 @@ async fn random_many_read<S: Into<String>>(
                 while time.elapsed() < Duration::from_secs(20) {
                     file.read_many((0..parallelism).map(|_| {
                         let pos = fastrand::u64(0..end);
-                        ((pos * io_size) as u64, io_size as usize)
+                        (pos * io_size, io_size as usize)
                     }), &expected, max_buffer_size).await;
                     iops.set(iops.get() + parallelism);
                 }

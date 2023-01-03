@@ -96,11 +96,11 @@ impl<'ring> SubmissionQueue<'ring> {
     }
 
     pub fn ready(&self) -> u32 {
-        unsafe { uring_sys::io_uring_sq_ready(self.ring.as_ptr()) as u32 }
+        unsafe { uring_sys::io_uring_sq_ready(self.ring.as_ptr()) }
     }
 
     pub fn space_left(&self) -> u32 {
-        unsafe { uring_sys::io_uring_sq_space_left(self.ring.as_ptr()) as u32 }
+        unsafe { uring_sys::io_uring_sq_space_left(self.ring.as_ptr()) }
     }
 }
 
