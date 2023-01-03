@@ -1076,12 +1076,13 @@ pub(crate) mod test {
         }
 
         // Deallocating past the end of file doesn't matter. The size doesn't change.
-        writer.deallocate(
-            (cluster_size * 2).try_into().unwrap(),
-            (cluster_size * 2).try_into().unwrap(),
-        )
-        .await
-        .unwrap();
+        writer
+            .deallocate(
+                (cluster_size * 2).try_into().unwrap(),
+                (cluster_size * 2).try_into().unwrap(),
+            )
+            .await
+            .unwrap();
         let stat = reader.stat().await.unwrap();
         // File size remains unchanged.
         assert_eq!(stat.file_size, (cluster_size * 2 + 512).try_into().unwrap());
