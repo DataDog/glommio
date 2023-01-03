@@ -39,7 +39,7 @@ impl<'a> SQE<'a> {
     /// Get this event's user data.
     #[inline]
     pub fn user_data(&self) -> u64 {
-        self.sqe.user_data as u64
+        self.sqe.user_data
     }
 
     /// Set this event's user data. User data is intended to be used by the
@@ -636,7 +636,7 @@ impl<'ring> SQEs<'ring> {
 
     /// Remaining [`SQE`]s that can be modified.
     pub fn remaining(&self) -> u32 {
-        (self.count - self.consumed) as u32
+        self.count - self.consumed
     }
 
     fn consume(&mut self) -> Option<SQE<'ring>> {

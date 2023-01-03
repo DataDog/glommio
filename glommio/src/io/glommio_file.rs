@@ -327,7 +327,7 @@ pub(crate) mod test {
                 let mut files = vec![];
                 for f in std::fs::read_dir("/proc/self/fd").unwrap() {
                     let f = f.unwrap().path();
-                    if let Ok(file) = std::fs::canonicalize(&f) {
+                    if let Ok(file) = std::fs::canonicalize(f) {
                         files.push(file);
                     }
                 }

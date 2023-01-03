@@ -225,6 +225,8 @@ impl<T> Drop for Buffer<T> {
         // any of the constructors through the vector. And whatever object was
         // in fact still alive we popped above.
         let _drop = unsafe {
+            // Nightly clippy warns about this but ptr::from_raw_parts_mut isn't stable yet.
+            #[allow(clippy::cast_slice_from_raw_parts)]
             let ptr = from_raw_parts_mut(self.buffer_storage, self.capacity) as *mut [Slot<T>];
             Box::from_raw(ptr)
         };
