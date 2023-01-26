@@ -375,7 +375,6 @@ impl Drop for SleepNotifier {
 pub(crate) enum DmaSource {
     Owned(DmaBuffer),
     Shared(Rc<DmaBuffer>),
-    Send(Arc<DmaBuffer>),
 }
 
 impl DmaSource {
@@ -383,7 +382,6 @@ impl DmaSource {
         match self {
             DmaSource::Owned(buffer) => buffer.uring_buffer_id(),
             DmaSource::Shared(buffer) => buffer.uring_buffer_id(),
-            DmaSource::Send(buffer) => buffer.uring_buffer_id(),
         }
     }
 }
@@ -395,7 +393,6 @@ impl Deref for DmaSource {
         match &self {
             Self::Owned(buffer) => buffer.as_bytes(),
             Self::Shared(buffer) => buffer.as_bytes(),
-            Self::Send(buffer) => buffer.as_bytes(),
         }
     }
 }

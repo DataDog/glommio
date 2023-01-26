@@ -29,7 +29,6 @@ use std::{
     os::unix::io::{AsRawFd, RawFd},
     path::Path,
     rc::Rc,
-    sync::Arc,
 };
 
 use super::Stat;
@@ -265,7 +264,11 @@ impl DmaFile {
     /// # Examples
     /// ```no_run
     /// use futures::join;
-    /// use glommio::{io::{DmaFile, DmaBuffer}, timer::sleep, LocalExecutor};
+    /// use glommio::{
+    ///     io::{DmaBuffer, DmaFile},
+    ///     timer::sleep,
+    ///     LocalExecutor,
+    /// };
     /// use std::rc::Rc;
     ///
     /// fn populate(buf: &mut DmaBuffer) {
@@ -275,7 +278,9 @@ impl DmaFile {
     /// async fn transform(buf: &[u8]) -> Vec<u8> {
     ///     // Dummy implementation that just returns a copy of what was written.
     ///     sleep(std::time::Duration::from_millis(100)).await;
-    ///     buf.iter().map(|a| if *a == 0 { 0 } else { *a + 1 }).collect()
+    ///     buf.iter()
+    ///         .map(|a| if *a == 0 { 0 } else { *a + 1 })
+    ///         .collect()
     /// }
     ///
     /// let ex = LocalExecutor::default();
@@ -290,11 +295,10 @@ impl DmaFile {
     ///     // counter on the heap.
     ///     let buf = Rc::new(buf);
     ///
-    ///     let (written, transformed) =
-    ///         join!(
-    ///              async { file.write_rc_at(buf.clone(), 0).await.unwrap() },
-    ///              transform(buf.as_bytes())
-    ///         );
+    ///     let (written, transformed) = join!(
+    ///         async { file.write_rc_at(buf.clone(), 0).await.unwrap() },
+    ///         transform(buf.as_bytes())
+    ///     );
     ///     assert_eq!(written, 4096);
     ///     file.close().await.unwrap();
     ///
@@ -307,66 +311,6 @@ impl DmaFile {
         let source = self.file.reactor.upgrade().unwrap().write_dma(
             self.as_raw_fd(),
             DmaSource::Shared(buf),
-            pos,
-            self.pollable,
-        );
-        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
-    }
-
-    /// Equivalent to [`DmaFile::write_rc_at`] except that the immutable
-    /// reference may be shared across threads. This can be useful if you wish
-    /// to offload processing of the written buffer to a background thread
-    /// responsible for batch/non-blocking operations while the main thread
-    /// continues to respond to I/O.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use futures::join;
-    /// use glommio::{io::{DmaFile, DmaBuffer}, executor, LocalExecutor};
-    /// use std::sync::Arc;
-    ///
-    /// fn populate(buf: &mut DmaBuffer) {
-    ///     buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
-    /// }
-    ///
-    /// fn transform(buf: &[u8]) -> Vec<u8> {
-    ///     // Dummy implementation that just returns a copy of what was written.
-    ///     std::thread::sleep(std::time::Duration::from_millis(100));
-    ///     buf.iter().map(|a| if *a == 0 { 0 } else { *a + 1 }).collect()
-    /// }
-    ///
-    /// let ex = LocalExecutor::default();
-    /// ex.run(async {
-    ///     let file = DmaFile::create("test.txt").await.unwrap();
-    ///
-    ///     let mut buf = file.alloc_dma_buffer(4096);
-    ///     // Write some data into the buffer.
-    ///     populate(&mut buf);
-    ///
-    ///     // Seal the buffer by moving ownership to a non-threaded reference
-    ///     // counter on the heap.
-    ///     let write_buf = Arc::new(buf);
-    ///     let read_buf = write_buf.clone();
-    ///     let buf_view = unsafe { std::mem::transmute(read_buf.as_bytes()) };
-    ///
-    ///     let (written, transformed) =
-    ///         join!(
-    ///             async { file.write_arc_at(write_buf, 0).await.unwrap() },
-    ///             async { () }
-    ///         );
-    ///     let transformed = executor().spawn_blocking(move || async move { transform(buf_view) });
-    ///     assert_eq!(written, 4096);
-    ///     file.close().await.unwrap();
-    ///
-    ///     // transformed AND buf can still be used even though the buffer got
-    ///     // written. Note that there may be performance issues if buf is large
-    ///     // and you remain hanging onto it.
-    /// });
-    /// ```
-    pub async fn write_arc_at(&self, buf: Arc<DmaBuffer>, pos: u64) -> Result<usize> {
-        let source = self.file.reactor.upgrade().unwrap().write_dma(
-            self.as_raw_fd(),
-            DmaSource::Send(buf),
             pos,
             self.pollable,
         );
@@ -1235,34 +1179,6 @@ pub(crate) mod test {
         let buf = Rc::new(buf);
         let res = new_file
             .write_rc_at(buf.clone(), 0)
-            .await
-            .expect("failed to write");
-        assert_eq!(res, bytes);
-        new_file.fdatasync().await.expect("failed to sync disk");
-        new_file.close().await.expect("failed to close file");
-
-        assert_eq!(buf.as_bytes()[1], 1);
-    });
-
-    dma_file_test!(file_arc_write, path, _k, {
-        let new_file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .dma_open(path.join("testfile"))
-            .await
-            .expect("failed to create file");
-
-        let bytes = 4096;
-
-        let mut buf = new_file.alloc_dma_buffer(bytes);
-        for x in 0..bytes {
-            buf.as_bytes_mut()[x] = x as u8;
-        }
-        let buf = Arc::new(buf);
-        let res = new_file
-            .write_arc_at(buf.clone(), 0)
             .await
             .expect("failed to write");
         assert_eq!(res, bytes);
