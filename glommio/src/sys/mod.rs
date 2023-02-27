@@ -137,15 +137,11 @@ pub(crate) fn recvmsg_syscall(
     let mut msg_name = MaybeUninit::<nix::sys::socket::sockaddr_storage>::uninit();
     let msg_namelen = std::mem::size_of::<nix::sys::socket::sockaddr_storage>() as libc::socklen_t;
 
-    let mut hdr = libc::msghdr {
-        msg_name: msg_name.as_mut_ptr() as *mut libc::c_void,
-        msg_namelen,
-        msg_iov: &mut iov as *mut libc::iovec,
-        msg_iovlen: 1,
-        msg_control: std::ptr::null_mut(),
-        msg_controllen: 0,
-        msg_flags: 0,
-    };
+    let mut hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
+    hdr.msg_name = msg_name.as_mut_ptr() as *mut libc::c_void;
+    hdr.msg_namelen = msg_namelen;
+    hdr.msg_iov = &mut iov as *mut libc::iovec;
+    hdr.msg_iovlen = 1;
 
     let x = syscall!(recvmsg(fd, &mut hdr, flags)).map(|x| x as usize)?;
     let addr = unsafe { ssptr_to_sockaddr(msg_name, hdr.msg_namelen as _)? };
@@ -167,15 +163,11 @@ pub(crate) fn sendmsg_syscall(
     let (msg_name, msg_namelen) = addr.as_ffi_pair();
     let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
 
-    let hdr = libc::msghdr {
-        msg_name,
-        msg_namelen,
-        msg_iov: &mut iov as *mut libc::iovec,
-        msg_iovlen: 1,
-        msg_control: std::ptr::null_mut(),
-        msg_controllen: 0,
-        msg_flags: 0,
-    };
+    let mut hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
+    hdr.msg_name = msg_name;
+    hdr.msg_namelen = msg_namelen;
+    hdr.msg_iov = &mut iov as *mut libc::iovec;
+    hdr.msg_iovlen = 1;
 
     syscall!(sendmsg(fd, &hdr, flags)).map(|x| x as usize)
 }
