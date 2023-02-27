@@ -142,7 +142,7 @@ impl DmaFile {
         let o_direct_alignment =
             sysfs::BlockDevice::logical_block_size(major, minor).max(512) as u64;
 
-        let pollable = if fstype == TMPFS_MAGIC {
+        let pollable = if (fstype.0 as u64) == (libc::TMPFS_MAGIC as u64) {
             PollableStatus::NonPollable(DirectIo::Disabled)
         } else {
             // Allow this to work on non direct I/O devices, but only if this is in-memory

@@ -848,7 +848,7 @@ pub(crate) mod test_utils {
         let buf = statfs(&dir).unwrap();
         let fstype = buf.filesystem_type();
 
-        let kind = if fstype == TMPFS_MAGIC {
+        let kind = if (fstype.0 as u64) == (libc::TMPFS_MAGIC as u64) {
             TestDirectoryKind::TempFs
         } else {
             TestDirectoryKind::NonPollMedia
