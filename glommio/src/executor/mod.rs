@@ -2910,7 +2910,7 @@ mod test {
     #[should_panic]
     fn spawn_without_executor() {
         let _ = LocalExecutor::default();
-        let _ = crate::spawn_local(async move {});
+        std::mem::drop(crate::spawn_local(async move {}));
     }
 
     #[test]
