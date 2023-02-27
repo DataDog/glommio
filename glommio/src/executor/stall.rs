@@ -162,13 +162,15 @@ impl StallDetector {
         timer: Arc<sys::timerfd::TimerFd>,
         signal: i32,
     ) -> JoinHandle<()> {
-        let tid = unsafe { nix::libc::pthread_self() };
+        struct SendWrapper(libc::pthread_t);
+        unsafe impl Send for SendWrapper {}
+        let tid = SendWrapper(unsafe { nix::libc::pthread_self() });
         std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
             while timer.wait().is_ok() {
                 if terminated.load(Ordering::Relaxed) {
                     return
                 }
-                unsafe { nix::libc::pthread_kill(tid, signal) };
+                unsafe { nix::libc::pthread_kill(tid.0, signal) };
             }
         }})
     }
