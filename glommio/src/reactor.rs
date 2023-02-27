@@ -447,15 +447,7 @@ impl Reactor {
         };
         // Note that the iov and addresses we have above are stack addresses. We will
         // leave it blank and the `io_uring` callee will fill that up
-        let hdr = libc::msghdr {
-            msg_name: std::ptr::null_mut(),
-            msg_namelen: 0,
-            msg_iov: std::ptr::null_mut(),
-            msg_iovlen: 0,
-            msg_control: std::ptr::null_mut(),
-            msg_controllen: 0,
-            msg_flags: 0,
-        };
+        let hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
 
         let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
         if let Some(timeout) = timeout {
@@ -474,15 +466,7 @@ impl Reactor {
         flags: MsgFlags,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let hdr = libc::msghdr {
-            msg_name: std::ptr::null_mut(),
-            msg_namelen: 0,
-            msg_iov: std::ptr::null_mut(),
-            msg_iovlen: 0,
-            msg_control: std::ptr::null_mut(),
-            msg_controllen: 0,
-            msg_flags: 0,
-        };
+        let hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
         let iov = libc::iovec {
             iov_base: std::ptr::null_mut(),
             iov_len: 0,
