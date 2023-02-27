@@ -594,7 +594,6 @@ impl UnixDatagram {
     /// The function must be called with valid byte array buf of sufficient size
     /// to hold the message bytes. If a message is too long to fit in the
     /// supplied buffer, excess bytes may be discarded.
-    #[track_caller]
     pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, UnixAddr)> {
         let (sz, addr) = self.socket.peek_from(buf).await?;
 
@@ -672,7 +671,6 @@ impl UnixDatagram {
     ///     assert_eq!(sz, 1);
     /// })
     /// ```
-    #[track_caller]
     pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, UnixAddr)> {
         let (sz, addr) = self.socket.recv_from(buf).await?;
         let addr = match addr {
