@@ -6,7 +6,7 @@
 use crate::{
     io::{BufferedFile, ScheduledSource},
     reactor::Reactor,
-    sys::{IoBuffer, Source},
+    sys::{IoBuffer, Source, Statx},
 };
 use futures_lite::{
     io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom},
@@ -508,7 +508,7 @@ macro_rules! do_seek {
                 }
                 Some(source) => {
                     let stype = source.extract_source_type();
-                    let stat_buf: libc::statx = stype.try_into().unwrap();
+                    let stat_buf: Statx = stype.try_into().unwrap();
                     let end = stat_buf.stx_size as i64;
                     $self.file_pos = (end + pos) as u64;
                     Poll::Ready(Ok($self.file_pos))

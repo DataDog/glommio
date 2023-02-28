@@ -4,7 +4,12 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
-use crate::{io::sched::FileScheduler, reactor::Reactor, sys, GlommioError};
+use crate::{
+    io::sched::FileScheduler,
+    reactor::Reactor,
+    sys::{self, Statx},
+    GlommioError,
+};
 use log::debug;
 use std::{
     cell::{Ref, RefCell},
@@ -279,7 +284,7 @@ impl GlommioFile {
     }
 
     // Retrieve file metadata, backed by the statx(2) syscall
-    pub(crate) async fn statx(&self) -> Result<libc::statx> {
+    pub(crate) async fn statx(&self) -> Result<Statx> {
         let path = self.path_required("stat")?.to_owned();
 
         let source = self

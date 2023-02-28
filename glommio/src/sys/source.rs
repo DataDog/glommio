@@ -12,6 +12,7 @@ use crate::{
         PollableStatus,
         ReactorQueue,
         SourceId,
+        Statx,
         TimeSpec64,
         Wakers,
     },
@@ -62,7 +63,7 @@ pub(crate) enum SourceType {
     Close,
     LinkRings,
     ForeignNotifier(u64, bool),
-    Statx(CString, Box<RefCell<libc::statx>>),
+    Statx(CString, Box<RefCell<Statx>>),
     Timeout(TimeSpec64, u32),
     Connect(SockAddr),
     Accept(SockAddrStorage),
@@ -75,7 +76,7 @@ pub(crate) enum SourceType {
     Noop,
 }
 
-impl TryFrom<SourceType> for libc::statx {
+impl TryFrom<SourceType> for Statx {
     type Error = GlommioError<()>;
 
     fn try_from(value: SourceType) -> Result<Self, Self::Error> {
