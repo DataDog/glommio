@@ -426,6 +426,46 @@ pub(crate) enum PollableStatus {
     NonPollable(DirectIo),
 }
 
+// code imported from libc crate
+// libc::statx isn't used because it's not available when targeting musl
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct Statx {
+    pub stx_mask: u32,
+    pub stx_blksize: u32,
+    pub stx_attributes: u64,
+    pub stx_nlink: u32,
+    pub stx_uid: u32,
+    pub stx_gid: u32,
+    pub stx_mode: u16,
+    __statx_pad1: [u16; 1],
+    pub stx_ino: u64,
+    pub stx_size: u64,
+    pub stx_blocks: u64,
+    pub stx_attributes_mask: u64,
+    pub stx_atime: StatxTimestamp,
+    pub stx_btime: StatxTimestamp,
+    pub stx_ctime: StatxTimestamp,
+    pub stx_mtime: StatxTimestamp,
+    pub stx_rdev_major: u32,
+    pub stx_rdev_minor: u32,
+    pub stx_dev_major: u32,
+    pub stx_dev_minor: u32,
+    pub stx_mnt_id: u64,
+    pub stx_dio_mem_align: u32,
+    pub stx_dio_offset_align: u32,
+    __statx_pad3: [u64; 12],
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct StatxTimestamp {
+    pub tv_sec: i64,
+    pub tv_nsec: u32,
+    pub __statx_timestamp_pad1: [i32; 1],
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct TimeSpec64 {
     raw: uring_sys::__kernel_timespec,

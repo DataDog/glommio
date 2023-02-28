@@ -21,7 +21,7 @@ pub use nix::{
 };
 
 use super::Personality;
-use crate::{to_io_error, uring_sys};
+use crate::{sys::Statx, to_io_error, uring_sys};
 
 /// A pending IO event.
 ///
@@ -283,7 +283,7 @@ impl<'a> SQE<'a> {
         path: &CStr,
         flags: StatxFlags,
         mask: StatxMode,
-        buf: &mut libc::statx,
+        buf: &mut Statx,
     ) {
         uring_sys::io_uring_prep_statx(
             self.sqe,

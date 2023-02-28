@@ -46,6 +46,7 @@ use crate::{
         Source,
         SourceType,
         StatsCollection,
+        Statx,
     },
     IoRequirements,
     IoStats,
@@ -719,7 +720,7 @@ impl Reactor {
         let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
 
         let statx_buf = unsafe {
-            let statx_buf = mem::MaybeUninit::<libc::statx>::zeroed();
+            let statx_buf = mem::MaybeUninit::<Statx>::zeroed();
             statx_buf.assume_init()
         };
 

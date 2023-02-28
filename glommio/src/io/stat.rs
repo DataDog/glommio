@@ -4,6 +4,8 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 
+use crate::sys::Statx;
+
 /// Represents the status information about a file.
 #[derive(Debug)]
 pub struct Stat {
@@ -23,8 +25,8 @@ pub struct Stat {
     pub fs_cluster_size: u32,
 }
 
-impl From<libc::statx> for Stat {
-    fn from(s: libc::statx) -> Self {
+impl From<Statx> for Stat {
+    fn from(s: Statx) -> Self {
         Self {
             file_size: s.stx_size,
             allocated_file_size: s.stx_blocks * 512,
