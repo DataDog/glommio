@@ -648,7 +648,7 @@ impl RingIoStats {
     /// [`files_opened`]: RingIoStats::files_opened
     /// [`files_closed`]: RingIoStats::files_closed
     pub fn files_closed(&self) -> u64 {
-        self.files_opened
+        self.files_closed
     }
 
     /// File read IO stats
