@@ -25,10 +25,13 @@ use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
 use std::{
     cell::Ref,
+    future::Future,
     io,
     os::unix::io::{AsRawFd, RawFd},
     path::Path,
+    pin::Pin,
     rc::Rc,
+    task::{Context, Poll},
 };
 
 use super::Stat;
@@ -321,7 +324,12 @@ impl DmaFile {
     ///
     /// The position must be aligned to for Direct I/O. In most platforms
     /// that means 512 bytes.
-    pub async fn read_at_aligned(&self, pos: u64, size: usize) -> Result<ReadResult> {
+    ///
+    /// Equals to
+    /// ```ignore
+    /// pub async fn read_at_aligned(&self, pos: u64, size: usize) -> Result<ReadResult>;
+    /// ```
+    pub fn read_at_aligned(&self, pos: u64, size: usize) -> PollDmaReadAtAligned<'_> {
         let source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             pos,
@@ -329,8 +337,10 @@ impl DmaFile {
             self.pollable,
             self.file.scheduler.borrow().as_ref(),
         );
-        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        Ok(ReadResult::from_sliced_buffer(source, 0, read_size))
+        PollDmaReadAtAligned {
+            source: Some(source),
+            file: &self.file,
+        }
     }
 
     /// Reads into buffer in buf from a specific position in the file.
@@ -341,7 +351,12 @@ impl DmaFile {
     ///
     /// If you can guarantee proper alignment, prefer [`Self::read_at_aligned`]
     /// instead
-    pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult> {
+    ///
+    /// Equals to
+    /// ```ignore
+    /// pub async fn read_at(&self, pos: u64, size: usize) -> Result<ReadResult>;
+    /// ```
+    pub fn read_at(&self, pos: u64, size: usize) -> PollDmaReadAt<'_> {
         let eff_pos = self.align_down(pos);
         let b = (pos - eff_pos) as usize;
 
@@ -353,13 +368,12 @@ impl DmaFile {
             self.pollable,
             self.file.scheduler.borrow().as_ref(),
         );
-
-        let read_size = enhanced_try!(source.collect_rw().await, "Reading", self.file)?;
-        Ok(ReadResult::from_sliced_buffer(
-            source,
-            b,
-            std::cmp::min(read_size, size),
-        ))
+        PollDmaReadAt {
+            source: Some(source),
+            file: &self.file,
+            begin: b,
+            size,
+        }
     }
 
     /// Submit many reads and process the results in a stream-like fashion via a
@@ -535,6 +549,61 @@ impl DmaFile {
             Err(_) => Ok(CloseResult::Unreferenced),
             Ok(file) => file.close().await.map(|_| CloseResult::Closed),
         }
+    }
+}
+
+/// Future of [`DmaFile::read_at_aligned`].
+#[derive(Debug)]
+#[must_use = "future has no effect unless you .await or poll it"]
+pub struct PollDmaReadAtAligned<'a> {
+    source: Option<ScheduledSource>,
+    file: &'a GlommioFile,
+}
+
+impl Future for PollDmaReadAtAligned<'_> {
+    type Output = Result<ReadResult>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let read_size = self
+            .source
+            .as_ref()
+            .expect("Polling a finished task")
+            .poll_collect_rw(cx)
+            .map(|read_size| enhanced_try!(read_size, "Reading", self.file))?;
+
+        read_size.map(|size| {
+            let source = self.get_mut().source.take().unwrap();
+            Ok(ReadResult::from_sliced_buffer(source, 0, size))
+        })
+    }
+}
+
+/// Future of [`DmaFile::read_at`].
+#[derive(Debug)]
+#[must_use = "future has no effect unless you .await or poll it"]
+pub struct PollDmaReadAt<'a> {
+    source: Option<ScheduledSource>,
+    file: &'a GlommioFile,
+    begin: usize,
+    size: usize,
+}
+impl Future for PollDmaReadAt<'_> {
+    type Output = Result<ReadResult>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let read_size = self
+            .source
+            .as_ref()
+            .expect("Polling a finished task")
+            .poll_collect_rw(cx)
+            .map(|read_size| enhanced_try!(read_size, "Reading", self.file))?;
+
+        read_size.map(|read_size| {
+            let offset = self.begin;
+            let len = self.size.min(read_size);
+            let source = self.get_mut().source.take().unwrap();
+            Ok(ReadResult::from_sliced_buffer(source, offset, len))
+        })
     }
 }
 

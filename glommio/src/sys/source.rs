@@ -33,7 +33,7 @@ use std::{
     path::PathBuf,
     pin::Pin,
     rc::Rc,
-    task::{Poll, Waker},
+    task::{Context, Poll, Waker},
     time::Duration,
 };
 
@@ -320,6 +320,15 @@ impl Source {
             Poll::Pending
         })
         .await
+    }
+
+    pub(crate) fn poll_collect_rw(&self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        if let Some(result) = self.result() {
+            return Poll::Ready(result);
+        }
+
+        self.add_waiter_many(cx.waker().clone());
+        Poll::Pending
     }
 }
 
