@@ -3,7 +3,7 @@ mod tests {
     use futures_lite::{AsyncReadExt, AsyncWriteExt};
     use glommio::{
         net::{TcpListener, TcpStream},
-        spawn_local, LocalExecutorBuilder, Placement,
+        spawn_local, LocalExecutorBuilder,
     };
     use std::{io::Result, rc::Rc, time::Instant};
 
@@ -20,7 +20,7 @@ mod tests {
         // need for sleep or retry), but it also demonstrates how a more complex
         // application may not necessarily spawn all executors at once running
         // symmetrical code.
-        let client_handle = LocalExecutorBuilder::new(Placement::Fixed(2))
+        let client_handle = LocalExecutorBuilder::default()
             .name("client")
             .spawn(move || async move { client(conns).await })?;
 
