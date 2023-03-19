@@ -91,7 +91,7 @@ mod tests {
         // Skip CPU0 because that is commonly used to host interrupts. That depends on
         // system configuration and most modern systems will balance it, but that it is
         // still common enough that it is worth excluding it in this benchmark
-        let builder = LocalExecutorBuilder::new(Placement::Fixed(1));
+        let builder = LocalExecutorBuilder::default();
         let server_handle = builder.name("server").spawn(|| async move {
             // If you try `top` during the execution of the first batch, you
             // will see that the CPUs should not be at 100%. A single connection will
