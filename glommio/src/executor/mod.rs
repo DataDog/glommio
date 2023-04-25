@@ -1499,7 +1499,7 @@ impl LocalExecutor {
                         break t.unwrap();
                     } else {
                         while !this.reactor.spin_poll_io().unwrap() {
-                            if pre_time.elapsed() > spin_before_park {
+                            if pre_time.elapsed() < spin_before_park {
                                 this.parker
                                     .park()
                                     .expect("Failed to park! This is actually pretty bad!");
