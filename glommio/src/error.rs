@@ -70,12 +70,11 @@ impl fmt::Display for ReactorErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReactorErrorKind::IncorrectSourceType(x) => {
-                write!(f, "Incorrect source type: {:?}!", x)
+                write!(f, "Incorrect source type: {x:?}!")
             }
             ReactorErrorKind::MemLockLimit(max, min) => write!(
                 f,
-                "The memlock resource limit is too low: {} (recommended {})",
-                max, min
+                "The memlock resource limit is too low: {max} (recommended {min})"
             ),
         }
     }
@@ -100,10 +99,10 @@ impl fmt::Display for ExecutorErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExecutorErrorKind::QueueError { index, kind } => {
-                write!(f, "Queue #{} is {}", index, kind)
+                write!(f, "Queue #{index} is {kind}")
             }
             ExecutorErrorKind::InvalidId(x) => {
-                write!(f, "indexing executor with id {}, which is invalid", x)
+                write!(f, "indexing executor with id {x}, which is invalid")
             }
         }
     }
@@ -147,16 +146,15 @@ impl fmt::Display for BuilderErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonExistentCpus { cpu } => {
-                write!(f, "CPU {} doesn't exist on the host", cpu)
+                write!(f, "CPU {cpu} doesn't exist on the host")
             }
             Self::InsufficientCpus {
                 available,
                 required,
-            } => write!(f, "found {} of {} required CPUs", available, required),
+            } => write!(f, "found {available} of {required} required CPUs"),
             Self::NrShards { minimum, shards } => write!(
                 f,
-                "requested {} shards but a minimum of {} is required",
-                minimum, shards
+                "requested {minimum} shards but a minimum of {shards} is required"
             ),
             Self::ThreadPanic(_) => write!(f, "thread panicked"),
         }
@@ -248,38 +246,32 @@ impl<T> From<io::Error> for GlommioError<T> {
 impl<T> fmt::Display for GlommioError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GlommioError::IoError(err) => write!(f, "IO error occurred: {}", err),
+            GlommioError::IoError(err) => write!(f, "IO error occurred: {err}"),
             GlommioError::EnhancedIoError {
                 source,
                 op,
                 path,
                 fd,
-            } => write!(
-                f,
-                "{}, op: {} path: {:?} with fd: {:?}",
-                source, op, path, fd
-            ),
-            GlommioError::ExecutorError(err) => write!(f, "Executor error: {}", err),
-            GlommioError::BuilderError(err) => write!(f, "Executor builder error: {}", err),
+            } => write!(f, "{source}, op: {op} path: {path:?} with fd: {fd:?}"),
+            GlommioError::ExecutorError(err) => write!(f, "Executor error: {err}"),
+            GlommioError::BuilderError(err) => write!(f, "Executor builder error: {err}"),
             GlommioError::Closed(rt) => match rt {
                 ResourceType::Semaphore {
                     requested,
                     available,
                 } => write!(
                     f,
-                    "Semaphore is closed (requested: {}, available: {})",
-                    requested, available
+                    "Semaphore is closed (requested: {requested}, available: {available})"
                 ),
                 ResourceType::RwLock => write!(f, "RwLock is closed"),
                 ResourceType::Channel(_) => write!(f, "Channel is closed"),
                 // TODO: look at what this format string should be as per bug report..
-                ResourceType::File(msg) => write!(f, "File is closed ({})", msg),
+                ResourceType::File(msg) => write!(f, "File is closed ({msg})"),
                 ResourceType::Gate => write!(f, "Gate is closed"),
             },
             GlommioError::CanNotBeClosed(_, s) => write!(
                 f,
-                "Can not be closed because certain conditions are not satisfied. {}",
-                *s
+                "Can not be closed because certain conditions are not satisfied. {s}"
             ),
             GlommioError::WouldBlock(rt) => match rt {
                 ResourceType::Semaphore {
@@ -287,16 +279,16 @@ impl<T> fmt::Display for GlommioError<T> {
                     available,
                 } => write!(
                     f,
-                    "Semaphore operation would block (requested: {}, available: {})",
-                    requested, available
+                    "Semaphore operation would block (requested: {requested}, available: \
+                     {available})"
                 ),
                 ResourceType::RwLock => write!(f, "RwLock operation would block"),
                 ResourceType::Channel(_) => write!(f, "Channel operation would block"),
-                ResourceType::File(msg) => write!(f, "File operation would block ({})", msg),
+                ResourceType::File(msg) => write!(f, "File operation would block ({msg})"),
                 ResourceType::Gate => write!(f, "Gate operation would block"),
             },
-            GlommioError::ReactorError(err) => write!(f, "Reactor error: {}", err),
-            GlommioError::TimedOut(dur) => write!(f, "Operation timed out after {:#?}", dur),
+            GlommioError::ReactorError(err) => write!(f, "Reactor error: {err}"),
+            GlommioError::TimedOut(dur) => write!(f, "Operation timed out after {dur:#?}"),
         }
     }
 }
@@ -381,14 +373,13 @@ impl fmt::Display for QueueErrorKind {
 /// other hand the display impl for the entire error will give correct results.
 impl<T> fmt::Display for ResourceType<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let fmt_str = match self {
-            ResourceType::Semaphore { .. } => "Semaphore".to_string(),
-            ResourceType::RwLock => "RwLock".to_string(),
-            ResourceType::Channel(_) => "Channel".to_string(),
-            ResourceType::File(_) => "File".to_string(),
-            ResourceType::Gate => "Gate".to_string(),
-        };
-        write!(f, "{}", &fmt_str)
+        f.write_str(match self {
+            ResourceType::Semaphore { .. } => "Semaphore",
+            ResourceType::RwLock => "RwLock",
+            ResourceType::Channel(_) => "Channel",
+            ResourceType::File(_) => "File",
+            ResourceType::Gate => "Gate",
+        })
     }
 }
 
@@ -400,35 +391,34 @@ impl<T> fmt::Display for ResourceType<T> {
 impl<T> Debug for GlommioError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GlommioError::IoError(err) => write!(f, "{:?}", err),
+            GlommioError::IoError(err) => write!(f, "{err:?}"),
             GlommioError::Closed(resource) => match resource {
                 ResourceType::Semaphore {
                     requested,
                     available,
                 } => write!(
                     f,
-                    "Semaphore is closed {{ requested {}, available: {} }}",
-                    requested, available
+                    "Semaphore is closed {{ requested {requested}, available: {available} }}"
                 ),
                 ResourceType::RwLock => write!(f, "RwLock is closed {{ .. }}"),
                 ResourceType::Channel(_) => write!(f, "Channel is closed {{ .. }}"),
-                ResourceType::File(msg) => write!(f, "File is closed (\"{}\")", msg),
+                ResourceType::File(msg) => write!(f, r#"File is closed ("{msg}")"#),
                 ResourceType::Gate => write!(f, "Gate is closed"),
             },
             GlommioError::CanNotBeClosed(resource, str) => match resource {
-                ResourceType::RwLock => write!(f, "RwLock can not be closed (\"{}\")", *str),
-                ResourceType::Channel(_) => write!(f, "Channel can not be closed (\"{}\")", *str),
+                ResourceType::RwLock => write!(f, r#"RwLock can not be closed ("{str}")"#),
+                ResourceType::Channel(_) => write!(f, r#"Channel can not be closed ("{str}")"#),
                 ResourceType::File(msg) => {
-                    write!(f, "File can not be closed : (\"{}\"). (\"{}\")", *str, msg)
+                    write!(f, r#"File can not be closed : ("{str}"). ("{msg}")"#)
                 }
-                ResourceType::Gate => write!(f, "Gate can not be closed: {}", *str),
+                ResourceType::Gate => write!(f, "Gate can not be closed: {str}"),
                 ResourceType::Semaphore {
                     requested,
                     available,
                 } => write!(
                     f,
-                    "Semaphore can not be closed: {}. {{ requested {}, available: {} }}",
-                    *str, requested, available
+                    "Semaphore can not be closed: {str}. {{ requested {requested}, available: \
+                     {available} }}"
                 ),
             },
             GlommioError::WouldBlock(resource) => match resource {
@@ -437,38 +427,36 @@ impl<T> Debug for GlommioError<T> {
                     available,
                 } => write!(
                     f,
-                    "Semaphore operation would block {{ requested {}, available: {} }}",
-                    requested, available
+                    "Semaphore operation would block {{ requested {requested}, available: \
+                     {available} }}"
                 ),
                 ResourceType::RwLock => write!(f, "RwLock operation would block {{ .. }}"),
                 ResourceType::Channel(_) => write!(f, "Channel operation  would block {{ .. }}"),
-                ResourceType::File(msg) => write!(f, "File operation would block (\"{}\")", msg),
+                ResourceType::File(msg) => write!(f, "File operation would block (\"{msg}\")"),
                 ResourceType::Gate => write!(f, "Gate operation would block {{ .. }}"),
             },
             GlommioError::ExecutorError(kind) => match kind {
-                ExecutorErrorKind::QueueError { index, kind } => f.write_fmt(format_args!(
-                    "QueueError {{ index: {}, kind: {:?} }}",
-                    index, kind
-                )),
+                ExecutorErrorKind::QueueError { index, kind } => {
+                    write!(f, "QueueError {{ index: {index}, kind: {kind:?} }}")
+                }
                 ExecutorErrorKind::InvalidId(x) => {
-                    f.write_fmt(format_args!("Invalid Executor ID {{ id: {} }}", x))
+                    write!(f, "Invalid Executor ID {{ id: {x} }}")
                 }
             },
             GlommioError::BuilderError(kind) => match kind {
                 BuilderErrorKind::NonExistentCpus { cpu } => {
-                    f.write_fmt(format_args!("NonExistentCpus {{ cpu: {} }}", cpu))
+                    write!(f, "NonExistentCpus {{ cpu: {cpu} }}")
                 }
                 BuilderErrorKind::InsufficientCpus {
                     required,
                     available,
-                } => f.write_fmt(format_args!(
-                    "InsufficientCpus {{ required: {}, available: {} }}",
-                    required, available
-                )),
-                BuilderErrorKind::NrShards { minimum, shards } => f.write_fmt(format_args!(
-                    "NrShards {{ minimum: {}, shards: {} }}",
-                    minimum, shards
-                )),
+                } => write!(
+                    f,
+                    "InsufficientCpus {{ required: {required}, available: {available} }}"
+                ),
+                BuilderErrorKind::NrShards { minimum, shards } => {
+                    write!(f, "NrShards {{ minimum: {minimum}, shards: {shards} }}")
+                }
                 BuilderErrorKind::ThreadPanic(_) => write!(f, "Thread panicked {{ .. }}"),
             },
             GlommioError::EnhancedIoError {
@@ -478,18 +466,17 @@ impl<T> Debug for GlommioError<T> {
                 fd,
             } => write!(
                 f,
-                "EnhancedIoError {{ source: {:?}, op: {:?}, path: {:?}, fd: {:?} }}",
-                source, op, path, fd
+                "EnhancedIoError {{ source: {source:?}, op: {op:?}, path: {path:?}, fd: {fd:?} }}"
             ),
             GlommioError::ReactorError(kind) => match kind {
                 ReactorErrorKind::IncorrectSourceType(x) => {
-                    write!(f, "ReactorError {{ kind: IncorrectSourceType {:?} }}", x)
+                    write!(f, "ReactorError {{ kind: IncorrectSourceType {x:?} }}")
                 }
                 ReactorErrorKind::MemLockLimit(a, b) => {
-                    write!(f, "ReactorError {{ kind: MemLockLimit({:?}/{:?}) }}", a, b)
+                    write!(f, "ReactorError {{ kind: MemLockLimit({a:?}/{b:?}) }}")
                 }
             },
-            GlommioError::TimedOut(dur) => write!(f, "TimedOut {{ dur {:?} }}", dur),
+            GlommioError::TimedOut(dur) => write!(f, "TimedOut {{ dur {dur:?} }}"),
         }
     }
 }
@@ -506,26 +493,24 @@ impl<T> From<GlommioError<T>> for io::Error {
             }
             GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => {
                 match kind {
-                    QueueErrorKind::StillActive => io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Queue #{} still active", index),
-                    ),
-                    QueueErrorKind::NotFound => io::Error::new(
-                        io::ErrorKind::NotFound,
-                        format!("Queue #{} not found", index),
-                    ),
+                    QueueErrorKind::StillActive => {
+                        io::Error::new(io::ErrorKind::Other, format!("Queue #{index} still active"))
+                    }
+                    QueueErrorKind::NotFound => {
+                        io::Error::new(io::ErrorKind::NotFound, format!("Queue #{index} not found"))
+                    }
                 }
             }
             GlommioError::ExecutorError(ExecutorErrorKind::InvalidId(id)) => io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("invalid executor id {}", id),
+                format!("invalid executor id {id}"),
             ),
             GlommioError::BuilderError(BuilderErrorKind::NonExistentCpus { .. })
             | GlommioError::BuilderError(BuilderErrorKind::InsufficientCpus { .. })
             | GlommioError::BuilderError(BuilderErrorKind::NrShards { .. })
             | GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(_)) => io::Error::new(
                 io::ErrorKind::Other,
-                format!("Executor builder error: {}", display_err),
+                format!("Executor builder error: {display_err}"),
             ),
             GlommioError::EnhancedIoError { source, .. } => {
                 io::Error::new(source.kind(), display_err)
@@ -533,17 +518,15 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::ReactorError(e) => match e {
                 ReactorErrorKind::IncorrectSourceType(x) => io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("IncorrectSourceType {:?}", x),
+                    format!("IncorrectSourceType {x:?}"),
                 ),
-                ReactorErrorKind::MemLockLimit(a, b) => io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("MemLockLimit({:?}/{:?})", a, b),
-                ),
+                ReactorErrorKind::MemLockLimit(a, b) => {
+                    io::Error::new(io::ErrorKind::Other, format!("MemLockLimit({a:?}/{b:?})"))
+                }
             },
-            GlommioError::TimedOut(dur) => io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("timed out after {:#?}", dur),
-            ),
+            GlommioError::TimedOut(dur) => {
+                io::Error::new(io::ErrorKind::TimedOut, format!("timed out after {dur:#?}"))
+            }
         }
     }
 }
@@ -705,7 +688,7 @@ mod test {
             path: None,
             fd: Some(32),
         };
-        let s = format!("{}", enhanced);
+        let s = format!("{enhanced}");
         assert_eq!(
             s,
             "Bad file descriptor (os error 9), op: testing enhancer path: None with fd: Some(32)"

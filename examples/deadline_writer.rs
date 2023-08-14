@@ -127,7 +127,7 @@ fn competing_cpu_hog(
 }
 
 async fn static_writer(how_many: usize, shares: usize, cpuhog_tq: TaskQueueHandle) -> Duration {
-    let name = format!("shares-{}", shares);
+    let name = format!("shares-{shares}");
     let tq =
         glommio::executor().create_task_queue(Shares::Static(shares), Latency::NotImportant, &name);
 
@@ -196,7 +196,7 @@ fn main() {
             let dur = static_writer(to_write, 1000, cpuhog_tq).await;
             println!(
                 "Finished writing in {}",
-                Paint::green(format!("{:#.0?}", dur))
+                Paint::green(format!("{dur:#.0?}"))
             );
             println!(
                 "This was using {} shares, and short of reducing the priority of the CPU hog. {}",
@@ -235,7 +235,7 @@ fn main() {
                 let dur = deadline.push_work(test).await.unwrap();
                 println!(
                     "Finished writing in {}",
-                    Paint::green(format!("{:#.2?}", dur))
+                    Paint::green(format!("{dur:#.2?}"))
                 );
                 stop.set(true);
                 hog.await.unwrap();

@@ -6,7 +6,7 @@ authors = [
     "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
     "DataDog <info@datadoghq.com>"
 ]
-edition = "2018"
+edition = "2021"
 description = "Glommio is a thread-per-core crate that makes writing highly parallel asynchronous applications in a thread-per-core architecture easier for rustaceans."
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/DataDog/glommio"

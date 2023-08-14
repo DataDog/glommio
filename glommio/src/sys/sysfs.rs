@@ -29,7 +29,7 @@ impl FromStr for StorageCache {
         match contents {
             "write back" => Ok(StorageCache::WriteBack),
             "write through" => Ok(StorageCache::WriteThrough),
-            _ => Err(format!("Invalid value {}", data)),
+            _ => Err(format!("Invalid value {data}")),
         }
     }
 }
@@ -813,11 +813,11 @@ mod test {
         let cpus_online = ListIterator::from_path(&sysfs_path.join("cpu/online")).unwrap();
         for cpu in cpus_online {
             let cpu = cpu.unwrap();
-            let cpu_topology = sysfs_path.join(format!("cpu/cpu{}/topology", cpu));
+            let cpu_topology = sysfs_path.join(format!("cpu/cpu{cpu}/topology"));
             let paths = ["core_cpus", "core_siblings", "die_cpus", "package_cpus"];
             for path in &paths {
                 let f_mask = cpu_topology.join(path);
-                let f_list = cpu_topology.join(format!("{}_list", path));
+                let f_list = cpu_topology.join(format!("{path}_list"));
                 assert_eq!(
                     HexBitIterator::from_path(&f_mask)
                         .unwrap()

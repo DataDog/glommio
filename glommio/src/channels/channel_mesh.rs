@@ -59,7 +59,7 @@ impl<T: Send> Senders<T> {
                 let msg = if idx < self.nr_consumers() {
                     "Local message should not be sent via channel mesh".into()
                 } else {
-                    format!("Shard {} is invalid in the channel mesh", idx)
+                    format!("Shard {idx} is invalid in the channel mesh")
                 };
                 Err(GlommioError::IoError(Error::new(
                     ErrorKind::InvalidInput,

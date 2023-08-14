@@ -218,8 +218,7 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
             if !sup {
                 println!(
                     "Yo kernel is so old it was with Hannibal when he crossed the Alps! Missing \
-                     {:?}",
-                    op
+                     {op:?}"
                 );
             }
         }
@@ -1326,25 +1325,16 @@ impl Reactor {
             SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
-            Err(x) => warn!(
-                "Error: registering buffers in the main ring. Skipping{:#?}",
-                x
-            ),
+            Err(x) => warn!("Error: registering buffers in the main ring. Skipping{x:#?}"),
             Ok(_) => match poll_ring.registrar().register_buffers_by_ref(&registry) {
                 Err(x) => {
-                    warn!(
-                        "Error: registering buffers in the poll ring. Skipping{:#?}",
-                        x
-                    );
+                    warn!("Error: registering buffers in the poll ring. Skipping{x:#?}");
                     main_ring.registrar().unregister_buffers().unwrap();
                 }
                 Ok(_) => {
                     match latency_ring.registrar().register_buffers_by_ref(&registry) {
                         Err(x) => {
-                            warn!(
-                                "Error: registering buffers in the poll ring. Skipping{:#?}",
-                                x
-                            );
+                            warn!("Error: registering buffers in the poll ring. Skipping{x:#?}");
                             poll_ring.registrar().unregister_buffers().unwrap();
                             main_ring.registrar().unregister_buffers().unwrap();
                         }

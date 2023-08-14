@@ -287,7 +287,7 @@ mod test {
         for ii in 0..total_cpus {
             if let Some(Level::Cpu(cpu_id)) = node_root.select_cpu().last() {
                 set.take(cpu_id)
-                    .unwrap_or_else(|| panic!("missing cpu {}", ii));
+                    .unwrap_or_else(|| panic!("missing cpu {ii}"));
             }
         }
 
@@ -334,7 +334,7 @@ mod test {
         for ii in 0..total_cpus {
             if let Some(Level::Cpu(cpu_id)) = node_root.select_cpu().last() {
                 set.take(cpu_id)
-                    .unwrap_or_else(|| panic!("missing cpu {}", ii));
+                    .unwrap_or_else(|| panic!("missing cpu {ii}"));
             }
         }
 

@@ -265,10 +265,9 @@ impl Reactor {
                     } else {
                         // The IO requests failed, but not because the poll ring doesn't work.
                         error!(
-                            "got unexpected error when probing iopoll support for file {:?} (fd: \
-                             {}) hosted on ({}, {}); the poll ring will be disabled for this \
-                             device: {}",
-                            path, raw, major, minor, err
+                            "got unexpected error when probing iopoll support for file {path:?} \
+                             (fd: {raw}) hosted on ({major}, {minor}); the poll ring will be \
+                             disabled for this device: {err}"
                         );
                         false
                     }

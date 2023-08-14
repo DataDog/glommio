@@ -63,7 +63,7 @@ impl<T> fmt::Debug for Buffer<T> {
         let id_to_str = |id| match id {
             0 => "not connected".into(),
             usize::MAX => "disconnected".into(),
-            x => format!("{}", x),
+            x => format!("{x}"),
         };
 
         let consumer_id = id_to_str(self.pcache.consumer_id.load(Ordering::Relaxed));

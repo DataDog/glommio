@@ -736,7 +736,7 @@ impl Default for LocalExecutorBuilder {
 /// let handles = LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(4))
 ///     .on_all_shards(|| async move {
 ///         let id = glommio::executor().id();
-///         println!("hello from executor {}", id);
+///         println!("hello from executor {id}");
 ///     })
 ///     .unwrap();
 ///
@@ -961,7 +961,7 @@ impl LocalExecutorPoolBuilder {
         // should no longer rely on its value at this point
         let cpu_binding = cpu_set_gen.next().cpu_binding();
         let notifier = sys::new_sleep_notifier()?;
-        let name = format!("{}-{}", &self.name, notifier.id());
+        let name = format!("{}-{}", self.name, notifier.id());
         let handle = Builder::new().name(name).spawn({
             let io_memory = self.io_memory;
             let ring_depth = self.ring_depth;
@@ -1608,7 +1608,7 @@ impl Default for LocalExecutor {
 ///
 /// let task = glommio::spawn_local(async move {
 ///     let ex = exclone.borrow();
-///     println!("Current value: {}", ex);
+///     println!("Current value: {ex}");
 /// });
 ///
 /// // This is fine if `task` executes after the current task, but will panic if

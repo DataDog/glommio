@@ -200,8 +200,7 @@ impl<T> SharesManager for InnerQueue<T> {
         for (exp, source) in queue.iter() {
             let remaining_time = exp.saturating_duration_since(now);
             trace!(
-                "Remaining time for this source: {:#?}, total_units {}",
-                remaining_time,
+                "Remaining time for this source: {remaining_time:#?}, total_units {}",
                 source.total_units()
             );
             let time_fraction =
@@ -714,7 +713,7 @@ mod test {
                     let old = last_shares.replace(shares) as isize;
                     if elapsed > 500 && elapsed < 850 {
                         let diff = old - shares as isize;
-                        assert!(diff.abs() < 200, "Found diff: {}", diff);
+                        assert!(diff.abs() < 200, "Found diff: {diff}");
                     }
                     if test.processed_units.replace(elapsed as usize) < 1000 {
                         Some(Duration::from_millis(50))

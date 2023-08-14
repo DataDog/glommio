@@ -72,7 +72,7 @@ impl TryFrom<SourceType> for Statx {
         match value {
             SourceType::Statx(_, buf) => Ok(buf.into_inner()),
             src => Err(GlommioError::ReactorError(
-                ReactorErrorKind::IncorrectSourceType(format!("{:?}", src)),
+                ReactorErrorKind::IncorrectSourceType(format!("{src:?}")),
             )),
         }
     }

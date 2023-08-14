@@ -67,12 +67,12 @@ pub(super) enum BlockingThreadOp {
 impl Debug for BlockingThreadOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
-            BlockingThreadOp::Rename(from, to) => write!(f, "rename `{:?}` -> `{:?}`", from, to),
-            BlockingThreadOp::Remove(path) => write!(f, "remove `{:?}`", path),
+            BlockingThreadOp::Rename(from, to) => write!(f, "rename `{from:?}` -> `{to:?}`"),
+            BlockingThreadOp::Remove(path) => write!(f, "remove `{path:?}`"),
             BlockingThreadOp::CreateDir(path, flags) => {
-                write!(f, "create dir `{:?}` (`{:b}`)", path, flags)
+                write!(f, "create dir `{path:?}` (`{flags:b}`)")
             }
-            BlockingThreadOp::Truncate(fd, to) => write!(f, "truncate `{}` -> `{}`", fd, to),
+            BlockingThreadOp::Truncate(fd, to) => write!(f, "truncate `{fd}` -> `{to}`"),
             BlockingThreadOp::Fn(_) => write!(f, "user function"),
         }
     }

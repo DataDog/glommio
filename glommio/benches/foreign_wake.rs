@@ -108,7 +108,7 @@ fn main() {
 
 fn test_latency(latency_req: Latency) {
     println!();
-    println!("Latency requirement: {:?}", latency_req);
+    println!("Latency requirement: {latency_req:?}");
 
     let runtime = Builder::new_multi_thread()
         .worker_threads(2)

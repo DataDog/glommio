@@ -276,14 +276,14 @@ where
     #[track_caller]
     fn increment_references(header: &mut Header) {
         let refs = header.references.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(refs, i16::MAX, "Waker invariant broken: {:?}", header);
+        assert_ne!(refs, i16::MAX, "Waker invariant broken: {header:?}");
     }
 
     #[inline]
     #[track_caller]
     fn decrement_references(header: &mut Header) -> i16 {
         let refs = header.references.fetch_sub(1, Ordering::Relaxed);
-        assert_ne!(refs, 0, "Waker invariant broken: {:?}", header);
+        assert_ne!(refs, 0, "Waker invariant broken: {header:?}");
         refs - 1
     }
 
