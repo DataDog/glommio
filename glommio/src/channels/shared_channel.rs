@@ -673,7 +673,7 @@ mod test {
                         // all good
                     }
                     Err(other_err) => {
-                        panic!("incorrect error type: '{}' for channel send", other_err)
+                        panic!("incorrect error type: '{other_err}' for channel send")
                     }
                 }
             })

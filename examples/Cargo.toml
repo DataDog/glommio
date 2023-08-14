@@ -3,7 +3,7 @@ name = "examples"
 version = "0.0.0"
 license = "Apache-2.0 OR MIT"
 publish = false
-edition = "2018"
+edition = "2021"
 
 [dev-dependencies]
 yansi = "~0.5.1"

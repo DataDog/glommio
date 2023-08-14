@@ -74,7 +74,7 @@ pin_project! {
 ///     loop {
 ///         let mut buf = String::new();
 ///         sin.read_line(&mut buf).await.unwrap();
-///         println!("you just typed {}", buf);
+///         println!("you just typed {buf}");
 ///     }
 /// });
 /// ```

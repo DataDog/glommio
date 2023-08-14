@@ -943,7 +943,7 @@ pub(crate) mod test {
     dma_file_test!(file_many_reads, path, _k, {
         let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
 
-        println!("{:?}", new_file);
+        println!("{new_file:?}");
 
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));

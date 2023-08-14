@@ -77,7 +77,7 @@ fn main() {
                         .spawn_local_into(
                             enclose!((gate, file)
                             async move {
-                                run_io(&format!("iteration: {}", x), &file, IO_TO_PERFORM, 4096).await;
+                                run_io(&format!("iteration: {x}"), &file, IO_TO_PERFORM, 4096).await;
                                 gate.replace(false);
                             }),
                             lat_tq,
@@ -121,7 +121,7 @@ async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
 
     let hist = Rc::try_unwrap(hist).unwrap().into_inner();
 
-    println!("\n --- {} ---", name);
+    println!("\n --- {name} ---");
     println!(
         "performed {}k read IO at {}k IOPS (took {:.2}s)",
         count / 1_000,

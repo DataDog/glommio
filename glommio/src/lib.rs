@@ -276,7 +276,7 @@ macro_rules! wake {
         use log::error;
 
         if let Err(x) = std::panic::catch_unwind(|| $waker.wake()) {
-            error!("Panic while calling waker! {:?}", x);
+            error!("Panic while calling waker! {x:?}");
         }
     };
 }

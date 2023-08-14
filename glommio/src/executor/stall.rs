@@ -78,7 +78,7 @@ pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     /// Do not perform blocking syscalls, acquire locks, spawn tasks
     /// or otherwise block here.
     fn stall(&self, detection: StallDetection<'_>) {
-        log::warn!("{}", detection);
+        log::warn!("{detection}");
     }
 }
 
@@ -412,7 +412,7 @@ mod test {
         let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(10);
         for i in 1..11 {
             let handler = TestHandler::new(nix::libc::SIGUSR1 as u8);
-            let tname = format!("exec{}", i);
+            let tname = format!("exec{i}");
             let builder = LocalExecutorBuilder::default()
                 .name(&tname)
                 .detect_stalls(Some(Box::new(handler.clone())))
@@ -453,7 +453,7 @@ mod test {
         let mut handles = Vec::with_capacity(signals.len());
         for (i, signal) in signals.iter().enumerate() {
             let handler = TestHandler::new(*signal);
-            let tname = format!("exec{}", i);
+            let tname = format!("exec{i}");
             let builder = LocalExecutorBuilder::default()
                 .name(&tname)
                 .detect_stalls(Some(Box::new(handler.clone())))

@@ -35,7 +35,7 @@ fn build_cpu_location(
     numa_node: usize,
     cpu_to_core: &mut HashMap<usize, usize>,
 ) -> io::Result<CpuLocation> {
-    let cpu_path = sysfs_path.join(format!("cpu/cpu{}/topology", cpu));
+    let cpu_path = sysfs_path.join(format!("cpu/cpu{cpu}/topology"));
 
     let package_id = ListIterator::from_path(&cpu_path.join("physical_package_id"))?
         .next()
@@ -79,7 +79,7 @@ pub fn get_machine_topology_unsorted() -> io::Result<Vec<CpuLocation>> {
 
     for node in nodes_online {
         let node = node?;
-        let node_path = sysfs_path.join(format!("node/node{}", node));
+        let node_path = sysfs_path.join(format!("node/node{node}"));
         let node_cpus = ListIterator::from_path(&node_path.join("cpulist"))?;
         for cpu in node_cpus {
             let cpu = cpu?;

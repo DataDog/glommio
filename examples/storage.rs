@@ -53,14 +53,11 @@ async fn stream_write<T: AsyncWriteExt + std::marker::Unpin, S: Into<String>>(
     let time = start.elapsed();
     let bytes = converter::convert(file_size as _);
     let rate = converter::convert((file_size as f64 / time.as_secs_f64()) as _);
-    println!("{}: Wrote {} in {:#?}, {}/s", &name, bytes, time, rate);
+    println!("{name}: Wrote {bytes} in {time:#?}, {rate}/s");
     stream.close().await.unwrap();
     let rate = converter::convert((file_size as f64 / start.elapsed().as_secs_f64()) as _);
     let time = endw.elapsed();
-    println!(
-        "{}: Closed in {:#?}, Amortized total {}/s",
-        &name, time, rate
-    );
+    println!("{name}: Closed in {time:#?}, Amortized total {rate}/s");
 }
 
 async fn stream_scan<T: AsyncReadExt + std::marker::Unpin, S: Into<String>>(
@@ -88,11 +85,7 @@ async fn stream_scan<T: AsyncReadExt + std::marker::Unpin, S: Into<String>>(
     let bytes = converter::convert(bytes_read as _);
     let rate = converter::convert((bytes_read as f64 / time.as_secs_f64()) as _);
     println!(
-        "{}: Scanned {} in {:#?}, {}/s, {} IOPS",
-        &name,
-        bytes,
-        time,
-        rate,
+        "{name}: Scanned {bytes} in {time:#?}, {rate}/s, {} IOPS",
         (ops as f64 / time.as_secs_f64()) as usize
     );
     stream
@@ -125,11 +118,7 @@ async fn stream_scan_alt_api<S: Into<String>>(
     let bytes = converter::convert(bytes_read as _);
     let rate = converter::convert((bytes_read as f64 / time.as_secs_f64()) as _);
     println!(
-        "{}: Scanned {} in {:#?}, {}/s, {} IOPS",
-        &name,
-        bytes,
-        time,
-        rate,
+        "{name}: Scanned {bytes} in {time:#?}, {rate}/s, {} IOPS",
         (ops as f64 / time.as_secs_f64()) as usize
     );
     stream.close().await.unwrap();
@@ -227,10 +216,7 @@ async fn random_read<S: Into<String>>(
     let bytes = converter::convert(random as _);
     let dur = time.elapsed();
     println!(
-        "{}: Random Read (uniform) size span of {}, for {:#?}, {} IOPS",
-        &name,
-        bytes,
-        dur,
+        "{name}: Random Read (uniform) size span of {bytes}, for {dur:#?}, {} IOPS",
         (iops.get() as f64 / dur.as_secs_f64()) as usize
     );
 }
@@ -280,12 +266,8 @@ async fn random_many_read<S: Into<String>>(
     let max_merged = converter::convert(max_buffer_size as _);
     let dur = time.elapsed();
     println!(
-        "{}: Random Bulk Read (uniform) size span of {}, for {:#?} (max merged size of {}), {} \
-         IOPS",
-        &name,
-        bytes,
-        dur,
-        max_merged,
+        "{name}: Random Bulk Read (uniform) size span of {bytes}, for {dur:#?} (max merged size \
+         of {max_merged}), {} IOPS",
         (iops.get() as f64 / dur.as_secs_f64()) as usize
     );
 }
@@ -315,7 +297,7 @@ fn main() {
     let mut dir = PathBuf::from(path);
     assert!(dir.exists());
     dir.push("benchfiles");
-    assert!(!dir.exists(), "{:?} already exists", dir);
+    assert!(!dir.exists(), "{dir:?} already exists");
     let dir = BenchDirectory::new(dir);
 
     let total_memory = sys_info::mem_info().unwrap().total << 10;

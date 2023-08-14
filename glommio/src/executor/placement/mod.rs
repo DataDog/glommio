@@ -355,7 +355,7 @@ impl CpuSet {
     ///     .expect("Err: please file an issue with glommio")
     ///     .filter(|l| l.numa_node == 0);
     ///
-    /// println!("The filtered CPUs are: {:#?}", cpus);
+    /// println!("The filtered CPUs are: {cpus:#?}");
     /// ```
     #[must_use]
     pub fn filter<F>(mut self, f: F) -> Self
@@ -679,7 +679,7 @@ where
                     2 => Level::NumaNode(cpu_loc.numa_node),
                     3 => Level::Core(cpu_loc.core),
                     4 => Level::Cpu(cpu_loc.cpu),
-                    _ => unreachable!("unexpected tree level: {}", depth),
+                    _ => unreachable!("unexpected tree level: {depth}"),
                 }
             }
         } else {
@@ -691,7 +691,7 @@ where
                     2 => Level::Package(cpu_loc.package),
                     3 => Level::Core(cpu_loc.core),
                     4 => Level::Cpu(cpu_loc.cpu),
-                    _ => unreachable!("unexpected tree level: {}", depth),
+                    _ => unreachable!("unexpected tree level: {depth}"),
                 }
             }
         };

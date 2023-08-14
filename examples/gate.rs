@@ -17,14 +17,14 @@ fn main() {
         for i in 0..nr_tasks {
             gate.spawn(enclose!((running_tasks, tasks_to_complete) async move {
                 running_tasks.signal(1);
-                println!("[Task {}] started, running tasks: {}", i, running_tasks.available());
+                println!("[Task {i}] started, running tasks: {}", running_tasks.available());
                 tasks_to_complete.acquire(1).await.unwrap();
             }))
             .unwrap()
             .detach();
         }
 
-        println!("Main: waiting for {} tasks", nr_tasks);
+        println!("Main: waiting for {nr_tasks} tasks");
         running_tasks.acquire(nr_tasks).await.unwrap();
 
         println!("Main: closing gate");

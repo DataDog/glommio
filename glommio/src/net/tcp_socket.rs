@@ -221,7 +221,7 @@ impl TcpListener {
     ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     ///     let mut incoming = listener.incoming();
     ///     while let Some(conn) = incoming.next().await {
-    ///         println!("Accepted client: {:?}", conn);
+    ///         println!("Accepted client: {conn:?}");
     ///     }
     /// });
     /// ```

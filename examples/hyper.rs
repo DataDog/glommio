@@ -95,7 +95,7 @@ mod hyper_compat {
                         let _permit = conn_control.acquire_permit(1).await;
                         if let Err(x) = Http::new().with_executor(HyperExecutor).serve_connection(HyperStream(stream), service_fn(service)).await {
                             if !x.is_incomplete_message() {
-                                eprintln!("Stream from {:?} failed with error {:?}", addr, x);
+                                eprintln!("Stream from {addr:?} failed with error {x:?}");
                             }
                         }
                     }}).detach();
@@ -132,7 +132,7 @@ fn main() {
     ))
     .on_all_shards(|| async move {
         let id = glommio::executor().id();
-        println!("Starting executor {}", id);
+        println!("Starting executor {id}");
         hyper_compat::serve_http(([0, 0, 0, 0], 8000), hyper_demo, 1024)
             .await
             .unwrap();
