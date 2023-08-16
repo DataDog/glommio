@@ -51,8 +51,7 @@ use crate::{error::BuilderErrorKind, sys::hardware_topology, CpuLocation, Glommi
 
 use pq_tree::{
     marker::{Pack, Priority, Spread},
-    Level,
-    Node,
+    Level, Node,
 };
 use std::{
     collections::{

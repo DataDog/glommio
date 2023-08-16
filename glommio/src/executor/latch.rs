@@ -14,9 +14,7 @@
 
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
-    Condvar,
-    Mutex,
+    Arc, Condvar, Mutex,
 };
 
 #[derive(Clone, Debug)]
@@ -156,10 +154,7 @@ mod test {
     #[test]
     fn cancel() {
         let n = 1 << 10;
-        let cxl_ids = (n / 2..n + 1)
-            .into_iter()
-            .step_by(n / 2 / 5)
-            .collect::<HashSet<_>>();
+        let cxl_ids = (n / 2..n + 1).step_by(n / 2 / 5).collect::<HashSet<_>>();
         assert_eq!(6, cxl_ids.len());
 
         let (w, a, t) = helper(cxl_ids, n);
@@ -193,7 +188,6 @@ mod test {
         let latch = Latch::new(count);
         let cxl_ids = Arc::new(cxl_ids);
         let res = (0..count)
-            .into_iter()
             .map(|id| {
                 std::thread::spawn({
                     let l = Latch::clone(&latch);

@@ -3,10 +3,7 @@ use futures_lite::AsyncWriteExt;
 use glommio::{
     enclose,
     io::{ImmutableFile, ImmutableFileBuilder},
-    Latency,
-    LocalExecutorBuilder,
-    Placement,
-    Shares,
+    Latency, LocalExecutorBuilder, Placement, Shares,
 };
 use rand::Rng;
 use std::{
@@ -102,7 +99,6 @@ async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
     let started_at = Instant::now();
 
     let tasks: Vec<_> = (0..2 << 10)
-        .into_iter()
         .map(|_| {
             let file = file.clone();
             let hist = hist.clone();

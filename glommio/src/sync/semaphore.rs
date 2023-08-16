@@ -12,13 +12,7 @@ use std::{
 };
 
 use intrusive_collections::{
-    container_of,
-    linked_list::LinkOps,
-    offset_of,
-    Adapter,
-    LinkedList,
-    LinkedListLink,
-    PointerOps,
+    container_of, linked_list::LinkOps, offset_of, Adapter, LinkedList, LinkedListLink, PointerOps,
 };
 use std::{marker::PhantomPinned, ptr::NonNull, rc::Rc};
 

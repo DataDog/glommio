@@ -14,6 +14,8 @@ homepage = "https://github.com/DataDog/glommio"
 keywords = ["linux", "rust", "async", "iouring", "thread-per-core"]
 categories = ["asynchronous", "concurrency", "os", "filesystem", "network-programming"]
 readme = "../README.md"
+# This is also documented in the README.md under "Supported Rust Versions"
+rust-version = "1.58"
 
 [dependencies]
 ahash = "0.7"

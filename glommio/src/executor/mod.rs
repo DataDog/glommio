@@ -36,16 +36,9 @@ use crate::{
     error::BuilderErrorKind,
     executor::stall::StallDetector,
     io::DmaBuffer,
-    parking,
-    reactor,
-    sys,
+    parking, reactor, sys,
     task::{self, waker_fn::dummy_waker},
-    GlommioError,
-    IoRequirements,
-    IoStats,
-    Latency,
-    Reactor,
-    Shares,
+    GlommioError, IoRequirements, IoStats, Latency, Reactor, Shares,
 };
 use ahash::AHashMap;
 use futures_lite::pin;
@@ -1459,7 +1452,7 @@ impl LocalExecutor {
             let spin_before_park = self.spin_before_park().unwrap_or_default();
 
             let future = this
-                .spawn_into(async move { future.await }, TaskQueueHandle::default())
+                .spawn_into(future, TaskQueueHandle::default())
                 .unwrap()
                 .detach();
             pin!(future);
@@ -2843,8 +2836,7 @@ mod test {
         collections::HashMap,
         sync::{
             atomic::{AtomicUsize, Ordering},
-            Arc,
-            Mutex,
+            Arc, Mutex,
         },
         task::Waker,
     };
@@ -3696,18 +3688,16 @@ mod test {
 
         fut_output.sort_unstable();
 
-        assert_eq!(fut_output, (0..nr_cpus).into_iter().collect::<Vec<_>>());
+        assert_eq!(fut_output, (0..nr_cpus).collect::<Vec<_>>());
 
         assert_eq!(nr_cpus, count.load(Ordering::Relaxed));
     }
 
     #[test]
     fn executor_invalid_executor_count() {
-        assert!(
-            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(0))
-                .on_all_shards(|| async move {})
-                .is_err()
-        );
+        assert!(LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(0))
+            .on_all_shards(|| async move {})
+            .is_err());
     }
 
     #[test]
@@ -3887,7 +3877,7 @@ mod test {
             .collect::<Vec<_>>();
 
         values.sort_unstable();
-        assert_eq!(values, (0..nr_execs).into_iter().collect::<Vec<_>>());
+        assert_eq!(values, (0..nr_execs).collect::<Vec<_>>());
     }
 
     #[test]

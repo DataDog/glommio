@@ -7,10 +7,7 @@ use futures_lite::Future;
 
 use crate::{
     channels::local_channel::{self, LocalSender},
-    GlommioError,
-    ResourceType,
-    Task,
-    TaskQueueHandle,
+    GlommioError, ResourceType, Task, TaskQueueHandle,
 };
 
 #[derive(Debug)]

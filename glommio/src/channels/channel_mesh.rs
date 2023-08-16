@@ -13,8 +13,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::{
     channels::shared_channel::{self, *},
-    GlommioError,
-    Result,
+    GlommioError, Result,
 };
 
 /// Sender side

@@ -7,8 +7,7 @@ use crate::{to_io_error, uring_sys};
 use ahash::AHashMap;
 use log::debug;
 use std::{
-    fmt,
-    io,
+    fmt, io,
     io::Error,
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},

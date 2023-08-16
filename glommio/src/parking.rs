@@ -25,8 +25,7 @@
 //! going between task execution and I/O.
 
 use std::{
-    fmt,
-    io,
+    fmt, io,
     panic::{RefUnwindSafe, UnwindSafe},
     rc::Rc,
     time::Duration,

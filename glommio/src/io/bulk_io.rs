@@ -1,8 +1,6 @@
 use crate::io::{
     dma_file::{align_down, align_up},
-    DmaFile,
-    ReadResult,
-    ScheduledSource,
+    DmaFile, ReadResult, ScheduledSource,
 };
 use core::task::{Context, Poll};
 use futures_lite::{ready, Stream, StreamExt};

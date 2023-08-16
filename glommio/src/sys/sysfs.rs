@@ -800,11 +800,9 @@ mod test {
         assert!(ListIterator::from_str("5-80:0/1\0")?.all(|e| e.is_ok()));
         assert!(ListIterator::from_str(",,1,,4-6,,       ,,\0")?.any(|e| e.is_ok()));
 
-        assert!(
-            ListIterator::from_str("collect_ok_err\0")?
-                .collect_ok::<Vec<_>>()
-                .is_err()
-        );
+        assert!(ListIterator::from_str("collect_ok_err\0")?
+            .collect_ok::<Vec<_>>()
+            .is_err());
 
         Ok(())
     }

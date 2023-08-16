@@ -282,7 +282,7 @@ mod test {
         assert_eq!(node_root.nr_slots(), total_cpus);
         assert_eq!(node_root.nr_slots_selected(), 0);
 
-        let mut set = (0..total_cpus).into_iter().collect::<HashSet<_>>();
+        let mut set = (0..total_cpus).collect::<HashSet<_>>();
 
         for ii in 0..total_cpus {
             if let Some(Level::Cpu(cpu_id)) = node_root.select_cpu().last() {
@@ -329,7 +329,7 @@ mod test {
         assert_eq!(node_root.nr_slots(), total_cpus);
         assert_eq!(node_root.nr_slots_selected(), 0);
 
-        let mut set = (0..total_cpus).into_iter().collect::<HashSet<_>>();
+        let mut set = (0..total_cpus).collect::<HashSet<_>>();
 
         for ii in 0..total_cpus {
             if let Some(Level::Cpu(cpu_id)) = node_root.select_cpu().last() {
