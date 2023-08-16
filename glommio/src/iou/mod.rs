@@ -58,8 +58,7 @@ mod probe;
 pub mod registrar;
 
 use std::{
-    fmt,
-    io,
+    fmt, io,
     mem::{self, MaybeUninit},
     os::unix::io::RawFd,
     ptr::{self, NonNull},

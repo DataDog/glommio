@@ -9,8 +9,7 @@ use crate::{
     enclose,
     reactor::Reactor,
     sys::{self, SleepNotifier},
-    GlommioError,
-    ResourceType,
+    GlommioError, ResourceType,
 };
 use futures_lite::{future, stream::Stream};
 use std::{
@@ -491,8 +490,7 @@ mod test {
     use super::*;
     use crate::{
         timer::{sleep, Timer},
-        LocalExecutorBuilder,
-        Placement,
+        LocalExecutorBuilder, Placement,
     };
     use futures_lite::{FutureExt, StreamExt};
     use std::{

@@ -6,13 +6,8 @@
 use crate::io::{
     bulk_io::{MergedBufferLimit, ReadAmplificationLimit, ReadManyArgs},
     open_options::OpenOptions,
-    DmaStreamReaderBuilder,
-    DmaStreamWriter,
-    DmaStreamWriterBuilder,
-    IoVec,
-    ReadManyResult,
-    ReadResult,
-    ScheduledSource,
+    DmaStreamReaderBuilder, DmaStreamWriter, DmaStreamWriterBuilder, IoVec, ReadManyResult,
+    ReadResult, ScheduledSource,
 };
 use futures_lite::{future::poll_fn, io::AsyncWrite, Stream};
 use std::{

@@ -6,21 +6,10 @@
 use crate::{
     iou::sqe::{SockAddr, SockAddrStorage},
     sys::{
-        DmaBuffer,
-        IoBuffer,
-        OsResult,
-        PollableStatus,
-        ReactorQueue,
-        SourceId,
-        Statx,
-        TimeSpec64,
+        DmaBuffer, IoBuffer, OsResult, PollableStatus, ReactorQueue, SourceId, Statx, TimeSpec64,
         Wakers,
     },
-    GlommioError,
-    IoRequirements,
-    ReactorErrorKind,
-    RingIoStats,
-    TaskQueueHandle,
+    GlommioError, IoRequirements, ReactorErrorKind, RingIoStats, TaskQueueHandle,
 };
 use futures_lite::{future, io};
 use std::{

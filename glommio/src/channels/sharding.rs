@@ -9,9 +9,7 @@ use futures_lite::{Future, Stream, StreamExt};
 use crate::{
     channels::channel_mesh::{FullMesh, Senders},
     task::JoinHandle,
-    GlommioError,
-    ResourceType,
-    Result,
+    GlommioError, ResourceType, Result,
 };
 
 /// Alias for return type of `Handler`

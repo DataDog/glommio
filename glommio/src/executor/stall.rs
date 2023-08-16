@@ -367,15 +367,13 @@ mod test {
 
                 exec.yield_task_queue_now().await; // yield the queue
 
-                assert!(
-                    stall_handler
-                        .inner
-                        .write()
-                        .unwrap()
-                        .detections
-                        .pop()
-                        .is_some()
-                );
+                assert!(stall_handler
+                    .inner
+                    .write()
+                    .unwrap()
+                    .detections
+                    .pop()
+                    .is_some());
 
                 // no stall because < 50ms of un-cooperativeness
                 thread::sleep(Duration::from_millis(40));
@@ -395,15 +393,13 @@ mod test {
 
                 exec.yield_task_queue_now().await; // yield the queue
 
-                assert!(
-                    stall_handler
-                        .inner
-                        .write()
-                        .unwrap()
-                        .detections
-                        .pop()
-                        .is_some()
-                );
+                assert!(stall_handler
+                    .inner
+                    .write()
+                    .unwrap()
+                    .detections
+                    .pop()
+                    .is_some());
 
                 // Make sure nothing else was reported
                 exec.yield_task_queue_now().await; // yield the queue

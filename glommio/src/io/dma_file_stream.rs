@@ -6,8 +6,7 @@
 use crate::{
     io::{dma_file::align_down, read_result::ReadResult, DmaFile},
     sys::DmaBuffer,
-    task,
-    ByteSliceMutExt,
+    task, ByteSliceMutExt,
 };
 use ahash::AHashMap;
 use core::task::Waker;

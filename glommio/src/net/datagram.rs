@@ -5,8 +5,7 @@
 //
 use crate::{
     sys::{self, DmaBuffer, Source, SourceType},
-    ByteSliceMutExt,
-    Reactor,
+    ByteSliceMutExt, Reactor,
 };
 use nix::sys::socket::MsgFlags;
 use std::{

@@ -1,24 +1,15 @@
 use clap::{App, Arg};
 use futures_lite::{
     stream::{self, StreamExt},
-    AsyncReadExt,
-    AsyncWriteExt,
+    AsyncReadExt, AsyncWriteExt,
 };
 use glommio::{
     enclose,
     io::{
-        BufferedFile,
-        DmaFile,
-        DmaStreamReader,
-        DmaStreamReaderBuilder,
-        DmaStreamWriterBuilder,
-        MergedBufferLimit,
-        ReadAmplificationLimit,
-        StreamReaderBuilder,
-        StreamWriterBuilder,
+        BufferedFile, DmaFile, DmaStreamReader, DmaStreamReaderBuilder, DmaStreamWriterBuilder,
+        MergedBufferLimit, ReadAmplificationLimit, StreamReaderBuilder, StreamWriterBuilder,
     },
-    LocalExecutorBuilder,
-    Placement,
+    LocalExecutorBuilder, Placement,
 };
 use pretty_bytes::converter;
 use std::{

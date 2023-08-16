@@ -1,7 +1,6 @@
 use std::{
     ffi::CStr,
-    io,
-    mem,
+    io, mem,
     ops::{Deref, DerefMut},
     os::unix::io::RawFd,
     ptr,

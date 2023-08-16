@@ -6,12 +6,7 @@
 use crate::{
     channels::local_channel::{self, LocalReceiver, LocalSender},
     controllers::ControllerStatus,
-    enclose,
-    task,
-    Latency,
-    Shares,
-    SharesManager,
-    TaskQueueHandle,
+    enclose, task, Latency, Shares, SharesManager, TaskQueueHandle,
 };
 use futures_lite::StreamExt;
 use log::{trace, warn};

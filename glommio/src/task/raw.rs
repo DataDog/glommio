@@ -18,8 +18,7 @@ use std::sync::atomic::{AtomicI16, Ordering};
 #[cfg(feature = "debugging")]
 use crate::task::debugging::TaskDebugger;
 use crate::{
-    dbg_context,
-    sys,
+    dbg_context, sys,
     task::{
         header::Header,
         state::*,

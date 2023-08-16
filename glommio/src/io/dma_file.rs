@@ -6,13 +6,8 @@
 use crate::{
     io::{
         bulk_io::{
-            CoalescedReads,
-            IoVec,
-            MergedBufferLimit,
-            OrderedBulkIo,
-            ReadAmplificationLimit,
-            ReadManyArgs,
-            ReadManyResult,
+            CoalescedReads, IoVec, MergedBufferLimit, OrderedBulkIo, ReadAmplificationLimit,
+            ReadManyArgs, ReadManyResult,
         },
         glommio_file::GlommioFile,
         open_options::OpenOptions,
