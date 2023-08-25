@@ -139,7 +139,7 @@ pub enum BuilderErrorKind {
     /// [`PoolThreadHandles::join_all`](crate::PoolThreadHandles::join_all)
     /// for threads that panicked.  The contained error is forwarded from
     /// [`JoinHandle`](std::thread::JoinHandle).
-    ThreadPanic(Box<dyn std::any::Any + Send>),
+    ThreadPanic(Box<dyn std::any::Any + Send + Sync>),
 }
 
 impl fmt::Display for BuilderErrorKind {
@@ -714,5 +714,10 @@ mod test {
             s,
             "Bad file descriptor (os error 9), op: testing enhancer path: None with fd: Some(32)"
         );
+    }
+
+    fn error_is_send_and_sync() {
+        fn fun<T: Send + Sync>(t: T) {}
+        fun(GlommioError::TimedOut(core::time::Duration::from_secs(0)));
     }
 }
