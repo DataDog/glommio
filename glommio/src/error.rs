@@ -717,7 +717,7 @@ mod test {
     }
 
     fn error_is_send_and_sync() {
-        fn fun<T: Send + Sync>(t: T) {}
+        fn fun<T: Send + Sync>(_t: T) {}
         fun(GlommioError::TimedOut(core::time::Duration::from_secs(0)));
     }
 }
