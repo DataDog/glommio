@@ -40,8 +40,7 @@ use crate::{
         PollableStatus, Source, SourceType, Statx, TimeSpec64,
     },
     uring_sys::{self, IoRingOp},
-    GlommioError, IoRequirements, IoStats, PoolPlacement, ReactorErrorKind, RingIoStats,
-    TaskQueueHandle,
+    GlommioError, IoRequirements, IoStats, ReactorErrorKind, RingIoStats, TaskQueueHandle,
 };
 use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
@@ -1300,7 +1299,7 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
         ring_depth: usize,
-        thread_pool_placement: PoolPlacement,
+        blocking_thread: BlockingThreadPool,
     ) -> crate::Result<Reactor, ()> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
@@ -1366,7 +1365,7 @@ impl Reactor {
             poll_ring: RefCell::new(poll_ring),
             latency_preemption_timeout_src: Cell::new(None),
             throughput_preemption_timeout_src: Cell::new(None),
-            blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
+            blocking_thread,
             link_fd,
             notifier,
             eventfd_src,
@@ -2026,6 +2025,7 @@ impl Drop for Reactor {
 
 #[cfg(test)]
 mod tests {
+    use crate::PoolPlacement;
     use std::time::Instant;
 
     use super::*;
@@ -2033,7 +2033,8 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0, 128, PoolPlacement::Unbound(1)).unwrap();
+        let pool = BlockingThreadPool::new(PoolPlacement::Unbound(1), notifier.clone()).unwrap();
+        let reactor = Reactor::new(notifier, 0, 128, pool).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
