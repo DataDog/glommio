@@ -4149,6 +4149,51 @@ mod test {
     }
 
     #[test]
+    fn blocking_function_placement_independent_of_executor_placement() {
+        let affinity = nix::sched::sched_getaffinity(nix::unistd::Pid::from_raw(0)).unwrap();
+        let num_cpus_accessible_by_default = (0..nix::sched::CpuSet::count())
+            .map(|cpu| affinity.is_set(cpu).unwrap() as usize)
+            .sum::<usize>();
+        if num_cpus_accessible_by_default < 2 {
+            eprintln!(
+                "Insufficient CPUs available to test blocking_function_placement_independent_of_executor_placement (affinity only allows for {})",
+                num_cpus_accessible_by_default,
+            );
+            return;
+        }
+
+        let num_schedulable_cpus = LocalExecutorBuilder::new(Placement::Fixed(0))
+            .blocking_thread_pool_placement(PoolPlacement::Unbound(2))
+            .spawn(|| async {
+                executor()
+                    .spawn_blocking(move || {
+                        let pid = nix::unistd::Pid::from_raw(0);
+                        let affinity =
+                            nix::sched::sched_getaffinity(pid).expect("Failed to get affinity");
+                        (0..nix::sched::CpuSet::count())
+                            .map(|cpu| {
+                                affinity
+                                    .is_set(cpu)
+                                    .expect("Failed to check if cpu affinity is set")
+                                    as usize
+                            })
+                            .sum::<usize>()
+                    })
+                    .await
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+
+        assert!(
+            num_schedulable_cpus >= num_cpus_accessible_by_default,
+            "num schedulable {}, num cpus accessible {}",
+            num_schedulable_cpus,
+            num_cpus_accessible_by_default,
+        );
+    }
+
+    #[test]
     fn blocking_pool_invalid_placement() {
         let ret = LocalExecutorBuilder::new(Placement::Unbound)
             .blocking_thread_pool_placement(PoolPlacement::Unbound(0))
