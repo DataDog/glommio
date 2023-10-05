@@ -108,7 +108,7 @@ impl UringBufferAllocator {
     fn new(size: usize) -> Self {
         let layout = Layout::from_size_align(size, 4096).unwrap();
         let (data, allocator) = unsafe {
-            let data = alloc::alloc::alloc(layout) as *mut u8;
+            let data = alloc::alloc::alloc(layout);
             let data = std::ptr::NonNull::new(data).unwrap();
             let allocator = BuddyAlloc::new(BuddyAllocParam::new(
                 data.as_ptr(),
@@ -133,7 +133,7 @@ impl UringBufferAllocator {
 
     fn free(&self, ptr: ptr::NonNull<u8>) {
         let mut allocator = self.allocator.borrow_mut();
-        allocator.free(ptr.as_ptr() as *mut u8);
+        allocator.free(ptr.as_ptr());
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -1056,7 +1056,7 @@ impl SleepableRing {
         }
     }
 
-    fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
+    fn sleep(&mut self, link: &Source) -> io::Result<usize> {
         assert_eq!(
             self.waiting_kernel_submission(),
             0,
@@ -1425,7 +1425,7 @@ impl Reactor {
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIo::Disabled),
                 IoBuffer::Buffered(buf),
-            ) => UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos),
+            ) => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
             x => panic!("Unexpected source type for write: {:?}", x),
         };
         queue_request_into_ring(
@@ -1469,7 +1469,7 @@ impl Reactor {
     pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
         let op = match &*source.source_type() {
             SourceType::SockSend(buf) => {
-                UringOpDescriptor::SockSend(buf.as_ptr() as *const u8, buf.len(), flags.bits())
+                UringOpDescriptor::SockSend(buf.as_ptr(), buf.len(), flags.bits())
             }
             _ => unreachable!(),
         };
@@ -1722,16 +1722,14 @@ impl Reactor {
     /// We may not be able to register an `SQE` at this point, so we return an
     /// Error and will just not sleep.
     fn link_rings_and_sleep(&self, ring: &mut SleepableRing) -> io::Result<()> {
-        let mut link_rings = Source::new(
+        let link_rings = Source::new(
             IoRequirements::default(),
             self.link_fd,
             SourceType::LinkRings,
             None,
             None,
         );
-        ring.sleep(&mut link_rings)
-            .or_else(Self::busy_ok)
-            .map(|_| {})
+        ring.sleep(&link_rings).or_else(Self::busy_ok).map(|_| {})
     }
 
     pub(crate) fn poll_io(&self, woke: &mut usize) -> io::Result<()> {
@@ -2097,7 +2095,7 @@ mod tests {
     fn allocator() {
         let l = Layout::from_size_align(10 << 20, 4 << 10).unwrap();
         let (data, mut allocator) = unsafe {
-            let data = alloc::alloc::alloc(l) as *mut u8;
+            let data = alloc::alloc::alloc(l);
             assert_eq!(data as usize & 4095, 0);
             let data = std::ptr::NonNull::new(data).unwrap();
             (

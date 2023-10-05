@@ -203,9 +203,9 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     pub(crate) async fn send_to(
         &self,
         buf: &[u8],
-        mut addr: nix::sys::socket::SockAddr,
+        addr: nix::sys::socket::SockAddr,
     ) -> io::Result<usize> {
-        match self.yolo_sendmsg(buf, &mut addr) {
+        match self.yolo_sendmsg(buf, &addr) {
             Some(res) => res,
             None => self.send_to_blocking(buf, addr).await,
         }
@@ -276,7 +276,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     fn yolo_sendmsg(
         &self,
         buf: &[u8],
-        addr: &mut nix::sys::socket::SockAddr,
+        addr: &nix::sys::socket::SockAddr,
     ) -> Option<io::Result<usize>> {
         if self.tx_yolo.get() {
             super::yolo_sendmsg(self.socket.as_raw_fd(), buf, addr)

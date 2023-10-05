@@ -89,7 +89,7 @@ fn yolo_recvmsg(
 fn yolo_sendmsg(
     fd: RawFd,
     buf: &[u8],
-    addr: &mut nix::sys::socket::SockAddr,
+    addr: &nix::sys::socket::SockAddr,
 ) -> Option<io::Result<usize>> {
     match sys::sendmsg_syscall(
         fd,

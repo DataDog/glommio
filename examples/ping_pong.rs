@@ -30,19 +30,16 @@ fn main() {
         .detach();
 
         // What would you write if there were no enclose! macro.
-        let second =
-            glommio::spawn_local(|_left: Rc<RefCell<bool>>, right: Rc<RefCell<bool>>| -> _ {
-                async move {
-                    loop {
-                        if !(*(right.borrow())) {
-                            println!("right");
-                            *(right.borrow_mut()) = true
-                        }
-                        glommio::yield_if_needed().await;
-                    }
+        let second = glommio::spawn_local(async move {
+            loop {
+                if !(*(right.borrow())) {
+                    println!("right");
+                    *(right.borrow_mut()) = true
                 }
-            }(left.clone(), right.clone()))
-            .detach();
+                glommio::yield_if_needed().await;
+            }
+        })
+        .detach();
 
         futures::join!(first, second);
     });

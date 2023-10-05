@@ -25,7 +25,7 @@ impl SysAlloc {
             None
         } else {
             let layout = Layout::from_size_align(size, 4096).unwrap();
-            let data = unsafe { alloc::alloc::alloc(layout) as *mut u8 };
+            let data = unsafe { alloc::alloc::alloc(layout) };
             let data = ptr::NonNull::new(data)?;
             Some(SysAlloc { data, layout })
         }

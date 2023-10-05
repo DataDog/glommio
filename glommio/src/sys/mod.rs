@@ -151,7 +151,7 @@ pub(crate) fn sendmsg_syscall(
     fd: RawFd,
     buf: *const u8,
     len: usize,
-    addr: &mut nix::sys::socket::SockAddr,
+    addr: &nix::sys::socket::SockAddr,
     flags: i32,
 ) -> io::Result<usize> {
     let mut iov = libc::iovec {
