@@ -106,9 +106,9 @@ pub fn get_machine_topology_unsorted() -> io::Result<Vec<CpuLocation>> {
     for l in &cpu_locations {
         node_to_core_to_cpus
             .entry(l.numa_node)
-            .or_insert_with(BTreeMap::new)
+            .or_default()
             .entry(l.core)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(l.cpu)
     }
 

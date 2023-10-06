@@ -36,7 +36,8 @@ use crate::{
     error::BuilderErrorKind,
     executor::stall::StallDetector,
     io::DmaBuffer,
-    parking, reactor, sys,
+    parking, reactor,
+    sys::{self, blocking::BlockingThreadPool},
     task::{self, waker_fn::dummy_waker},
     GlommioError, IoRequirements, IoStats, Latency, Reactor, Shares,
 };
@@ -1140,6 +1141,9 @@ impl LocalExecutor {
         cpu_binding: Option<impl IntoIterator<Item = usize>>,
         mut config: LocalExecutorConfig,
     ) -> Result<LocalExecutor> {
+        let blocking_thread =
+            BlockingThreadPool::new(config.thread_pool_placement, notifier.clone())?;
+
         // Linux's default memory policy is "local allocation" which allocates memory
         // on the NUMA node containing the CPU where the allocation takes place.
         // Hence, we bind to a CPU in the provided CPU set before allocating any
@@ -1165,7 +1169,7 @@ impl LocalExecutor {
                 config.io_memory,
                 config.ring_depth,
                 config.record_io_latencies,
-                config.thread_pool_placement,
+                blocking_thread,
             )?),
             stall_detector: RefCell::new(
                 config
@@ -4132,7 +4136,7 @@ mod test {
                 }
 
                 // we created 5 blocking jobs each taking 100ms but our thread pool only has 4
-                // threads. SWe expect one of those jobs to take twice as long as the others.
+                // threads. We expect one of those jobs to take twice as long as the others.
 
                 let mut ts = join_all(blocking.into_iter()).await;
                 assert_eq!(ts.len(), 5);
@@ -4146,6 +4150,51 @@ mod test {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn blocking_function_placement_independent_of_executor_placement() {
+        let affinity = nix::sched::sched_getaffinity(nix::unistd::Pid::from_raw(0)).unwrap();
+        let num_cpus_accessible_by_default = (0..nix::sched::CpuSet::count())
+            .map(|cpu| affinity.is_set(cpu).unwrap() as usize)
+            .sum::<usize>();
+        if num_cpus_accessible_by_default < 2 {
+            eprintln!(
+                "Insufficient CPUs available to test blocking_function_placement_independent_of_executor_placement (affinity only allows for {})",
+                num_cpus_accessible_by_default,
+            );
+            return;
+        }
+
+        let num_schedulable_cpus = LocalExecutorBuilder::new(Placement::Fixed(0))
+            .blocking_thread_pool_placement(PoolPlacement::Unbound(2))
+            .spawn(|| async {
+                executor()
+                    .spawn_blocking(move || {
+                        let pid = nix::unistd::Pid::from_raw(0);
+                        let affinity =
+                            nix::sched::sched_getaffinity(pid).expect("Failed to get affinity");
+                        (0..nix::sched::CpuSet::count())
+                            .map(|cpu| {
+                                affinity
+                                    .is_set(cpu)
+                                    .expect("Failed to check if cpu affinity is set")
+                                    as usize
+                            })
+                            .sum::<usize>()
+                    })
+                    .await
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+
+        assert!(
+            num_schedulable_cpus >= num_cpus_accessible_by_default,
+            "num schedulable {}, num cpus accessible {}",
+            num_schedulable_cpus,
+            num_cpus_accessible_by_default,
+        );
     }
 
     #[test]

@@ -206,6 +206,7 @@ impl Iterator for CQEsBlocking<'_> {
 
 bitflags::bitflags! {
     /// Flags that can be returned from the kernel on [`CQE`]s.
+    #[derive(Debug, Clone, Copy)]
     pub struct CompletionFlags: u32 {
         const BUFFER_SHIFT    = 1 << 0;
     }

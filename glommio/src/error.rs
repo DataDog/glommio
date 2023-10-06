@@ -532,6 +532,7 @@ impl<T> From<GlommioError<T>> for io::Error {
 }
 
 #[cfg(test)]
+#[allow(clippy::unnecessary_literal_unwrap)]
 mod test {
     use std::{io, panic::panic_any};
 

@@ -267,21 +267,21 @@ where
     unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
         dbg_context!(ptr, "clone_waker", {
             let raw = Self::from_ptr(ptr);
-            Self::increment_references(&mut *(raw.header as *mut Header));
+            Self::increment_references(&*(raw.header as *mut Header));
             RawWaker::new(ptr, &Self::RAW_WAKER_VTABLE)
         })
     }
 
     #[inline]
     #[track_caller]
-    fn increment_references(header: &mut Header) {
+    fn increment_references(header: &Header) {
         let refs = header.references.fetch_add(1, Ordering::Relaxed);
         assert_ne!(refs, i16::MAX, "Waker invariant broken: {header:?}");
     }
 
     #[inline]
     #[track_caller]
-    fn decrement_references(header: &mut Header) -> i16 {
+    fn decrement_references(header: &Header) -> i16 {
         let refs = header.references.fetch_sub(1, Ordering::Relaxed);
         assert_ne!(refs, 0, "Waker invariant broken: {header:?}");
         refs - 1
@@ -303,7 +303,7 @@ where
                     // In case the task complete before the last foreign waker
                     // is dropped, schedule it once more to ensure the task
                     // will be destroyed
-                    if Self::decrement_references(&mut *(raw.header as *mut Header)) == 0 {
+                    if Self::decrement_references(&*(raw.header as *mut Header)) == 0 {
                         let notifier = raw.notifier();
                         notifier.queue_waker(
                             Waker::from_raw(Self::clone_waker(ptr)),
@@ -314,7 +314,7 @@ where
                 });
             }
 
-            let refs = Self::decrement_references(&mut *(raw.header as *mut Header));
+            let refs = Self::decrement_references(&*(raw.header as *mut Header));
 
             let state = (*raw.header).state;
 
@@ -348,7 +348,7 @@ where
             let raw = Self::from_ptr(ptr);
 
             // Decrement the reference count.
-            let refs = Self::decrement_references(&mut *(raw.header as *mut Header));
+            let refs = Self::decrement_references(&*(raw.header as *mut Header));
 
             let state = (*raw.header).state;
 
@@ -367,7 +367,7 @@ where
     unsafe fn schedule(ptr: *const ()) {
         dbg_context!(ptr, "schedule", {
             let raw = Self::from_ptr(ptr);
-            Self::increment_references(&mut *(raw.header as *mut Header));
+            Self::increment_references(&*(raw.header as *mut Header));
 
             // Calling of schedule functions itself does not increment references,
             // if the schedule function has captured variables, increment references

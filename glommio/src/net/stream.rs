@@ -255,7 +255,7 @@ impl<S: AsRawFd> NonBufferedStream<S> {
 
     pub(crate) fn poll_read(
         &mut self,
-        cx: &mut Context<'_>,
+        cx: &Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let reactor = self.reactor.upgrade().unwrap();
@@ -298,11 +298,7 @@ impl<S: AsRawFd> NonBufferedStream<S> {
         Poll::Pending
     }
 
-    pub(crate) fn poll_write(
-        &mut self,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
+    pub(crate) fn poll_write(&mut self, cx: &Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         // On the write path, we always start with calling `yolo_send`, because
         // it is very likely to success. It could be a waste if it already timed
         // out since the last `poll_write`, but it would not cost much more to
@@ -334,7 +330,7 @@ impl<S: AsRawFd> NonBufferedStream<S> {
         Poll::Pending
     }
 
-    pub(crate) fn poll_close(&mut self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+    pub(crate) fn poll_close(&mut self, _: &Context<'_>) -> Poll<io::Result<()>> {
         self.source_tx.take();
         Poll::Ready(sys::shutdown(self.stream.as_raw_fd(), Shutdown::Write))
     }
@@ -438,7 +434,7 @@ impl<S: AsRawFd, B: RxBuf> GlommioStream<S, B> {
 
     pub(crate) fn poll_read(
         &mut self,
-        cx: &mut Context<'_>,
+        cx: &Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         if self.rx_buf.is_empty() {
@@ -452,7 +448,7 @@ impl<S: AsRawFd, B: RxBuf> GlommioStream<S, B> {
         Poll::Ready(Ok(self.rx_buf.read(buf)))
     }
 
-    fn poll_replenish_buffer(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+    fn poll_replenish_buffer(&mut self, cx: &Context<'_>) -> Poll<io::Result<usize>> {
         let result = poll_err!(ready!(self.stream.poll_read(cx, self.rx_buf.unfilled())));
         self.rx_buf.handle_result(result);
         if result == 0 {
@@ -461,19 +457,15 @@ impl<S: AsRawFd, B: RxBuf> GlommioStream<S, B> {
         Poll::Ready(Ok(result))
     }
 
-    pub(crate) fn poll_write(
-        &mut self,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
+    pub(crate) fn poll_write(&mut self, cx: &Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         self.stream.poll_write(cx, buf)
     }
 
-    pub(crate) fn poll_flush(&self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    pub(crate) fn poll_flush(&self, _cx: &Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    pub(crate) fn poll_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    pub(crate) fn poll_close(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         self.stream.poll_close(cx)
     }
 
@@ -507,7 +499,7 @@ impl<S: AsRawFd, B: RxBuf> GlommioStream<S, B> {
 }
 
 impl<S: AsRawFd, B: Buffered> GlommioStream<S, B> {
-    pub(crate) fn poll_fill_buf(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+    pub(crate) fn poll_fill_buf(&mut self, cx: &Context<'_>) -> Poll<io::Result<&[u8]>> {
         if self.rx_buf.is_empty() {
             poll_err!(ready!(self.poll_replenish_buffer(cx)));
         }

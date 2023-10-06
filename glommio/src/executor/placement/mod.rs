@@ -308,7 +308,7 @@ impl PartialEq for CpuSet {
 
 impl FromIterator<CpuLocation> for CpuSet {
     fn from_iter<I: IntoIterator<Item = CpuLocation>>(cpus: I) -> Self {
-        Self(HashSet::<CpuLocation>::from_iter(cpus.into_iter()))
+        Self(HashSet::<CpuLocation>::from_iter(cpus))
     }
 }
 

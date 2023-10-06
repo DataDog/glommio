@@ -403,7 +403,7 @@ impl StreamWriter {
         }
     }
 
-    fn poll_sync(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_sync(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         if !self.sync_on_close {
             Poll::Ready(Ok(()))
         } else {
@@ -426,7 +426,7 @@ impl StreamWriter {
         }
     }
 
-    fn poll_inner_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_inner_close(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         match self.source.take() {
             None => {
                 let source = self
@@ -446,7 +446,7 @@ impl StreamWriter {
         }
     }
 
-    fn do_poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn do_poll_flush(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         match self.source.take() {
             None => match self.flush_write_buffer(cx.waker()) {
                 true => Poll::Pending,
@@ -456,7 +456,7 @@ impl StreamWriter {
         }
     }
 
-    fn do_poll_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn do_poll_close(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         while self.file.is_some() {
             match self.file_status {
                 FileStatus::Open => {

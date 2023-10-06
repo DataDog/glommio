@@ -68,7 +68,7 @@ impl<'a> SQE<'a> {
     /// Get this event's flags.
     #[inline]
     pub fn flags(&self) -> SubmissionFlags {
-        unsafe { SubmissionFlags::from_bits_unchecked(self.sqe.flags as _) }
+        SubmissionFlags::from_bits_retain(self.sqe.flags as _)
     }
 
     /// Overwrite this event's flags.
@@ -535,6 +535,7 @@ pub struct BufferGroupId {
 
 bitflags::bitflags! {
     /// [`SQE`](SQE) configuration flags.
+    #[derive(Debug, Clone, Copy)]
     pub struct SubmissionFlags: u8 {
         /// This event's file descriptor is an index into the preregistered set of files.
         const FIXED_FILE    = 1 << 0;   /* use fixed fileset */

@@ -32,10 +32,11 @@ use crate::{
     io::{FileScheduler, IoScheduler, ScheduledSource},
     iou::sqe::SockAddrStorage,
     sys::{
-        self, common_flags, read_flags, sysfs, DirectIo, DmaBuffer, DmaSource, IoBuffer,
-        PollableStatus, SleepNotifier, Source, SourceType, StatsCollection, Statx,
+        self, blocking::BlockingThreadPool, common_flags, read_flags, sysfs, DirectIo, DmaBuffer,
+        DmaSource, IoBuffer, PollableStatus, SleepNotifier, Source, SourceType, StatsCollection,
+        Statx,
     },
-    IoRequirements, IoStats, PoolPlacement, TaskQueueHandle,
+    IoRequirements, IoStats, TaskQueueHandle,
 };
 use nix::poll::PollFlags;
 
@@ -180,9 +181,9 @@ impl Reactor {
         io_memory: usize,
         ring_depth: usize,
         record_io_latencies: bool,
-        thread_pool_placement: PoolPlacement,
+        blocking_thread: BlockingThreadPool,
     ) -> io::Result<Reactor> {
-        let sys = sys::Reactor::new(notifier, io_memory, ring_depth, thread_pool_placement)?;
+        let sys = sys::Reactor::new(notifier, io_memory, ring_depth, blocking_thread)?;
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Ok(Reactor {
             sys,

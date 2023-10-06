@@ -443,7 +443,7 @@ mod test {
 
     #[test]
     fn stall_detector_multiple_signals() {
-        let signals = vec![
+        let signals = [
             nix::libc::SIGALRM as u8,
             nix::libc::SIGUSR1 as u8,
             nix::libc::SIGUSR2 as u8,

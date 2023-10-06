@@ -295,7 +295,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
         res
     }
 
-    fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
+    fn wait_for_room(&self, cx: &Context<'_>) -> Poll<()> {
         match self.state.buffer.free_space() > 0 || self.state.buffer.producer_disconnected() {
             true => Poll::Ready(()),
             false => {

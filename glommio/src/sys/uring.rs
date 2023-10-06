@@ -40,8 +40,7 @@ use crate::{
         PollableStatus, Source, SourceType, Statx, TimeSpec64,
     },
     uring_sys::{self, IoRingOp},
-    GlommioError, IoRequirements, IoStats, PoolPlacement, ReactorErrorKind, RingIoStats,
-    TaskQueueHandle,
+    GlommioError, IoRequirements, IoStats, ReactorErrorKind, RingIoStats, TaskQueueHandle,
 };
 use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
@@ -108,7 +107,7 @@ impl UringBufferAllocator {
     fn new(size: usize) -> Self {
         let layout = Layout::from_size_align(size, 4096).unwrap();
         let (data, allocator) = unsafe {
-            let data = alloc::alloc::alloc(layout) as *mut u8;
+            let data = alloc::alloc::alloc(layout);
             let data = std::ptr::NonNull::new(data).unwrap();
             let allocator = BuddyAlloc::new(BuddyAllocParam::new(
                 data.as_ptr(),
@@ -133,7 +132,7 @@ impl UringBufferAllocator {
 
     fn free(&self, ptr: ptr::NonNull<u8>) {
         let mut allocator = self.allocator.borrow_mut();
-        allocator.free(ptr.as_ptr() as *mut u8);
+        allocator.free(ptr.as_ptr());
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -1056,7 +1055,7 @@ impl SleepableRing {
         }
     }
 
-    fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
+    fn sleep(&mut self, link: &Source) -> io::Result<usize> {
         assert_eq!(
             self.waiting_kernel_submission(),
             0,
@@ -1300,7 +1299,7 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
         ring_depth: usize,
-        thread_pool_placement: PoolPlacement,
+        blocking_thread: BlockingThreadPool,
     ) -> crate::Result<Reactor, ()> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
@@ -1366,7 +1365,7 @@ impl Reactor {
             poll_ring: RefCell::new(poll_ring),
             latency_preemption_timeout_src: Cell::new(None),
             throughput_preemption_timeout_src: Cell::new(None),
-            blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
+            blocking_thread,
             link_fd,
             notifier,
             eventfd_src,
@@ -1425,7 +1424,7 @@ impl Reactor {
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIo::Disabled),
                 IoBuffer::Buffered(buf),
-            ) => UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos),
+            ) => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
             x => panic!("Unexpected source type for write: {:?}", x),
         };
         queue_request_into_ring(
@@ -1469,7 +1468,7 @@ impl Reactor {
     pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
         let op = match &*source.source_type() {
             SourceType::SockSend(buf) => {
-                UringOpDescriptor::SockSend(buf.as_ptr() as *const u8, buf.len(), flags.bits())
+                UringOpDescriptor::SockSend(buf.as_ptr(), buf.len(), flags.bits())
             }
             _ => unreachable!(),
         };
@@ -1722,16 +1721,14 @@ impl Reactor {
     /// We may not be able to register an `SQE` at this point, so we return an
     /// Error and will just not sleep.
     fn link_rings_and_sleep(&self, ring: &mut SleepableRing) -> io::Result<()> {
-        let mut link_rings = Source::new(
+        let link_rings = Source::new(
             IoRequirements::default(),
             self.link_fd,
             SourceType::LinkRings,
             None,
             None,
         );
-        ring.sleep(&mut link_rings)
-            .or_else(Self::busy_ok)
-            .map(|_| {})
+        ring.sleep(&link_rings).or_else(Self::busy_ok).map(|_| {})
     }
 
     pub(crate) fn poll_io(&self, woke: &mut usize) -> io::Result<()> {
@@ -2028,6 +2025,7 @@ impl Drop for Reactor {
 
 #[cfg(test)]
 mod tests {
+    use crate::PoolPlacement;
     use std::time::Instant;
 
     use super::*;
@@ -2035,7 +2033,8 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0, 128, PoolPlacement::Unbound(1)).unwrap();
+        let pool = BlockingThreadPool::new(PoolPlacement::Unbound(1), notifier.clone()).unwrap();
+        let reactor = Reactor::new(notifier, 0, 128, pool).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
@@ -2097,7 +2096,7 @@ mod tests {
     fn allocator() {
         let l = Layout::from_size_align(10 << 20, 4 << 10).unwrap();
         let (data, mut allocator) = unsafe {
-            let data = alloc::alloc::alloc(l) as *mut u8;
+            let data = alloc::alloc::alloc(l);
             assert_eq!(data as usize & 4095, 0);
             let data = std::ptr::NonNull::new(data).unwrap();
             (

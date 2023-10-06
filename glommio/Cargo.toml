@@ -15,12 +15,12 @@ keywords = ["linux", "rust", "async", "iouring", "thread-per-core"]
 categories = ["asynchronous", "concurrency", "os", "filesystem", "network-programming"]
 readme = "../README.md"
 # This is also documented in the README.md under "Supported Rust Versions"
-rust-version = "1.58"
+rust-version = "1.65"
 
 [dependencies]
 ahash = "0.7"
 backtrace = { version = "0.3" }
-bitflags = "1.3"
+bitflags = "2.4"
 bitmaps = "3.1"
 buddy-alloc = "0.4"
 concurrent-queue = "1.2"

@@ -541,7 +541,7 @@ impl DmaStreamReader {
     /// [`get_buffer_aligned`]: Self::get_buffer_aligned
     pub fn poll_get_buffer_aligned(
         &mut self,
-        cx: &mut Context<'_>,
+        cx: &Context<'_>,
         mut len: u64,
     ) -> Poll<Result<ReadResult>> {
         let (start_id, buffer_len) = {
@@ -568,7 +568,7 @@ impl DmaStreamReader {
 
     fn poll_get_buffer(
         &mut self,
-        cx: &mut Context<'_>,
+        cx: &Context<'_>,
         len: u64,
         buffer_id: u64,
     ) -> Poll<Result<ReadResult>> {
@@ -1269,7 +1269,7 @@ impl DmaStreamWriter {
     // but leaves the file open. Useful for the immutable file abstraction.
     pub(super) fn poll_seal(
         &mut self,
-        cx: &mut Context<'_>,
+        cx: &Context<'_>,
     ) -> Poll<io::Result<DmaStreamReaderBuilder>> {
         let mut state = self.state.borrow_mut();
         match state.file_status {
