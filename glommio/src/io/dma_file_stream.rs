@@ -620,6 +620,7 @@ pub struct DmaStreamWriterBuilder {
     buffer_size: usize,
     write_behind: usize,
     sync_on_close: bool,
+    truncate_on_close: bool,
     file: Rc<DmaFile>,
 }
 
@@ -654,6 +655,7 @@ impl DmaStreamWriterBuilder {
             buffer_size: 128 << 10,
             write_behind: 4,
             sync_on_close: true,
+            truncate_on_close: false,
             file: Rc::new(file),
         }
     }
@@ -677,6 +679,15 @@ impl DmaStreamWriterBuilder {
     #[must_use = "The builder must be built to be useful"]
     pub fn with_sync_on_close_disabled(mut self, flush_disabled: bool) -> Self {
         self.sync_on_close = !flush_disabled;
+        self
+    }
+
+    /// Issue a truncate operation to the position at the end of the last write
+    /// when closing the file, thus removing any padding that might have been
+    /// added.
+    #[must_use = "The builder must be built to be useful"]
+    pub fn with_truncate_on_close(mut self, truncate_enabled: bool) -> Self {
+        self.truncate_on_close = truncate_enabled;
         self
     }
 
@@ -800,6 +811,7 @@ struct DmaStreamWriterState {
     buffer_pos: usize,
     write_behind: usize,
     sync_on_close: bool,
+    truncate_on_close: bool,
 }
 
 macro_rules! already_closed {
@@ -884,7 +896,7 @@ impl DmaStreamWriterState {
 
             let must_truncate = {
                 let state = state.borrow();
-                state.must_truncate()
+                state.truncate_on_close || state.must_truncate()
             };
 
             if must_truncate {
@@ -1024,6 +1036,7 @@ impl DmaStreamWriter {
             buffer_size: builder.buffer_size,
             write_behind: builder.write_behind,
             sync_on_close: builder.sync_on_close,
+            truncate_on_close: builder.truncate_on_close,
             current_buffer: None,
             waker: None,
             flush_state: DmaStreamWriterFlushState::new(builder.write_behind),
