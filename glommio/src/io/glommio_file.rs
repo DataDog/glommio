@@ -120,6 +120,26 @@ impl GlommioFile {
         Ok(file)
     }
 
+    pub(crate) fn dup(&self) -> io::Result<Self> {
+        let reactor = crate::executor().reactor();
+
+        let duped = Self {
+            file: Some(nix::unistd::dup(self.file.unwrap())?),
+            path: self.path.clone(),
+            inode: self.inode,
+            dev_major: self.dev_major,
+            dev_minor: self.dev_minor,
+            reactor: Rc::downgrade(&reactor),
+            scheduler: RefCell::new(None),
+        };
+
+        if self.scheduler.borrow().is_some() {
+            duped.attach_scheduler();
+        }
+
+        Ok(duped)
+    }
+
     pub(super) fn attach_scheduler(&self) {
         if self.scheduler.borrow().is_none() {
             self.scheduler.replace(Some(

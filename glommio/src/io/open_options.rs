@@ -23,6 +23,8 @@ pub struct OpenOptions {
     truncate: bool,
     create: bool,
     create_new: bool,
+    tmpfile: bool,
+    tmpfile_linkable: bool,
     // system-specific
     pub(super) custom_flags: libc::c_int,
     pub(super) mode: libc::mode_t,
@@ -46,6 +48,8 @@ impl OpenOptions {
             truncate: false,
             create: false,
             create_new: false,
+            tmpfile: false,
+            tmpfile_linkable: false,
             // system-specific
             custom_flags: 0,
             // previously, we defaulted to 0o644, but 0o666 is used by libstd
@@ -134,6 +138,25 @@ impl OpenOptions {
         self
     }
 
+    /// Sets the option to create a new unnamed temporary file if the operating
+    /// system supports it. The path provided to [`dma_open`](#method.dma_open) is the
+    /// path of the directory to parent the file. This also requires [`write`](#method.write)
+    /// to have been set. See [`tmpfile_linkable`](#method.tmpfile_linkable) if you want to
+    /// be able to later create a name for this file using `linkat` (not yet implemented).
+    pub fn tmpfile(&mut self, tmpfile: bool) -> &mut Self {
+        self.tmpfile = tmpfile;
+        self
+    }
+
+    /// When [`tmpfile`](#method.tmpfile) is set to true, this controls whether the temporary file
+    /// may be put into the filesystem as a named file at a later date using `linkat`.
+    /// For now, since `linkat` is not implemented within glommio, you'll need to link
+    /// it by hand.
+    pub fn tmpfile_linkable(&mut self, linkable: bool) -> &mut Self {
+        self.tmpfile_linkable = linkable;
+        self
+    }
+
     /// Pass custom flags to the flags' argument of `open_at`.
     pub fn custom_flags(&mut self, flags: i32) -> &mut Self {
         self.custom_flags = flags;
@@ -161,15 +184,21 @@ impl OpenOptions {
         match (self.write, self.append) {
             (true, false) => {}
             (false, false) => {
-                if self.truncate || self.create || self.create_new {
+                if self.truncate || self.create || self.create_new || self.tmpfile {
                     return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
                 }
             }
             (_, true) => {
-                if self.truncate && !self.create_new {
+                if self.truncate && !(self.create_new || self.tmpfile) {
                     return Err(io::Error::from_raw_os_error(libc::EINVAL).into());
                 }
             }
+        }
+
+        match (self.tmpfile, self.tmpfile_linkable) {
+            (false, _) => (),
+            (true, false) => return Ok(libc::O_EXCL | libc::O_TMPFILE),
+            (true, true) => return Ok(libc::O_TMPFILE),
         }
 
         Ok(match (self.create, self.truncate, self.create_new) {
@@ -187,7 +216,7 @@ impl OpenOptions {
         DmaFile::open_with_options(
             -1_i32,
             path.as_ref(),
-            if self.create || self.create_new {
+            if self.create || self.create_new || self.tmpfile {
                 "Creating"
             } else {
                 "Opening"
@@ -203,7 +232,7 @@ impl OpenOptions {
         BufferedFile::open_with_options(
             -1_i32,
             path.as_ref(),
-            if self.create || self.create_new {
+            if self.create || self.create_new || self.tmpfile {
                 "Creating"
             } else {
                 "Opening"
