@@ -432,6 +432,13 @@ impl DmaFile {
         self.file.fdatasync().await.map_err(Into::into)
     }
 
+    /// Returns the alignment required for I/O operations. Typical values will
+    /// be 512 (NVME drive is configured in slower compat mode) or 4096
+    /// (typical TLC native alignment).
+    pub fn alignment(&self) -> u64 {
+        self.o_direct_alignment
+    }
+
     /// Erases a range from the file without changing the size. Check the man
     /// page for [`fallocate`] for a list of the supported filesystems.
     /// Partial blocks are zeroed while whole blocks are simply unmapped
