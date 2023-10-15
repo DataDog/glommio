@@ -201,6 +201,66 @@ impl DmaFile {
         OpenOptions::new().read(true).dma_open(path.as_ref()).await
     }
 
+    /// Creates a duplicate instance pointing to the same file descriptor as self.
+    ///
+    /// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+    /// <strong>Warning:</strong> If the file has been opened with `append`,
+    /// then the position for writes will get ignored and the buffer will be written at
+    /// the current end of file. See the [man page] for `O_APPEND`. All dup'ed files
+    /// will share the same offset (i.e. writes to one will affect the other).
+    /// </p>
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::{
+    ///   LocalExecutor,
+    ///   io::{
+    ///     OpenOptions,
+    ///     DmaBuffer,
+    ///   }
+    /// };
+    ///
+    /// fn populate(buf: &mut DmaBuffer) {
+    ///     buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
+    /// }
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     // A new anonymous file is created within `some_directory/`.
+    ///     let file = OpenOptions::new()
+    ///       .create_new(true)
+    ///       .read(true)
+    ///       .write(true)
+    ///       .tmpfile(true)
+    ///       .dma_open("some_directory")
+    ///       .await
+    ///       .unwrap();
+    ///
+    ///     let file2 = file.dup().unwrap();
+    ///
+    ///     let mut buf = file.alloc_dma_buffer(4096);
+    ///     // Write some data into the buffer.
+    ///     populate(&mut buf);
+    ///
+    ///     let written = file.write_at(buf, 0).await.unwrap();
+    ///     assert_eq!(written, 4096);
+    ///     file.close().await.unwrap();
+    ///
+    ///     let read = file2.read_at_aligned(0, 4096).await.unwrap();
+    ///     assert_eq!(read.len(), 4096);
+    ///     assert_eq!(&read[0..6], b"hello\0");
+    /// });
+    /// ```
+    pub fn dup(&self) -> Result<Self> {
+        Ok(Self {
+            file: enhanced_try!(self.file.dup(), "Duplicating", self.file)?,
+            o_direct_alignment: self.o_direct_alignment,
+            max_sectors_size: self.max_sectors_size,
+            max_segment_size: self.max_segment_size,
+            pollable: self.pollable,
+        })
+    }
+
     /// Write the buffer in `buf` to a specific position in the file.
     ///
     /// It is expected that the buffer and the position be properly aligned
@@ -1263,5 +1323,52 @@ pub(crate) mod test {
         assert_eq!(buf2.len(), bytes);
 
         assert_eq!(*buf1, *buf2);
+    });
+
+    dma_file_test!(dup, path, _k, {
+        fn populate(buf: &mut DmaBuffer) {
+            buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
+            buf.as_bytes_mut()[5..].fill(0);
+        }
+
+        // A new anonymous file is created within `some_directory/`.
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .unwrap();
+
+        let file2 = file.dup().unwrap();
+        let buffer_size = file.o_direct_alignment.try_into().unwrap();
+        let mut buf = file.alloc_dma_buffer(buffer_size);
+        // Write some data into the buffer.
+        populate(&mut buf);
+
+        let written = file.write_at(buf, 0).await.unwrap();
+        assert_eq!(written, buffer_size);
+        file.close().await.unwrap();
+
+        let read = file2.read_at_aligned(0, buffer_size).await.unwrap();
+        assert_eq!(read.len(), buffer_size);
+        assert_eq!(
+            &read[0..6],
+            b"hello\0",
+            "{}",
+            String::from_utf8_lossy(&read[0..6])
+        );
+    });
+
+    dma_file_test!(tmpfile_fails_if_not_writable, path, _k, {
+        OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(false)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .expect_err("O_TMPFILE requires opening with write permissions");
     });
 }
