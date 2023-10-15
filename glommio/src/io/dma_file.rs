@@ -1388,4 +1388,32 @@ pub(crate) mod test {
             .await
             .expect_err("O_TMPFILE requires opening with write permissions");
     });
+
+    dma_file_test!(resize_dma_buf, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .expect("Failed to open file");
+
+        let alignment =
+            (file.alignment()).max(file.stat().await.unwrap().fs_cluster_size.into()) as usize;
+
+        let mut buffer = file.alloc_dma_buffer(2 * alignment);
+        buffer.as_bytes_mut()[0..alignment].fill(1);
+        buffer.as_bytes_mut()[alignment..].fill(2);
+        buffer.trim_to_size(alignment);
+
+        assert_eq!(alignment, file.write_at(buffer, 0).await.unwrap());
+
+        let read = file.read_at_aligned(0, 2 * alignment).await.unwrap();
+        assert_eq!(read.len(), alignment);
+        assert!(read.iter().all(|&b| b == 1));
+
+        let stat = file.stat().await.unwrap();
+        assert_eq!(stat.file_size, alignment as u64, "{:?}", stat);
+    });
 }
