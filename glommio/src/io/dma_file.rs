@@ -589,6 +589,23 @@ impl DmaFile {
         self.file.path()
     }
 
+    /// The inode backing the file. A file with the same inode may appear under multiple
+    /// paths due to renaming and linking.
+    pub fn inode(&self) -> u64 {
+        self.file.inode
+    }
+
+    /// The major ID of the device containing the filesystem where the file resides.
+    /// The device may be found by issuing a `readlink`` on `/sys/dev/block/<major>:<minor>`
+    pub fn dev_major(&self) -> u32 {
+        self.file.dev_major
+    }
+
+    /// The minor ID of the device containing the filesystem where the file resides.
+    pub fn dev_minor(&self) -> u32 {
+        self.file.dev_minor
+    }
+
     /// Convenience method that closes a DmaFile wrapped inside an Rc.
     ///
     /// Returns [CloseResult] to indicate which operation was performed.
