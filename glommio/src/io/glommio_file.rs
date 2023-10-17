@@ -330,6 +330,54 @@ impl GlommioFile {
     }
 }
 
+/// This lets you open a DmaFile on one thread and then send it safely to another thread for processing.
+#[derive(Debug)]
+pub(crate) struct OwnedGlommioFile {
+    pub(crate) fd: Option<RawFd>,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) inode: u64,
+    pub(crate) dev_major: u32,
+    pub(crate) dev_minor: u32,
+}
+
+unsafe impl Send for OwnedGlommioFile {}
+
+impl Drop for OwnedGlommioFile {
+    fn drop(&mut self) {
+        if let Some(fd) = self.fd.take() {
+            nix::unistd::close(fd).unwrap();
+        }
+    }
+}
+
+impl From<OwnedGlommioFile> for GlommioFile {
+    fn from(mut owned: OwnedGlommioFile) -> Self {
+        let reactor = crate::executor().reactor();
+
+        GlommioFile {
+            file: owned.fd.take(),
+            path: RefCell::new(owned.path.take()),
+            inode: owned.inode,
+            dev_major: owned.dev_major,
+            dev_minor: owned.dev_minor,
+            reactor: Rc::downgrade(&reactor),
+            scheduler: RefCell::new(None),
+        }
+    }
+}
+
+impl From<GlommioFile> for OwnedGlommioFile {
+    fn from(mut value: GlommioFile) -> Self {
+        Self {
+            fd: value.file.take(),
+            path: value.path.borrow_mut().take().map(|p| p.to_path_buf()),
+            inode: value.inode,
+            dev_major: value.dev_major,
+            dev_minor: value.dev_minor,
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
