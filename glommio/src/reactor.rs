@@ -83,7 +83,7 @@ struct Timers {
 
     /// An ordered map of registered timers.
     ///
-    /// Timers are in the order in which they fire. The `usize` in this type is
+    /// Timers are in the order in which they fire. The `u64` in this type is
     /// a timer ID used to distinguish timers that fire at the same time.
     /// The [`Waker`] represents the task awaiting the timer.
     timers: BTreeMap<(Instant, u64), Waker>,
