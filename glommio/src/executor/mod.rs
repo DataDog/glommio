@@ -1422,9 +1422,8 @@ impl LocalExecutor {
         // are woken up.
         tq.default_vruntime = tq
             .active_executors
-            .iter()
+            .peek()
             .map(|x| x.borrow().vruntime)
-            .min()
             .unwrap_or(vruntime);
 
         true
