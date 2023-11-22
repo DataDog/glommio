@@ -113,7 +113,11 @@ impl DmaBuffer {
         }
     }
 
-    pub(crate) fn trim_to_size(&mut self, newsize: usize) {
+    /// Reduce the length of this buffer to be `newsize`. This value must be <= the current
+    /// [`len`](#method.len) and is a destructive operation (length cannot be increased).
+    /// NOTE: When using this with DmaFile, you have to make sure that `newsize` is properly
+    /// aligned or the write will fail due to O_DIRECT requirements.
+    pub fn trim_to_size(&mut self, newsize: usize) {
         assert!(newsize <= self.size);
         self.size = newsize;
     }
