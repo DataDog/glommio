@@ -54,7 +54,7 @@ impl Parker {
         self.inner.park(|| None)
     }
 
-    /// Performs non-sleepable pool and install a preemption timeout into the
+    /// Performs non-sleepable poll and installs a preemption timeout into the
     /// ring with `Duration`. A value of zero means we are not interested in
     /// installing a preemption timer. Tasks executing in the CPU right after
     /// this will be able to check if the timer has elapsed and yield the
