@@ -1341,93 +1341,92 @@ impl LocalExecutor {
         let candidate = tq.active_executors.pop();
         tq.stats.scheduler_runs += 1;
 
-        match candidate {
-            Some(queue) => {
-                tq.active_executing = Some(queue.clone());
-                drop(tq);
+        if candidate.is_none() {
+            return false;
+        }
 
-                let time = {
-                    let now = Instant::now();
-                    let mut queue_ref = queue.borrow_mut();
-                    queue_ref.prepare_to_run(now);
-                    self.reactor
-                        .inform_io_requirements(queue_ref.io_requirements);
-                    now
-                };
+        let queue = candidate.unwrap();
+        tq.active_executing = Some(queue.clone());
+        drop(tq);
 
-                let (runtime, tasks_executed_this_loop) = {
-                    let detector = self.stall_detector.borrow();
-                    let guard = detector.as_ref().map(|x| {
-                        let queue = queue.borrow_mut();
-                        x.enter_task_queue(
-                            queue.stats.index,
-                            queue.name.clone(),
-                            time,
-                            self.preempt_timer_duration(),
-                        )
-                    });
+        let time = {
+            let now = Instant::now();
+            let mut queue_ref = queue.borrow_mut();
+            queue_ref.prepare_to_run(now);
+            self.reactor
+                .inform_io_requirements(queue_ref.io_requirements);
+            now
+        };
 
-                    let mut tasks_executed_this_loop = 0;
-                    loop {
-                        let mut queue_ref = queue.borrow_mut();
-                        if self.need_preempt() || queue_ref.yielded() {
-                            break;
-                        }
+        let (runtime, tasks_executed_this_loop) = {
+            let detector = self.stall_detector.borrow();
+            let guard = detector.as_ref().map(|x| {
+                let queue = queue.borrow_mut();
+                x.enter_task_queue(
+                    queue.stats.index,
+                    queue.name.clone(),
+                    time,
+                    self.preempt_timer_duration(),
+                )
+            });
 
-                        if let Some(r) = queue_ref.get_task() {
-                            drop(queue_ref);
-                            r.run();
-                            tasks_executed_this_loop += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    let elapsed = time.elapsed();
-                    drop(guard);
-                    (elapsed, tasks_executed_this_loop)
-                };
-
-                let (need_repush, vruntime) = {
-                    let mut state = queue.borrow_mut();
-                    let last_vruntime = state.account_vruntime(runtime);
-                    (state.is_active(), last_vruntime)
-                };
-
-                let mut tq = self.queues.borrow_mut();
-                tq.active_executing = None;
-                tq.stats.executor_runtime += runtime;
-                tq.stats.tasks_executed += tasks_executed_this_loop;
-                let vruntime = match vruntime {
-                    Some(x) => x,
-                    None => {
-                        for queue in tq.available_executors.values() {
-                            let mut q = queue.borrow_mut();
-                            q.vruntime = 0;
-                        }
-                        0
-                    }
-                };
-
-                if need_repush {
-                    tq.active_executors.push(queue);
-                } else {
-                    tq.reevaluate_preempt_timer();
+            let mut tasks_executed_this_loop = 0;
+            loop {
+                let mut queue_ref = queue.borrow_mut();
+                if self.need_preempt() || queue_ref.yielded() {
+                    break;
                 }
 
-                // Compute the smallest vruntime out of all the active task queues
-                // This value is used to set the vruntime of deactivated task queues when they
-                // are woken up.
-                tq.default_vruntime = tq
-                    .active_executors
-                    .iter()
-                    .map(|x| x.borrow().vruntime)
-                    .min()
-                    .unwrap_or(vruntime);
-
-                true
+                if let Some(r) = queue_ref.get_task() {
+                    drop(queue_ref);
+                    r.run();
+                    tasks_executed_this_loop += 1;
+                } else {
+                    break;
+                }
             }
-            None => false,
+            let elapsed = time.elapsed();
+            drop(guard);
+            (elapsed, tasks_executed_this_loop)
+        };
+
+        let (need_repush, vruntime) = {
+            let mut state = queue.borrow_mut();
+            let last_vruntime = state.account_vruntime(runtime);
+            (state.is_active(), last_vruntime)
+        };
+
+        let mut tq = self.queues.borrow_mut();
+        tq.active_executing = None;
+        tq.stats.executor_runtime += runtime;
+        tq.stats.tasks_executed += tasks_executed_this_loop;
+        let vruntime = match vruntime {
+            Some(x) => x,
+            None => {
+                for queue in tq.available_executors.values() {
+                    let mut q = queue.borrow_mut();
+                    q.vruntime = 0;
+                }
+                0
+            }
+        };
+
+        if need_repush {
+            tq.active_executors.push(queue);
+        } else {
+            tq.reevaluate_preempt_timer();
         }
+
+        // Compute the smallest vruntime out of all the active task queues
+        // This value is used to set the vruntime of deactivated task queues when they
+        // are woken up.
+        tq.default_vruntime = tq
+            .active_executors
+            .peek()
+            .map(|x| x.borrow().vruntime)
+            .unwrap_or(vruntime);
+
+        true
     }
 
     /// Runs the executor until the given future completes.
