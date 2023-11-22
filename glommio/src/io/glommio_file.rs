@@ -342,6 +342,29 @@ pub(crate) struct OwnedGlommioFile {
 
 unsafe impl Send for OwnedGlommioFile {}
 
+impl OwnedGlommioFile {
+    pub(crate) fn dup(&self) -> io::Result<Self> {
+        let fd = match self.fd {
+            Some(fd) => Some(nix::unistd::dup(fd)?),
+            None => None,
+        };
+
+        Ok(Self {
+            fd,
+            path: self.path.clone(),
+            inode: self.inode,
+            dev_major: self.dev_major,
+            dev_minor: self.dev_minor,
+        })
+    }
+}
+
+impl AsRawFd for OwnedGlommioFile {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd.as_ref().copied().unwrap()
+    }
+}
+
 impl Drop for OwnedGlommioFile {
     fn drop(&mut self) {
         if let Some(fd) = self.fd.take() {

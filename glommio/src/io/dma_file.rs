@@ -723,6 +723,25 @@ pub struct OwnedDmaFile {
 
 unsafe impl Send for OwnedDmaFile {}
 
+impl OwnedDmaFile {
+    /// Creates a duplicate instance pointing to the same file descriptor as self.
+    /// See [`DmaFile::dup`](struct.DmaFile.html#method.dup) for more info.
+    pub fn dup(&self) -> Result<Self> {
+        Ok(Self {
+            file: enhanced_try!(
+                self.file.dup(),
+                "Duplicating",
+                self.file.path.as_ref(),
+                self.file.fd
+            )?,
+            o_direct_alignment: self.o_direct_alignment,
+            max_sectors_size: self.max_sectors_size,
+            max_segment_size: self.max_segment_size,
+            pollable: self.pollable,
+        })
+    }
+}
+
 impl From<DmaFile> for OwnedDmaFile {
     fn from(value: DmaFile) -> Self {
         Self {
@@ -744,6 +763,12 @@ impl From<OwnedDmaFile> for DmaFile {
             max_segment_size: value.max_segment_size,
             pollable: value.pollable,
         }
+    }
+}
+
+impl AsRawFd for OwnedDmaFile {
+    fn as_raw_fd(&self) -> RawFd {
+        self.file.as_raw_fd()
     }
 }
 
