@@ -83,7 +83,7 @@ struct Timers {
 
     /// An ordered map of registered timers.
     ///
-    /// Timers are in the order in which they fire. The `usize` in this type is
+    /// Timers are in the order in which they fire. The `u64` in this type is
     /// a timer ID used to distinguish timers that fire at the same time.
     /// The [`Waker`] represents the task awaiting the timer.
     timers: BTreeMap<(Instant, u64), Waker>,
@@ -345,6 +345,41 @@ impl Reactor {
         );
         self.sys.write_dma(&source, pos);
         source
+    }
+
+    pub(crate) fn copy_file_range(
+        &self,
+        fd_in: RawFd,
+        off_in: u64,
+        fd_out: RawFd,
+        off_out: u64,
+        len: usize,
+    ) -> impl Future<Output = Source> {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    let len = *result as u64 * op_count;
+
+                    stats.file_reads += op_count;
+                    stats.file_bytes_read += len;
+                    stats.file_writes += op_count;
+                    stats.file_bytes_written += len;
+                }
+            }),
+            reused: None,
+            latency: None,
+        };
+
+        let source = self.new_source(
+            fd_out,
+            SourceType::CopyFileRange(fd_in, off_in, len),
+            Some(stats),
+        );
+        let waiter = self.sys.copy_file_range(&source, off_out);
+        async move {
+            waiter.await;
+            source
+        }
     }
 
     pub(crate) fn write_buffered(&self, raw: RawFd, buf: Vec<u8>, pos: u64) -> Source {

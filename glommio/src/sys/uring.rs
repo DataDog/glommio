@@ -1591,6 +1591,22 @@ impl Reactor {
         self.enqueue_blocking_request(source.inner.clone(), op)
     }
 
+    pub(crate) fn copy_file_range(&self, source: &Source, pos: u64) -> impl Future<Output = ()> {
+        let (fd_in, off_in, len) = match &*source.source_type() {
+            SourceType::CopyFileRange(fd_in, off_in, len) => (*fd_in, *off_in, *len),
+            _ => panic!("Unexpected source for copy_file_range operation"),
+        };
+
+        let op = BlockingThreadOp::CopyFileRange(
+            fd_in,
+            (off_in).try_into().unwrap(),
+            source.raw(),
+            pos.try_into().unwrap(),
+            len,
+        );
+        self.enqueue_blocking_request(source.inner.clone(), op)
+    }
+
     pub(crate) fn create_dir(
         &self,
         source: &Source,

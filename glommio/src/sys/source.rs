@@ -61,6 +61,7 @@ pub(crate) enum SourceType {
     Remove(PathBuf),
     BlockingFn,
     Invalid,
+    CopyFileRange(RawFd, u64, usize),
     #[cfg(feature = "bench")]
     Noop,
 }

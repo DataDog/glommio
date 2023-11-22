@@ -482,6 +482,29 @@ impl DmaFile {
         }
     }
 
+    /// Copies a file range from one file to another in kernel space. This is going to have the same performance
+    /// characteristic as splice except if both files are on the same filesystem and the filesystem supports reflinks.
+    /// In that case, the underlying disk blocks will be CoW linked instead of actually performing a copy.
+    /// Since `copy_file_range` is not yet implemented on io_uring (https://github.com/axboe/liburing/issues/831),
+    /// this is just a dispatch to the blocking thread pool to do the syscall.
+    pub async fn copy_file_range_aligned(
+        &self,
+        fd_in: &DmaFile,
+        off_in: u64,
+        len: usize,
+        off_out: u64,
+    ) -> Result<usize> {
+        let source = self
+            .file
+            .reactor
+            .upgrade()
+            .unwrap()
+            .copy_file_range(fd_in.as_raw_fd(), off_in, self.as_raw_fd(), off_out, len)
+            .await;
+        let copy_size = enhanced_try!(source.collect_rw().await, "Copying file range", self.file)?;
+        Ok(copy_size)
+    }
+
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush
     /// all writes to the device, providing durability even if the system
     /// crashes or is rebooted.
@@ -1579,5 +1602,75 @@ pub(crate) mod test {
             .dma_open(path)
             .await
             .expect_err("O_TMPFILE requires opening with write permissions");
+    });
+
+    dma_file_test!(resize_dma_buf, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .expect("Failed to open file");
+
+        let alignment =
+            (file.alignment()).max(file.stat().await.unwrap().fs_cluster_size.into()) as usize;
+
+        let mut buffer = file.alloc_dma_buffer(2 * alignment);
+        buffer.as_bytes_mut()[0..alignment].fill(1);
+        buffer.as_bytes_mut()[alignment..].fill(2);
+        buffer.trim_to_size(alignment);
+
+        assert_eq!(alignment, file.write_at(buffer, 0).await.unwrap());
+
+        let read = file.read_at_aligned(0, 2 * alignment).await.unwrap();
+        assert_eq!(read.len(), alignment);
+        assert!(read.iter().all(|&b| b == 1));
+
+        let stat = file.stat().await.unwrap();
+        assert_eq!(stat.file_size, alignment as u64, "{:?}", stat);
+    });
+
+    dma_file_test!(copy_file_range, path, _k, {
+        let file1 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let file2 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let buffer_len = file1.alignment().max(4096) as usize;
+        let mut buffer = file1.alloc_dma_buffer(buffer_len);
+        buffer.as_bytes_mut().fill(0);
+        for i in 0..10u8 {
+            buffer.as_bytes_mut()[i as usize] = i;
+        }
+        let original_write_buffer = buffer.as_bytes_mut().to_vec();
+
+        file1.write_at(buffer, 0).await.unwrap();
+
+        assert_eq!(
+            buffer_len,
+            file2
+                .copy_file_range_aligned(&file1, 0, buffer_len, 0)
+                .await
+                .unwrap()
+        );
+
+        let read = file2.read_at_aligned(0, buffer_len).await.unwrap();
+        assert_eq!(read.len(), buffer_len);
+        assert_eq!(original_write_buffer.as_slice(), &read[..]);
     });
 }
