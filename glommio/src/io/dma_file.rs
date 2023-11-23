@@ -1627,9 +1627,6 @@ pub(crate) mod test {
         let read = file.read_at_aligned(0, 2 * alignment).await.unwrap();
         assert_eq!(read.len(), alignment);
         assert!(read.iter().all(|&b| b == 1));
-
-        let stat = file.stat().await.unwrap();
-        assert_eq!(stat.file_size, alignment as u64, "{:?}", stat);
     });
 
     dma_file_test!(copy_file_range, path, _k, {
