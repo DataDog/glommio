@@ -61,6 +61,7 @@ pub(super) enum BlockingThreadOp {
     Remove(PathBuf),
     CreateDir(PathBuf, libc::c_int),
     Truncate(RawFd, i64),
+    CopyFileRange(RawFd, i64, RawFd, i64, usize),
     Fn(Box<dyn FnOnce() + Send + 'static>),
 }
 
@@ -73,6 +74,10 @@ impl Debug for BlockingThreadOp {
                 write!(f, "create dir `{path:?}` (`{flags:b}`)")
             }
             BlockingThreadOp::Truncate(fd, to) => write!(f, "truncate `{fd}` -> `{to}`"),
+            BlockingThreadOp::CopyFileRange(fd_in, off_in, fd_out, off_out, len) => write!(
+                f,
+                "copy_file_range `{fd_in}` @ `{off_in}` -> {fd_out} @ `{off_out}` for {len} bytes"
+            ),
             BlockingThreadOp::Fn(_) => write!(f, "user function"),
         }
     }
@@ -96,6 +101,16 @@ impl BlockingThreadOp {
             }
             BlockingThreadOp::Truncate(fd, sz) => {
                 raw_syscall!(ftruncate(fd, sz))
+            }
+            BlockingThreadOp::CopyFileRange(fd_in, mut off_in, fd_out, mut off_out, len) => {
+                raw_syscall!(copy_file_range(
+                    fd_in,
+                    &mut off_in,
+                    fd_out,
+                    &mut off_out,
+                    len,
+                    0
+                ))
             }
             BlockingThreadOp::Fn(f) => {
                 f();
