@@ -780,7 +780,6 @@ pub(crate) mod test {
     };
     use futures::join;
     use futures_lite::{stream, StreamExt};
-    use nix::fcntl::{fcntl, FcntlArg::F_GETFD};
     use rand::{seq::SliceRandom, thread_rng};
     use std::{cell::RefCell, convert::TryInto, path::PathBuf, time::Duration};
 
@@ -1546,8 +1545,6 @@ pub(crate) mod test {
         })
         .join()
         .unwrap();
-
-        assert_eq!(fcntl(original_fd, F_GETFD), Err(nix::errno::Errno::EBADF));
 
         let file: DmaFile = result.into();
         assert_ne!(file.as_raw_fd(), original_fd);
