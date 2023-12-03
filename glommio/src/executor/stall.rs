@@ -60,9 +60,9 @@ pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     fn threshold(
         &self,
         _queue_handle: TaskQueueHandle,
-        max_expected_runtime: Duration,
+        _max_expected_runtime: Duration,
     ) -> Option<Duration> {
-        Some(max_expected_runtime + Duration::from_millis(10))
+        Some(Duration::from_millis(10))
     }
 
     /// What signal number to use; see values in libc::SIG*.
