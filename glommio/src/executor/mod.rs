@@ -2939,10 +2939,11 @@ mod test {
                 let exec = executed_last.clone();
                 joins.push(crate::spawn_local(async move {
                     for _ in 0..10_000 {
-                        let mut last = exec.borrow_mut();
-                        assert_ne!(id, *last);
-                        *last = id;
-                        drop(last);
+                        {
+                            let mut last = exec.borrow_mut();
+                            assert_ne!(id, *last);
+                            *last = id;
+                        }
                         crate::executor().yield_task_queue_now().await;
                     }
                 }));
@@ -3083,17 +3084,18 @@ mod test {
                             let start = Instant::now();
                             // Now busy loop and make sure that we yield when we have too.
                             loop {
-                                let mut count = first_started.borrow_mut();
-                                *count += 1;
+                                {
+                                    let mut count = first_started.borrow_mut();
+                                    *count += 1;
 
-                                if start.elapsed().as_millis() >= 99 {
-                                    break;
-                                }
+                                    if start.elapsed().as_millis() >= 99 {
+                                        break;
+                                    }
 
-                                if *count < *(second_status.borrow()) {
-                                    panic!("I was preempted but should not have been");
+                                    if *count < *(second_status.borrow()) {
+                                        panic!("I was preempted but should not have been");
+                                    }
                                 }
-                                drop(count);
                                 crate::yield_if_needed().await;
                             }
                         }
@@ -3108,14 +3110,14 @@ mod test {
                         async move {
                             // In case we are executed first, yield to the the other task
                             loop {
-                                let mut count = second_status.borrow_mut();
-                                *count += 1;
-                                if *count >= *(first_started.borrow()) {
-                                    drop(count);
-                                    crate::executor().yield_task_queue_now().await;
-                                } else {
-                                    break;
+                                {
+                                    let mut count = second_status.borrow_mut();
+                                    *count += 1;
+                                    if *count < *(first_started.borrow()) {
+                                       break;
+                                    }
                                 }
+                                crate::executor().yield_task_queue_now().await;
                             }
                         }
                     },

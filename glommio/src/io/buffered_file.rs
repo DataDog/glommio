@@ -381,17 +381,14 @@ mod test {
         assert_eq!(rb.len(), 0);
 
         let r = writer
-            .write_at(
-                vec![7, 8, 9, 10, 11, 12, 13],
-                (cluster_size * 2).try_into().unwrap(),
-            )
+            .write_at(vec![7, 8, 9, 10, 11, 12, 13], (cluster_size * 2).into())
             .await
             .unwrap();
         assert_eq!(r, 7.try_into().unwrap());
 
         let stat = reader.stat().await.unwrap();
-        assert_eq!(stat.file_size, (cluster_size * 2 + 7).try_into().unwrap());
-        assert_eq!(stat.allocated_file_size, cluster_size.try_into().unwrap());
+        assert_eq!(stat.file_size, (cluster_size * 2 + 7).into());
+        assert_eq!(stat.allocated_file_size, cluster_size.into());
         assert_eq!(stat.fs_cluster_size, cluster_size);
 
         let rb = reader
@@ -403,10 +400,7 @@ mod test {
             assert_eq!(*i, 0);
         }
 
-        let rb = reader
-            .read_at((cluster_size * 2).try_into().unwrap(), 40)
-            .await
-            .unwrap();
+        let rb = reader.read_at((cluster_size * 2).into(), 40).await.unwrap();
         assert_eq!(rb.len(), 7);
         check_contents!(*rb, 7);
 
@@ -417,13 +411,10 @@ mod test {
         assert_eq!(r, 387);
         let stat = reader.stat().await.unwrap();
         // File size is unchanged.
-        assert_eq!(stat.file_size, (cluster_size * 2 + 7).try_into().unwrap());
+        assert_eq!(stat.file_size, (cluster_size * 2 + 7).into());
         // Allocated size should double because the sparse region should be
         // dirtied sufficiently to need another full filesystem cluster.
-        assert_eq!(
-            stat.allocated_file_size,
-            (cluster_size * 2).try_into().unwrap()
-        );
+        assert_eq!(stat.allocated_file_size, (cluster_size * 2).into());
 
         // Make sure the sparse contents are still 0'ed.
         let rb = reader.read_at(0, 513).await.unwrap();
@@ -454,16 +445,13 @@ mod test {
             assert_eq!(*i, 0);
         }
 
-        writer
-            .deallocate(0, cluster_size.try_into().unwrap())
-            .await
-            .unwrap();
+        writer.deallocate(0, cluster_size.into()).await.unwrap();
         let stat = writer.stat().await.unwrap();
         // File size is unchanged.
-        assert_eq!(stat.file_size, (cluster_size * 2 + 7).try_into().unwrap());
+        assert_eq!(stat.file_size, (cluster_size * 2 + 7).into());
         // Allocated size should go back to 0 because there's still one allocated
         // cluster.
-        assert_eq!(stat.allocated_file_size, cluster_size.try_into().unwrap());
+        assert_eq!(stat.allocated_file_size, cluster_size.into());
 
         // Deallocated range now returns 0s.
         let rb = reader
