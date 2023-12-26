@@ -329,8 +329,8 @@ impl UnixStream {
         let reactor = crate::executor().reactor();
 
         let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
-        let addr = SockAddr::new_unix(addr.as_ref())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let addr =
+            UnixAddr::new(addr.as_ref()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
 
@@ -536,8 +536,8 @@ impl UnixDatagram {
     /// [`send`]: UnixDatagram::send
     /// [`recv`]: UnixDatagram::recv
     pub async fn connect<A: AsRef<Path>>(&self, addr: A) -> Result<()> {
-        let addr = SockAddr::new_unix(addr.as_ref())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let addr =
+            UnixAddr::new(addr.as_ref()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         let reactor = self.socket.reactor.upgrade().unwrap();
         let source = reactor.connect(self.socket.as_raw_fd(), addr);

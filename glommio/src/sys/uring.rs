@@ -8,6 +8,7 @@ use log::warn;
 use nix::{
     fcntl::{FallocateFlags, OFlag},
     poll::PollFlags,
+    sys::socket::SockaddrStorage,
 };
 use rlimit::Resource;
 use std::{
@@ -65,7 +66,7 @@ enum UringOpDescriptor {
     Open(*const u8, libc::c_int, u32),
     Close,
     FDataSync,
-    Connect(*const SockAddr),
+    Connect(*const SockaddrStorage),
     LinkTimeout(*const uring_sys::__kernel_timespec),
     Accept(*mut SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
@@ -1525,7 +1526,7 @@ impl Reactor {
 
     pub(crate) fn connect(&self, source: &Source) {
         let op = match &*source.source_type() {
-            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const SockAddr),
+            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const _),
             x => panic!("Unexpected source type for connect: {:?}", x),
         };
         queue_request_into_ring(

@@ -54,7 +54,7 @@ pub(crate) enum SourceType {
     ForeignNotifier(u64, bool),
     Statx(CString, Box<RefCell<Statx>>),
     Timeout(TimeSpec64, u32),
-    Connect(SockAddr),
+    Connect(nix::sys::socket::SockaddrStorage),
     Accept(SockAddrStorage),
     Rename(PathBuf, PathBuf),
     CreateDir(PathBuf),

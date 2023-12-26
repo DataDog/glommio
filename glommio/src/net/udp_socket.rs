@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::datagram::GlommioDatagram;
-use nix::sys::socket::{InetAddr, SockAddr};
+use nix::sys::socket::{InetAddr, SockAddr, SockaddrStorage};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     io,
@@ -121,10 +121,8 @@ impl UdpSocket {
         let iter = addr.to_socket_addrs()?;
         let mut err = io::Error::new(io::ErrorKind::Other, "No Valid addresses");
         for addr in iter {
-            let inet = InetAddr::from_std(&addr);
-            let addr = SockAddr::new_inet(inet);
             let reactor = self.socket.reactor.upgrade().unwrap();
-            let source = reactor.connect(self.socket.as_raw_fd(), addr);
+            let source = reactor.connect(self.socket.as_raw_fd(), SockaddrStorage::from(addr));
             match source.collect_rw().await {
                 Ok(_) => return Ok(()),
                 Err(x) => {
