@@ -4,11 +4,11 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use super::datagram::GlommioDatagram;
-use nix::sys::socket::{InetAddr, SockAddr, SockaddrStorage};
+use nix::sys::socket::{SockaddrLike, SockaddrStorage};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     io,
-    net::{self, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
+    net::{self, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     time::Duration,
 };
@@ -39,6 +39,33 @@ impl FromRawFd for UdpSocket {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         let socket = socket2::Socket::from_raw_fd(fd);
         UdpSocket::from(socket)
+    }
+}
+
+fn sockaddr_storage_to_std(addr: SockaddrStorage) -> Option<SocketAddr> {
+    match addr.family() {
+        Some(nix::sys::socket::AddressFamily::Inet) => {
+            let addr = match addr.as_sockaddr_in() {
+                Some(a) => a,
+                None => return None,
+            };
+            let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(addr.ip()), addr.port()));
+            Some(addr)
+        }
+        Some(nix::sys::socket::AddressFamily::Inet6) => {
+            let addr = match addr.as_sockaddr_in6() {
+                Some(a) => a,
+                None => return None,
+            };
+            let addr = SocketAddr::V6(SocketAddrV6::new(
+                addr.ip(),
+                addr.port(),
+                addr.flowinfo(),
+                addr.scope_id(),
+            ));
+            Some(addr)
+        }
+        _ => None,
     }
 }
 
@@ -492,12 +519,8 @@ impl UdpSocket {
     /// supplied buffer, excess bytes may be discarded.
     pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         let (sz, addr) = self.socket.peek_from(buf).await?;
-
-        let addr = match addr {
-            nix::sys::socket::SockAddr::Inet(addr) => addr,
-            x => panic!("invalid socket addr for this family!: {:?}", x),
-        };
-        Ok((sz, addr.to_std()))
+        let addr = sockaddr_storage_to_std(addr).expect("invalid socket addr for this family!");
+        Ok((sz, addr))
     }
 
     /// Returns the socket address of the remote peer this socket was connected
@@ -579,11 +602,8 @@ impl UdpSocket {
     /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         let (sz, addr) = self.socket.recv_from(buf).await?;
-        let addr = match addr {
-            nix::sys::socket::SockAddr::Inet(addr) => addr,
-            x => panic!("invalid socket addr for this family!: {:?}", x),
-        };
-        Ok((sz, addr.to_std()))
+        let addr = sockaddr_storage_to_std(addr).expect("invalid socket addr for this family!");
+        Ok((sz, addr))
     }
 
     /// Sends data on the socket to the given address. On success, returns the
@@ -620,8 +640,7 @@ impl UdpSocket {
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
 
-        let inet = nix::sys::socket::InetAddr::from_std(&addr);
-        let sockaddr = nix::sys::socket::SockAddr::new_inet(inet);
+        let sockaddr = SockaddrStorage::from(addr);
         self.socket.send_to(buf, sockaddr).await.map_err(Into::into)
     }
 
@@ -657,7 +676,7 @@ impl UdpSocket {
 mod tests {
     use super::*;
     use crate::{timer::Timer, LocalExecutorBuilder};
-    use nix::sys::socket::MsgFlags;
+    use nix::sys::socket::{MsgFlags, SockaddrIn};
     use std::time::Duration;
 
     macro_rules! connected_pair {
@@ -877,7 +896,7 @@ mod tests {
                 for _ in 0..10 {
                     let (sz, _) = receiver
                         .socket
-                        .recv_from_blocking(&mut buf, MsgFlags::MSG_PEEK)
+                        .recv_from_blocking::<SockaddrIn>(&mut buf, MsgFlags::MSG_PEEK)
                         .await
                         .unwrap();
                     assert_eq!(sz, 1);
@@ -887,11 +906,7 @@ mod tests {
                     .recv_from_blocking(&mut buf, MsgFlags::MSG_PEEK)
                     .await
                     .unwrap();
-                let addr = match from {
-                    nix::sys::socket::SockAddr::Inet(addr) => addr,
-                    x => panic!("invalid socket addr for this family!: {:?}", x),
-                };
-                addr.to_std()
+                sockaddr_storage_to_std(from).expect("invalid socket addr for this family!")
             })
             .detach();
 
@@ -938,11 +953,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(sz, 1);
-                let addr = match from {
-                    nix::sys::socket::SockAddr::Inet(addr) => addr,
-                    x => panic!("invalid socket addr for this family!: {:?}", x),
-                };
-                addr.to_std()
+                sockaddr_storage_to_std(from).expect("invalid socket addr for this family!")
             })
             .detach();
 
@@ -978,8 +989,7 @@ mod tests {
             let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
             let addr = receiver.local_addr().unwrap();
 
-            let inet = nix::sys::socket::InetAddr::from_std(&addr);
-            let sockaddr = nix::sys::socket::SockAddr::new_inet(inet);
+            let sockaddr = SockaddrStorage::from(addr);
             let me = UdpSocket::bind("127.0.0.1:0").unwrap();
             me.socket
                 .send_to_blocking(&[65u8; 1], sockaddr)

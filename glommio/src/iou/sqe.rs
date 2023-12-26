@@ -15,13 +15,13 @@ pub use nix::{
     sys::{
         epoll::{EpollEvent, EpollOp},
         mman::MmapAdvise,
-        socket::{MsgFlags, SockAddr, SockFlag},
+        socket::{MsgFlags, SockFlag},
         stat::Mode,
     },
 };
 
 use super::Personality;
-use crate::{sys::Statx, to_io_error, uring_sys};
+use crate::{sys::Statx, uring_sys};
 
 /// A pending IO event.
 ///
@@ -524,10 +524,10 @@ impl SockAddrStorage {
         SockAddrStorage { storage, len }
     }
 
-    pub unsafe fn as_socket_addr(&self) -> io::Result<SockAddr> {
-        let storage = &*self.storage.as_ptr();
-        nix::sys::socket::sockaddr_storage_to_addr(storage, self.len).map_err(|e| to_io_error!(e))
-    }
+    // pub unsafe fn as_socket_addr(&self) -> io::Result<SockAddr> {
+    //     let storage = &*self.storage.as_ptr();
+    //     nix::sys::socket::sockaddr_storage_to_addr(storage, self.len).map_err(|e| to_io_error!(e))
+    // }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]

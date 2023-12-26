@@ -8,7 +8,7 @@ use log::warn;
 use nix::{
     fcntl::{FallocateFlags, OFlag},
     poll::PollFlags,
-    sys::socket::SockaddrStorage,
+    sys::socket::{SockaddrLike, SockaddrStorage},
 };
 use rlimit::Resource;
 use std::{
@@ -46,7 +46,7 @@ use crate::{
 use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use nix::sys::{
-    socket::{MsgFlags, SockAddr, SockFlag},
+    socket::{MsgFlags, SockFlag},
     stat::Mode as OpenMode,
 };
 use smallvec::SmallVec;
@@ -1484,8 +1484,8 @@ impl Reactor {
     pub(crate) fn sendmsg(&self, source: &Source, flags: MsgFlags) {
         let op = match &mut *source.source_type_mut() {
             SourceType::SockSendMsg(_, iov, hdr, addr) => {
-                let (msg_name, msg_namelen) = addr.as_ffi_pair();
-                let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
+                let msg_name = addr.as_ptr() as *mut libc::c_void;
+                let msg_namelen = addr.len();
 
                 hdr.msg_iov = iov as *mut libc::iovec;
                 hdr.msg_iovlen = 1;

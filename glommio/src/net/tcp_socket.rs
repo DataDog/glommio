@@ -17,7 +17,7 @@ use futures_lite::{
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
     stream::{self, Stream},
 };
-use nix::sys::socket::{InetAddr, SockAddr, SockaddrStorage};
+use nix::sys::socket::SockaddrStorage;
 use pin_project_lite::pin_project;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
