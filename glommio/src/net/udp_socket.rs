@@ -44,27 +44,17 @@ impl FromRawFd for UdpSocket {
 
 fn sockaddr_storage_to_std(addr: SockaddrStorage) -> Option<SocketAddr> {
     match addr.family() {
-        Some(nix::sys::socket::AddressFamily::Inet) => {
-            let addr = match addr.as_sockaddr_in() {
-                Some(a) => a,
-                None => return None,
-            };
-            let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(addr.ip()), addr.port()));
-            Some(addr)
-        }
-        Some(nix::sys::socket::AddressFamily::Inet6) => {
-            let addr = match addr.as_sockaddr_in6() {
-                Some(a) => a,
-                None => return None,
-            };
-            let addr = SocketAddr::V6(SocketAddrV6::new(
-                addr.ip(),
-                addr.port(),
-                addr.flowinfo(),
-                addr.scope_id(),
-            ));
-            Some(addr)
-        }
+        Some(nix::sys::socket::AddressFamily::Inet) => addr
+            .as_sockaddr_in()
+            .map(|x| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(x.ip()), x.port()))),
+        Some(nix::sys::socket::AddressFamily::Inet6) => addr.as_sockaddr_in6().map(|x| {
+            SocketAddr::V6(SocketAddrV6::new(
+                x.ip(),
+                x.port(),
+                x.flowinfo(),
+                x.scope_id(),
+            ))
+        }),
         _ => None,
     }
 }

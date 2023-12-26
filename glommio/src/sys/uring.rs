@@ -381,28 +381,16 @@ fn fill_sqe<F>(
 
             UringOpDescriptor::SockSend(ptr, len, flags) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
-                sqe.prep_send(
-                    op.fd,
-                    buf,
-                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
-                );
+                sqe.prep_send(op.fd, buf, MsgFlags::from_bits_retain(flags | MSG_ZEROCOPY));
             }
 
             UringOpDescriptor::SockSendMsg(hdr, flags) => {
-                sqe.prep_sendmsg(
-                    op.fd,
-                    hdr,
-                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
-                );
+                sqe.prep_sendmsg(op.fd, hdr, MsgFlags::from_bits_retain(flags | MSG_ZEROCOPY));
             }
 
             UringOpDescriptor::SockRecv(len, flags) => {
                 let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
-                sqe.prep_recv(
-                    op.fd,
-                    buf.as_bytes_mut(),
-                    MsgFlags::from_bits_unchecked(flags),
-                );
+                sqe.prep_recv(op.fd, buf.as_bytes_mut(), MsgFlags::from_bits_retain(flags));
 
                 source_map.peek_source_mut(from_user_data(op.user_data), |mut src| {
                     match &mut src.source_type {
@@ -433,7 +421,7 @@ fn fill_sqe<F>(
                             sqe.prep_recvmsg(
                                 op.fd,
                                 hdr as *mut libc::msghdr,
-                                MsgFlags::from_bits_unchecked(flags),
+                                MsgFlags::from_bits_retain(flags),
                             );
                             *slot = Some(buf);
                         }
