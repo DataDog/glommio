@@ -971,6 +971,7 @@ mod test {
                         *cv_mtx_1.1.lock().unwrap() = 1;
                         cv_mtx_1.0.notify_all();
                     });
+                    #[allow(clippy::await_holding_lock)]
                     let t2 = crate::executor().spawn_local(async move {
                         let mut lck = cv_mtx_2
                             .0
