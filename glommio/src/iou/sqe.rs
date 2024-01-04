@@ -8,19 +8,20 @@ use std::{
 
 use super::registrar::{UringFd, UringReadBuf, UringWriteBuf};
 
+use nix::sys::socket::{SockaddrLike, SockaddrStorage};
 pub use nix::{
     fcntl::{FallocateFlags, OFlag, PosixFadviseAdvice},
     poll::PollFlags,
     sys::{
         epoll::{EpollEvent, EpollOp},
         mman::MmapAdvise,
-        socket::{MsgFlags, SockAddr, SockFlag},
+        socket::{MsgFlags, SockFlag},
         stat::Mode,
     },
 };
 
 use super::Personality;
-use crate::{sys::Statx, to_io_error, uring_sys};
+use crate::{sys::Statx, uring_sys};
 
 /// A pending IO event.
 ///
@@ -352,9 +353,10 @@ impl<'a> SQE<'a> {
     }
 
     #[inline]
-    pub unsafe fn prep_connect(&mut self, fd: impl UringFd, socket_addr: &SockAddr) {
-        let (addr, len) = socket_addr.as_ffi_pair();
-        uring_sys::io_uring_prep_connect(self.sqe, fd.as_raw_fd(), addr as *const _ as *mut _, len);
+    pub unsafe fn prep_connect(&mut self, fd: impl UringFd, socket_addr: &SockaddrStorage) {
+        let addr = socket_addr.as_ptr();
+        let len = socket_addr.len();
+        uring_sys::io_uring_prep_connect(self.sqe, fd.as_raw_fd(), addr as *mut _, len);
         fd.update_sqe(self);
     }
 
@@ -520,11 +522,6 @@ impl SockAddrStorage {
         let storage = mem::MaybeUninit::uninit();
         let len = mem::size_of::<nix::sys::socket::sockaddr_storage>();
         SockAddrStorage { storage, len }
-    }
-
-    pub unsafe fn as_socket_addr(&self) -> io::Result<SockAddr> {
-        let storage = &*self.storage.as_ptr();
-        nix::sys::socket::sockaddr_storage_to_addr(storage, self.len).map_err(|e| to_io_error!(e))
     }
 }
 

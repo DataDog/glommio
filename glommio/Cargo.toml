@@ -33,7 +33,7 @@ lazy_static = "1.4"
 libc = "0.2"
 lockfree = "0.5"
 log = "0.4"
-nix = "0.23"
+nix = { version = "0.27", features = ["event", "fs", "ioctl", "mman", "net", "poll", "sched", "time"] }
 pin-project-lite = "0.2"
 rlimit = "0.6"
 scoped-tls = "1.0"

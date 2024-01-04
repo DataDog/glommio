@@ -4,10 +4,10 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use crate::{
-    sys::{self, DmaBuffer, Source, SourceType},
+    sys::{DmaBuffer, Source, SourceType},
     ByteSliceMutExt, Reactor,
 };
-use nix::sys::socket::MsgFlags;
+use nix::sys::socket::{MsgFlags, SockaddrLike};
 use std::{
     cell::Cell,
     io,
@@ -95,10 +95,10 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         self.consume_receive_buffer(source, buf).await
     }
 
-    pub(crate) async fn peek_from(
+    pub(crate) async fn peek_from<T: SockaddrLike>(
         &self,
         buf: &mut [u8],
-    ) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
+    ) -> io::Result<(usize, T)> {
         match self.yolo_recvmsg(buf, MsgFlags::MSG_PEEK) {
             Some(res) => res,
             None => self.recv_from_blocking(buf, MsgFlags::MSG_PEEK).await,
@@ -119,11 +119,11 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         }
     }
 
-    pub(crate) async fn recv_from_blocking(
+    pub(crate) async fn recv_from_blocking<T: SockaddrLike>(
         &self,
         buf: &mut [u8],
         flags: MsgFlags,
-    ) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
+    ) -> io::Result<(usize, T)> {
         let source = self.reactor.upgrade().unwrap().rushed_recvmsg(
             self.socket.as_raw_fd(),
             buf.len(),
@@ -136,7 +136,9 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
                 let mut src = src.take().unwrap();
                 src.trim_to_size(sz);
                 buf[0..sz].copy_from_slice(&src.as_bytes()[0..sz]);
-                let addr = unsafe { sys::ssptr_to_sockaddr(addr, hdr.msg_namelen as _)? };
+                let addr = unsafe {
+                    T::from_raw(addr.as_ptr() as *const _, Some(hdr.msg_namelen)).unwrap()
+                };
                 self.rx_yolo.set(true);
                 Ok((sz, addr))
             }
@@ -172,10 +174,10 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         self.read_timeout.get()
     }
 
-    pub(crate) async fn recv_from(
+    pub(crate) async fn recv_from<T: SockaddrLike>(
         &self,
         buf: &mut [u8],
-    ) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
+    ) -> io::Result<(usize, T)> {
         match self.yolo_recvmsg(buf, MsgFlags::empty()) {
             Some(res) => res,
             None => self.recv_from_blocking(buf, MsgFlags::empty()).await,
@@ -185,7 +187,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     pub(crate) async fn send_to_blocking(
         &self,
         buf: &[u8],
-        sockaddr: nix::sys::socket::SockAddr,
+        sockaddr: impl nix::sys::socket::SockaddrLike,
     ) -> io::Result<usize> {
         let mut dma = self.allocate_buffer(buf.len());
         assert_eq!(dma.write_at(0, buf), buf.len());
@@ -203,7 +205,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     pub(crate) async fn send_to(
         &self,
         buf: &[u8],
-        addr: nix::sys::socket::SockAddr,
+        addr: impl nix::sys::socket::SockaddrLike,
     ) -> io::Result<usize> {
         match self.yolo_sendmsg(buf, &addr) {
             Some(res) => res,
@@ -245,11 +247,11 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
         })
     }
 
-    fn yolo_recvmsg(
+    fn yolo_recvmsg<T: SockaddrLike>(
         &self,
         buf: &mut [u8],
         flags: MsgFlags,
-    ) -> Option<io::Result<(usize, nix::sys::socket::SockAddr)>> {
+    ) -> Option<io::Result<(usize, T)>> {
         if self.rx_yolo.get() {
             super::yolo_recvmsg(self.socket.as_raw_fd(), buf, flags)
         } else {
@@ -276,7 +278,7 @@ impl<S: AsRawFd + FromRawFd + From<socket2::Socket>> GlommioDatagram<S> {
     fn yolo_sendmsg(
         &self,
         buf: &[u8],
-        addr: &nix::sys::socket::SockAddr,
+        addr: &impl nix::sys::socket::SockaddrLike,
     ) -> Option<io::Result<usize>> {
         if self.tx_yolo.get() {
             super::yolo_sendmsg(self.socket.as_raw_fd(), buf, addr)

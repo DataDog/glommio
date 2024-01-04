@@ -4,7 +4,7 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2021 Datadog, Inc.
 //
 use crate::{
-    iou::sqe::{SockAddr, SockAddrStorage},
+    iou::sqe::SockAddrStorage,
     sys::{
         DmaBuffer, IoBuffer, OsResult, PollableStatus, ReactorQueue, SourceId, Statx, TimeSpec64,
         Wakers,
@@ -43,7 +43,7 @@ pub(crate) enum SourceType {
         DmaBuffer,
         libc::iovec,
         libc::msghdr,
-        nix::sys::socket::SockAddr,
+        nix::sys::socket::SockaddrStorage,
     ),
     Open(CString),
     FdataSync,
@@ -54,7 +54,7 @@ pub(crate) enum SourceType {
     ForeignNotifier(u64, bool),
     Statx(CString, Box<RefCell<Statx>>),
     Timeout(TimeSpec64, u32),
-    Connect(SockAddr),
+    Connect(nix::sys::socket::SockaddrStorage),
     Accept(SockAddrStorage),
     Rename(PathBuf, PathBuf),
     CreateDir(PathBuf),

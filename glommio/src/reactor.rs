@@ -25,7 +25,7 @@ use std::{
 
 use ahash::AHashMap;
 use log::error;
-use nix::sys::socket::{MsgFlags, SockAddr};
+use nix::sys::socket::{MsgFlags, SockaddrLike, SockaddrStorage};
 use smallvec::SmallVec;
 
 use crate::{
@@ -406,13 +406,14 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn connect(&self, raw: RawFd, addr: SockAddr) -> Source {
+    pub(crate) fn connect(&self, raw: RawFd, addr: impl SockaddrLike) -> Source {
+        let addr = unsafe { SockaddrStorage::from_raw(addr.as_ptr(), Some(addr.len())) }.unwrap();
         let source = self.new_source(raw, SourceType::Connect(addr), None);
         self.sys.connect(&source);
         source
     }
 
-    pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockAddr, d: Duration) -> Source {
+    pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockaddrStorage, d: Duration) -> Source {
         let source = self.new_source(raw, SourceType::Connect(addr), None);
         source.set_timeout(d);
         self.sys.connect(&source);
@@ -458,7 +459,7 @@ impl Reactor {
         &self,
         fd: RawFd,
         buf: DmaBuffer,
-        addr: nix::sys::socket::SockAddr,
+        addr: impl nix::sys::socket::SockaddrLike,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
         let iov = libc::iovec {
@@ -469,6 +470,7 @@ impl Reactor {
         // leave it blank and the `io_uring` callee will fill that up
         let hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
 
+        let addr = unsafe { SockaddrStorage::from_raw(addr.as_ptr(), Some(addr.len())) }.unwrap();
         let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);

@@ -8,6 +8,7 @@ use log::warn;
 use nix::{
     fcntl::{FallocateFlags, OFlag},
     poll::PollFlags,
+    sys::socket::{SockaddrLike, SockaddrStorage},
 };
 use rlimit::Resource;
 use std::{
@@ -45,7 +46,7 @@ use crate::{
 use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use nix::sys::{
-    socket::{MsgFlags, SockAddr, SockFlag},
+    socket::{MsgFlags, SockFlag},
     stat::Mode as OpenMode,
 };
 use smallvec::SmallVec;
@@ -65,7 +66,7 @@ enum UringOpDescriptor {
     Open(*const u8, libc::c_int, u32),
     Close,
     FDataSync,
-    Connect(*const SockAddr),
+    Connect(*const SockaddrStorage),
     LinkTimeout(*const uring_sys::__kernel_timespec),
     Accept(*mut SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
@@ -380,28 +381,16 @@ fn fill_sqe<F>(
 
             UringOpDescriptor::SockSend(ptr, len, flags) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
-                sqe.prep_send(
-                    op.fd,
-                    buf,
-                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
-                );
+                sqe.prep_send(op.fd, buf, MsgFlags::from_bits_retain(flags | MSG_ZEROCOPY));
             }
 
             UringOpDescriptor::SockSendMsg(hdr, flags) => {
-                sqe.prep_sendmsg(
-                    op.fd,
-                    hdr,
-                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
-                );
+                sqe.prep_sendmsg(op.fd, hdr, MsgFlags::from_bits_retain(flags | MSG_ZEROCOPY));
             }
 
             UringOpDescriptor::SockRecv(len, flags) => {
                 let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
-                sqe.prep_recv(
-                    op.fd,
-                    buf.as_bytes_mut(),
-                    MsgFlags::from_bits_unchecked(flags),
-                );
+                sqe.prep_recv(op.fd, buf.as_bytes_mut(), MsgFlags::from_bits_retain(flags));
 
                 source_map.peek_source_mut(from_user_data(op.user_data), |mut src| {
                     match &mut src.source_type {
@@ -432,7 +421,7 @@ fn fill_sqe<F>(
                             sqe.prep_recvmsg(
                                 op.fd,
                                 hdr as *mut libc::msghdr,
-                                MsgFlags::from_bits_unchecked(flags),
+                                MsgFlags::from_bits_retain(flags),
                             );
                             *slot = Some(buf);
                         }
@@ -1483,8 +1472,8 @@ impl Reactor {
     pub(crate) fn sendmsg(&self, source: &Source, flags: MsgFlags) {
         let op = match &mut *source.source_type_mut() {
             SourceType::SockSendMsg(_, iov, hdr, addr) => {
-                let (msg_name, msg_namelen) = addr.as_ffi_pair();
-                let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
+                let msg_name = addr.as_ptr() as *mut libc::c_void;
+                let msg_namelen = addr.len();
 
                 hdr.msg_iov = iov as *mut libc::iovec;
                 hdr.msg_iovlen = 1;
@@ -1525,7 +1514,7 @@ impl Reactor {
 
     pub(crate) fn connect(&self, source: &Source) {
         let op = match &*source.source_type() {
-            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const SockAddr),
+            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const _),
             x => panic!("Unexpected source type for connect: {:?}", x),
         };
         queue_request_into_ring(

@@ -13,7 +13,7 @@ use futures_lite::{
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
     stream::{self, Stream},
 };
-use nix::sys::socket::{SockAddr, UnixAddr};
+use nix::sys::socket::UnixAddr;
 use pin_project_lite::pin_project;
 use socket2::{Domain, Socket, Type};
 use std::{
@@ -329,8 +329,8 @@ impl UnixStream {
         let reactor = crate::executor().reactor();
 
         let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
-        let addr = SockAddr::new_unix(addr.as_ref())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let addr =
+            UnixAddr::new(addr.as_ref()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
 
@@ -536,8 +536,8 @@ impl UnixDatagram {
     /// [`send`]: UnixDatagram::send
     /// [`recv`]: UnixDatagram::recv
     pub async fn connect<A: AsRef<Path>>(&self, addr: A) -> Result<()> {
-        let addr = SockAddr::new_unix(addr.as_ref())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let addr =
+            UnixAddr::new(addr.as_ref()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         let reactor = self.socket.reactor.upgrade().unwrap();
         let source = reactor.connect(self.socket.as_raw_fd(), addr);
@@ -595,13 +595,7 @@ impl UnixDatagram {
     /// to hold the message bytes. If a message is too long to fit in the
     /// supplied buffer, excess bytes may be discarded.
     pub async fn peek_from(&self, buf: &mut [u8]) -> Result<(usize, UnixAddr)> {
-        let (sz, addr) = self.socket.peek_from(buf).await?;
-
-        let addr = match addr {
-            nix::sys::socket::SockAddr::Unix(addr) => addr,
-            x => panic!("invalid socket addr for this family!: {:?}", x),
-        };
-        Ok((sz, addr))
+        self.socket.peek_from(buf).await.map_err(Into::into)
     }
 
     /// Returns the socket address of the remote peer this socket was connected
@@ -672,12 +666,7 @@ impl UnixDatagram {
     /// })
     /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, UnixAddr)> {
-        let (sz, addr) = self.socket.recv_from(buf).await?;
-        let addr = match addr {
-            nix::sys::socket::SockAddr::Unix(addr) => addr,
-            x => panic!("invalid socket addr for this family!: {:?}", x),
-        };
-        Ok((sz, addr))
+        self.socket.recv_from(buf).await.map_err(Into::into)
     }
 
     /// Sends data on the socket to the given address. On success, returns the
@@ -695,7 +684,7 @@ impl UnixDatagram {
     /// })
     /// ```
     pub async fn send_to<A: AsRef<Path>>(&self, buf: &[u8], addr: A) -> Result<usize> {
-        let addr = nix::sys::socket::SockAddr::new_unix(addr.as_ref())
+        let addr = nix::sys::socket::UnixAddr::new(addr.as_ref())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         self.socket.send_to(buf, addr).await.map_err(Into::into)
     }

@@ -3,9 +3,10 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{to_io_error, uring_sys};
+use crate::uring_sys;
 use ahash::AHashMap;
 use log::debug;
+use nix::sys::socket::SockaddrLike;
 use std::{
     fmt, io,
     io::Error,
@@ -105,29 +106,28 @@ pub(crate) fn direct_io_ify(fd: RawFd, flags: libc::c_int) -> io::Result<()> {
 
 // This essentially converts the nix errors into something we can integrate with
 // the rest of the crate.
-pub(crate) unsafe fn ssptr_to_sockaddr(
+pub(crate) unsafe fn ssptr_to_sockaddr<T: SockaddrLike>(
     ss: MaybeUninit<nix::sys::socket::sockaddr_storage>,
     len: usize,
-) -> io::Result<nix::sys::socket::SockAddr> {
-    let storage = ss.assume_init();
+) -> io::Result<T> {
     // Unnamed unix sockets have a len of 0. Technically we should make sure this
     // has family = AF_UNIX, but if len == 0 the OS may not have written
     // anything here. If this is not supposed to be unix, the upper layers will
     // complain.
     if len == 0 {
-        nix::sys::socket::SockAddr::new_unix("")
+        let addr = nix::sys::socket::UnixAddr::new("").unwrap();
+        Ok(T::from_raw(addr.as_ptr() as *const _, Some(addr.len())).unwrap())
     } else {
-        nix::sys::socket::sockaddr_storage_to_addr(&storage, len)
+        Ok(T::from_raw(ss.as_ptr() as *const _, Some(len as _)).unwrap())
     }
-    .map_err(|e| to_io_error!(e))
 }
 
-pub(crate) fn recvmsg_syscall(
+pub(crate) fn recvmsg_syscall<T: SockaddrLike>(
     fd: RawFd,
     buf: *mut u8,
     len: usize,
     flags: i32,
-) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
+) -> io::Result<(usize, T)> {
     let mut iov = libc::iovec {
         iov_base: buf as *mut libc::c_void,
         iov_len: len,
@@ -151,7 +151,7 @@ pub(crate) fn sendmsg_syscall(
     fd: RawFd,
     buf: *const u8,
     len: usize,
-    addr: &nix::sys::socket::SockAddr,
+    addr: &impl nix::sys::socket::SockaddrLike,
     flags: i32,
 ) -> io::Result<usize> {
     let mut iov = libc::iovec {
@@ -159,8 +159,8 @@ pub(crate) fn sendmsg_syscall(
         iov_len: len,
     };
 
-    let (msg_name, msg_namelen) = addr.as_ffi_pair();
-    let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
+    let msg_name = addr.as_ptr() as *mut libc::c_void;
+    let msg_namelen = addr.len();
 
     let mut hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
     hdr.msg_name = msg_name;
