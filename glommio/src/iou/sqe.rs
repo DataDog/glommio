@@ -523,11 +523,6 @@ impl SockAddrStorage {
         let len = mem::size_of::<nix::sys::socket::sockaddr_storage>();
         SockAddrStorage { storage, len }
     }
-
-    // pub unsafe fn as_socket_addr(&self) -> io::Result<SockAddr> {
-    //     let storage = &*self.storage.as_ptr();
-    //     nix::sys::socket::sockaddr_storage_to_addr(storage, self.len).map_err(|e| to_io_error!(e))
-    // }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
