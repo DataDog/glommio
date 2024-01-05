@@ -15,6 +15,7 @@ use crate::{
         ScheduledSource,
     },
     sys::{self, sysfs, DirectIo, DmaBuffer, DmaSource, PollableStatus},
+    GlommioError,
 };
 use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
@@ -401,6 +402,14 @@ impl DmaFile {
         let b = (pos - eff_pos) as usize;
 
         let eff_size = self.align_up((size + b) as u64) as usize;
+
+        if eff_size >= self.max_sectors_size {
+            return Err(GlommioError::MaxIOSizeExceeded {
+                size: eff_size,
+                limit: self.max_sectors_size,
+            });
+        }
+
         let source = self.file.reactor.upgrade().unwrap().read_dma(
             self.as_raw_fd(),
             eff_pos,

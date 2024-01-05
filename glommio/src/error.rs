@@ -235,6 +235,18 @@ pub enum GlommioError<T> {
 
     /// Timeout variant used for reporting timed out operations
     TimedOut(Duration),
+
+    /// The read/write size is bigger than allowed by the block device.
+    ///
+    /// Single read/write size shouldn't exceed the value in /sys/block/.../queue/max_sectors_kb.
+    ///
+    /// This only happens when doing direct IO
+    MaxIOSizeExceeded {
+        /// Size of the requested IO operation.
+        size: usize,
+        /// Single request limit of the underlying block device.
+        limit: usize,
+    },
 }
 
 impl<T> From<io::Error> for GlommioError<T> {
@@ -289,6 +301,9 @@ impl<T> fmt::Display for GlommioError<T> {
             },
             GlommioError::ReactorError(err) => write!(f, "Reactor error: {err}"),
             GlommioError::TimedOut(dur) => write!(f, "Operation timed out after {dur:#?}"),
+            GlommioError::MaxIOSizeExceeded { size, limit } => {
+                write!(f, "Max IO size exceeded when doing direct IO. Expected a max size of {limit} but got {size}")
+            }
         }
     }
 }
@@ -477,6 +492,9 @@ impl<T> Debug for GlommioError<T> {
                 }
             },
             GlommioError::TimedOut(dur) => write!(f, "TimedOut {{ dur {dur:?} }}"),
+            GlommioError::MaxIOSizeExceeded { size, limit } => {
+                write!(f, "MaxIOSizeExceeded {{ size {size:?}, limit {limit:?} }}")
+            }
         }
     }
 }
@@ -527,6 +545,12 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::TimedOut(dur) => {
                 io::Error::new(io::ErrorKind::TimedOut, format!("timed out after {dur:#?}"))
             }
+            GlommioError::MaxIOSizeExceeded { size, limit } => io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "max IO size exceeded when doing direct IO. Limit is {limit} but got {size}"
+                ),
+            ),
         }
     }
 }
