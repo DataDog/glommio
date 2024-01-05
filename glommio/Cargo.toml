@@ -44,6 +44,7 @@ smallvec = { version = "1.7", features = ["union"] }
 socket2 = { version = "0.4", features = ["all"] }
 tracing = "0.1"
 typenum = "1.15"
+vsock = "0.3.0"
 
 [dev-dependencies]
 fastrand = "1"
