@@ -14,11 +14,12 @@ futures-lite = "1.11.1"
 glommio = { path = "../glommio" }
 
 # hyper and tokio for the hyper example. We just need the traits from Tokio
-hyper = { version = "0.14", features = ["full"] }
+hyper = { version = "1.2.0", features = ["full"] }
 num_cpus = "1.13.0"
 pretty-bytes = "~0.2.2"
 sys-info = "~0.8.0"
-tokio = { version = "1" }
+http-body-util = "0.1.0"
+serde_json = "1.0.114"
 
 [[example]]
 name = "echo"
@@ -53,9 +54,13 @@ name = "channel_mesh"
 path = "sharding.rs"
 
 [[example]]
-name = "hyper"
-path = "hyper.rs"
-
-[[example]]
 name = "gate"
 path = "gate.rs"
+
+[[example]]
+name = "hyper_server"
+path = "hyper_server.rs"
+
+[[example]]
+name = "hyper_client"
+path = "hyper_client.rs"
