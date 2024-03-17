@@ -1,4 +1,4 @@
-use clap::{Command, Arg};
+use clap::{Arg, Command};
 use futures_lite::{
     stream::{self, StreamExt},
     AsyncReadExt, AsyncWriteExt,
