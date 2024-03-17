@@ -7,7 +7,7 @@ edition = "2021"
 
 [dev-dependencies]
 yansi = "~0.5.1"
-clap = "2.33"
+clap = "4.5.3"
 fastrand = "1.4.0"
 futures = "~0.3.5"
 futures-lite = "1.11.1"

@@ -1,4 +1,4 @@
-use clap::{App, Arg};
+use clap::{Command, Arg};
 use futures_lite::{
     stream::{self, StreamExt},
     AsyncReadExt, AsyncWriteExt,
@@ -273,27 +273,27 @@ async fn random_many_read<S: Into<String>>(
 }
 
 fn main() {
-    let matches = App::new("storage example")
+    let matches = Command::new("storage example")
         .version("0.1.0")
         .author("Glauber Costa <glauber@datadoghq.com>")
         .about("demonstrate glommio's storage APIs")
         .arg(
-            Arg::with_name("storage_dir")
+            Arg::new("storage_dir")
                 .long("dir")
-                .takes_value(true)
+                .action(clap::ArgAction::Set)
                 .required(true)
                 .help("The directory where to write and read file for this test"),
         )
         .arg(
-            Arg::with_name("file_size")
+            Arg::new("file_size")
                 .long("size-gb")
-                .takes_value(true)
+                .action(clap::ArgAction::Set)
                 .required(false)
                 .help("size of the file in GB (default: 2 * memory_size)"),
         )
         .get_matches();
 
-    let path = matches.value_of("storage_dir").unwrap();
+    let path = matches.get_one::<String>("storage_dir").unwrap();
     let mut dir = PathBuf::from(path);
     assert!(dir.exists());
     dir.push("benchfiles");
@@ -303,8 +303,8 @@ fn main() {
     let total_memory = sys_info::mem_info().unwrap().total << 10;
 
     let file_size = matches
-        .value_of("file_size")
-        .map(|s| s.parse::<u64>().unwrap() << 30)
+        .get_one::<u64>("file_size")
+        .map(|s| s << 30)
         .unwrap_or(total_memory * 2);
 
     let random = total_memory / 10;
