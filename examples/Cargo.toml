@@ -6,6 +6,7 @@ publish = false
 edition = "2021"
 
 [dev-dependencies]
+byte-unit = "5.1.4"
 yansi = "~0.5.1"
 clap = "4.5.3"
 fastrand = "1.4.0"
@@ -16,7 +17,6 @@ glommio = { path = "../glommio" }
 # hyper and tokio for the hyper example. We just need the traits from Tokio
 hyper = { version = "1.2.0", features = ["full"] }
 num_cpus = "1.13.0"
-pretty-bytes = "~0.2.2"
 sys-info = "~0.8.0"
 http-body-util = "0.1.0"
 serde_json = "1.0.114"

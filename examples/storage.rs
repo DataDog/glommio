@@ -1,3 +1,4 @@
+use byte_unit::{Byte, UnitType};
 use clap::{Arg, Command};
 use futures_lite::{
     stream::{self, StreamExt},
@@ -11,7 +12,6 @@ use glommio::{
     },
     LocalExecutorBuilder, Placement,
 };
-use pretty_bytes::converter;
 use std::{
     cell::Cell,
     fs,
@@ -51,13 +51,17 @@ async fn stream_write<T: AsyncWriteExt + std::marker::Unpin, S: Into<String>>(
 
     let endw = Instant::now();
     let time = start.elapsed();
-    let bytes = converter::convert(file_size as _);
-    let rate = converter::convert((file_size as f64 / time.as_secs_f64()) as _);
-    println!("{name}: Wrote {bytes} in {time:#?}, {rate}/s");
+    let bytes = Byte::from_u64(file_size).get_appropriate_unit(UnitType::Binary);
+    let rate = Byte::from_f64(file_size as f64 / time.as_secs_f64())
+        .unwrap_or_default()
+        .get_appropriate_unit(UnitType::Binary);
+    println!("{name}: Wrote {bytes:.2} in {time:#?}, {rate:.2}/s");
     stream.close().await.unwrap();
-    let rate = converter::convert((file_size as f64 / start.elapsed().as_secs_f64()) as _);
+    let rate = Byte::from_f64(file_size as f64 / start.elapsed().as_secs_f64())
+        .unwrap_or_default()
+        .get_appropriate_unit(UnitType::Binary);
     let time = endw.elapsed();
-    println!("{name}: Closed in {time:#?}, Amortized total {rate}/s");
+    println!("{name}: Closed in {time:#?}, Amortized total {rate:.2}/s");
 }
 
 async fn stream_scan<T: AsyncReadExt + std::marker::Unpin, S: Into<String>>(
@@ -82,10 +86,12 @@ async fn stream_scan<T: AsyncReadExt + std::marker::Unpin, S: Into<String>>(
     let time = start.elapsed();
     let name = name.into();
 
-    let bytes = converter::convert(bytes_read as _);
-    let rate = converter::convert((bytes_read as f64 / time.as_secs_f64()) as _);
+    let bytes = Byte::from_u64(bytes_read as _).get_appropriate_unit(UnitType::Binary);
+    let rate = Byte::from_f64(bytes_read as f64 / time.as_secs_f64())
+        .unwrap_or_default()
+        .get_appropriate_unit(UnitType::Binary);
     println!(
-        "{name}: Scanned {bytes} in {time:#?}, {rate}/s, {} IOPS",
+        "{name}: Scanned {bytes:.2} in {time:#?}, {rate:.2}/s, {} IOPS",
         (ops as f64 / time.as_secs_f64()) as usize
     );
     stream
@@ -115,10 +121,12 @@ async fn stream_scan_alt_api<S: Into<String>>(
     let time = start.elapsed();
     let name = name.into();
 
-    let bytes = converter::convert(bytes_read as _);
-    let rate = converter::convert((bytes_read as f64 / time.as_secs_f64()) as _);
+    let bytes = Byte::from_u64(bytes_read as _).get_appropriate_unit(UnitType::Binary);
+    let rate = Byte::from_f64(bytes_read as f64 / time.as_secs_f64())
+        .unwrap_or_default()
+        .get_appropriate_unit(UnitType::Binary);
     println!(
-        "{name}: Scanned {bytes} in {time:#?}, {rate}/s, {} IOPS",
+        "{name}: Scanned {bytes:.2} in {time:#?}, {rate:.2}/s, {} IOPS",
         (ops as f64 / time.as_secs_f64()) as usize
     );
     stream.close().await.unwrap();
@@ -212,11 +220,11 @@ async fn random_read<S: Into<String>>(
         Ok(file) => file.close().await,
     };
 
-    assert_eq!(finished, parallelism as _);
-    let bytes = converter::convert(random as _);
+    assert_eq!(finished, parallelism);
+    let bytes = Byte::from_u64(random).get_appropriate_unit(UnitType::Binary);
     let dur = time.elapsed();
     println!(
-        "{name}: Random Read (uniform) size span of {bytes}, for {dur:#?}, {} IOPS",
+        "{name}: Random Read (uniform) size span of {bytes:.2}, for {dur:#?}, {} IOPS",
         (iops.get() as f64 / dur.as_secs_f64()) as usize
     );
 }
@@ -261,13 +269,13 @@ async fn random_many_read<S: Into<String>>(
         Ok(file) => file.close().await,
     };
 
-    assert_eq!(finished, parallelism as _);
-    let bytes = converter::convert(random as _);
-    let max_merged = converter::convert(max_buffer_size as _);
+    assert_eq!(finished, parallelism);
+    let bytes = Byte::from_u64(random).get_appropriate_unit(UnitType::Binary);
+    let max_merged = Byte::from_u64(max_buffer_size as _).get_appropriate_unit(UnitType::Binary);
     let dur = time.elapsed();
     println!(
-        "{name}: Random Bulk Read (uniform) size span of {bytes}, for {dur:#?} (max merged size \
-         of {max_merged}), {} IOPS",
+        "{name}: Random Bulk Read (uniform) size span of {bytes:.2}, for {dur:#?} (max merged size \
+         of {max_merged:.2}), {} IOPS",
         (iops.get() as f64 / dur.as_secs_f64()) as usize
     );
 }
