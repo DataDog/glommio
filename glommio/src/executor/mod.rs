@@ -3001,7 +3001,7 @@ mod test {
                 .spawn_into(
                     crate::enclose! { (nolat_started, lat_status)
                         async move {
-                            // In case we are executed first, yield to the the other task
+                            // In case we are executed first, yield to the other task
                             loop {
                                 if !(*(nolat_started.borrow())) {
                                     crate::executor().yield_task_queue_now().await;
@@ -3108,7 +3108,7 @@ mod test {
                 .spawn_into(
                     crate::enclose! { (first_started, second_status)
                         async move {
-                            // In case we are executed first, yield to the the other task
+                            // In case we are executed first, yield to the other task
                             loop {
                                 {
                                     let mut count = second_status.borrow_mut();
