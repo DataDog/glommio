@@ -27,6 +27,8 @@ use std::{
 };
 
 #[derive(Debug)]
+#[allow(dead_code)] // Clippy is unhappy with some of the fields on these enums never being read,
+                    // but they are certainly used, and read by debug
 pub(crate) enum SourceType {
     Write(PollableStatus, IoBuffer),
     Read(PollableStatus, Option<IoBuffer>),
