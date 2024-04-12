@@ -1618,6 +1618,58 @@ pub(crate) mod test {
             .expect_err("O_TMPFILE requires opening with write permissions");
     });
 
+    dma_file_test!(deleted_file_still_can_be_stat, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .dma_open(path.join("deleted_file_still_can_be_stat"))
+            .await
+            .expect("file should open");
+        let mut buf = file.alloc_dma_buffer(512);
+        buf.as_bytes_mut().fill(2);
+        file.write_at(buf, 0)
+            .await
+            .expect("should be able to write the file");
+        file.remove().await.expect("should have removed file");
+        let stat = file
+            .stat()
+            .await
+            .expect("should be able to state unlinked but open file");
+        assert_eq!(stat.file_size, 512);
+    });
+
+    dma_file_test!(tmpfiles_have_unique_inode, path, _k, {
+        let f1 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let f2 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        assert_ne!(f1.inode(), f2.inode());
+        assert_eq!(f1.stat().await.unwrap().file_size, 0);
+        assert_eq!(f2.stat().await.unwrap().file_size, 0);
+
+        let mut buf = f1.alloc_dma_buffer(512);
+        buf.as_bytes_mut().fill(2);
+        f1.write_at(buf, 0)
+            .await
+            .expect("failed to write to temporary file");
+        assert_eq!(f1.stat().await.unwrap().file_size, 512);
+    });
+
     dma_file_test!(resize_dma_buf, path, _k, {
         let file = OpenOptions::new()
             .create_new(true)
