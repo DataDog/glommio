@@ -502,11 +502,7 @@ macro_rules! do_seek {
             }
             SeekFrom::End(pos) => match $source.take() {
                 None => {
-                    let source = $self
-                        .reactor
-                        .upgrade()
-                        .unwrap()
-                        .statx($fileobj.as_raw_fd(), &$fileobj.path().unwrap());
+                    let source = $self.reactor.upgrade().unwrap().statx($fileobj.as_raw_fd());
                     source.add_waiter_single($cx.waker());
                     $source = Some(source);
                     Poll::Pending

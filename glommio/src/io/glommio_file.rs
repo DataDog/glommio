@@ -329,13 +329,7 @@ impl GlommioFile {
 
     // Retrieve file metadata, backed by the statx(2) syscall
     pub(crate) async fn statx(&self) -> Result<Statx> {
-        let path = self.path_required("stat")?.to_owned();
-
-        let source = self
-            .reactor
-            .upgrade()
-            .unwrap()
-            .statx(self.as_raw_fd(), path.as_ref());
+        let source = self.reactor.upgrade().unwrap().statx(self.as_raw_fd());
         source.collect_rw().await.map_err(|source| {
             GlommioError::create_enhanced(
                 source,
