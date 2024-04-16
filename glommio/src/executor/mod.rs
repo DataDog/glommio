@@ -93,6 +93,36 @@ pub fn executor() -> ExecutorProxy {
     ExecutorProxy {}
 }
 
+/// You probably don't need to call this explicitly unless you have created threads before
+/// you constructed an executor. You may also want to call this explicitly if you're sandboxing
+/// your app and dropping permissions required to use privated expedited membarrier commands to
+/// improve Glommio performance.
+///
+/// This run some early initialization that may save ~30-80ms if you create threads before you
+/// tough Glommio code & don't otherwise register with membarrier. This is an idempotent call
+/// that can be invoked as many times, but only really makes sense to do early in main before
+/// you've constructed any threads. Additionally, the explicit membarrier registration this
+/// attempts is also useful if you're later dropping the privilege required to using private
+/// expedited commands so that the membarrier synchronization strategy can be used within
+/// the executor hot loop.
+///
+/// The detailed motivation is that internally glommio prefers to use [membarrier](https://man7.org/linux/man-pages/man2/membarrier.2.html)
+/// as a high performance synchronization barrier of the underlying io_uring memory
+/// shared with the kernel (if the feature is available). If there exist any threads in the program,
+/// registering the barrier has been observed to take a relatively long and highly variable amount
+/// of time (as high as 30-80ms). If we register before any threads are constructed, this takes almost no time.
+/// That's why this can be useful if you're integrating Glommio into an existing application to move this to
+/// the front of main.
+///
+/// The suspicion is that the membarrier registration makes a synchronous IPI to enable the use of cheap
+/// asynchronous IPI within the reactor hot loop. This means the startup cost will depend on the specific
+/// number of cores; 30-80ms was observed on a 32-core machine running a high end Intel consumer CPU.
+/// That's probably on the high end for consumer machines and smartphones today and on the low-end for
+/// server-class hardware.
+pub fn early_init() {
+    sys::initialize_membarrier_strategy();
+}
+
 pub(crate) fn executor_id() -> Option<usize> {
     #[cfg(not(feature = "native-tls"))]
     {

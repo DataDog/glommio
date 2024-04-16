@@ -173,6 +173,7 @@ pub(crate) fn sendmsg_syscall(
 
 mod dma_buffer;
 mod membarrier;
+pub(crate) use membarrier::initialize_strategy as initialize_membarrier_strategy;
 pub(crate) mod source;
 pub(crate) mod sysfs;
 mod uring;
