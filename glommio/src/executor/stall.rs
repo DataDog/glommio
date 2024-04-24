@@ -16,13 +16,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Store information about detected stall
 pub struct StallDetection<'a> {
-    executor: usize,
-    queue_handle: TaskQueueHandle,
-    queue_name: &'a str,
-    trace: backtrace::Backtrace,
-    budget: Duration,
-    overage: Duration,
+    /// Executor id in which the detection occurred
+    pub executor: usize,
+    /// The handle of the queue where the stall was detected
+    pub queue_handle: TaskQueueHandle,
+    /// Name of the queue
+    pub queue_name: &'a str,
+    /// Backtrace captured on stall detection
+    pub trace: backtrace::Backtrace,
+    /// Maximum allowed duration for a task execution before being considered stalled
+    pub budget: Duration,
+    /// Additional duration granted for task execution
+    pub overage: Duration,
 }
 
 impl fmt::Debug for StallDetection<'_> {
