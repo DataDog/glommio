@@ -269,7 +269,7 @@ impl BufferedFile {
         self.file.path()
     }
 
-    pub(crate) fn discard(self) -> (RawFd, Option<PathBuf>) {
+    pub(crate) fn discard(self) -> (Option<RawFd>, Option<PathBuf>) {
         self.file.discard()
     }
 }

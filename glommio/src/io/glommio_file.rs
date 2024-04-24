@@ -8,7 +8,7 @@ use crate::{
     io::sched::FileScheduler,
     reactor::Reactor,
     sys::{self, Statx},
-    GlommioError,
+    GlommioError, ResourceType,
 };
 use log::debug;
 use std::{
@@ -18,6 +18,7 @@ use std::{
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     path::{Path, PathBuf},
     rc::{Rc, Weak},
+    sync::Arc,
 };
 
 type Result<T> = crate::Result<T, ()>;
@@ -31,9 +32,9 @@ pub(super) type Identity = (Device, Inode);
 ///
 /// It also implements some operations that are common among Buffered and
 /// non-Buffered files
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct GlommioFile {
-    pub(crate) file: Option<RawFd>,
+    pub(crate) file: Option<Arc<RawFd>>,
     // A file can appear in many paths, through renaming and linking.
     // If we do that, each path should have its own object. This is to
     // facilitate error displaying.
@@ -47,12 +48,12 @@ pub(crate) struct GlommioFile {
 
 impl Drop for GlommioFile {
     fn drop(&mut self) {
-        if let Some(file) = self.file.take() {
+        if let Some(file) = self.file.take().and_then(Arc::into_inner) {
             debug!(
                 "File dropped while still active. ({:?} / fd {}).
 That means that while the file is already out of scope, the file descriptor is still registered \
                  until the next I/O cycle.
-This is likely file, but in extreme situations can lead to resource exhaustion. An explicit \
+This is likely fine, but in extreme situations can lead to resource exhaustion. An explicit \
                  asynchronous close is still preferred",
                 self.path.borrow(),
                 file
@@ -66,14 +67,14 @@ This is likely file, but in extreme situations can lead to resource exhaustion. 
 
 impl AsRawFd for GlommioFile {
     fn as_raw_fd(&self) -> RawFd {
-        self.file.as_ref().copied().unwrap()
+        self.file.as_ref().unwrap().as_raw_fd()
     }
 }
 
 impl FromRawFd for GlommioFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         GlommioFile {
-            file: Some(fd),
+            file: Some(Arc::new(fd)),
             path: RefCell::new(None),
             inode: 0,
             dev_major: 0,
@@ -104,7 +105,7 @@ impl GlommioFile {
         let fd = source.collect_rw().await?;
 
         let mut file = GlommioFile {
-            file: Some(fd as _),
+            file: Some(Arc::new(fd as _)),
             path: RefCell::new(Some(path)),
             inode: 0,
             dev_major: 0,
@@ -124,7 +125,9 @@ impl GlommioFile {
         let reactor = crate::executor().reactor();
 
         let duped = Self {
-            file: Some(nix::unistd::dup(self.file.unwrap())?),
+            file: Some(Arc::new(nix::unistd::dup(
+                self.file.as_ref().unwrap().as_raw_fd(),
+            )?)),
             path: self.path.clone(),
             inode: self.inode,
             dev_major: self.dev_major,
@@ -162,23 +165,44 @@ impl GlommioFile {
         self.identity() == other.identity()
     }
 
-    pub(crate) fn discard(mut self) -> (RawFd, Option<PathBuf>) {
-        // Destruct `self` signalling to `Drop` that there is no need to async close
-        let fd = self.file.take().unwrap();
-        let path = self.path.take();
-        (fd, path)
+    pub(crate) fn try_take_last_clone(mut self) -> std::result::Result<Self, Self> {
+        match Arc::try_unwrap(self.file.take().unwrap()) {
+            Ok(took) => {
+                self.file = Some(Arc::new(took));
+                Ok(self)
+            }
+            Err(failed) => {
+                self.file = Some(failed);
+                Err(self)
+            }
+        }
+    }
+
+    pub(crate) fn discard(mut self) -> (Option<RawFd>, Option<PathBuf>) {
+        // Destruct `self` signalling to `Drop` that there is no need to async close.
+        (Arc::into_inner(self.file.take().unwrap()), self.path.take())
     }
 
     pub(crate) async fn close(self) -> Result<()> {
         let reactor = self.reactor.upgrade().unwrap();
         // Destruct `self` into components skipping Drop.
         let (fd, path) = self.discard();
-        let source = reactor.close(fd);
-        source
-            .collect_rw()
-            .await
-            .map_err(|source| GlommioError::create_enhanced(source, "Closing", path, Some(fd)))?;
-        Ok(())
+        if let Some(fd) = fd {
+            let source = reactor.close(fd);
+            source.collect_rw().await.map_err(|source| {
+                GlommioError::create_enhanced(source, "Closing", path, Some(fd))
+            })?;
+            Ok(())
+        } else {
+            Err(GlommioError::CanNotBeClosed(
+                ResourceType::File(
+                    path.map_or("path has already been taken!".to_string(), |p| {
+                        p.to_string_lossy().to_string()
+                    }),
+                ),
+                "Another clone of this file exists somewhere - cannot close fd",
+            ))
+        }
     }
 
     pub(crate) fn with_path(self, path: Option<PathBuf>) -> GlommioFile {
@@ -331,21 +355,19 @@ impl GlommioFile {
 }
 
 /// This lets you open a DmaFile on one thread and then send it safely to another thread for processing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct OwnedGlommioFile {
-    pub(crate) fd: Option<RawFd>,
+    pub(crate) fd: Option<Arc<RawFd>>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) inode: u64,
     pub(crate) dev_major: u32,
     pub(crate) dev_minor: u32,
 }
 
-unsafe impl Send for OwnedGlommioFile {}
-
 impl OwnedGlommioFile {
     pub(crate) fn dup(&self) -> io::Result<Self> {
-        let fd = match self.fd {
-            Some(fd) => Some(nix::unistd::dup(fd)?),
+        let fd = match self.fd.as_ref() {
+            Some(fd) => Some(Arc::new(nix::unistd::dup(fd.as_raw_fd())?)),
             None => None,
         };
 
@@ -361,13 +383,13 @@ impl OwnedGlommioFile {
 
 impl AsRawFd for OwnedGlommioFile {
     fn as_raw_fd(&self) -> RawFd {
-        self.fd.as_ref().copied().unwrap()
+        self.fd.as_ref().unwrap().as_raw_fd()
     }
 }
 
 impl Drop for OwnedGlommioFile {
     fn drop(&mut self) {
-        if let Some(fd) = self.fd.take() {
+        if let Some(fd) = self.fd.take().and_then(Arc::into_inner) {
             nix::unistd::close(fd).unwrap();
         }
     }
