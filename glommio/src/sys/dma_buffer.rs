@@ -10,7 +10,7 @@
 
 use std::ptr;
 
-use crate::sys::uring::UringBuffer;
+use crate::{io::ReadResult, sys::uring::UringBuffer};
 use alloc::alloc::Layout;
 
 #[derive(Debug)]
@@ -53,6 +53,7 @@ pub(crate) enum BufferStorage {
     Sys(SysAlloc),
     Uring(UringBuffer),
     EventFd(*mut u8),
+    ReadResult(ReadResult),
 }
 
 impl BufferStorage {
@@ -61,6 +62,7 @@ impl BufferStorage {
             BufferStorage::Sys(x) => x.as_ptr(),
             BufferStorage::Uring(x) => x.as_ptr(),
             BufferStorage::EventFd(x) => *x as *const u8,
+            BufferStorage::ReadResult(x) => x.as_ptr(),
         }
     }
 
@@ -69,6 +71,9 @@ impl BufferStorage {
             BufferStorage::Sys(x) => x.as_mut_ptr(),
             BufferStorage::Uring(x) => x.as_mut_ptr(),
             BufferStorage::EventFd(x) => *x,
+            BufferStorage::ReadResult(_) => {
+                unreachable!("Attempt to access immutable ReadResult as a mutable pointer")
+            }
         }
     }
 }
@@ -170,5 +175,15 @@ impl AsMut<[u8]> for DmaBuffer {
     #[inline(always)]
     fn as_mut(&mut self) -> &mut [u8] {
         self.as_bytes_mut()
+    }
+}
+
+impl From<ReadResult> for DmaBuffer {
+    fn from(value: ReadResult) -> Self {
+        Self {
+            trim: 0,
+            size: value.len(),
+            storage: BufferStorage::ReadResult(value),
+        }
     }
 }

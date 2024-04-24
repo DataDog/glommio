@@ -804,7 +804,7 @@ pub(crate) mod test {
     use futures::join;
     use futures_lite::{stream, StreamExt};
     use rand::{seq::SliceRandom, thread_rng};
-    use std::{cell::RefCell, convert::TryInto, path::PathBuf, time::Duration};
+    use std::{cell::RefCell, convert::TryInto, ops::Deref, path::PathBuf, time::Duration};
 
     macro_rules! dma_file_test {
         ( $name:ident, $dir:ident, $kind:ident, $code:block) => {
@@ -1735,6 +1735,43 @@ pub(crate) mod test {
         let read = file2.read_at_aligned(0, buffer_len).await.unwrap();
         assert_eq!(read.len(), buffer_len);
         assert_eq!(original_write_buffer.as_slice(), &read[..]);
+    });
+
+    dma_file_test!(zero_copy_between_files, path, _k, {
+        let file1 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let file2 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let buffer_len = file1.alignment().max(4096) as usize;
+        let mut buffer = file1.alloc_dma_buffer(buffer_len);
+        buffer.as_bytes_mut().fill(0);
+        for i in 0..10u8 {
+            buffer.as_bytes_mut()[i as usize] = i;
+        }
+        let original_write_buffer = buffer.as_bytes_mut().to_vec();
+
+        file1.write_at(buffer, 0).await.unwrap();
+
+        let to_copy = file1.read_at_aligned(0, buffer_len).await.unwrap();
+        assert_eq!(to_copy.deref(), original_write_buffer.as_slice());
+
+        file2.write_at(to_copy.into(), 4096).await.unwrap();
+        let file2_data = file2.read_at_aligned(4096, buffer_len).await.unwrap();
+        assert_eq!(file2_data.deref(), original_write_buffer.as_slice());
     });
 
     dma_file_test!(close_fails_if_clone_exists, path, _k, {
