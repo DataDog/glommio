@@ -440,7 +440,12 @@ impl StreamWriter {
             }
             Some(source) => {
                 let _ = source.result().unwrap();
-                self.file.take().unwrap().discard();
+                let file = self.file.take().unwrap();
+                let fd = file.as_raw_fd();
+                let (last_fd, _) = file.discard();
+                // This is really bad and shouldn't happen - we're handling the close event for the FD
+                // even though a reference is held onto it somewhere else. That means fd reuse is possible.
+                assert!(last_fd.is_some(), "Handling inner close for fd {fd} but it's still owned - fd reuse is a real risk");
                 Poll::Ready(Ok(()))
             }
         }
