@@ -1,3 +1,5 @@
+use crate::sys::Statx;
+
 pub mod syscalls;
 
 pub const LIBURING_UDATA_TIMEOUT: libc::__u64 = libc::__u64::max_value();
@@ -589,7 +591,7 @@ extern "C" {
         path: *const libc::c_char,
         flags: libc::c_int,
         mask: libc::c_uint,
-        statx: *mut libc::statx,
+        statx: *mut Statx,
     );
 
     #[link_name = "rust_io_uring_prep_fadvise: libc::c_int"]

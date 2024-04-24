@@ -14,9 +14,7 @@
 
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
-    Condvar,
-    Mutex,
+    Arc, Condvar, Mutex,
 };
 
 #[derive(Clone, Debug)]
@@ -70,6 +68,7 @@ impl Latch {
     /// `count_down(0)`) is indicative that the state is either `Ready` or
     /// `Canceled`, other data may not yet be synchronized with other threads.
     pub fn count_down(&self, n: usize) -> Result<usize, usize> {
+        #[allow(clippy::unnecessary_lazy_evaluations)]
         self.update(LatchState::Ready, |v| (v >= n).then(|| v - n))
     }
 
@@ -79,7 +78,7 @@ impl Latch {
     ///
     /// The method does not synchronize with other threads.
     pub fn cancel(&self) -> Result<usize, LatchState> {
-        self.update(LatchState::Canceled, |v| (v != 0).then(|| 0))
+        self.update(LatchState::Canceled, |v| (v != 0).then_some(0))
             .map_err(|_| self.wait())
     }
 
@@ -155,10 +154,7 @@ mod test {
     #[test]
     fn cancel() {
         let n = 1 << 10;
-        let cxl_ids = (n / 2..n + 1)
-            .into_iter()
-            .step_by(n / 2 / 5)
-            .collect::<HashSet<_>>();
+        let cxl_ids = (n / 2..n + 1).step_by(n / 2 / 5).collect::<HashSet<_>>();
         assert_eq!(6, cxl_ids.len());
 
         let (w, a, t) = helper(cxl_ids, n);
@@ -192,7 +188,6 @@ mod test {
         let latch = Latch::new(count);
         let cxl_ids = Arc::new(cxl_ids);
         let res = (0..count)
-            .into_iter()
             .map(|id| {
                 std::thread::spawn({
                     let l = Latch::clone(&latch);

@@ -9,9 +9,7 @@ use futures_lite::{Future, Stream, StreamExt};
 use crate::{
     channels::channel_mesh::{FullMesh, Senders},
     task::JoinHandle,
-    GlommioError,
-    ResourceType,
-    Result,
+    GlommioError, ResourceType, Result,
 };
 
 /// Alias for return type of `Handler`
@@ -115,7 +113,7 @@ impl<T: Send + 'static, H: Handler<T> + 'static> Sharded<T, H> {
     ///
     /// [`GlommioError::Closed`]: crate::GlommioError::Closed
     /// [`InvalidInput`]: std::io::ErrorKind::InvalidInput
-    pub async fn send_to(&mut self, dst_shard: usize, message: T) -> Result<(), T> {
+    pub async fn send_to(&self, dst_shard: usize, message: T) -> Result<(), T> {
         self.shard.send_to(dst_shard, message).await
     }
 

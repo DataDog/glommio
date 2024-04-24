@@ -829,7 +829,7 @@ mod test {
             .unwrap_err();
             assert!(now.elapsed().as_millis() >= 10);
             assert!(now.elapsed().as_millis() < 100);
-            assert_eq!(format!("{}", err), "Operation timed out after 10ms");
+            assert_eq!(format!("{err}"), "Operation timed out after 10ms");
             match err {
                 GlommioError::TimedOut(d) => assert_eq!(d, dur),
                 _ => unreachable!(),
@@ -1176,8 +1176,8 @@ mod test {
     fn test_memory_leak_unfinished_timer() {
         //There are two targets of this test
         // 1. To detect absence of memory leaks in case of unfinished
-        //timers. Right now we need to run tests with ASAN. There is a  crate https://github.com/lynnux/leak-detect-allocator
-        //which provides allocator with memory leak detection but it can not be used
+        // timers. Right now we need to run tests with ASAN. There is a  crate https://github.com/lynnux/leak-detect-allocator
+        // which provides allocator with memory leak detection but it can not be used
         // because it works only with nightly builds
         // 2. Ensure correct clean up of resources in case of presence of unfinished
         // tasks. Previous versions of timer and executor caused abort of the

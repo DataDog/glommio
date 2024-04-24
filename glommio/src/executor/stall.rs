@@ -16,13 +16,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Store information about detected stall
 pub struct StallDetection<'a> {
-    executor: usize,
-    queue_handle: TaskQueueHandle,
-    queue_name: &'a str,
-    trace: backtrace::Backtrace,
-    budget: Duration,
-    overage: Duration,
+    /// Executor id in which the detection occurred
+    pub executor: usize,
+    /// The handle of the queue where the stall was detected
+    pub queue_handle: TaskQueueHandle,
+    /// Name of the queue
+    pub queue_name: &'a str,
+    /// Backtrace captured on stall detection
+    pub trace: backtrace::Backtrace,
+    /// Maximum allowed duration for a task execution before being considered stalled
+    pub budget: Duration,
+    /// Additional duration granted for task execution
+    pub overage: Duration,
 }
 
 impl fmt::Debug for StallDetection<'_> {
@@ -60,9 +67,9 @@ pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     fn threshold(
         &self,
         _queue_handle: TaskQueueHandle,
-        max_expected_runtime: Duration,
+        _max_expected_runtime: Duration,
     ) -> Option<Duration> {
-        Some(max_expected_runtime + Duration::from_millis(10))
+        Some(Duration::from_millis(10))
     }
 
     /// What signal number to use; see values in libc::SIG*.
@@ -78,7 +85,7 @@ pub trait StallDetectionHandler: std::fmt::Debug + Send + Sync {
     /// Do not perform blocking syscalls, acquire locks, spawn tasks
     /// or otherwise block here.
     fn stall(&self, detection: StallDetection<'_>) {
-        log::warn!("{}", detection);
+        log::warn!("{detection}");
     }
 }
 
@@ -162,13 +169,15 @@ impl StallDetector {
         timer: Arc<sys::timerfd::TimerFd>,
         signal: i32,
     ) -> JoinHandle<()> {
-        let tid = unsafe { nix::libc::pthread_self() };
+        struct SendWrapper(libc::pthread_t);
+        unsafe impl Send for SendWrapper {}
+        let tid = SendWrapper(unsafe { nix::libc::pthread_self() });
         std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
             while timer.wait().is_ok() {
                 if terminated.load(Ordering::Relaxed) {
                     return
                 }
-                unsafe { nix::libc::pthread_kill(tid, signal) };
+                unsafe { nix::libc::pthread_kill(tid.0, signal) };
             }
         }})
     }
@@ -365,15 +374,13 @@ mod test {
 
                 exec.yield_task_queue_now().await; // yield the queue
 
-                assert!(
-                    stall_handler
-                        .inner
-                        .write()
-                        .unwrap()
-                        .detections
-                        .pop()
-                        .is_some()
-                );
+                assert!(stall_handler
+                    .inner
+                    .write()
+                    .unwrap()
+                    .detections
+                    .pop()
+                    .is_some());
 
                 // no stall because < 50ms of un-cooperativeness
                 thread::sleep(Duration::from_millis(40));
@@ -393,15 +400,13 @@ mod test {
 
                 exec.yield_task_queue_now().await; // yield the queue
 
-                assert!(
-                    stall_handler
-                        .inner
-                        .write()
-                        .unwrap()
-                        .detections
-                        .pop()
-                        .is_some()
-                );
+                assert!(stall_handler
+                    .inner
+                    .write()
+                    .unwrap()
+                    .detections
+                    .pop()
+                    .is_some());
 
                 // Make sure nothing else was reported
                 exec.yield_task_queue_now().await; // yield the queue
@@ -414,7 +419,7 @@ mod test {
         let mut build_handlers: Vec<(TestHandler, LocalExecutorBuilder)> = Vec::with_capacity(10);
         for i in 1..11 {
             let handler = TestHandler::new(nix::libc::SIGUSR1 as u8);
-            let tname = format!("exec{}", i);
+            let tname = format!("exec{i}");
             let builder = LocalExecutorBuilder::default()
                 .name(&tname)
                 .detect_stalls(Some(Box::new(handler.clone())))
@@ -445,7 +450,7 @@ mod test {
 
     #[test]
     fn stall_detector_multiple_signals() {
-        let signals = vec![
+        let signals = [
             nix::libc::SIGALRM as u8,
             nix::libc::SIGUSR1 as u8,
             nix::libc::SIGUSR2 as u8,
@@ -455,7 +460,7 @@ mod test {
         let mut handles = Vec::with_capacity(signals.len());
         for (i, signal) in signals.iter().enumerate() {
             let handler = TestHandler::new(*signal);
-            let tname = format!("exec{}", i);
+            let tname = format!("exec{i}");
             let builder = LocalExecutorBuilder::default()
                 .name(&tname)
                 .detect_stalls(Some(Box::new(handler.clone())))

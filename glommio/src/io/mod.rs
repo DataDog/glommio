@@ -116,7 +116,9 @@ macro_rules! enhanced_try {
             }
         }
     }};
-    ($expr:expr, $op:expr, $obj:expr) => {{ enhanced_try!($expr, $op, $obj.path(), Some($obj.as_raw_fd())) }};
+    ($expr:expr, $op:expr, $obj:expr) => {{
+        enhanced_try!($expr, $op, $obj.path(), Some($obj.as_raw_fd()))
+    }};
 }
 
 mod buffered_file;
@@ -130,6 +132,7 @@ mod immutable_file;
 mod open_options;
 mod read_result;
 mod sched;
+mod stat;
 
 use std::path::Path;
 
@@ -155,24 +158,18 @@ pub(crate) use self::sched::{FileScheduler, IoScheduler, ScheduledSource};
 pub use self::{
     buffered_file::BufferedFile,
     buffered_file_stream::{
-        stdin,
-        StreamReader,
-        StreamReaderBuilder,
-        StreamWriter,
-        StreamWriterBuilder,
+        stdin, StreamReader, StreamReaderBuilder, StreamWriter, StreamWriterBuilder,
     },
     bulk_io::{IoVec, MergedBufferLimit, ReadAmplificationLimit, ReadManyResult},
     directory::Directory,
-    dma_file::{CloseResult, DmaFile},
+    dma_file::{CloseResult, DmaFile, OwnedDmaFile},
     dma_file_stream::{
-        DmaStreamReader,
-        DmaStreamReaderBuilder,
-        DmaStreamWriter,
-        DmaStreamWriterBuilder,
+        DmaStreamReader, DmaStreamReaderBuilder, DmaStreamWriter, DmaStreamWriterBuilder,
     },
     immutable_file::{ImmutableFile, ImmutableFileBuilder, ImmutableFilePreSealSink},
     open_options::OpenOptions,
     read_result::ReadResult,
+    stat::Stat,
 };
 pub use crate::sys::DmaBuffer;
 

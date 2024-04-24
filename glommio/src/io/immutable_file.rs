@@ -6,13 +6,8 @@
 use crate::io::{
     bulk_io::{MergedBufferLimit, ReadAmplificationLimit, ReadManyArgs},
     open_options::OpenOptions,
-    DmaStreamReaderBuilder,
-    DmaStreamWriter,
-    DmaStreamWriterBuilder,
-    IoVec,
-    ReadManyResult,
-    ReadResult,
-    ScheduledSource,
+    DmaStreamReaderBuilder, DmaStreamWriter, DmaStreamWriterBuilder, IoVec, ReadManyResult,
+    ReadResult, ScheduledSource,
 };
 use futures_lite::{future::poll_fn, io::AsyncWrite, Stream};
 use std::{
@@ -206,7 +201,7 @@ where
 
         // these two syscall are hints and are allowed to fail.
         if let Some(size) = self.pre_allocate {
-            let _ = file.pre_allocate(size).await;
+            let _ = file.pre_allocate(size, true).await;
         }
         if let Some(size) = self.hint_extent_size {
             let _ = file.hint_extent_size(size).await;

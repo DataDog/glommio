@@ -1,7 +1,6 @@
 use std::{
     ffi::CStr,
-    io,
-    mem,
+    io, mem,
     ops::{Deref, DerefMut},
     os::unix::io::RawFd,
     ptr,
@@ -9,19 +8,20 @@ use std::{
 
 use super::registrar::{UringFd, UringReadBuf, UringWriteBuf};
 
+use nix::sys::socket::{SockaddrLike, SockaddrStorage};
 pub use nix::{
     fcntl::{FallocateFlags, OFlag, PosixFadviseAdvice},
     poll::PollFlags,
     sys::{
         epoll::{EpollEvent, EpollOp},
         mman::MmapAdvise,
-        socket::{MsgFlags, SockAddr, SockFlag},
+        socket::{MsgFlags, SockFlag},
         stat::Mode,
     },
 };
 
 use super::Personality;
-use crate::{to_io_error, uring_sys};
+use crate::{sys::Statx, uring_sys};
 
 /// A pending IO event.
 ///
@@ -39,7 +39,7 @@ impl<'a> SQE<'a> {
     /// Get this event's user data.
     #[inline]
     pub fn user_data(&self) -> u64 {
-        self.sqe.user_data as u64
+        self.sqe.user_data
     }
 
     /// Set this event's user data. User data is intended to be used by the
@@ -69,7 +69,7 @@ impl<'a> SQE<'a> {
     /// Get this event's flags.
     #[inline]
     pub fn flags(&self) -> SubmissionFlags {
-        unsafe { SubmissionFlags::from_bits_unchecked(self.sqe.flags as _) }
+        SubmissionFlags::from_bits_retain(self.sqe.flags as _)
     }
 
     /// Overwrite this event's flags.
@@ -283,7 +283,7 @@ impl<'a> SQE<'a> {
         path: &CStr,
         flags: StatxFlags,
         mask: StatxMode,
-        buf: &mut libc::statx,
+        buf: &mut Statx,
     ) {
         uring_sys::io_uring_prep_statx(
             self.sqe,
@@ -353,9 +353,10 @@ impl<'a> SQE<'a> {
     }
 
     #[inline]
-    pub unsafe fn prep_connect(&mut self, fd: impl UringFd, socket_addr: &SockAddr) {
-        let (addr, len) = socket_addr.as_ffi_pair();
-        uring_sys::io_uring_prep_connect(self.sqe, fd.as_raw_fd(), addr as *const _ as *mut _, len);
+    pub unsafe fn prep_connect(&mut self, fd: impl UringFd, socket_addr: &SockaddrStorage) {
+        let addr = socket_addr.as_ptr();
+        let len = socket_addr.len();
+        uring_sys::io_uring_prep_connect(self.sqe, fd.as_raw_fd(), addr as *mut _, len);
         fd.update_sqe(self);
     }
 
@@ -522,11 +523,6 @@ impl SockAddrStorage {
         let len = mem::size_of::<nix::sys::socket::sockaddr_storage>();
         SockAddrStorage { storage, len }
     }
-
-    pub unsafe fn as_socket_addr(&self) -> io::Result<SockAddr> {
-        let storage = &*self.storage.as_ptr();
-        nix::sys::socket::sockaddr_storage_to_addr(storage, self.len).map_err(|e| to_io_error!(e))
-    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -536,6 +532,7 @@ pub struct BufferGroupId {
 
 bitflags::bitflags! {
     /// [`SQE`](SQE) configuration flags.
+    #[derive(Debug, Clone, Copy)]
     pub struct SubmissionFlags: u8 {
         /// This event's file descriptor is an index into the preregistered set of files.
         const FIXED_FILE    = 1 << 0;   /* use fixed fileset */
@@ -636,7 +633,7 @@ impl<'ring> SQEs<'ring> {
 
     /// Remaining [`SQE`]s that can be modified.
     pub fn remaining(&self) -> u32 {
-        (self.count - self.consumed) as u32
+        self.count - self.consumed
     }
 
     fn consume(&mut self) -> Option<SQE<'ring>> {

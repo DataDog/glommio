@@ -3,10 +3,7 @@ use futures_lite::AsyncWriteExt;
 use glommio::{
     enclose,
     io::{ImmutableFile, ImmutableFileBuilder},
-    Latency,
-    LocalExecutorBuilder,
-    Placement,
-    Shares,
+    Latency, LocalExecutorBuilder, Placement, Shares,
 };
 use rand::Rng;
 use std::{
@@ -80,7 +77,7 @@ fn main() {
                         .spawn_local_into(
                             enclose!((gate, file)
                             async move {
-                                run_io(&format!("iteration: {}", x), &file, IO_TO_PERFORM, 4096).await;
+                                run_io(&format!("iteration: {x}"), &file, IO_TO_PERFORM, 4096).await;
                                 gate.replace(false);
                             }),
                             lat_tq,
@@ -102,7 +99,6 @@ async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
     let started_at = Instant::now();
 
     let tasks: Vec<_> = (0..2 << 10)
-        .into_iter()
         .map(|_| {
             let file = file.clone();
             let hist = hist.clone();
@@ -125,7 +121,7 @@ async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
 
     let hist = Rc::try_unwrap(hist).unwrap().into_inner();
 
-    println!("\n --- {} ---", name);
+    println!("\n --- {name} ---");
     println!(
         "performed {}k read IO at {}k IOPS (took {:.2}s)",
         count / 1_000,

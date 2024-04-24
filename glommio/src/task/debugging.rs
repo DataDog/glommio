@@ -48,11 +48,11 @@ impl TaskDebugger {
                 let age = v.ts.elapsed();
                 if age > older_than {
                     count += 1;
-                    dbg.debug_task_info(v, format!("age: {:?}", age).as_str());
+                    dbg.debug_task_info(v, format!("age: {age:?}").as_str());
                 }
             }
             if count > 0 {
-                log::debug!("found {} tasks older than {:?}", count, older_than);
+                log::debug!("found {count} tasks older than {older_than:?}");
             }
         })
     }

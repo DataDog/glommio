@@ -107,7 +107,7 @@
 //!
 //! This example creates two task queues: `tq1` has 2 shares, `tq2` has 1 share.
 //! This means that if both want to use the CPU to its maximum, `tq1` will have
-//! `1/3` of the CPU time `(1 / (1 + 2))` and `tq2` will have `2/3` of the CPU
+//! `2/3` of the CPU time `(2 / (1 + 2))` and `tq2` will have `1/3` of the CPU
 //! time. Those shares are dynamic and can be changed at any time. Notice that
 //! this scheduling method doesn't prevent either `tq1` no `tq2` from using 100%
 //! of CPU time at times in which they are the only task queue running: the
@@ -230,37 +230,10 @@
 //! 512
 //! ```
 //!
-//! ## Current limitations
+//! Glommio also requires a kernel with a recent enough `io_uring` support, at
+//! least recent enough to run discovery probes. The minimum version at this
+//! time is 5.8
 //!
-//! Due to our immediate needs which are a lot narrower, we make the following
-//! design assumptions:
-//!
-//!  - NVMe. While other storage types may work, the general assumptions made in
-//!    here are based on the characteristics of NVMe storage. This allows us to
-//!    use io uring's poll ring for reads and writes which are interrupt free.
-//!    This also assumes that one is running either `XFS` or `Ext4` (an
-//!    assumption that `Seastar` also makes).
-//!
-//!  - A corollary to the above is that the CPUs are likely to be the
-//!    bottleneck, so this crate has a CPU scheduler but lacks an I/O scheduler.
-//!    That, however, would be a welcome addition.
-//!
-//!  - A recent (at least 5.8) kernel is no impediment, as long as a fully
-//!    functional I/O uring is present. In fact, we require a kernel so recent
-//!    that it doesn't even exist: operations like `mkdir, ftruncate`, etc.
-//!    which are not present in today's (5.8) `io_uring` are simply synchronous,
-//!    and we'll live with the pain in the hopes that Linux will eventually add
-//!    support for them.
-//!
-//! ## Missing features
-//!
-//! There are many. In particular:
-//!
-//! * Memory allocator: memory allocation is a big source of contention for
-//!   thread per core systems. A shard-aware allocator would be crucial for
-//!   achieving good performance in allocation-heavy workloads.
-//!
-//! * As mentioned, an I/O Scheduler.
 //!
 //! ## Examples
 //!
@@ -303,7 +276,7 @@ macro_rules! wake {
         use log::error;
 
         if let Err(x) = std::panic::catch_unwind(|| $waker.wake()) {
-            error!("Panic while calling waker! {:?}", x);
+            error!("Panic while calling waker! {x:?}");
         }
     };
 }
@@ -469,38 +442,16 @@ use crate::reactor::Reactor;
 pub use crate::{
     byte_slice_ext::{ByteSliceExt, ByteSliceMutExt},
     error::{
-        BuilderErrorKind,
-        ExecutorErrorKind,
-        GlommioError,
-        QueueErrorKind,
-        ReactorErrorKind,
-        ResourceType,
-        Result,
+        BuilderErrorKind, ExecutorErrorKind, GlommioError, QueueErrorKind, ReactorErrorKind,
+        ResourceType, Result,
     },
     executor::{
-        allocate_dma_buffer,
-        allocate_dma_buffer_global,
-        executor,
-        spawn_local,
-        spawn_local_into,
-        spawn_scoped_local,
-        spawn_scoped_local_into,
-        stall::{DefaultStallDetectionHandler, StallDetectionHandler},
-        yield_if_needed,
-        CpuSet,
-        ExecutorJoinHandle,
-        ExecutorProxy,
-        ExecutorStats,
-        LocalExecutor,
-        LocalExecutorBuilder,
-        LocalExecutorPoolBuilder,
-        Placement,
-        PoolPlacement,
-        PoolThreadHandles,
-        ScopedTask,
-        Task,
-        TaskQueueHandle,
-        TaskQueueStats,
+        allocate_dma_buffer, allocate_dma_buffer_global, executor, spawn_local, spawn_local_into,
+        spawn_scoped_local, spawn_scoped_local_into,
+        stall::{DefaultStallDetectionHandler, StallDetection, StallDetectionHandler},
+        yield_if_needed, CpuSet, ExecutorJoinHandle, ExecutorProxy, ExecutorStats, LocalExecutor,
+        LocalExecutorBuilder, LocalExecutorPoolBuilder, Placement, PoolPlacement,
+        PoolThreadHandles, ScopedTask, Task, TaskQueueHandle, TaskQueueStats,
     },
     shares::{Shares, SharesManager},
     sys::hardware_topology::CpuLocation,
@@ -518,25 +469,10 @@ use std::{
 pub mod prelude {
     #[doc(no_inline)]
     pub use crate::{
-        error::GlommioError,
-        executor,
-        spawn_local,
-        spawn_local_into,
-        yield_if_needed,
-        ByteSliceExt,
-        ByteSliceMutExt,
-        ExecutorProxy,
-        IoStats,
-        Latency,
-        LocalExecutor,
-        LocalExecutorBuilder,
-        LocalExecutorPoolBuilder,
-        Placement,
-        PoolPlacement,
-        PoolThreadHandles,
-        RingIoStats,
-        Shares,
-        TaskQueueHandle,
+        error::GlommioError, executor, spawn_local, spawn_local_into, yield_if_needed,
+        ByteSliceExt, ByteSliceMutExt, ExecutorProxy, IoStats, Latency, LocalExecutor,
+        LocalExecutorBuilder, LocalExecutorPoolBuilder, Placement, PoolPlacement,
+        PoolThreadHandles, RingIoStats, Shares, TaskQueueHandle,
     };
 }
 
@@ -675,7 +611,7 @@ impl RingIoStats {
     /// [`files_opened`]: RingIoStats::files_opened
     /// [`files_closed`]: RingIoStats::files_closed
     pub fn files_closed(&self) -> u64 {
-        self.files_opened
+        self.files_closed
     }
 
     /// File read IO stats
@@ -875,7 +811,7 @@ pub(crate) mod test_utils {
         let buf = statfs(&dir).unwrap();
         let fstype = buf.filesystem_type();
 
-        let kind = if fstype == TMPFS_MAGIC {
+        let kind = if (fstype.0 as u64) == (libc::TMPFS_MAGIC as u64) {
             TestDirectoryKind::TempFs
         } else {
             TestDirectoryKind::NonPollMedia

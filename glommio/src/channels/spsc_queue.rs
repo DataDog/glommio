@@ -63,7 +63,7 @@ impl<T> fmt::Debug for Buffer<T> {
         let id_to_str = |id| match id {
             0 => "not connected".into(),
             usize::MAX => "disconnected".into(),
-            x => format!("{}", x),
+            x => format!("{x}"),
         };
 
         let consumer_id = id_to_str(self.pcache.consumer_id.load(Ordering::Relaxed));
@@ -146,7 +146,7 @@ impl<T> Buffer<T> {
         let index = (tail + self.lookahead) & self.mask;
         let slot = unsafe { &*self.buffer_storage.add(index) };
         if !slot.has_value.load(Ordering::Acquire) {
-            self.pcache.limit.set(tail + self.lookahead);
+            self.pcache.limit.set(tail + self.lookahead + 1);
             true
         } else {
             let slot = unsafe { &*self.buffer_storage.add(tail & self.mask) };
@@ -165,7 +165,7 @@ impl<T> Buffer<T> {
             return Some(v);
         }
         let tail = self.pcache.tail.load(Ordering::Relaxed);
-        if tail >= self.lookahead && !self.has_space(tail) {
+        if tail >= self.pcache.limit.get() && !self.has_space(tail) {
             return Some(v);
         }
         let slot = unsafe {
@@ -224,10 +224,12 @@ impl<T> Drop for Buffer<T> {
         // We don't want to run any destructors here, because we didn't run
         // any of the constructors through the vector. And whatever object was
         // in fact still alive we popped above.
-        unsafe {
+        let _drop = unsafe {
+            // Nightly clippy warns about this but ptr::from_raw_parts_mut isn't stable yet.
+            #[allow(clippy::cast_slice_from_raw_parts)]
             let ptr = from_raw_parts_mut(self.buffer_storage, self.capacity) as *mut [Slot<T>];
-            Box::from_raw(ptr);
-        }
+            Box::from_raw(ptr)
+        };
     }
 }
 
@@ -305,20 +307,17 @@ pub(crate) trait BufferHalf {
 impl<T> BufferHalf for Producer<T> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
-        &*self.buffer
+        &self.buffer
     }
 
     fn connect(&self, id: usize) {
         assert_ne!(id, 0);
         assert_ne!(id, usize::MAX);
-        (*self.buffer)
-            .ccache
-            .producer_id
-            .store(id, Ordering::Release);
+        self.buffer.ccache.producer_id.store(id, Ordering::Release);
     }
 
     fn peer_id(&self) -> usize {
-        (*self.buffer).pcache.consumer_id.load(Ordering::Acquire)
+        self.buffer.pcache.consumer_id.load(Ordering::Acquire)
     }
 }
 
@@ -363,20 +362,17 @@ impl<T> Producer<T> {
 impl<T> BufferHalf for Consumer<T> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
-        &(*self.buffer)
+        &self.buffer
     }
 
     fn connect(&self, id: usize) {
         assert_ne!(id, usize::MAX);
         assert_ne!(id, 0);
-        (*self.buffer)
-            .pcache
-            .consumer_id
-            .store(id, Ordering::Release);
+        self.buffer.pcache.consumer_id.store(id, Ordering::Release);
     }
 
     fn peer_id(&self) -> usize {
-        (*self.buffer).ccache.producer_id.load(Ordering::Acquire)
+        self.buffer.ccache.producer_id.load(Ordering::Acquire)
     }
 }
 

@@ -8,6 +8,7 @@ use log::warn;
 use nix::{
     fcntl::{FallocateFlags, OFlag},
     poll::PollFlags,
+    sys::socket::{SockaddrLike, SockaddrStorage},
 };
 use rlimit::Resource;
 use std::{
@@ -39,29 +40,16 @@ use crate::{
         self,
         blocking::{BlockingThreadOp, BlockingThreadPool},
         dma_buffer::{BufferStorage, DmaBuffer},
-        DirectIo,
-        EnqueuedSource,
-        EnqueuedStatus,
-        InnerSource,
-        IoBuffer,
-        PollableStatus,
-        Source,
-        SourceType,
-        TimeSpec64,
+        membarrier, DirectIo, EnqueuedSource, EnqueuedStatus, InnerSource, IoBuffer,
+        PollableStatus, Source, SourceType, Statx, TimeSpec64,
     },
     uring_sys::{self, IoRingOp},
-    GlommioError,
-    IoRequirements,
-    IoStats,
-    PoolPlacement,
-    ReactorErrorKind,
-    RingIoStats,
-    TaskQueueHandle,
+    GlommioError, IoRequirements, IoStats, ReactorErrorKind, RingIoStats, TaskQueueHandle,
 };
 use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
 use nix::sys::{
-    socket::{MsgFlags, SockAddr, SockFlag},
+    socket::{MsgFlags, SockFlag},
     stat::Mode as OpenMode,
 };
 use smallvec::SmallVec;
@@ -81,11 +69,11 @@ enum UringOpDescriptor {
     Open(*const u8, libc::c_int, u32),
     Close,
     FDataSync,
-    Connect(*const SockAddr),
+    Connect(*const SockaddrStorage),
     LinkTimeout(*const uring_sys::__kernel_timespec),
     Accept(*mut SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
-    Statx(*const u8, *mut libc::statx),
+    StatxFd(RawFd, *mut Statx),
     Timeout(*const uring_sys::__kernel_timespec, u32),
     TimeoutRemove(u64),
     SockSend(*const u8, usize, i32),
@@ -123,7 +111,7 @@ impl UringBufferAllocator {
     fn new(size: usize) -> Self {
         let layout = Layout::from_size_align(size, 4096).unwrap();
         let (data, allocator) = unsafe {
-            let data = alloc::alloc::alloc(layout) as *mut u8;
+            let data = alloc::alloc::alloc(layout);
             let data = std::ptr::NonNull::new(data).unwrap();
             let allocator = BuddyAlloc::new(BuddyAllocParam::new(
                 data.as_ptr(),
@@ -148,7 +136,7 @@ impl UringBufferAllocator {
 
     fn free(&self, ptr: ptr::NonNull<u8>) {
         let mut allocator = self.allocator.borrow_mut();
-        allocator.free(ptr.as_ptr() as *mut u8);
+        allocator.free(ptr.as_ptr());
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -233,8 +221,7 @@ fn check_supported_operations(ops: &[uring_sys::IoRingOp]) -> bool {
             if !sup {
                 println!(
                     "Yo kernel is so old it was with Hannibal when he crossed the Alps! Missing \
-                     {:?}",
-                    op
+                     {op:?}"
                 );
             }
         }
@@ -316,7 +303,7 @@ fn fill_sqe<F>(
                             // source. The kernel knows about that buffer already, and will write to
                             // it. So this can only be called if there is no buffer attached to it.
                             assert!(slot.is_none());
-                            *slot = Some(IoBuffer::Dma(buf));
+                            *slot = Some(IoBuffer::DmaSink(buf));
                         }
                         _ => unreachable!("Expected Read source type"),
                     }
@@ -350,12 +337,12 @@ fn fill_sqe<F>(
                 let flags = FallocateFlags::from_bits_truncate(flags);
                 sqe.prep_fallocate(op.fd, offset, size, flags);
             }
-            UringOpDescriptor::Statx(path, statx_buf) => {
-                let flags = StatxFlags::AT_STATX_SYNC_AS_STAT | StatxFlags::AT_NO_AUTOMOUNT;
+            UringOpDescriptor::StatxFd(fd, statx_buf) => {
+                let flags = StatxFlags::AT_STATX_SYNC_AS_STAT
+                    | StatxFlags::AT_NO_AUTOMOUNT
+                    | StatxFlags::AT_EMPTY_PATH;
                 let mode = StatxMode::from_bits_truncate(0x7ff);
-
-                let path = CStr::from_ptr(path as _);
-                sqe.prep_statx(-1, path, flags, mode, &mut *statx_buf);
+                sqe.prep_statx(fd, Default::default(), flags, mode, &mut *statx_buf);
             }
             UringOpDescriptor::Timeout(timespec, events) => {
                 sqe.prep_timeout(&*timespec, events, TimeoutFlags::empty());
@@ -372,7 +359,7 @@ fn fill_sqe<F>(
                     match &mut src.source_type {
                         SourceType::Read(PollableStatus::NonPollable(DirectIo::Disabled), slot) => {
                             sqe.prep_read(op.fd, buf.as_bytes_mut(), pos);
-                            *slot = Some(IoBuffer::Dma(buf));
+                            *slot = Some(IoBuffer::DmaSink(buf));
                         }
                         SourceType::Read(_, slot) => {
                             match buf.uring_buffer_id() {
@@ -383,7 +370,7 @@ fn fill_sqe<F>(
                                     sqe.prep_read_fixed(op.fd, buf.as_bytes_mut(), pos, idx);
                                 }
                             };
-                            *slot = Some(IoBuffer::Dma(buf));
+                            *slot = Some(IoBuffer::DmaSink(buf));
                         }
                         _ => unreachable!(),
                     };
@@ -397,28 +384,16 @@ fn fill_sqe<F>(
 
             UringOpDescriptor::SockSend(ptr, len, flags) => {
                 let buf = std::slice::from_raw_parts(ptr, len);
-                sqe.prep_send(
-                    op.fd,
-                    buf,
-                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
-                );
+                sqe.prep_send(op.fd, buf, MsgFlags::from_bits_retain(flags | MSG_ZEROCOPY));
             }
 
             UringOpDescriptor::SockSendMsg(hdr, flags) => {
-                sqe.prep_sendmsg(
-                    op.fd,
-                    hdr,
-                    MsgFlags::from_bits_unchecked(flags | MSG_ZEROCOPY),
-                );
+                sqe.prep_sendmsg(op.fd, hdr, MsgFlags::from_bits_retain(flags | MSG_ZEROCOPY));
             }
 
             UringOpDescriptor::SockRecv(len, flags) => {
                 let mut buf = DmaBuffer::new(len).expect("failed to allocate buffer");
-                sqe.prep_recv(
-                    op.fd,
-                    buf.as_bytes_mut(),
-                    MsgFlags::from_bits_unchecked(flags),
-                );
+                sqe.prep_recv(op.fd, buf.as_bytes_mut(), MsgFlags::from_bits_retain(flags));
 
                 source_map.peek_source_mut(from_user_data(op.user_data), |mut src| {
                     match &mut src.source_type {
@@ -449,7 +424,7 @@ fn fill_sqe<F>(
                             sqe.prep_recvmsg(
                                 op.fd,
                                 hdr as *mut libc::msghdr,
-                                MsgFlags::from_bits_unchecked(flags),
+                                MsgFlags::from_bits_retain(flags),
                             );
                             *slot = Some(buf);
                         }
@@ -1073,7 +1048,7 @@ impl SleepableRing {
                         BufferStorage::EventFd(buffer_ptr),
                     ))
                 },
-                &mut *self.source_map.borrow_mut(),
+                &mut self.source_map.borrow_mut(),
             );
 
             match &mut *eventfd_src.source_type_mut() {
@@ -1088,7 +1063,7 @@ impl SleepableRing {
         }
     }
 
-    fn sleep(&mut self, link: &mut Source) -> io::Result<usize> {
+    fn sleep(&mut self, link: &Source) -> io::Result<usize> {
         assert_eq!(
             self.waiting_kernel_submission(),
             0,
@@ -1110,7 +1085,7 @@ impl SleepableRing {
                 &mut sqe,
                 &op,
                 DmaBuffer::new,
-                &mut *self.source_map.borrow_mut(),
+                &mut self.source_map.borrow_mut(),
             );
 
             // We have now prepared the SQE that links the two rings. We now need to submit
@@ -1313,7 +1288,7 @@ impl Reactor {
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
         ring_depth: usize,
-        thread_pool_placement: PoolPlacement,
+        blocking_thread: BlockingThreadPool,
     ) -> crate::Result<Reactor, ()> {
         const MIN_MEMLOCK_LIMIT: u64 = 512 * 1024;
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
@@ -1338,25 +1313,16 @@ impl Reactor {
             SleepableRing::new(ring_depth, "latency", allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
-            Err(x) => warn!(
-                "Error: registering buffers in the main ring. Skipping{:#?}",
-                x
-            ),
+            Err(x) => warn!("Error: registering buffers in the main ring. Skipping{x:#?}"),
             Ok(_) => match poll_ring.registrar().register_buffers_by_ref(&registry) {
                 Err(x) => {
-                    warn!(
-                        "Error: registering buffers in the poll ring. Skipping{:#?}",
-                        x
-                    );
+                    warn!("Error: registering buffers in the poll ring. Skipping{x:#?}");
                     main_ring.registrar().unregister_buffers().unwrap();
                 }
                 Ok(_) => {
                     match latency_ring.registrar().register_buffers_by_ref(&registry) {
                         Err(x) => {
-                            warn!(
-                                "Error: registering buffers in the poll ring. Skipping{:#?}",
-                                x
-                            );
+                            warn!("Error: registering buffers in the poll ring. Skipping{x:#?}");
                             poll_ring.registrar().unregister_buffers().unwrap();
                             main_ring.registrar().unregister_buffers().unwrap();
                         }
@@ -1388,7 +1354,7 @@ impl Reactor {
             poll_ring: RefCell::new(poll_ring),
             latency_preemption_timeout_src: Cell::new(None),
             throughput_preemption_timeout_src: Cell::new(None),
-            blocking_thread: BlockingThreadPool::new(thread_pool_placement, notifier.clone())?,
+            blocking_thread,
             link_fd,
             notifier,
             eventfd_src,
@@ -1426,9 +1392,9 @@ impl Reactor {
         let op = match &*source.source_type() {
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIo::Disabled),
-                IoBuffer::Dma(buf),
+                IoBuffer::DmaSource(buf),
             ) => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
-            SourceType::Write(_, IoBuffer::Dma(buf)) => match buf.uring_buffer_id() {
+            SourceType::Write(_, IoBuffer::DmaSource(buf)) => match buf.uring_buffer_id() {
                 Some(id) => UringOpDescriptor::WriteFixed(buf.as_ptr(), buf.len(), pos, id),
                 None => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
             },
@@ -1438,7 +1404,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1447,14 +1413,14 @@ impl Reactor {
             SourceType::Write(
                 PollableStatus::NonPollable(DirectIo::Disabled),
                 IoBuffer::Buffered(buf),
-            ) => UringOpDescriptor::Write(buf.as_ptr() as *const u8, buf.len(), pos),
+            ) => UringOpDescriptor::Write(buf.as_ptr(), buf.len(), pos),
             x => panic!("Unexpected source type for write: {:?}", x),
         };
         queue_request_into_ring(
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1464,7 +1430,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1474,7 +1440,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1484,14 +1450,14 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
     pub(crate) fn send(&self, source: &Source, flags: MsgFlags) {
         let op = match &*source.source_type() {
             SourceType::SockSend(buf) => {
-                UringOpDescriptor::SockSend(buf.as_ptr() as *const u8, buf.len(), flags.bits())
+                UringOpDescriptor::SockSend(buf.as_ptr(), buf.len(), flags.bits())
             }
             _ => unreachable!(),
         };
@@ -1499,15 +1465,15 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
     pub(crate) fn sendmsg(&self, source: &Source, flags: MsgFlags) {
         let op = match &mut *source.source_type_mut() {
             SourceType::SockSendMsg(_, iov, hdr, addr) => {
-                let (msg_name, msg_namelen) = addr.as_ffi_pair();
-                let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
+                let msg_name = addr.as_ptr() as *mut libc::c_void;
+                let msg_namelen = addr.len();
 
                 hdr.msg_iov = iov as *mut libc::iovec;
                 hdr.msg_iovlen = 1;
@@ -1522,7 +1488,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1532,7 +1498,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1542,20 +1508,20 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
     pub(crate) fn connect(&self, source: &Source) {
         let op = match &*source.source_type() {
-            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const SockAddr),
+            SourceType::Connect(addr) => UringOpDescriptor::Connect(addr as *const _),
             x => panic!("Unexpected source type for connect: {:?}", x),
         };
         queue_request_into_ring(
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1568,7 +1534,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1577,7 +1543,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             UringOpDescriptor::FDataSync,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1587,7 +1553,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1611,6 +1577,22 @@ impl Reactor {
         };
 
         let op = BlockingThreadOp::Rename(old_path, new_path);
+        self.enqueue_blocking_request(source.inner.clone(), op)
+    }
+
+    pub(crate) fn copy_file_range(&self, source: &Source, pos: u64) -> impl Future<Output = ()> {
+        let (fd_in, off_in, len) = match &*source.source_type() {
+            SourceType::CopyFileRange(fd_in, off_in, len) => (*fd_in, *off_in, *len),
+            _ => panic!("Unexpected source for copy_file_range operation"),
+        };
+
+        let op = BlockingThreadOp::CopyFileRange(
+            fd_in,
+            (off_in).try_into().unwrap(),
+            source.raw(),
+            pos.try_into().unwrap(),
+            len,
+        );
         self.enqueue_blocking_request(source.inner.clone(), op)
     }
 
@@ -1655,16 +1637,15 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
-    pub(crate) fn statx(&self, source: &Source) {
+    pub(crate) fn statx_fd(&self, source: &Source) {
         let op = match &*source.source_type() {
-            SourceType::Statx(path, buf) => {
-                let path = path.as_c_str().as_ptr();
+            SourceType::Statx(buf) => {
                 let buf = buf.as_ptr();
-                UringOpDescriptor::Statx(path as _, buf)
+                UringOpDescriptor::StatxFd(source.raw(), buf)
             }
             _ => panic!("Unexpected source for statx operation"),
         };
@@ -1672,7 +1653,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1686,7 +1667,7 @@ impl Reactor {
             &mut *self.ring_for_source(source),
             source,
             op,
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
         );
     }
 
@@ -1744,16 +1725,14 @@ impl Reactor {
     /// We may not be able to register an `SQE` at this point, so we return an
     /// Error and will just not sleep.
     fn link_rings_and_sleep(&self, ring: &mut SleepableRing) -> io::Result<()> {
-        let mut link_rings = Source::new(
+        let link_rings = Source::new(
             IoRequirements::default(),
             self.link_fd,
             SourceType::LinkRings,
             None,
             None,
         );
-        ring.sleep(&mut link_rings)
-            .or_else(Self::busy_ok)
-            .map(|_| {})
+        ring.sleep(&link_rings).or_else(Self::busy_ok).map(|_| {})
     }
 
     pub(crate) fn poll_io(&self, woke: &mut usize) -> io::Result<()> {
@@ -2050,6 +2029,7 @@ impl Drop for Reactor {
 
 #[cfg(test)]
 mod tests {
+    use crate::PoolPlacement;
     use std::time::Instant;
 
     use super::*;
@@ -2057,7 +2037,8 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0, 128, PoolPlacement::Unbound(1)).unwrap();
+        let pool = BlockingThreadPool::new(PoolPlacement::Unbound(1), notifier.clone()).unwrap();
+        let reactor = Reactor::new(notifier, 0, 128, pool).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
@@ -2084,7 +2065,7 @@ mod tests {
             &mut *reactor.ring_for_source(&fast),
             &fast,
             op,
-            &mut *reactor.source_map.borrow_mut(),
+            &mut reactor.source_map.borrow_mut(),
         );
 
         let (slow, op) = timeout_source(150);
@@ -2092,7 +2073,7 @@ mod tests {
             &mut *reactor.ring_for_source(&slow),
             &slow,
             op,
-            &mut *reactor.source_map.borrow_mut(),
+            &mut reactor.source_map.borrow_mut(),
         );
 
         let (lethargic, op) = timeout_source(300);
@@ -2100,7 +2081,7 @@ mod tests {
             &mut *reactor.ring_for_source(&lethargic),
             &lethargic,
             op,
-            &mut *reactor.source_map.borrow_mut(),
+            &mut reactor.source_map.borrow_mut(),
         );
 
         let start = Instant::now();
@@ -2119,7 +2100,7 @@ mod tests {
     fn allocator() {
         let l = Layout::from_size_align(10 << 20, 4 << 10).unwrap();
         let (data, mut allocator) = unsafe {
-            let data = alloc::alloc::alloc(l) as *mut u8;
+            let data = alloc::alloc::alloc(l);
             assert_eq!(data as usize & 4095, 0);
             let data = std::ptr::NonNull::new(data).unwrap();
             (

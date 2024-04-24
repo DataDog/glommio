@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Cache setup
         uses: ./.github/actions/cache-setup
@@ -26,24 +26,6 @@ jobs:
       - name: Generate documentation
         run: cargo doc --all
 
-  doc-nightly:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Cache setup
-        uses: ./.github/actions/cache-setup
-
-      - name: Install cargo-deadlinks
-        run: which deadlinks || cargo install cargo-deadlinks
-
-      - name: Generate documentation
-        run: |
-          rustup install nightly
-          cargo +nightly doc --all
-
     # temporarily disabled.
     # - name: Validate links
     #   run: cargo deadlinks --dir target/doc/glommio
@@ -53,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Cache setup
         uses: ./.github/actions/cache-setup
@@ -61,27 +43,12 @@ jobs:
       - name: Build all targets
         run: cargo build --all --all-targets
 
-  build-nightly:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Cache setup
-        uses: ./.github/actions/cache-setup
-
-      - name: Build all targets on the nigthly channel
-        run: >
-          rustup install nightly;
-          cargo +nightly build --all --all-targets --features=nightly
-
   test:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Cache setup
         uses: ./.github/actions/cache-setup
@@ -91,36 +58,10 @@ jobs:
           cat << EOF > "run-gha-workflow.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
           echo "`nproc` CPU(s) available"
-          rustup install nightly
-          rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
-          rustup install 1.58
+          rustup install 1.65
           rustup show
           rustup default stable
           cargo install cargo-sort
           cargo test -- --test-threads=`nproc`
-          EOF
-          sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"
-
-  test-nightly:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Cache setup
-        uses: ./.github/actions/cache-setup
-
-      - name: Install cargo helpers and test all targets on the nigthly channel
-        run: |
-          cat << EOF > "run-gha-workflow.sh"
-          PATH=$PATH:/usr/share/rust/.cargo/bin
-          echo "`nproc` CPU(s) available"
-          rustup install nightly
-          rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
-          rustup install 1.58
-          cargo install cargo-sort
-          rustup show
-          cargo +nightly test --features=nightly -- --test-threads=`nproc`
           EOF
           sudo -E bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"

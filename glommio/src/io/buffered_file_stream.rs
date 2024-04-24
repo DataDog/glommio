@@ -6,7 +6,7 @@
 use crate::{
     io::{BufferedFile, ScheduledSource},
     reactor::Reactor,
-    sys::{IoBuffer, Source},
+    sys::{IoBuffer, Source, Statx},
 };
 use futures_lite::{
     io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, SeekFrom},
@@ -74,7 +74,7 @@ pin_project! {
 ///     loop {
 ///         let mut buf = String::new();
 ///         sin.read_line(&mut buf).await.unwrap();
-///         println!("you just typed {}", buf);
+///         println!("you just typed {buf}");
 ///     }
 /// });
 /// ```
@@ -403,7 +403,7 @@ impl StreamWriter {
         }
     }
 
-    fn poll_sync(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_sync(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         if !self.sync_on_close {
             Poll::Ready(Ok(()))
         } else {
@@ -426,7 +426,7 @@ impl StreamWriter {
         }
     }
 
-    fn poll_inner_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_inner_close(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         match self.source.take() {
             None => {
                 let source = self
@@ -440,13 +440,18 @@ impl StreamWriter {
             }
             Some(source) => {
                 let _ = source.result().unwrap();
-                self.file.take().unwrap().discard();
+                let file = self.file.take().unwrap();
+                let fd = file.as_raw_fd();
+                let (last_fd, _) = file.discard();
+                // This is really bad and shouldn't happen - we're handling the close event for the FD
+                // even though a reference is held onto it somewhere else. That means fd reuse is possible.
+                assert!(last_fd.is_some(), "Handling inner close for fd {fd} but it's still owned - fd reuse is a real risk");
                 Poll::Ready(Ok(()))
             }
         }
     }
 
-    fn do_poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn do_poll_flush(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         match self.source.take() {
             None => match self.flush_write_buffer(cx.waker()) {
                 true => Poll::Pending,
@@ -456,7 +461,7 @@ impl StreamWriter {
         }
     }
 
-    fn do_poll_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn do_poll_close(&mut self, cx: &Context<'_>) -> Poll<io::Result<()>> {
         while self.file.is_some() {
             match self.file_status {
                 FileStatus::Open => {
@@ -497,18 +502,14 @@ macro_rules! do_seek {
             }
             SeekFrom::End(pos) => match $source.take() {
                 None => {
-                    let source = $self
-                        .reactor
-                        .upgrade()
-                        .unwrap()
-                        .statx($fileobj.as_raw_fd(), &$fileobj.path().unwrap());
+                    let source = $self.reactor.upgrade().unwrap().statx($fileobj.as_raw_fd());
                     source.add_waiter_single($cx.waker());
                     $source = Some(source);
                     Poll::Pending
                 }
                 Some(source) => {
                     let stype = source.extract_source_type();
-                    let stat_buf: libc::statx = stype.try_into().unwrap();
+                    let stat_buf: Statx = stype.try_into().unwrap();
                     let end = stat_buf.stx_size as i64;
                     $self.file_pos = (end + pos) as u64;
                     Poll::Ready(Ok($self.file_pos))

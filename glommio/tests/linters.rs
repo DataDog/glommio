@@ -7,22 +7,18 @@
 mod tests {
     use std::process::Command;
     #[test]
-    fn check_formating() {
+    fn check_formatting() {
         let status = Command::new("cargo")
-            .args(["+nightly", "fmt", "--all", "--", "--check"])
+            .args(["fmt", "--all", "--", "--check"])
             .status()
             .unwrap();
-        assert!(
-            status.success(),
-            "cargo fmt failed. Note that glommio uses nightly for formatting, so please invoke \
-             cargo with +nightly"
-        );
+        assert!(status.success());
     }
 
     #[test]
     fn check_clippy() {
         let status = Command::new("cargo")
-            .args(["+stable", "clippy", "--all-targets", "--", "-D", "warnings"])
+            .args(["clippy", "--all-targets", "--", "-D", "warnings"])
             .status()
             .unwrap();
         assert!(status.success());

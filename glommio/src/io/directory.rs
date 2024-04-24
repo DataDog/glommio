@@ -5,8 +5,7 @@
 //
 use crate::{
     io::{dma_file::DmaFile, glommio_file::GlommioFile},
-    sys,
-    GlommioError,
+    sys, GlommioError,
 };
 use std::{
     cell::Ref,

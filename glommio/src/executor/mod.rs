@@ -36,16 +36,10 @@ use crate::{
     error::BuilderErrorKind,
     executor::stall::StallDetector,
     io::DmaBuffer,
-    parking,
-    reactor,
-    sys,
+    parking, reactor,
+    sys::{self, blocking::BlockingThreadPool},
     task::{self, waker_fn::dummy_waker},
-    GlommioError,
-    IoRequirements,
-    IoStats,
-    Latency,
-    Reactor,
-    Shares,
+    GlommioError, IoRequirements, IoStats, Latency, Reactor, Shares,
 };
 use ahash::AHashMap;
 use futures_lite::pin;
@@ -743,7 +737,7 @@ impl Default for LocalExecutorBuilder {
 /// let handles = LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(4))
 ///     .on_all_shards(|| async move {
 ///         let id = glommio::executor().id();
-///         println!("hello from executor {}", id);
+///         println!("hello from executor {id}");
 ///     })
 ///     .unwrap();
 ///
@@ -968,7 +962,7 @@ impl LocalExecutorPoolBuilder {
         // should no longer rely on its value at this point
         let cpu_binding = cpu_set_gen.next().cpu_binding();
         let notifier = sys::new_sleep_notifier()?;
-        let name = format!("{}-{}", &self.name, notifier.id());
+        let name = format!("{}-{}", self.name, notifier.id());
         let handle = Builder::new().name(name).spawn({
             let io_memory = self.io_memory;
             let ring_depth = self.ring_depth;
@@ -1147,6 +1141,9 @@ impl LocalExecutor {
         cpu_binding: Option<impl IntoIterator<Item = usize>>,
         mut config: LocalExecutorConfig,
     ) -> Result<LocalExecutor> {
+        let blocking_thread =
+            BlockingThreadPool::new(config.thread_pool_placement, notifier.clone())?;
+
         // Linux's default memory policy is "local allocation" which allocates memory
         // on the NUMA node containing the CPU where the allocation takes place.
         // Hence, we bind to a CPU in the provided CPU set before allocating any
@@ -1172,7 +1169,7 @@ impl LocalExecutor {
                 config.io_memory,
                 config.ring_depth,
                 config.record_io_latencies,
-                config.thread_pool_placement,
+                blocking_thread,
             )?),
             stall_detector: RefCell::new(
                 config
@@ -1344,93 +1341,92 @@ impl LocalExecutor {
         let candidate = tq.active_executors.pop();
         tq.stats.scheduler_runs += 1;
 
-        match candidate {
-            Some(queue) => {
-                tq.active_executing = Some(queue.clone());
-                drop(tq);
+        if candidate.is_none() {
+            return false;
+        }
 
-                let time = {
-                    let now = Instant::now();
-                    let mut queue_ref = queue.borrow_mut();
-                    queue_ref.prepare_to_run(now);
-                    self.reactor
-                        .inform_io_requirements(queue_ref.io_requirements);
-                    now
-                };
+        let queue = candidate.unwrap();
+        tq.active_executing = Some(queue.clone());
+        drop(tq);
 
-                let (runtime, tasks_executed_this_loop) = {
-                    let detector = self.stall_detector.borrow();
-                    let guard = detector.as_ref().map(|x| {
-                        let queue = queue.borrow_mut();
-                        x.enter_task_queue(
-                            queue.stats.index,
-                            queue.name.clone(),
-                            time,
-                            self.preempt_timer_duration(),
-                        )
-                    });
+        let time = {
+            let now = Instant::now();
+            let mut queue_ref = queue.borrow_mut();
+            queue_ref.prepare_to_run(now);
+            self.reactor
+                .inform_io_requirements(queue_ref.io_requirements);
+            now
+        };
 
-                    let mut tasks_executed_this_loop = 0;
-                    loop {
-                        let mut queue_ref = queue.borrow_mut();
-                        if self.need_preempt() || queue_ref.yielded() {
-                            break;
-                        }
+        let (runtime, tasks_executed_this_loop) = {
+            let detector = self.stall_detector.borrow();
+            let guard = detector.as_ref().map(|x| {
+                let queue = queue.borrow_mut();
+                x.enter_task_queue(
+                    queue.stats.index,
+                    queue.name.clone(),
+                    time,
+                    self.preempt_timer_duration(),
+                )
+            });
 
-                        if let Some(r) = queue_ref.get_task() {
-                            drop(queue_ref);
-                            r.run();
-                            tasks_executed_this_loop += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    let elapsed = time.elapsed();
-                    drop(guard);
-                    (elapsed, tasks_executed_this_loop)
-                };
-
-                let (need_repush, vruntime) = {
-                    let mut state = queue.borrow_mut();
-                    let last_vruntime = state.account_vruntime(runtime);
-                    (state.is_active(), last_vruntime)
-                };
-
-                let mut tq = self.queues.borrow_mut();
-                tq.active_executing = None;
-                tq.stats.executor_runtime += runtime;
-                tq.stats.tasks_executed += tasks_executed_this_loop;
-                let vruntime = match vruntime {
-                    Some(x) => x,
-                    None => {
-                        for queue in tq.available_executors.values() {
-                            let mut q = queue.borrow_mut();
-                            q.vruntime = 0;
-                        }
-                        0
-                    }
-                };
-
-                if need_repush {
-                    tq.active_executors.push(queue);
-                } else {
-                    tq.reevaluate_preempt_timer();
+            let mut tasks_executed_this_loop = 0;
+            loop {
+                let mut queue_ref = queue.borrow_mut();
+                if self.need_preempt() || queue_ref.yielded() {
+                    break;
                 }
 
-                // Compute the smallest vruntime out of all the active task queues
-                // This value is used to set the vruntime of deactivated task queues when they
-                // are woken up.
-                tq.default_vruntime = tq
-                    .active_executors
-                    .iter()
-                    .map(|x| x.borrow().vruntime)
-                    .min()
-                    .unwrap_or(vruntime);
-
-                true
+                if let Some(r) = queue_ref.get_task() {
+                    drop(queue_ref);
+                    r.run();
+                    tasks_executed_this_loop += 1;
+                } else {
+                    break;
+                }
             }
-            None => false,
+            let elapsed = time.elapsed();
+            drop(guard);
+            (elapsed, tasks_executed_this_loop)
+        };
+
+        let (need_repush, vruntime) = {
+            let mut state = queue.borrow_mut();
+            let last_vruntime = state.account_vruntime(runtime);
+            (state.is_active(), last_vruntime)
+        };
+
+        let mut tq = self.queues.borrow_mut();
+        tq.active_executing = None;
+        tq.stats.executor_runtime += runtime;
+        tq.stats.tasks_executed += tasks_executed_this_loop;
+        let vruntime = match vruntime {
+            Some(x) => x,
+            None => {
+                for queue in tq.available_executors.values() {
+                    let mut q = queue.borrow_mut();
+                    q.vruntime = 0;
+                }
+                0
+            }
+        };
+
+        if need_repush {
+            tq.active_executors.push(queue);
+        } else {
+            tq.reevaluate_preempt_timer();
         }
+
+        // Compute the smallest vruntime out of all the active task queues
+        // This value is used to set the vruntime of deactivated task queues when they
+        // are woken up.
+        tq.default_vruntime = tq
+            .active_executors
+            .peek()
+            .map(|x| x.borrow().vruntime)
+            .unwrap_or(vruntime);
+
+        true
     }
 
     /// Runs the executor until the given future completes.
@@ -1459,7 +1455,7 @@ impl LocalExecutor {
             let spin_before_park = self.spin_before_park().unwrap_or_default();
 
             let future = this
-                .spawn_into(async move { future.await }, TaskQueueHandle::default())
+                .spawn_into(future, TaskQueueHandle::default())
                 .unwrap()
                 .detach();
             pin!(future);
@@ -1615,7 +1611,7 @@ impl Default for LocalExecutor {
 ///
 /// let task = glommio::spawn_local(async move {
 ///     let ex = exclone.borrow();
-///     println!("Current value: {}", ex);
+///     println!("Current value: {ex}");
 /// });
 ///
 /// // This is fine if `task` executes after the current task, but will panic if
@@ -2843,8 +2839,7 @@ mod test {
         collections::HashMap,
         sync::{
             atomic::{AtomicUsize, Ordering},
-            Arc,
-            Mutex,
+            Arc, Mutex,
         },
         task::Waker,
     };
@@ -2910,7 +2905,7 @@ mod test {
     #[should_panic]
     fn spawn_without_executor() {
         let _ = LocalExecutor::default();
-        let _ = crate::spawn_local(async move {});
+        std::mem::drop(crate::spawn_local(async move {}));
     }
 
     #[test]
@@ -2944,10 +2939,11 @@ mod test {
                 let exec = executed_last.clone();
                 joins.push(crate::spawn_local(async move {
                     for _ in 0..10_000 {
-                        let mut last = exec.borrow_mut();
-                        assert_ne!(id, *last);
-                        *last = id;
-                        drop(last);
+                        {
+                            let mut last = exec.borrow_mut();
+                            assert_ne!(id, *last);
+                            *last = id;
+                        }
                         crate::executor().yield_task_queue_now().await;
                     }
                 }));
@@ -3005,7 +3001,7 @@ mod test {
                 .spawn_into(
                     crate::enclose! { (nolat_started, lat_status)
                         async move {
-                            // In case we are executed first, yield to the the other task
+                            // In case we are executed first, yield to the other task
                             loop {
                                 if !(*(nolat_started.borrow())) {
                                     crate::executor().yield_task_queue_now().await;
@@ -3088,17 +3084,18 @@ mod test {
                             let start = Instant::now();
                             // Now busy loop and make sure that we yield when we have too.
                             loop {
-                                let mut count = first_started.borrow_mut();
-                                *count += 1;
+                                {
+                                    let mut count = first_started.borrow_mut();
+                                    *count += 1;
 
-                                if start.elapsed().as_millis() >= 99 {
-                                    break;
-                                }
+                                    if start.elapsed().as_millis() >= 99 {
+                                        break;
+                                    }
 
-                                if *count < *(second_status.borrow()) {
-                                    panic!("I was preempted but should not have been");
+                                    if *count < *(second_status.borrow()) {
+                                        panic!("I was preempted but should not have been");
+                                    }
                                 }
-                                drop(count);
                                 crate::yield_if_needed().await;
                             }
                         }
@@ -3111,16 +3108,16 @@ mod test {
                 .spawn_into(
                     crate::enclose! { (first_started, second_status)
                         async move {
-                            // In case we are executed first, yield to the the other task
+                            // In case we are executed first, yield to the other task
                             loop {
-                                let mut count = second_status.borrow_mut();
-                                *count += 1;
-                                if *count >= *(first_started.borrow()) {
-                                    drop(count);
-                                    crate::executor().yield_task_queue_now().await;
-                                } else {
-                                    break;
+                                {
+                                    let mut count = second_status.borrow_mut();
+                                    *count += 1;
+                                    if *count < *(first_started.borrow()) {
+                                       break;
+                                    }
                                 }
+                                crate::executor().yield_task_queue_now().await;
                             }
                         }
                     },
@@ -3696,18 +3693,16 @@ mod test {
 
         fut_output.sort_unstable();
 
-        assert_eq!(fut_output, (0..nr_cpus).into_iter().collect::<Vec<_>>());
+        assert_eq!(fut_output, (0..nr_cpus).collect::<Vec<_>>());
 
         assert_eq!(nr_cpus, count.load(Ordering::Relaxed));
     }
 
     #[test]
     fn executor_invalid_executor_count() {
-        assert!(
-            LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(0))
-                .on_all_shards(|| async move {})
-                .is_err()
-        );
+        assert!(LocalExecutorPoolBuilder::new(PoolPlacement::Unbound(0))
+            .on_all_shards(|| async move {})
+            .is_err());
     }
 
     #[test]
@@ -3887,7 +3882,7 @@ mod test {
             .collect::<Vec<_>>();
 
         values.sort_unstable();
-        assert_eq!(values, (0..nr_execs).into_iter().collect::<Vec<_>>());
+        assert_eq!(values, (0..nr_execs).collect::<Vec<_>>());
     }
 
     #[test]
@@ -4142,7 +4137,7 @@ mod test {
                 }
 
                 // we created 5 blocking jobs each taking 100ms but our thread pool only has 4
-                // threads. SWe expect one of those jobs to take twice as long as the others.
+                // threads. We expect one of those jobs to take twice as long as the others.
 
                 let mut ts = join_all(blocking.into_iter()).await;
                 assert_eq!(ts.len(), 5);
@@ -4156,6 +4151,51 @@ mod test {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn blocking_function_placement_independent_of_executor_placement() {
+        let affinity = nix::sched::sched_getaffinity(nix::unistd::Pid::from_raw(0)).unwrap();
+        let num_cpus_accessible_by_default = (0..nix::sched::CpuSet::count())
+            .map(|cpu| affinity.is_set(cpu).unwrap() as usize)
+            .sum::<usize>();
+        if num_cpus_accessible_by_default < 2 {
+            eprintln!(
+                "Insufficient CPUs available to test blocking_function_placement_independent_of_executor_placement (affinity only allows for {})",
+                num_cpus_accessible_by_default,
+            );
+            return;
+        }
+
+        let num_schedulable_cpus = LocalExecutorBuilder::new(Placement::Fixed(0))
+            .blocking_thread_pool_placement(PoolPlacement::Unbound(2))
+            .spawn(|| async {
+                executor()
+                    .spawn_blocking(move || {
+                        let pid = nix::unistd::Pid::from_raw(0);
+                        let affinity =
+                            nix::sched::sched_getaffinity(pid).expect("Failed to get affinity");
+                        (0..nix::sched::CpuSet::count())
+                            .map(|cpu| {
+                                affinity
+                                    .is_set(cpu)
+                                    .expect("Failed to check if cpu affinity is set")
+                                    as usize
+                            })
+                            .sum::<usize>()
+                    })
+                    .await
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+
+        assert!(
+            num_schedulable_cpus >= num_cpus_accessible_by_default,
+            "num schedulable {}, num cpus accessible {}",
+            num_schedulable_cpus,
+            num_cpus_accessible_by_default,
+        );
     }
 
     #[test]

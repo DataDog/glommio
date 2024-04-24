@@ -4,22 +4,12 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2021 Datadog, Inc.
 //
 use crate::{
-    iou::sqe::{SockAddr, SockAddrStorage},
+    iou::sqe::SockAddrStorage,
     sys::{
-        DmaBuffer,
-        IoBuffer,
-        OsResult,
-        PollableStatus,
-        ReactorQueue,
-        SourceId,
-        TimeSpec64,
+        DmaBuffer, IoBuffer, OsResult, PollableStatus, ReactorQueue, SourceId, Statx, TimeSpec64,
         Wakers,
     },
-    GlommioError,
-    IoRequirements,
-    ReactorErrorKind,
-    RingIoStats,
-    TaskQueueHandle,
+    GlommioError, IoRequirements, ReactorErrorKind, RingIoStats, TaskQueueHandle,
 };
 use futures_lite::{future, io};
 use std::{
@@ -37,6 +27,8 @@ use std::{
 };
 
 #[derive(Debug)]
+#[allow(dead_code)] // Clippy is unhappy with some of the fields on these enums never being read,
+                    // but they are certainly used, and read by debug
 pub(crate) enum SourceType {
     Write(PollableStatus, IoBuffer),
     Read(PollableStatus, Option<IoBuffer>),
@@ -53,7 +45,7 @@ pub(crate) enum SourceType {
         DmaBuffer,
         libc::iovec,
         libc::msghdr,
-        nix::sys::socket::SockAddr,
+        nix::sys::socket::SockaddrStorage,
     ),
     Open(CString),
     FdataSync,
@@ -62,27 +54,28 @@ pub(crate) enum SourceType {
     Close,
     LinkRings,
     ForeignNotifier(u64, bool),
-    Statx(CString, Box<RefCell<libc::statx>>),
+    Statx(Box<RefCell<Statx>>),
     Timeout(TimeSpec64, u32),
-    Connect(SockAddr),
+    Connect(nix::sys::socket::SockaddrStorage),
     Accept(SockAddrStorage),
     Rename(PathBuf, PathBuf),
     CreateDir(PathBuf),
     Remove(PathBuf),
     BlockingFn,
     Invalid,
+    CopyFileRange(RawFd, u64, usize),
     #[cfg(feature = "bench")]
     Noop,
 }
 
-impl TryFrom<SourceType> for libc::statx {
+impl TryFrom<SourceType> for Statx {
     type Error = GlommioError<()>;
 
     fn try_from(value: SourceType) -> Result<Self, Self::Error> {
         match value {
-            SourceType::Statx(_, buf) => Ok(buf.into_inner()),
+            SourceType::Statx(buf) => Ok(buf.into_inner()),
             src => Err(GlommioError::ReactorError(
-                ReactorErrorKind::IncorrectSourceType(format!("{:?}", src)),
+                ReactorErrorKind::IncorrectSourceType(format!("{src:?}")),
             )),
         }
     }
@@ -224,7 +217,7 @@ impl Source {
     }
 
     pub(crate) fn buffer(&self) -> Ref<'_, IoBuffer> {
-        Ref::map(self.source_type(), |stype| match &*stype {
+        Ref::map(self.source_type(), |stype| match stype {
             SourceType::Read(_, Some(buffer)) => buffer,
             SourceType::Write(_, buffer) => buffer,
             x => panic!("Could not extract buffer. Source: {:?}", x),

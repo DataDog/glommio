@@ -5,8 +5,7 @@ use futures_lite::{
 use glommio::{
     enclose,
     net::{TcpListener, TcpStream},
-    LocalExecutorBuilder,
-    Placement,
+    LocalExecutorBuilder, Placement,
 };
 use std::{
     cell::Cell,

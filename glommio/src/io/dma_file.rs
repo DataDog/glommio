@@ -6,20 +6,15 @@
 use crate::{
     io::{
         bulk_io::{
-            CoalescedReads,
-            IoVec,
-            MergedBufferLimit,
-            OrderedBulkIo,
-            ReadAmplificationLimit,
-            ReadManyArgs,
-            ReadManyResult,
+            CoalescedReads, IoVec, MergedBufferLimit, OrderedBulkIo, ReadAmplificationLimit,
+            ReadManyArgs, ReadManyResult,
         },
         glommio_file::GlommioFile,
         open_options::OpenOptions,
         read_result::ReadResult,
         ScheduledSource,
     },
-    sys::{self, sysfs, DirectIo, DmaBuffer, PollableStatus},
+    sys::{self, sysfs, DirectIo, DmaBuffer, DmaSource, PollableStatus},
 };
 use futures_lite::{Stream, StreamExt};
 use nix::sys::statfs::*;
@@ -30,6 +25,8 @@ use std::{
     path::Path,
     rc::Rc,
 };
+
+use super::{glommio_file::OwnedGlommioFile, Stat};
 
 pub(super) type Result<T> = crate::Result<T, ()>;
 
@@ -51,7 +48,7 @@ pub(crate) fn align_down(v: u64, align: u64) -> u64 {
     v & !(align - 1)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// An asynchronously accessed Direct Memory Access (DMA) file.
 ///
 /// All access uses Direct I/O, and all operations including open and close are
@@ -140,7 +137,7 @@ impl DmaFile {
         let o_direct_alignment =
             sysfs::BlockDevice::logical_block_size(major, minor).max(512) as u64;
 
-        let pollable = if fstype == TMPFS_MAGIC {
+        let pollable = if (fstype.0 as u64) == (libc::TMPFS_MAGIC as u64) {
             PollableStatus::NonPollable(DirectIo::Disabled)
         } else {
             // Allow this to work on non direct I/O devices, but only if this is in-memory
@@ -204,6 +201,66 @@ impl DmaFile {
         OpenOptions::new().read(true).dma_open(path.as_ref()).await
     }
 
+    /// Creates a duplicate instance pointing to the same file descriptor as self.
+    ///
+    /// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+    /// <strong>Warning:</strong> If the file has been opened with `append`,
+    /// then the position for writes will get ignored and the buffer will be written at
+    /// the current end of file. See the [man page] for `O_APPEND`. All dup'ed files
+    /// will share the same offset (i.e. writes to one will affect the other).
+    /// </p>
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use glommio::{
+    ///   LocalExecutor,
+    ///   io::{
+    ///     OpenOptions,
+    ///     DmaBuffer,
+    ///   }
+    /// };
+    ///
+    /// fn populate(buf: &mut DmaBuffer) {
+    ///     buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
+    /// }
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     // A new anonymous file is created within `some_directory/`.
+    ///     let file = OpenOptions::new()
+    ///       .create_new(true)
+    ///       .read(true)
+    ///       .write(true)
+    ///       .tmpfile(true)
+    ///       .dma_open("some_directory")
+    ///       .await
+    ///       .unwrap();
+    ///
+    ///     let file2 = file.dup().unwrap();
+    ///
+    ///     let mut buf = file.alloc_dma_buffer(4096);
+    ///     // Write some data into the buffer.
+    ///     populate(&mut buf);
+    ///
+    ///     let written = file.write_at(buf, 0).await.unwrap();
+    ///     assert_eq!(written, 4096);
+    ///     file.close().await.unwrap();
+    ///
+    ///     let read = file2.read_at_aligned(0, 4096).await.unwrap();
+    ///     assert_eq!(read.len(), 4096);
+    ///     assert_eq!(&read[0..6], b"hello\0");
+    /// });
+    /// ```
+    pub fn dup(&self) -> Result<Self> {
+        Ok(Self {
+            file: enhanced_try!(self.file.dup(), "Duplicating", self.file)?,
+            o_direct_alignment: self.o_direct_alignment,
+            max_sectors_size: self.max_sectors_size,
+            max_segment_size: self.max_segment_size,
+            pollable: self.pollable,
+        })
+    }
+
     /// Write the buffer in `buf` to a specific position in the file.
     ///
     /// It is expected that the buffer and the position be properly aligned
@@ -222,6 +279,12 @@ impl DmaFile {
     /// is the situation, for example, when the device runs out of space
     /// (See the man page for write(2) for details)
     ///
+    /// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+    /// <strong>Warning:</strong> If the file has been opened with `append`,
+    /// then the position will get ignored and the buffer will be written at
+    /// the current end of file. See the [man page] for `O_APPEND`
+    /// </p>
+    ///
     /// # Examples
     /// ```no_run
     /// use glommio::{io::DmaFile, LocalExecutor};
@@ -238,10 +301,71 @@ impl DmaFile {
     /// ```
     ///
     /// [`alloc_dma_buffer`]: struct.DmaFile.html#method.alloc_dma_buffer
+    /// [man page]: https://man7.org/linux/man-pages/man2/open.2.html
     pub async fn write_at(&self, buf: DmaBuffer, pos: u64) -> Result<usize> {
         let source = self.file.reactor.upgrade().unwrap().write_dma(
             self.as_raw_fd(),
-            buf,
+            DmaSource::Owned(buf),
+            pos,
+            self.pollable,
+        );
+        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+    }
+
+    /// Equivalent to [`DmaFile::write_at`] except that the caller retains
+    /// non-mutable ownership of the underlying buffer. This can be useful if
+    /// you want to asynchronously process a page concurrently with writing it.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use futures::join;
+    /// use glommio::{
+    ///     io::{DmaBuffer, DmaFile},
+    ///     timer::sleep,
+    ///     LocalExecutor,
+    /// };
+    /// use std::rc::Rc;
+    ///
+    /// fn populate(buf: &mut DmaBuffer) {
+    ///     buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
+    /// }
+    ///
+    /// async fn transform(buf: &[u8]) -> Vec<u8> {
+    ///     // Dummy implementation that just returns a copy of what was written.
+    ///     sleep(std::time::Duration::from_millis(100)).await;
+    ///     buf.iter()
+    ///         .map(|a| if *a == 0 { 0 } else { *a + 1 })
+    ///         .collect()
+    /// }
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     let file = DmaFile::create("test.txt").await.unwrap();
+    ///
+    ///     let mut buf = file.alloc_dma_buffer(4096);
+    ///     // Write some data into the buffer.
+    ///     populate(&mut buf);
+    ///
+    ///     // Seal the buffer by moving ownership to a non-threaded reference
+    ///     // counter on the heap.
+    ///     let buf = Rc::new(buf);
+    ///
+    ///     let (written, transformed) = join!(
+    ///         async { file.write_rc_at(buf.clone(), 0).await.unwrap() },
+    ///         transform(buf.as_bytes())
+    ///     );
+    ///     assert_eq!(written, 4096);
+    ///     file.close().await.unwrap();
+    ///
+    ///     // transformed AND buf can still be used even though the buffer got
+    ///     // written. Note that there may be performance issues if buf is large
+    ///     // and you remain hanging onto it.
+    /// });
+    /// ```
+    pub async fn write_rc_at(&self, buf: Rc<DmaBuffer>, pos: u64) -> Result<usize> {
+        let source = self.file.reactor.upgrade().unwrap().write_dma(
+            self.as_raw_fd(),
+            DmaSource::Shared(buf),
             pos,
             self.pollable,
         );
@@ -358,6 +482,29 @@ impl DmaFile {
         }
     }
 
+    /// Copies a file range from one file to another in kernel space. This is going to have the same performance
+    /// characteristic as splice except if both files are on the same filesystem and the filesystem supports reflinks.
+    /// In that case, the underlying disk blocks will be CoW linked instead of actually performing a copy.
+    /// Since `copy_file_range` is not yet implemented on io_uring (https://github.com/axboe/liburing/issues/831),
+    /// this is just a dispatch to the blocking thread pool to do the syscall.
+    pub async fn copy_file_range_aligned(
+        &self,
+        fd_in: &DmaFile,
+        off_in: u64,
+        len: usize,
+        off_out: u64,
+    ) -> Result<usize> {
+        let source = self
+            .file
+            .reactor
+            .upgrade()
+            .unwrap()
+            .copy_file_range(fd_in.as_raw_fd(), off_in, self.as_raw_fd(), off_out, len)
+            .await;
+        let copy_size = enhanced_try!(source.collect_rw().await, "Copying file range", self.file)?;
+        Ok(copy_size)
+    }
+
     /// Issues `fdatasync` for the underlying file, instructing the OS to flush
     /// all writes to the device, providing durability even if the system
     /// crashes or is rebooted.
@@ -368,10 +515,34 @@ impl DmaFile {
         self.file.fdatasync().await.map_err(Into::into)
     }
 
+    /// Returns the alignment required for I/O operations. Typical values will
+    /// be 512 (NVME drive is configured in slower compat mode) or 4096
+    /// (typical TLC native alignment).
+    pub fn alignment(&self) -> u64 {
+        self.o_direct_alignment
+    }
+
+    /// Erases a range from the file without changing the size. Check the man
+    /// page for [`fallocate`] for a list of the supported filesystems.
+    /// Partial blocks are zeroed while whole blocks are simply unmapped
+    /// from the file. The reported file size (`file_size`) is unchanged but
+    /// the allocated file size may if you've erased whole filesystem blocks
+    /// ([`allocated_file_size`])
+    ///
+    /// [`fallocate`]: https://man7.org/linux/man-pages/man2/fallocate.2.html
+    /// [`allocated_file_size`]: struct.Stat.html#structfield.alloc_dma_buffer
+    pub async fn deallocate(&self, offset: u64, size: u64) -> Result<()> {
+        self.file.deallocate(offset, size).await
+    }
+
     /// pre-allocates space in the filesystem to hold a file at least as big as
-    /// the size argument.
-    pub async fn pre_allocate(&self, size: u64) -> Result<()> {
-        self.file.pre_allocate(size).await
+    /// the size argument. No existing data in the range [0, size) is modified.
+    /// If `keep_size` is false, then anything in [current file length, size)
+    /// will report zeroed blocks until overwritten and the file size reported
+    /// will be `size`. If `keep_size` is true then the existing file size
+    /// is unchanged.
+    pub async fn pre_allocate(&self, size: u64, keep_size: bool) -> Result<()> {
+        self.file.pre_allocate(size, keep_size).await
     }
 
     /// Hint to the OS the size of increase of this file, to allow more
@@ -425,6 +596,32 @@ impl DmaFile {
         self.file.file_size().await
     }
 
+    /// Returns the size of the filesystem cluster, in bytes
+    pub async fn stat(&self) -> Result<Stat> {
+        self.file.statx().await.map(Into::into)
+    }
+
+    /// Attempt to confirm no other clones of this file exist. If no clones exist,
+    /// Ok(self) is returned. If clones remain, Err(self) is returned. Do not use
+    /// this unless you are implementing a polling mechanism to determine when it's
+    /// safe to invoke close - dropping the error case is equivalent to just invoking
+    /// close and ignoring the result.
+    /// NOTE: Clones are allowed to exist on any thread and all share the same underlying
+    /// fd safely. try_take_last_clone is also safe to invoke from any thread and will
+    /// behave correctly with respect to clones on other threads.
+    pub fn try_take_last_clone(mut self) -> std::result::Result<Self, Self> {
+        match self.file.try_take_last_clone() {
+            Ok(took) => {
+                self.file = took;
+                Ok(self)
+            }
+            Err(still_cloned) => {
+                self.file = still_cloned;
+                Err(self)
+            }
+        }
+    }
+
     /// Closes this DMA file.
     pub async fn close(self) -> Result<()> {
         self.file.close().await
@@ -434,6 +631,23 @@ impl DmaFile {
     /// directory, or `None` if there isn't one.
     pub fn path(&self) -> Option<Ref<'_, Path>> {
         self.file.path()
+    }
+
+    /// The inode backing the file. A file with the same inode may appear under multiple
+    /// paths due to renaming and linking.
+    pub fn inode(&self) -> u64 {
+        self.file.inode
+    }
+
+    /// The major ID of the device containing the filesystem where the file resides.
+    /// The device may be found by issuing a `readlink`` on `/sys/dev/block/<major>:<minor>`
+    pub fn dev_major(&self) -> u32 {
+        self.file.dev_major
+    }
+
+    /// The minor ID of the device containing the filesystem where the file resides.
+    pub fn dev_minor(&self) -> u32 {
+        self.file.dev_minor
     }
 
     /// Convenience method that closes a DmaFile wrapped inside an Rc.
@@ -447,20 +661,150 @@ impl DmaFile {
     }
 }
 
+#[derive(Debug, Clone)]
+/// Takes ownership of internal state of the [`DmaFile`] that can be sent to an executor running on a different thread.
+/// In the other thread, you'd convert this back into a [`DmaFile`].
+///
+/// # Examples
+/// ```no_run
+/// use glommio::{
+///     io::{DmaFile, OpenOptions, OwnedDmaFile},
+///     LocalExecutor,
+/// };
+/// use std::os::unix::io::AsRawFd;
+///
+/// let main_ex = LocalExecutor::default();
+/// main_ex.run(async move {
+///     let file = OpenOptions::new()
+///         .create_new(true)
+///         .read(true)
+///         .write(true)
+///         .tmpfile(true)
+///         .dma_open("some directory")
+///         .await
+///         .expect("Failed to open file");
+///     let original_fd = file.as_raw_fd();
+///     let original_inode = file.inode();
+///
+///     let alignment = file.alignment();
+///     let fs_cluster_size = file.stat().await.unwrap().fs_cluster_size;
+///     let buffer_size = alignment.max(fs_cluster_size.into()) as usize;
+///
+///     let mut buffer = file.alloc_dma_buffer(buffer_size);
+///     buffer.as_bytes_mut().fill(1);
+///     file.write_at(buffer, 0).await.unwrap();
+///
+///     let to_send: OwnedDmaFile = file.into();
+///     let result: OwnedDmaFile = std::thread::spawn(move || {
+///         let background_ex = LocalExecutor::default();
+///
+///         let result = background_ex.run(async move {
+///             let file: DmaFile = to_send.into();
+///             assert_eq!(file.as_raw_fd(), original_fd);
+///             assert_eq!(file.inode(), original_inode);
+///
+///             let read = file.read_at_aligned(0, buffer_size).await.unwrap();
+///             assert!(read.iter().all(|&b| b == 1));
+///
+///             let mut buffer = file.alloc_dma_buffer(buffer_size);
+///             buffer.as_bytes_mut().fill(2);
+///
+///             file.write_at(buffer, 0).await.unwrap();
+///
+///             file.dup().unwrap().into()
+///         });
+///         // Make sure we cycle through the reactor one final time to process the
+///         // implicit close generated by the drop. This is generally true for glommio. However,
+///         // Most examples have `.run` return out of main and so the leak that would otherwise
+///         // happen is short lived. However, OwnedDmaFile means you're likely to create an executor
+///         // for a long-lived background thread and it's worth calling out that caveat here explicitly.
+///         background_ex.run(async move {});
+///         result
+///     })
+///     .join()
+///     .unwrap();
+///
+///     assert_eq!(nix::fcntl::fcntl(original_fd, nix::fcntl::FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+///
+///     let file: DmaFile = result.into();
+///     assert_ne!(file.as_raw_fd(), original_fd);
+///     assert_eq!(file.inode(), original_inode);
+///
+///     let read = file.read_at_aligned(0, buffer_size).await.unwrap();
+///     assert!(read.iter().all(|&b| b == 2));
+/// });
+/// ```
+pub struct OwnedDmaFile {
+    file: OwnedGlommioFile,
+    o_direct_alignment: u64,
+    max_sectors_size: usize,
+    max_segment_size: usize,
+    pollable: PollableStatus,
+}
+
+impl OwnedDmaFile {
+    /// Creates a duplicate instance pointing to the same file descriptor as self.
+    /// See [`DmaFile::dup`](struct.DmaFile.html#method.dup) for more info. This is
+    /// very different from cloning which simply adds a reference to the underlying
+    /// fd already open and should be preferred unless you are trying to intentionally
+    /// decouple lifetime of the file descriptors.
+    pub fn dup(&self) -> Result<Self> {
+        Ok(Self {
+            file: enhanced_try!(
+                self.file.dup(),
+                "Duplicating",
+                self.file.path.as_ref(),
+                self.file.fd.as_ref().map(|fd| fd.as_raw_fd())
+            )?,
+            o_direct_alignment: self.o_direct_alignment,
+            max_sectors_size: self.max_sectors_size,
+            max_segment_size: self.max_segment_size,
+            pollable: self.pollable,
+        })
+    }
+}
+
+impl From<DmaFile> for OwnedDmaFile {
+    fn from(value: DmaFile) -> Self {
+        Self {
+            file: value.file.into(),
+            o_direct_alignment: value.o_direct_alignment,
+            max_sectors_size: value.max_sectors_size,
+            max_segment_size: value.max_segment_size,
+            pollable: value.pollable,
+        }
+    }
+}
+
+impl From<OwnedDmaFile> for DmaFile {
+    fn from(value: OwnedDmaFile) -> Self {
+        Self {
+            file: value.file.into(),
+            o_direct_alignment: value.o_direct_alignment,
+            max_sectors_size: value.max_sectors_size,
+            max_segment_size: value.max_segment_size,
+            pollable: value.pollable,
+        }
+    }
+}
+
+impl AsRawFd for OwnedDmaFile {
+    fn as_raw_fd(&self) -> RawFd {
+        self.file.as_raw_fd()
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
     use crate::{
-        enclose,
-        test_utils::{make_test_directories, TestDirectoryKind},
-        ByteSliceMutExt,
-        Latency,
-        Shares,
+        enclose, test_utils::make_test_directories, ByteSliceMutExt, GlommioError, Latency,
+        LocalExecutor, ResourceType, Shares,
     };
     use futures::join;
     use futures_lite::{stream, StreamExt};
     use rand::{seq::SliceRandom, thread_rng};
-    use std::{cell::RefCell, path::PathBuf, time::Duration};
+    use std::{cell::RefCell, convert::TryInto, path::PathBuf, time::Duration};
 
     macro_rules! dma_file_test {
         ( $name:ident, $dir:ident, $kind:ident, $code:block) => {
@@ -534,17 +878,15 @@ pub(crate) mod test {
         new_file.close().await.expect("failed to close file");
     });
 
-    dma_file_test!(file_fallocate_alocatee, path, kind, {
+    dma_file_test!(file_fallocate_alocatee, path, _kind, {
         let new_file = DmaFile::create(path.join("testfile"))
             .await
             .expect("failed to create file");
 
-        let res = new_file.pre_allocate(4096).await;
-        if let TestDirectoryKind::TempFs = kind {
-            res.expect_err("fallocate should error on tmpfs");
-            return;
-        }
-        res.expect("fallocate failed");
+        new_file
+            .pre_allocate(4096, false)
+            .await
+            .expect("fallocate failed");
 
         std::assert_eq!(
             new_file.file_size().await.unwrap(),
@@ -555,7 +897,10 @@ pub(crate) mod test {
         std::assert_eq!(metadata.len(), 4096);
 
         // should be noop
-        new_file.pre_allocate(2048).await.expect("fallocate failed");
+        new_file
+            .pre_allocate(2048, false)
+            .await
+            .expect("fallocate failed");
 
         std::assert_eq!(
             new_file.file_size().await.unwrap(),
@@ -565,7 +910,36 @@ pub(crate) mod test {
         let metadata = std::fs::metadata(path.join("testfile")).unwrap();
         std::assert_eq!(metadata.len(), 4096);
 
+        let mut buf = new_file.alloc_dma_buffer(4096);
+        buf.as_bytes_mut()[0] = 1;
+        buf.as_bytes_mut()[4095] = 2;
+        new_file.write_at(buf, 0).await.expect("failed to write");
+
+        new_file
+            .pre_allocate(8192, true)
+            .await
+            .expect("fallocate failed");
+        let metadata = std::fs::metadata(path.join("testfile")).unwrap();
+        std::assert_eq!(metadata.len(), 4096);
+
+        new_file
+            .pre_allocate(8192, false)
+            .await
+            .expect("fallocate failed");
+        let metadata = std::fs::metadata(path.join("testfile")).unwrap();
+        std::assert_eq!(metadata.len(), 8192);
+
         new_file.close().await.expect("failed to close file");
+
+        let new_file = DmaFile::open(path.join("testfile"))
+            .await
+            .expect("failed to open file");
+        let read = new_file.read_at(0, 8192).await.expect("failed to read");
+        assert_eq!(read.len(), 8192);
+        assert_eq!(read[0], 1);
+        assert_eq!(read[4095], 2);
+        assert_eq!(read[4096], 0);
+        assert_eq!(read[8191], 0);
     });
 
     dma_file_test!(file_fallocate_zero, path, _k, {
@@ -573,7 +947,7 @@ pub(crate) mod test {
             .await
             .expect("failed to create file");
         new_file
-            .pre_allocate(0)
+            .pre_allocate(0, false)
             .await
             .expect_err("fallocate should fail with len == 0");
 
@@ -649,7 +1023,7 @@ pub(crate) mod test {
             .await
             .expect_err("writes to read-only files should fail");
         new_file
-            .pre_allocate(4096)
+            .pre_allocate(4096, false)
             .await
             .expect_err("pre allocating read-only files should fail");
         new_file.close().await.expect("failed to close file");
@@ -833,7 +1207,7 @@ pub(crate) mod test {
     dma_file_test!(file_many_reads, path, _k, {
         let new_file = Rc::new(write_dma_file(path.join("testfile"), 4096).await);
 
-        println!("{:?}", new_file);
+        println!("{new_file:?}");
 
         let total_reads = Rc::new(RefCell::new(0));
         let last_read = Rc::new(RefCell::new(-1));
@@ -938,5 +1312,593 @@ pub(crate) mod test {
             4096 / new_file.o_direct_alignment
         );
         new_file.close_rc().await.expect("failed to close file");
+    });
+
+    dma_file_test!(write_past_end, path, _k, {
+        let writer = DmaFile::create(path.join("testfile")).await.unwrap();
+        let reader = DmaFile::open(path.join("testfile")).await.unwrap();
+
+        let stat = reader.stat().await.unwrap();
+        assert_eq!(stat.file_size, 0);
+        assert_eq!(stat.allocated_file_size, 0);
+
+        let cluster_size = stat.fs_cluster_size;
+        assert!(cluster_size >= 512, "{}", stat.fs_cluster_size);
+
+        let mut buffer = writer.alloc_dma_buffer(512);
+        for (elem, val) in buffer.as_bytes_mut().iter_mut().zip(1..513) {
+            *elem = val as u8;
+        }
+        let r = writer
+            .write_at(buffer, (cluster_size * 2).into())
+            .await
+            .unwrap();
+        assert_eq!(r, 512);
+
+        let stat = reader.stat().await.unwrap();
+        assert_eq!(stat.file_size, (cluster_size * 2 + 512).into());
+        assert_eq!(stat.allocated_file_size, (cluster_size).into());
+        assert_eq!(stat.fs_cluster_size, cluster_size);
+
+        let rb = reader
+            .read_at_aligned(0, (cluster_size * 2).try_into().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), (cluster_size * 2).try_into().unwrap());
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        let rb = reader
+            .read_at_aligned((cluster_size * 2).into(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), 512);
+        for (idx, i) in rb.iter().enumerate() {
+            assert_eq!(*i, (idx + 1) as u8);
+        }
+
+        let mut buffer = writer.alloc_dma_buffer(512);
+        for (elem, val) in buffer.as_bytes_mut().iter_mut().zip(3..515) {
+            *elem = val as u8;
+        }
+        let r = writer.write_at(buffer, 512).await.unwrap();
+        assert_eq!(r, 512);
+
+        let stat = reader.stat().await.unwrap();
+        assert_eq!(stat.file_size, (cluster_size * 2 + 512).into());
+        assert_eq!(stat.allocated_file_size, (cluster_size * 2).into());
+        assert_eq!(stat.fs_cluster_size, cluster_size);
+
+        let rb = reader.read_at_aligned(0, 512).await.unwrap();
+        assert_eq!(rb.len(), 512);
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        let rb = reader.read_at_aligned(512, 512).await.unwrap();
+        assert_eq!(rb.len(), 512);
+        for (idx, i) in rb.iter().enumerate() {
+            assert_eq!(*i, (idx + 3) as u8);
+        }
+
+        let rb = reader
+            .read_at_aligned(1024, (cluster_size * 2 - 1024).try_into().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), (cluster_size * 2 - 1024).try_into().unwrap());
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        // Deallocating past the end of file doesn't matter. The size doesn't change.
+        writer
+            .deallocate((cluster_size * 2).into(), (cluster_size * 2).into())
+            .await
+            .unwrap();
+        let stat = reader.stat().await.unwrap();
+        // File size remains unchanged.
+        assert_eq!(stat.file_size, (cluster_size * 2 + 512).into());
+        // Only one allocated cluster remains.
+        assert_eq!(stat.allocated_file_size, cluster_size.into());
+
+        // Deallocated range now returns 0s.
+        let rb = reader
+            .read_at_aligned((cluster_size * 2).into(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), 512);
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+    });
+
+    dma_file_test!(file_rc_write, path, _k, {
+        let new_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .dma_open(path.join("testfile"))
+            .await
+            .expect("failed to create file");
+
+        let bytes = 4096;
+
+        let mut buf = new_file.alloc_dma_buffer(bytes);
+        for x in 0..bytes {
+            buf.as_bytes_mut()[x] = x as u8;
+        }
+        let buf = Rc::new(buf);
+        let res = new_file
+            .write_rc_at(buf.clone(), 0)
+            .await
+            .expect("failed to write");
+        assert_eq!(res, bytes);
+        new_file.fdatasync().await.expect("failed to sync disk");
+        new_file.close().await.expect("failed to close file");
+
+        assert_eq!(buf.as_bytes()[1], 1);
+    });
+
+    dma_file_test!(mirror_buffer_to_two_files, path, _k, {
+        let (file1, file2) = join!(
+            async {
+                OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .read(true)
+                    .dma_open(path.join("testfile1"))
+                    .await
+                    .expect("failed to create file 1")
+            },
+            async {
+                OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .read(true)
+                    .dma_open(path.join("testfile2"))
+                    .await
+                    .expect("failed to create file 2")
+            }
+        );
+
+        let bytes = 4096;
+
+        let mut buf = file1.alloc_dma_buffer(bytes);
+        buf.memset(104);
+
+        let buf1 = Rc::new(buf);
+        let buf2 = buf1.clone();
+
+        let (written1, written2) = join!(
+            async {
+                file1
+                    .write_rc_at(buf1, 0)
+                    .await
+                    .expect("failed to write testfile1")
+            },
+            async {
+                file2
+                    .write_rc_at(buf2, 0)
+                    .await
+                    .expect("failed to write testfile2")
+            }
+        );
+
+        assert_eq!(written1, bytes);
+        assert_eq!(written2, bytes);
+
+        let (buf1, buf2) = join!(
+            async {
+                file1
+                    .read_at_aligned(0, bytes)
+                    .await
+                    .expect("failed to read testfile1")
+            },
+            async {
+                file2
+                    .read_at_aligned(0, bytes)
+                    .await
+                    .expect("failed to read testfile2")
+            }
+        );
+
+        join!(async move { file1.close().await.unwrap() }, async move {
+            file2.close().await.unwrap()
+        });
+
+        assert_eq!(buf1.len(), bytes);
+        assert_eq!(buf2.len(), bytes);
+
+        assert_eq!(*buf1, *buf2);
+    });
+
+    dma_file_test!(send_file_across_threads, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .expect("Failed to open file");
+        let original_fd = file.as_raw_fd();
+        let original_inode = file.file.inode;
+
+        let alignment = file.alignment();
+        let fs_cluster_size = file.stat().await.unwrap().fs_cluster_size;
+        let buffer_size = alignment.max(fs_cluster_size.into()) as usize;
+
+        let mut buffer = file.alloc_dma_buffer(buffer_size);
+        buffer.as_bytes_mut().fill(1);
+        file.write_at(buffer, 0).await.unwrap();
+
+        let to_send: OwnedDmaFile = file.into();
+        let result: OwnedDmaFile = std::thread::spawn(move || {
+            let local_ex = LocalExecutor::default();
+
+            let result = local_ex.run(async move {
+                let file: DmaFile = to_send.into();
+                assert_eq!(file.as_raw_fd(), original_fd);
+                assert_eq!(file.file.inode, original_inode);
+
+                let read = file.read_at_aligned(0, buffer_size).await.unwrap();
+                assert!(read.iter().all(|&b| b == 1));
+
+                let mut buffer = file.alloc_dma_buffer(buffer_size);
+                buffer.as_bytes_mut().fill(2);
+
+                file.write_at(buffer, 0).await.unwrap();
+
+                file.dup().unwrap().into()
+            });
+            // Make sure we cycle through the reactor one final time to process the
+            // implicit close generated by the drop.
+            local_ex.run(async move {});
+            result
+        })
+        .join()
+        .unwrap();
+
+        let file: DmaFile = result.into();
+        assert_ne!(file.as_raw_fd(), original_fd);
+        assert_eq!(file.file.inode, original_inode);
+
+        let read = file.read_at_aligned(0, buffer_size).await.unwrap();
+        assert!(read.iter().all(|&b| b == 2));
+    });
+
+    dma_file_test!(dup, path, _k, {
+        fn populate(buf: &mut DmaBuffer) {
+            buf.as_bytes_mut()[0..5].copy_from_slice(b"hello");
+            buf.as_bytes_mut()[5..].fill(0);
+        }
+
+        // A new anonymous file is created within `some_directory/`.
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .unwrap();
+
+        let file2 = file.dup().unwrap();
+        let buffer_size = file.o_direct_alignment.try_into().unwrap();
+        let mut buf = file.alloc_dma_buffer(buffer_size);
+        // Write some data into the buffer.
+        populate(&mut buf);
+
+        let written = file.write_at(buf, 0).await.unwrap();
+        assert_eq!(written, buffer_size);
+        file.close().await.unwrap();
+
+        let read = file2.read_at_aligned(0, buffer_size).await.unwrap();
+        assert_eq!(read.len(), buffer_size);
+        assert_eq!(
+            &read[0..6],
+            b"hello\0",
+            "{}",
+            String::from_utf8_lossy(&read[0..6])
+        );
+    });
+
+    dma_file_test!(tmpfile_fails_if_not_writable, path, _k, {
+        OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(false)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .expect_err("O_TMPFILE requires opening with write permissions");
+    });
+
+    dma_file_test!(deleted_file_still_can_be_stat, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .dma_open(path.join("deleted_file_still_can_be_stat"))
+            .await
+            .expect("file should open");
+        let mut buf = file.alloc_dma_buffer(512);
+        buf.as_bytes_mut().fill(2);
+        file.write_at(buf, 0)
+            .await
+            .expect("should be able to write the file");
+        file.remove().await.expect("should have removed file");
+        let stat = file
+            .stat()
+            .await
+            .expect("should be able to state unlinked but open file");
+        assert_eq!(stat.file_size, 512);
+    });
+
+    dma_file_test!(tmpfiles_have_unique_inode, path, _k, {
+        let f1 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let f2 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        assert_ne!(f1.inode(), f2.inode());
+        assert_eq!(f1.stat().await.unwrap().file_size, 0);
+        assert_eq!(f2.stat().await.unwrap().file_size, 0);
+
+        let mut buf = f1.alloc_dma_buffer(512);
+        buf.as_bytes_mut().fill(2);
+        f1.write_at(buf, 0)
+            .await
+            .expect("failed to write to temporary file");
+        assert_eq!(f1.stat().await.unwrap().file_size, 512);
+    });
+
+    dma_file_test!(resize_dma_buf, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(path)
+            .await
+            .expect("Failed to open file");
+
+        let alignment =
+            (file.alignment()).max(file.stat().await.unwrap().fs_cluster_size.into()) as usize;
+
+        let mut buffer = file.alloc_dma_buffer(2 * alignment);
+        buffer.as_bytes_mut()[0..alignment].fill(1);
+        buffer.as_bytes_mut()[alignment..].fill(2);
+        buffer.trim_to_size(alignment);
+
+        assert_eq!(alignment, file.write_at(buffer, 0).await.unwrap());
+
+        let read = file.read_at_aligned(0, 2 * alignment).await.unwrap();
+        assert_eq!(read.len(), alignment);
+        assert!(read.iter().all(|&b| b == 1));
+    });
+
+    dma_file_test!(copy_file_range, path, _k, {
+        let file1 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let file2 = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let buffer_len = file1.alignment().max(4096) as usize;
+        let mut buffer = file1.alloc_dma_buffer(buffer_len);
+        buffer.as_bytes_mut().fill(0);
+        for i in 0..10u8 {
+            buffer.as_bytes_mut()[i as usize] = i;
+        }
+        let original_write_buffer = buffer.as_bytes_mut().to_vec();
+
+        file1.write_at(buffer, 0).await.unwrap();
+
+        assert_eq!(
+            buffer_len,
+            file2
+                .copy_file_range_aligned(&file1, 0, buffer_len, 0)
+                .await
+                .unwrap()
+        );
+
+        let read = file2.read_at_aligned(0, buffer_len).await.unwrap();
+        assert_eq!(read.len(), buffer_len);
+        assert_eq!(original_write_buffer.as_slice(), &read[..]);
+    });
+
+    dma_file_test!(close_fails_if_clone_exists, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let cloned_file = file.clone();
+        assert_eq!(cloned_file.as_raw_fd(), file.as_raw_fd());
+
+        let cloned_file = cloned_file
+            .try_take_last_clone()
+            .expect_err("Can't take when a clone still exists");
+
+        match file.close().await {
+            Err(GlommioError::CanNotBeClosed(ResourceType::File(failed_path), reason)) => {
+                assert_eq!(Path::new(&failed_path), path);
+                assert_eq!(
+                    reason,
+                    "Another clone of this file exists somewhere - cannot close fd"
+                );
+            }
+            Ok(()) => panic!("Cannot close file while a clone exists"),
+            Err(e) => panic!("File close failed with an unexpected error {e:?}"),
+        }
+
+        cloned_file
+            .close()
+            .await
+            .expect("Last reference to file should close successfully");
+    });
+
+    dma_file_test!(close_succeeds_on_background_thread, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let cloned_file: OwnedDmaFile = file.clone().into();
+        assert_eq!(cloned_file.as_raw_fd(), file.as_raw_fd());
+
+        let (clone_registered_on_background_thread, waiting_for_registration) =
+            tokio::sync::oneshot::channel();
+        let (test_thread_dropped_file, waiting_for_file_drop) = tokio::sync::oneshot::channel();
+
+        let test_thread = std::thread::current().id();
+
+        let spawned_task = crate::executor()
+            .spawn_local(async move {
+                crate::executor()
+                    .spawn_blocking(move || {
+                        let local_ex = crate::executor::LocalExecutorBuilder::new(
+                            crate::executor::Placement::Unbound,
+                        )
+                        .record_io_latencies(true)
+                        .make()
+                        .unwrap();
+                        local_ex.run(async move {
+                            assert_ne!(
+                                std::thread::current().id(),
+                                test_thread,
+                                "Blocking thread and test thread shouldn't be the same thread"
+                            );
+
+                            let cloned_file: DmaFile = cloned_file.into();
+
+                            clone_registered_on_background_thread.send(()).unwrap();
+                            waiting_for_file_drop.await.unwrap();
+
+                            cloned_file
+                                .try_take_last_clone()
+                                .expect("No more clones should exist")
+                                .close()
+                                .await
+                                .expect("Close on background thread should succeed");
+                        })
+                    })
+                    .await
+            })
+            .detach();
+
+        waiting_for_registration.await.unwrap();
+        let _ = file
+            .try_take_last_clone()
+            .expect_err("A clone is expected to exist");
+        test_thread_dropped_file.send(()).unwrap();
+        spawned_task.await.expect("Task wasn't cancelled");
+    });
+
+    dma_file_test!(share_file_between_threads, path, _k, {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .tmpfile(true)
+            .dma_open(&path)
+            .await
+            .unwrap();
+
+        let cloned_file = file.clone();
+        assert_eq!(cloned_file.as_raw_fd(), file.as_raw_fd());
+
+        let owned_clone: OwnedDmaFile = cloned_file.into();
+
+        let test_thread = std::thread::current().id();
+
+        let expected_buffer: Vec<u8> = crate::executor()
+            .spawn_blocking(move || {
+                let local_ex =
+                    crate::executor::LocalExecutorBuilder::new(crate::executor::Placement::Unbound)
+                        .record_io_latencies(true)
+                        .make()
+                        .unwrap();
+                local_ex.run(async move {
+                    assert_ne!(
+                        std::thread::current().id(),
+                        test_thread,
+                        "Blocking thread and test thread shouldn't be the same thread"
+                    );
+
+                    let cloned_file: DmaFile = owned_clone.into();
+
+                    let buffer_len = cloned_file.alignment().max(4096) as usize;
+                    let mut buffer = cloned_file.alloc_dma_buffer(buffer_len);
+                    buffer.as_bytes_mut().fill(0);
+                    for i in 0..10u8 {
+                        buffer.as_bytes_mut()[i as usize] = i;
+                    }
+                    let original_write_buffer = buffer.as_bytes_mut().to_vec();
+
+                    cloned_file
+                        .write_at(buffer, cloned_file.alignment())
+                        .await
+                        .expect("File should be written from background thread successfully");
+
+                    // See close_fails_if_clone_exists - error should be returned by close if a clone
+                    // exists & that includes clones materialized on other threads.
+                    if let GlommioError::CanNotBeClosed(ResourceType::File(_), _) =
+                        cloned_file.close().await.expect_err(
+                            "File shouldn't close because clone still exists back on main thread",
+                        )
+                    {
+                    } else {
+                        panic!("Unexpected error closing file");
+                    }
+
+                    original_write_buffer
+                })
+            })
+            .await;
+
+        let found_buffer = file
+            .read_at_aligned(file.alignment(), expected_buffer.len())
+            .await
+            .expect("File should be read from foreground thread successfully");
+        assert_eq!(&*found_buffer, expected_buffer.as_slice());
     });
 }
