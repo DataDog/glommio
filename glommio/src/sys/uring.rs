@@ -70,7 +70,7 @@ enum UringOpDescriptor {
     LinkTimeout(*const uring_sys::__kernel_timespec),
     Accept(*mut SockAddrStorage),
     Fallocate(u64, u64, libc::c_int),
-    Statx(*const u8, *mut Statx),
+    StatxFd(RawFd, *mut Statx),
     Timeout(*const uring_sys::__kernel_timespec, u32),
     TimeoutRemove(u64),
     SockSend(*const u8, usize, i32),
@@ -334,12 +334,12 @@ fn fill_sqe<F>(
                 let flags = FallocateFlags::from_bits_truncate(flags);
                 sqe.prep_fallocate(op.fd, offset, size, flags);
             }
-            UringOpDescriptor::Statx(path, statx_buf) => {
-                let flags = StatxFlags::AT_STATX_SYNC_AS_STAT | StatxFlags::AT_NO_AUTOMOUNT;
+            UringOpDescriptor::StatxFd(fd, statx_buf) => {
+                let flags = StatxFlags::AT_STATX_SYNC_AS_STAT
+                    | StatxFlags::AT_NO_AUTOMOUNT
+                    | StatxFlags::AT_EMPTY_PATH;
                 let mode = StatxMode::from_bits_truncate(0x7ff);
-
-                let path = CStr::from_ptr(path as _);
-                sqe.prep_statx(-1, path, flags, mode, &mut *statx_buf);
+                sqe.prep_statx(fd, Default::default(), flags, mode, &mut *statx_buf);
             }
             UringOpDescriptor::Timeout(timespec, events) => {
                 sqe.prep_timeout(&*timespec, events, TimeoutFlags::empty());
@@ -1641,12 +1641,11 @@ impl Reactor {
         );
     }
 
-    pub(crate) fn statx(&self, source: &Source) {
+    pub(crate) fn statx_fd(&self, source: &Source) {
         let op = match &*source.source_type() {
-            SourceType::Statx(path, buf) => {
-                let path = path.as_c_str().as_ptr();
+            SourceType::Statx(buf) => {
                 let buf = buf.as_ptr();
-                UringOpDescriptor::Statx(path as _, buf)
+                UringOpDescriptor::StatxFd(source.raw(), buf)
             }
             _ => panic!("Unexpected source for statx operation"),
         };

@@ -54,7 +54,7 @@ pub(crate) enum SourceType {
     Close,
     LinkRings,
     ForeignNotifier(u64, bool),
-    Statx(CString, Box<RefCell<Statx>>),
+    Statx(Box<RefCell<Statx>>),
     Timeout(TimeSpec64, u32),
     Connect(nix::sys::socket::SockaddrStorage),
     Accept(SockAddrStorage),
@@ -73,7 +73,7 @@ impl TryFrom<SourceType> for Statx {
 
     fn try_from(value: SourceType) -> Result<Self, Self::Error> {
         match value {
-            SourceType::Statx(_, buf) => Ok(buf.into_inner()),
+            SourceType::Statx(buf) => Ok(buf.into_inner()),
             src => Err(GlommioError::ReactorError(
                 ReactorErrorKind::IncorrectSourceType(format!("{src:?}")),
             )),

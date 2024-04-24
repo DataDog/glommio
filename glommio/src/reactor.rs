@@ -737,9 +737,7 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn statx(&self, raw: RawFd, path: &Path) -> Source {
-        let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
-
+    pub(crate) fn statx(&self, raw: RawFd) -> Source {
         let statx_buf = unsafe {
             let statx_buf = mem::MaybeUninit::<Statx>::zeroed();
             statx_buf.assume_init()
@@ -747,10 +745,10 @@ impl Reactor {
 
         let source = self.new_source(
             raw,
-            SourceType::Statx(path, Box::new(RefCell::new(statx_buf))),
+            SourceType::Statx(Box::new(RefCell::new(statx_buf))),
             None,
         );
-        self.sys.statx(&source);
+        self.sys.statx_fd(&source);
         source
     }
 

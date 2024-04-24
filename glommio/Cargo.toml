@@ -26,7 +26,7 @@ buddy-alloc = "0.4"
 concurrent-queue = "1.2"
 crossbeam = "0.8"
 enclose = "1.1"
-flume = { version = "0.10", features = ["async"] }
+flume = { version = "0.11", features = ["async"] }
 futures-lite = "1.12"
 intrusive-collections = "0.9"
 lazy_static = "1.4"
