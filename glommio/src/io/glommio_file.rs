@@ -18,7 +18,7 @@ use std::{
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     path::{Path, PathBuf},
     rc::{Rc, Weak},
-    sync::Arc,
+    sync::{Arc, Weak as AWeak},
 };
 
 type Result<T> = crate::Result<T, ()>;
@@ -346,6 +346,16 @@ impl GlommioFile {
         let st = self.statx().await?;
         Ok(st.stx_size)
     }
+
+    pub(crate) fn downgrade(&self) -> WeakGlommioFile {
+        WeakGlommioFile {
+            fd: self.file.as_ref().map_or(AWeak::new(), Arc::downgrade),
+            path: self.path.borrow().clone(),
+            inode: self.inode,
+            dev_major: self.dev_major,
+            dev_minor: self.dev_minor,
+        }
+    }
 }
 
 /// This lets you open a DmaFile on one thread and then send it safely to another thread for processing.
@@ -372,6 +382,16 @@ impl OwnedGlommioFile {
             dev_major: self.dev_major,
             dev_minor: self.dev_minor,
         })
+    }
+
+    pub fn downgrade(&self) -> WeakGlommioFile {
+        WeakGlommioFile {
+            fd: self.fd.as_ref().map_or(AWeak::new(), Arc::downgrade),
+            path: self.path.clone(),
+            inode: self.inode,
+            dev_major: self.dev_major,
+            dev_minor: self.dev_minor,
+        }
     }
 }
 
@@ -414,6 +434,27 @@ impl From<GlommioFile> for OwnedGlommioFile {
             dev_major: value.dev_major,
             dev_minor: value.dev_minor,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WeakGlommioFile {
+    pub(crate) fd: AWeak<RawFd>,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) inode: u64,
+    pub(crate) dev_major: u32,
+    pub(crate) dev_minor: u32,
+}
+
+impl WeakGlommioFile {
+    pub(crate) fn upgrade(&self) -> Option<OwnedGlommioFile> {
+        self.fd.upgrade().map(|fd| OwnedGlommioFile {
+            fd: Some(fd),
+            path: self.path.clone(),
+            inode: self.inode,
+            dev_major: self.dev_major,
+            dev_minor: self.dev_minor,
+        })
     }
 }
 

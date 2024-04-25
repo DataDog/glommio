@@ -170,7 +170,7 @@ mod hyper_compat {
             while let Some(next) = response.frame().await {
                 let frame = next.unwrap();
                 if let Some(chunk) = frame.data_ref() {
-                    res_buff.write_all(&chunk).unwrap();
+                    res_buff.write_all(chunk).unwrap();
                 }
             }
 
@@ -221,7 +221,7 @@ mod hyper_compat {
             while let Some(next) = response.frame().await {
                 let frame = next.unwrap();
                 if let Some(chunk) = frame.data_ref() {
-                    res_buff.write_all(&chunk).unwrap();
+                    res_buff.write_all(chunk).unwrap();
                 }
             }
 
