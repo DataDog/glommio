@@ -577,7 +577,7 @@ impl TimerActionRepeat {
     ///
     /// * `action_gen` a Future to be executed repeatedly. The Future's return
     ///   value must be
-    /// Option<Duration>. If [`Some`], It will execute again after Duration
+    /// `Option<Duration>`. If [`Some`], It will execute again after Duration
     /// elapses. If `None`, it stops.
     /// * `tq` the [`TaskQueueHandle`] for the TaskQueue we want.
     ///
@@ -641,7 +641,7 @@ impl TimerActionRepeat {
     ///
     /// * `action_gen` a Future to be executed repeatedly. The Future's return
     ///   value must be
-    /// Option<Duration>. If [`Some`], It will execute again after Duration
+    /// `Option<Duration>`. If [`Some`], It will execute again after Duration
     /// elapses. If `None`, it stops.
     ///
     /// # Examples
