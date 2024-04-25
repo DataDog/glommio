@@ -893,7 +893,7 @@ impl UringCommon for PollRing {
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         submit_event_chain(
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
             &mut self.ring,
             self.allocator.clone(),
             queue,
@@ -1206,7 +1206,7 @@ impl UringCommon for SleepableRing {
 
     fn submit_one_event(&mut self, queue: &mut VecDeque<UringDescriptor>) -> Option<bool> {
         submit_event_chain(
-            &mut *self.source_map.borrow_mut(),
+            &mut self.source_map.borrow_mut(),
             &mut self.ring,
             self.allocator.clone(),
             queue,
