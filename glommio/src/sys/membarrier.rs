@@ -226,3 +226,18 @@ pub(crate) fn heavy() {
         Fallback => atomic::fence(atomic::Ordering::SeqCst),
     }
 }
+
+/// The membarrier strategy is expensive to initialize. Expose that initialization so
+/// that [crate::executor::early_init] can call it (it also gets intentionally called
+/// by [crate::executor::LocalExecutor::new] in case the user didn't).
+///
+/// I believe the cost of registration got worse sometime after Linux 6.6 because tests
+/// in my project that do a sleep on a timer as the first thing started taking >30ms
+/// after upgrading to 6.8 whereas before they were mostly succeeding < 30ms (it was
+/// my hacky attempt at dealing with setting a timeout on how long a timer could take
+/// before I dug into the problem once 6.8 made it unbearable & waiting up to 100ms
+/// for a 10ms test seemed silly & was hard to write assertions around).
+#[inline]
+pub(crate) fn initialize_strategy() {
+    let _ = *STRATEGY;
+}

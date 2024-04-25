@@ -1195,4 +1195,21 @@ mod test {
 
         handle.join().unwrap();
     }
+
+    #[test]
+    fn first_timer_finishes_with_expected_duration() {
+        test_executor!(async move {
+            let start = Instant::now();
+            Timer::new(Duration::from_millis(3)).await;
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed >= Duration::from_millis(3),
+                "Timer expired too soon: {elapsed:?}"
+            );
+            assert!(
+                elapsed <= Duration::from_millis(5),
+                "Timer took way too long to run: {elapsed:?}"
+            );
+        });
+    }
 }

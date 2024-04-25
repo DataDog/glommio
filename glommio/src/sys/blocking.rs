@@ -20,6 +20,8 @@ use std::{
     thread::JoinHandle,
 };
 
+use super::membarrier;
+
 // So hard to copy/clone io::Error, plus need to send between threads. Best to
 // do all i64.
 macro_rules! raw_syscall {
@@ -193,6 +195,14 @@ impl BlockingThreadPool {
         placement: PoolPlacement,
         sleep_notifier: Arc<SleepNotifier>,
     ) -> crate::Result<Self, ()> {
+        // Make sure to initialize the membarrier before the thread pool is constructed so that registration
+        // is much cheaper. Additionally, even if we take the expensive slow path, we do it here instead
+        // of at the reactor hot loop which synchronously blocks the io_uring loop to register the membarrier.
+        // https://github.com/DataDog/glommio/issues/652
+        // An alternative solution is to pull in https://crates.io/crates/ctor as a dependency and run this
+        // that way - then the public API to call early_init can be elided wholesale.
+        membarrier::initialize_strategy();
+
         let (in_tx, in_rx) = flume::bounded(4 << 10);
         let (out_tx, out_rx) = flume::bounded(4 << 10);
         let in_rx = Arc::new(in_rx);
