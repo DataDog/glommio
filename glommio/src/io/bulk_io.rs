@@ -1,8 +1,6 @@
 use crate::io::{
     dma_file::{align_down, align_up},
-    DmaFile,
-    ReadResult,
-    ScheduledSource,
+    DmaFile, ReadResult, ScheduledSource,
 };
 use core::task::{Context, Poll};
 use futures_lite::{ready, Stream, StreamExt};
@@ -186,7 +184,7 @@ impl<V: IoVec> IOVecMerger<V> {
     }
 
     pub(super) fn flush(&mut self) -> Option<MergedIOVecs<V>> {
-        self.current.map(|x| MergedIOVecs {
+        self.current.take().map(|x| MergedIOVecs {
             coalesced_user_iovecs: self.merged.drain(..).collect(),
             pos: x.pos(),
             size: x.size(),
@@ -718,5 +716,26 @@ mod tests {
                 ]
             );
         });
+    }
+
+    #[test]
+    fn flush_merger() {
+        let mut merger = IOVecMerger::<(u64, usize)> {
+            max_merged_buffer_size: 102400,
+            max_read_amp: None,
+            current: None,
+            merged: VecDeque::new(),
+        };
+        assert!(merger.flush().is_none());
+
+        assert!(merger.merge((0u64, 4096usize)).is_none());
+        let f = merger.flush().unwrap();
+        assert_eq!(f.pos(), 0);
+        assert_eq!(f.size(), 4096);
+
+        assert!(merger.merge((4096u64, 4096usize)).is_none());
+        let f = merger.flush().unwrap();
+        assert_eq!(f.pos(), 4096);
+        assert_eq!(f.size(), 4096);
     }
 }

@@ -12,13 +12,7 @@ use std::{
 };
 
 use intrusive_collections::{
-    container_of,
-    linked_list::LinkOps,
-    offset_of,
-    Adapter,
-    LinkedList,
-    LinkedListLink,
-    PointerOps,
+    container_of, linked_list::LinkOps, offset_of, Adapter, LinkedList, LinkedListLink, PointerOps,
 };
 use std::{marker::PhantomPinned, ptr::NonNull, rc::Rc};
 
@@ -768,7 +762,7 @@ mod test {
             },
             async move {
                 update_cond!(exec2, 1);
-                let _ = sem2.signal(1);
+                sem2.signal(1);
                 wait_on_cond!(exec2, 2, 1);
             }
         );
@@ -951,7 +945,7 @@ mod test {
             })
             .detach();
 
-            let _ = semaphore.acquire(1).await.unwrap();
+            semaphore.acquire(1).await.unwrap();
         });
     }
 

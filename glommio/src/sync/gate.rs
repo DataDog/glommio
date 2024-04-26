@@ -7,10 +7,7 @@ use futures_lite::Future;
 
 use crate::{
     channels::local_channel::{self, LocalSender},
-    GlommioError,
-    ResourceType,
-    Task,
-    TaskQueueHandle,
+    GlommioError, ResourceType, Task, TaskQueueHandle,
 };
 
 #[derive(Debug)]
@@ -187,9 +184,9 @@ mod tests {
             let spawn_task = |i| {
                 enclose!((running_tasks, tasks_to_complete) async move {
                     running_tasks.signal(1);
-                    println!("[Task {}] started, running tasks: {}", i, running_tasks.available());
+                    println!("[Task {i}] started, running tasks: {}", running_tasks.available());
                     tasks_to_complete.acquire(1).await.unwrap();
-                    println!("[Task {}] complete, tasks to complete: {}", i, tasks_to_complete.available());
+                    println!("[Task {i}] complete, tasks to complete: {}", tasks_to_complete.available());
                 })
             };
 
@@ -197,7 +194,7 @@ mod tests {
                 gate.spawn(spawn_task(i)).unwrap().detach();
             }
 
-            println!("Main: waiting for {} tasks", nr_tasks);
+            println!("Main: waiting for {nr_tasks} tasks");
             running_tasks.acquire(nr_tasks).await.unwrap();
 
             println!("Main: closing gate");

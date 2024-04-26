@@ -11,8 +11,7 @@ use std::{
     ffi::CString,
     fmt,
     future::Future,
-    io,
-    mem,
+    io, mem,
     os::unix::{ffi::OsStrExt, io::RawFd},
     path::Path,
     rc::Rc,
@@ -26,30 +25,18 @@ use std::{
 
 use ahash::AHashMap;
 use log::error;
-use nix::sys::socket::{MsgFlags, SockAddr};
+use nix::sys::socket::{MsgFlags, SockaddrLike, SockaddrStorage};
 use smallvec::SmallVec;
 
 use crate::{
     io::{FileScheduler, IoScheduler, ScheduledSource},
     iou::sqe::SockAddrStorage,
     sys::{
-        self,
-        common_flags,
-        read_flags,
-        sysfs,
-        DirectIo,
-        DmaBuffer,
-        IoBuffer,
-        PollableStatus,
-        SleepNotifier,
-        Source,
-        SourceType,
-        StatsCollection,
+        self, blocking::BlockingThreadPool, common_flags, read_flags, sysfs, DirectIo, DmaBuffer,
+        DmaSource, IoBuffer, PollableStatus, SleepNotifier, Source, SourceType, StatsCollection,
+        Statx,
     },
-    IoRequirements,
-    IoStats,
-    PoolPlacement,
-    TaskQueueHandle,
+    IoRequirements, IoStats, TaskQueueHandle,
 };
 use nix::poll::PollFlags;
 
@@ -96,7 +83,7 @@ struct Timers {
 
     /// An ordered map of registered timers.
     ///
-    /// Timers are in the order in which they fire. The `usize` in this type is
+    /// Timers are in the order in which they fire. The `u64` in this type is
     /// a timer ID used to distinguish timers that fire at the same time.
     /// The [`Waker`] represents the task awaiting the timer.
     timers: BTreeMap<(Instant, u64), Waker>,
@@ -194,9 +181,9 @@ impl Reactor {
         io_memory: usize,
         ring_depth: usize,
         record_io_latencies: bool,
-        thread_pool_placement: PoolPlacement,
+        blocking_thread: BlockingThreadPool,
     ) -> io::Result<Reactor> {
-        let sys = sys::Reactor::new(notifier, io_memory, ring_depth, thread_pool_placement)?;
+        let sys = sys::Reactor::new(notifier, io_memory, ring_depth, blocking_thread)?;
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Ok(Reactor {
             sys,
@@ -279,10 +266,9 @@ impl Reactor {
                     } else {
                         // The IO requests failed, but not because the poll ring doesn't work.
                         error!(
-                            "got unexpected error when probing iopoll support for file {:?} (fd: \
-                             {}) hosted on ({}, {}); the poll ring will be disabled for this \
-                             device: {}",
-                            path, raw, major, minor, err
+                            "got unexpected error when probing iopoll support for file {path:?} \
+                             (fd: {raw}) hosted on ({major}, {minor}); the poll ring will be \
+                             disabled for this device: {err}"
                         );
                         false
                     }
@@ -337,7 +323,7 @@ impl Reactor {
     pub(crate) fn write_dma(
         &self,
         raw: RawFd,
-        buf: DmaBuffer,
+        buf: DmaSource,
         pos: u64,
         pollable: PollableStatus,
     ) -> Source {
@@ -354,11 +340,46 @@ impl Reactor {
 
         let source = self.new_source(
             raw,
-            SourceType::Write(pollable, IoBuffer::Dma(buf)),
+            SourceType::Write(pollable, IoBuffer::DmaSource(buf)),
             Some(stats),
         );
         self.sys.write_dma(&source, pos);
         source
+    }
+
+    pub(crate) fn copy_file_range(
+        &self,
+        fd_in: RawFd,
+        off_in: u64,
+        fd_out: RawFd,
+        off_out: u64,
+        len: usize,
+    ) -> impl Future<Output = Source> {
+        let stats = StatsCollection {
+            fulfilled: Some(|result, stats, op_count| {
+                if let Ok(result) = result {
+                    let len = *result as u64 * op_count;
+
+                    stats.file_reads += op_count;
+                    stats.file_bytes_read += len;
+                    stats.file_writes += op_count;
+                    stats.file_bytes_written += len;
+                }
+            }),
+            reused: None,
+            latency: None,
+        };
+
+        let source = self.new_source(
+            fd_out,
+            SourceType::CopyFileRange(fd_in, off_in, len),
+            Some(stats),
+        );
+        let waiter = self.sys.copy_file_range(&source, off_out);
+        async move {
+            waiter.await;
+            source
+        }
     }
 
     pub(crate) fn write_buffered(&self, raw: RawFd, buf: Vec<u8>, pos: u64) -> Source {
@@ -385,13 +406,14 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn connect(&self, raw: RawFd, addr: SockAddr) -> Source {
+    pub(crate) fn connect(&self, raw: RawFd, addr: impl SockaddrLike) -> Source {
+        let addr = unsafe { SockaddrStorage::from_raw(addr.as_ptr(), Some(addr.len())) }.unwrap();
         let source = self.new_source(raw, SourceType::Connect(addr), None);
         self.sys.connect(&source);
         source
     }
 
-    pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockAddr, d: Duration) -> Source {
+    pub(crate) fn connect_timeout(&self, raw: RawFd, addr: SockaddrStorage, d: Duration) -> Source {
         let source = self.new_source(raw, SourceType::Connect(addr), None);
         source.set_timeout(d);
         self.sys.connect(&source);
@@ -437,7 +459,7 @@ impl Reactor {
         &self,
         fd: RawFd,
         buf: DmaBuffer,
-        addr: nix::sys::socket::SockAddr,
+        addr: impl nix::sys::socket::SockaddrLike,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
         let iov = libc::iovec {
@@ -446,16 +468,9 @@ impl Reactor {
         };
         // Note that the iov and addresses we have above are stack addresses. We will
         // leave it blank and the `io_uring` callee will fill that up
-        let hdr = libc::msghdr {
-            msg_name: std::ptr::null_mut(),
-            msg_namelen: 0,
-            msg_iov: std::ptr::null_mut(),
-            msg_iovlen: 0,
-            msg_control: std::ptr::null_mut(),
-            msg_controllen: 0,
-            msg_flags: 0,
-        };
+        let hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
 
+        let addr = unsafe { SockaddrStorage::from_raw(addr.as_ptr(), Some(addr.len())) }.unwrap();
         let source = self.new_source(fd, SourceType::SockSendMsg(buf, iov, hdr, addr), None);
         if let Some(timeout) = timeout {
             source.set_timeout(timeout);
@@ -473,15 +488,7 @@ impl Reactor {
         flags: MsgFlags,
         timeout: Option<Duration>,
     ) -> io::Result<Source> {
-        let hdr = libc::msghdr {
-            msg_name: std::ptr::null_mut(),
-            msg_namelen: 0,
-            msg_iov: std::ptr::null_mut(),
-            msg_iovlen: 0,
-            msg_control: std::ptr::null_mut(),
-            msg_controllen: 0,
-            msg_flags: 0,
-        };
+        let hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
         let iov = libc::iovec {
             iov_base: std::ptr::null_mut(),
             iov_len: 0,
@@ -730,20 +737,18 @@ impl Reactor {
         source
     }
 
-    pub(crate) fn statx(&self, raw: RawFd, path: &Path) -> Source {
-        let path = CString::new(path.as_os_str().as_bytes()).expect("path contained null!");
-
+    pub(crate) fn statx(&self, raw: RawFd) -> Source {
         let statx_buf = unsafe {
-            let statx_buf = mem::MaybeUninit::<libc::statx>::zeroed();
+            let statx_buf = mem::MaybeUninit::<Statx>::zeroed();
             statx_buf.assume_init()
         };
 
         let source = self.new_source(
             raw,
-            SourceType::Statx(path, Box::new(RefCell::new(statx_buf))),
+            SourceType::Statx(Box::new(RefCell::new(statx_buf))),
             None,
         );
-        self.sys.statx(&source);
+        self.sys.statx_fd(&source);
         source
     }
 

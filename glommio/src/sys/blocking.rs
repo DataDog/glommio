@@ -20,6 +20,8 @@ use std::{
     thread::JoinHandle,
 };
 
+use super::membarrier;
+
 // So hard to copy/clone io::Error, plus need to send between threads. Best to
 // do all i64.
 macro_rules! raw_syscall {
@@ -61,18 +63,23 @@ pub(super) enum BlockingThreadOp {
     Remove(PathBuf),
     CreateDir(PathBuf, libc::c_int),
     Truncate(RawFd, i64),
+    CopyFileRange(RawFd, i64, RawFd, i64, usize),
     Fn(Box<dyn FnOnce() + Send + 'static>),
 }
 
 impl Debug for BlockingThreadOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
-            BlockingThreadOp::Rename(from, to) => write!(f, "rename `{:?}` -> `{:?}`", from, to),
-            BlockingThreadOp::Remove(path) => write!(f, "remove `{:?}`", path),
+            BlockingThreadOp::Rename(from, to) => write!(f, "rename `{from:?}` -> `{to:?}`"),
+            BlockingThreadOp::Remove(path) => write!(f, "remove `{path:?}`"),
             BlockingThreadOp::CreateDir(path, flags) => {
-                write!(f, "create dir `{:?}` (`{:b}`)", path, flags)
+                write!(f, "create dir `{path:?}` (`{flags:b}`)")
             }
-            BlockingThreadOp::Truncate(fd, to) => write!(f, "truncate `{}` -> `{}`", fd, to),
+            BlockingThreadOp::Truncate(fd, to) => write!(f, "truncate `{fd}` -> `{to}`"),
+            BlockingThreadOp::CopyFileRange(fd_in, off_in, fd_out, off_out, len) => write!(
+                f,
+                "copy_file_range `{fd_in}` @ `{off_in}` -> {fd_out} @ `{off_out}` for {len} bytes"
+            ),
             BlockingThreadOp::Fn(_) => write!(f, "user function"),
         }
     }
@@ -96,6 +103,16 @@ impl BlockingThreadOp {
             }
             BlockingThreadOp::Truncate(fd, sz) => {
                 raw_syscall!(ftruncate(fd, sz))
+            }
+            BlockingThreadOp::CopyFileRange(fd_in, mut off_in, fd_out, mut off_out, len) => {
+                raw_syscall!(copy_file_range(
+                    fd_in,
+                    &mut off_in,
+                    fd_out,
+                    &mut off_out,
+                    len,
+                    0
+                ))
             }
             BlockingThreadOp::Fn(f) => {
                 f();
@@ -135,6 +152,8 @@ pub(super) struct BlockingThreadResp {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Clippy is unhappy with some of the fields on these enums never being read,
+                    // but they are certainly used, and read by debug
 struct BlockingThread(JoinHandle<()>);
 
 impl BlockingThread {
@@ -176,6 +195,14 @@ impl BlockingThreadPool {
         placement: PoolPlacement,
         sleep_notifier: Arc<SleepNotifier>,
     ) -> crate::Result<Self, ()> {
+        // Make sure to initialize the membarrier before the thread pool is constructed so that registration
+        // is much cheaper. Additionally, even if we take the expensive slow path, we do it here instead
+        // of at the reactor hot loop which synchronously blocks the io_uring loop to register the membarrier.
+        // https://github.com/DataDog/glommio/issues/652
+        // An alternative solution is to pull in https://crates.io/crates/ctor as a dependency and run this
+        // that way - then the public API to call early_init can be elided wholesale.
+        membarrier::initialize_strategy();
+
         let (in_tx, in_rx) = flume::bounded(4 << 10);
         let (out_tx, out_rx) = flume::bounded(4 << 10);
         let in_rx = Arc::new(in_rx);

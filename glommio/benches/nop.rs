@@ -64,7 +64,7 @@ fn main() {
                 .unwrap();
             let measurement = ex.run(run_bench_tasks(bench.num_tasks, bench.num_events));
 
-            println!("{}", measurement);
+            println!("{measurement}");
             measurements.push(measurement);
         }
 
@@ -72,10 +72,7 @@ fn main() {
             acc + v.average_task_duration
         });
         let average = sum / num_bench_runs;
-        println!(
-            "Average task duration across {} runs: {:?}\n",
-            num_bench_runs, average
-        );
+        println!("Average task duration across {num_bench_runs} runs: {average:?}\n");
         measurements.clear();
     }
 }

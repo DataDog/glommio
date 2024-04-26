@@ -1,4 +1,3 @@
-use ansi_term::{Colour, Style};
 use futures_lite::io::AsyncBufReadExt;
 use glommio::{
     controllers::{DeadlineQueue, DeadlineSource},
@@ -12,6 +11,7 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
+use yansi::Paint;
 
 fn burn_cpu(dur: Duration) {
     let now = Instant::now();
@@ -69,13 +69,11 @@ impl IntWriter {
 
                 println!(
                     "{}: Wrote {} ({}%), {:.0} int/s, scheduler shares: {} , {:.2} % CPU",
-                    Colour::Blue.paint(format!("{}s", elapsed.as_secs())),
+                    Paint::blue(format!("{}s", elapsed.as_secs())),
                     self.count.get(),
-                    Style::new().bold().paint(format!("{:.0}", ratio)),
+                    Paint::new(format!("{:.0}", ratio)).bold(),
                     intratio,
-                    Style::new()
-                        .bold()
-                        .paint(tq_stats.current_shares().to_string()),
+                    Paint::new(tq_stats.current_shares().to_string()).bold(),
                     cpuratio
                 );
                 self.next_print
@@ -129,7 +127,7 @@ fn competing_cpu_hog(
 }
 
 async fn static_writer(how_many: usize, shares: usize, cpuhog_tq: TaskQueueHandle) -> Duration {
-    let name = format!("shares-{}", shares);
+    let name = format!("shares-{shares}");
     let tq =
         glommio::executor().create_task_queue(Shares::Static(shares), Latency::NotImportant, &name);
 
@@ -172,9 +170,7 @@ fn main() {
 
             println!(
                 "{}",
-                Style::new()
-                    .bold()
-                    .paint("Welcome to the Deadline Writer example")
+                Paint::new("Welcome to the Deadline Writer example").bold()
             );
             println!(
                 "In this example we will write a sequence of integers to a variable, busy looping \
@@ -187,7 +183,7 @@ fn main() {
             println!(
                 "For {} results, this test is pinned to your CPU0. Make sure nothing else of \
                  significance is running there. You should be able to see it at 100% at all times!",
-                Style::new().bold().paint("best")
+                Paint::new("best").bold()
             );
 
             println!("\n\nPlease tell me how many integers you would like to write");
@@ -195,28 +191,28 @@ fn main() {
             println!(
                 "Ok, now let's write {} integers with both the writer and the CPU hog having the \
                  same priority",
-                Colour::Blue.paint(to_write.to_string())
+                Paint::blue(to_write.to_string())
             );
             let dur = static_writer(to_write, 1000, cpuhog_tq).await;
             println!(
                 "Finished writing in {}",
-                Colour::Green.paint(format!("{:#.0?}", dur))
+                Paint::green(format!("{dur:#.0?}"))
             );
             println!(
                 "This was using {} shares, and short of reducing the priority of the CPU hog. {}",
-                Colour::Green.paint("1000"),
-                Style::new().bold().paint("This is as fast as we can do!")
+                Paint::green("1000"),
+                Paint::new("This is as fast as we can do!").bold()
             );
             println!(
                 "With {} shares, this would have taken approximately {}",
-                Colour::Green.paint("100"),
-                Colour::Green.paint(format!("{:#.1?}", dur * 10))
+                Paint::green("100"),
+                Paint::green(format!("{:#.1?}", dur * 10))
             );
             println!(
                 "With {} shares, this would have taken approximately {}. {}.",
-                Colour::Green.paint("1"),
-                Colour::Green.paint(format!("{:#.1?}", dur * 1000)),
-                Style::new().bold().paint("Can't go any slower than that!")
+                Paint::green("1"),
+                Paint::green(format!("{:#.1?}", dur * 1000)),
+                Paint::new("Can't go any slower than that!").bold()
             );
 
             println!(
@@ -239,7 +235,7 @@ fn main() {
                 let dur = deadline.push_work(test).await.unwrap();
                 println!(
                     "Finished writing in {}",
-                    Colour::Green.paint(format!("{:#.2?}", dur))
+                    Paint::green(format!("{dur:#.2?}"))
                 );
                 stop.set(true);
                 hog.await.unwrap();

@@ -6,13 +6,8 @@
 use crate::io::{
     bulk_io::{MergedBufferLimit, ReadAmplificationLimit, ReadManyArgs},
     open_options::OpenOptions,
-    DmaStreamReaderBuilder,
-    DmaStreamWriter,
-    DmaStreamWriterBuilder,
-    IoVec,
-    ReadManyResult,
-    ReadResult,
-    ScheduledSource,
+    DmaStreamReaderBuilder, DmaStreamWriter, DmaStreamWriterBuilder, IoVec, ReadManyResult,
+    ReadResult, ScheduledSource,
 };
 use futures_lite::{future::poll_fn, io::AsyncWrite, Stream};
 use std::{
@@ -206,7 +201,7 @@ where
 
         // these two syscall are hints and are allowed to fail.
         if let Some(size) = self.pre_allocate {
-            let _ = file.pre_allocate(size).await;
+            let _ = file.pre_allocate(size, true).await;
         }
         if let Some(size) = self.hint_extent_size {
             let _ = file.hint_extent_size(size).await;
@@ -497,7 +492,8 @@ mod test {
     immutable_file_test!(seal_and_stream, path, {
         let fname = path.join("testfile");
         let mut immutable = ImmutableFileBuilder::new(fname).build_sink().await.unwrap();
-        immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        let written = immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        assert_eq!(written, 6);
         let stream = immutable.seal().await.unwrap();
         let mut reader = stream.stream_reader().build();
 
@@ -515,11 +511,13 @@ mod test {
         assert_eq!(immutable.current_pos(), 0);
         assert_eq!(immutable.current_flushed_pos(), 0);
 
-        immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        let written = immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        assert_eq!(written, 6);
         assert_eq!(immutable.current_pos(), 6);
         assert_eq!(immutable.current_flushed_pos(), 0);
 
-        immutable.write(&[6, 7, 8, 9]).await.unwrap();
+        let written = immutable.write(&[6, 7, 8, 9]).await.unwrap();
+        assert_eq!(written, 4);
 
         let stream = immutable.seal().await.unwrap();
         let mut reader = stream.stream_reader().build();
@@ -535,7 +533,8 @@ mod test {
     immutable_file_test!(seal_and_random, path, {
         let fname = path.join("testfile");
         let mut immutable = ImmutableFileBuilder::new(fname).build_sink().await.unwrap();
-        immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        let written = immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        assert_eq!(written, 6);
         let stream = immutable.seal().await.unwrap();
 
         let task1 = crate::spawn_local(enclose! { (stream) async move {
@@ -559,7 +558,8 @@ mod test {
     immutable_file_test!(seal_ready_many, path, {
         let fname = path.join("testfile");
         let mut immutable = ImmutableFileBuilder::new(fname).build_sink().await.unwrap();
-        immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        let written = immutable.write(&[0, 1, 2, 3, 4, 5]).await.unwrap();
+        assert_eq!(written, 6);
         let stream = immutable.seal().await.unwrap();
 
         {

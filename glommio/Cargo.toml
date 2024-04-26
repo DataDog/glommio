@@ -1,12 +1,12 @@
 [package]
 name = "glommio"
-version = "0.7.0"
+version = "0.9.0"
 authors = [
     "Glauber Costa <glommer@gmail.com>",
     "Hippolyte Barraud <hippolyte.barraud@datadoghq.com>",
     "DataDog <info@datadoghq.com>"
 ]
-edition = "2018"
+edition = "2021"
 description = "Glommio is a thread-per-core crate that makes writing highly parallel asynchronous applications in a thread-per-core architecture easier for rustaceans."
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/DataDog/glommio"
@@ -14,25 +14,26 @@ homepage = "https://github.com/DataDog/glommio"
 keywords = ["linux", "rust", "async", "iouring", "thread-per-core"]
 categories = ["asynchronous", "concurrency", "os", "filesystem", "network-programming"]
 readme = "../README.md"
+# This is also documented in the README.md under "Supported Rust Versions"
+rust-version = "1.65"
 
 [dependencies]
 ahash = "0.7"
 backtrace = { version = "0.3" }
-bitflags = "1.3"
+bitflags = "2.4"
 bitmaps = "3.1"
 buddy-alloc = "0.4"
 concurrent-queue = "1.2"
 crossbeam = "0.8"
 enclose = "1.1"
-flume = { version = "0.10", features = ["async"] }
+flume = { version = "0.11", features = ["async"] }
 futures-lite = "1.12"
 intrusive-collections = "0.9"
 lazy_static = "1.4"
 libc = "0.2"
 lockfree = "0.5"
 log = "0.4"
-membarrier = "0.2"
-nix = "0.23"
+nix = { version = "0.27", features = ["event", "fs", "ioctl", "mman", "net", "poll", "sched", "time"] }
 pin-project-lite = "0.2"
 rlimit = "0.6"
 scoped-tls = "1.0"
@@ -59,6 +60,10 @@ cc = "1.0"
 [features]
 bench = []
 debugging = []
+
+# Unstable features based on nightly
+native-tls = []
+nightly = ["native-tls"]
 
 [[bench]]
 name = "executor"

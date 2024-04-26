@@ -1,6 +1,5 @@
 use std::{
-    fmt,
-    io,
+    fmt, io,
     marker::PhantomData,
     mem::MaybeUninit,
     ptr::{self, NonNull},

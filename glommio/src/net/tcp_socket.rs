@@ -19,7 +19,7 @@ use futures_lite::{
     ready,
     stream::{self, Stream},
 };
-use nix::sys::socket::{InetAddr, SockAddr};
+use nix::sys::socket::SockaddrStorage;
 use pin_project_lite::pin_project;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
@@ -259,7 +259,7 @@ impl TcpListener {
     ///     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     ///     let mut incoming = listener.incoming();
     ///     while let Some(conn) = incoming.next().await {
-    ///         println!("Accepted client: {:?}", conn);
+    ///         println!("Accepted client: {conn:?}");
     ///     }
     /// });
     /// ```
@@ -431,16 +431,14 @@ impl FromRawFd for TcpStream {
     }
 }
 
-fn make_tcp_socket(addr: &SocketAddr) -> io::Result<(SockAddr, Socket)> {
+fn make_tcp_socket(addr: &SocketAddr) -> io::Result<Socket> {
     let domain = if addr.is_ipv6() {
         Domain::IPV6
     } else {
         Domain::IPV4
     };
     let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
-    let inet = InetAddr::from_std(addr);
-    let addr = SockAddr::new_inet(inet);
-    Ok((addr, socket))
+    Ok(socket)
 }
 
 impl TcpStream {
@@ -458,9 +456,9 @@ impl TcpStream {
     /// ```
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<TcpStream> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
-        let (addr, socket) = make_tcp_socket(&addr)?;
+        let socket = make_tcp_socket(&addr)?;
         let reactor = crate::executor().reactor();
-        let source = reactor.connect(socket.as_raw_fd(), addr);
+        let source = reactor.connect(socket.as_raw_fd(), SockaddrStorage::from(addr));
         source.collect_rw().await?;
 
         Ok(TcpStream {
@@ -501,9 +499,10 @@ impl TcpStream {
         }
 
         let addr = addr.to_socket_addrs()?.next().unwrap();
-        let (addr, socket) = make_tcp_socket(&addr)?;
+        let socket = make_tcp_socket(&addr)?;
         let reactor = crate::executor().reactor();
-        let source = reactor.connect_timeout(socket.as_raw_fd(), addr, duration);
+        let source =
+            reactor.connect_timeout(socket.as_raw_fd(), SockaddrStorage::from(addr), duration);
 
         // connect_timeout submits two sqes to io_uring: a connect sqe soft-linked
         // with a LINK_TIMEOUT sqe. If the timeout fires, the connect sqe fails with

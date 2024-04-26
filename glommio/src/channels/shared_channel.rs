@@ -9,8 +9,7 @@ use crate::{
     enclose,
     reactor::Reactor,
     sys::{self, SleepNotifier},
-    GlommioError,
-    ResourceType,
+    GlommioError, ResourceType,
 };
 use futures_lite::{future, stream::Stream};
 use std::{
@@ -85,7 +84,7 @@ pub struct ConnectedReceiver<T: Send + Sized> {
     notifier: Arc<SleepNotifier>,
 }
 
-/// The `ConnectedReceiver` is the sending end of the Shared Channel.
+/// The `ConnectedSender` is the sending end of the Shared Channel.
 pub struct ConnectedSender<T: Send + Sized> {
     id: u64,
     state: Rc<SenderState<T>>,
@@ -212,7 +211,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
     ///     .name("receiver")
     ///     .spawn(move || async move {
     ///         let mut receiver = receiver.connect().await;
-    ///         receiver.next().await.unwrap(); // now we have capacity again
+    ///         receiver.next().await.unwrap();
     ///     })
     ///     .unwrap();
     /// producer.join().unwrap();
@@ -286,7 +285,6 @@ impl<T: Send + Sized> ConnectedSender<T> {
     /// producer.join().unwrap();
     /// receiver.join().unwrap();
     /// ```
-    #[track_caller]
     pub async fn send(&self, item: T) -> Result<(), T> {
         let waiter = future::poll_fn(|cx| self.wait_for_room(cx));
         waiter.await;
@@ -297,7 +295,7 @@ impl<T: Send + Sized> ConnectedSender<T> {
         res
     }
 
-    fn wait_for_room(&self, cx: &mut Context<'_>) -> Poll<()> {
+    fn wait_for_room(&self, cx: &Context<'_>) -> Poll<()> {
         match self.state.buffer.free_space() > 0 || self.state.buffer.producer_disconnected() {
             true => Poll::Ready(()),
             false => {
@@ -358,7 +356,7 @@ impl<T: Send + Sized> ConnectedReceiver<T> {
     /// Receives data from this channel
     ///
     /// If the sender is no longer available it returns [`None`]. Otherwise,
-    /// block until an item is available and returns it wrapped in [`Some`]
+    /// blocks until an item is available and returns it wrapped in [`Some`].
     ///
     /// Notice that this is also available as a Stream. Whether to consume from
     /// a stream or `recv` is up to the application. The biggest difference
@@ -492,8 +490,7 @@ mod test {
     use super::*;
     use crate::{
         timer::{sleep, Timer},
-        LocalExecutorBuilder,
-        Placement,
+        LocalExecutorBuilder, Placement,
     };
     use futures_lite::{FutureExt, StreamExt};
     use std::{
@@ -676,7 +673,7 @@ mod test {
                         // all good
                     }
                     Err(other_err) => {
-                        panic!("incorrect error type: '{}' for channel send", other_err)
+                        panic!("incorrect error type: '{other_err}' for channel send")
                     }
                 }
             })
@@ -974,6 +971,7 @@ mod test {
                         *cv_mtx_1.1.lock().unwrap() = 1;
                         cv_mtx_1.0.notify_all();
                     });
+                    #[allow(clippy::await_holding_lock)]
                     let t2 = crate::executor().spawn_local(async move {
                         let mut lck = cv_mtx_2
                             .0
@@ -992,10 +990,12 @@ mod test {
         let ex2 = LocalExecutorBuilder::default()
             .spawn(move || async move {
                 let receiver = receiver.connect().await;
-                let _lck = cv_mtx_3
-                    .0
-                    .wait_while(cv_mtx_3.1.lock().unwrap(), |l| *l < 2)
-                    .unwrap();
+                {
+                    let _lck = cv_mtx_3
+                        .0
+                        .wait_while(cv_mtx_3.1.lock().unwrap(), |l| *l < 2)
+                        .unwrap();
+                };
                 while let Some(v) = receiver.recv().await {
                     assert!(0 <= v);
                 }

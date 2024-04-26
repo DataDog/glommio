@@ -3,16 +3,17 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{to_io_error, uring_sys};
+use crate::uring_sys;
 use ahash::AHashMap;
 use log::debug;
+use nix::sys::socket::SockaddrLike;
 use std::{
-    fmt,
-    io,
+    fmt, io,
     io::Error,
     mem::{ManuallyDrop, MaybeUninit},
     net::{Shutdown, TcpStream},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    rc::Rc,
     sync::{atomic::Ordering, Arc, RwLock},
     task::Waker,
     time::Duration,
@@ -105,29 +106,28 @@ pub(crate) fn direct_io_ify(fd: RawFd, flags: libc::c_int) -> io::Result<()> {
 
 // This essentially converts the nix errors into something we can integrate with
 // the rest of the crate.
-pub(crate) unsafe fn ssptr_to_sockaddr(
+pub(crate) unsafe fn ssptr_to_sockaddr<T: SockaddrLike>(
     ss: MaybeUninit<nix::sys::socket::sockaddr_storage>,
     len: usize,
-) -> io::Result<nix::sys::socket::SockAddr> {
-    let storage = ss.assume_init();
+) -> io::Result<T> {
     // Unnamed unix sockets have a len of 0. Technically we should make sure this
     // has family = AF_UNIX, but if len == 0 the OS may not have written
     // anything here. If this is not supposed to be unix, the upper layers will
     // complain.
     if len == 0 {
-        nix::sys::socket::SockAddr::new_unix("")
+        let addr = nix::sys::socket::UnixAddr::new("").unwrap();
+        Ok(T::from_raw(addr.as_ptr() as *const _, Some(addr.len())).unwrap())
     } else {
-        nix::sys::socket::sockaddr_storage_to_addr(&storage, len)
+        Ok(T::from_raw(ss.as_ptr() as *const _, Some(len as _)).unwrap())
     }
-    .map_err(|e| to_io_error!(e))
 }
 
-pub(crate) fn recvmsg_syscall(
+pub(crate) fn recvmsg_syscall<T: SockaddrLike>(
     fd: RawFd,
     buf: *mut u8,
     len: usize,
     flags: i32,
-) -> io::Result<(usize, nix::sys::socket::SockAddr)> {
+) -> io::Result<(usize, T)> {
     let mut iov = libc::iovec {
         iov_base: buf as *mut libc::c_void,
         iov_len: len,
@@ -136,15 +136,11 @@ pub(crate) fn recvmsg_syscall(
     let mut msg_name = MaybeUninit::<nix::sys::socket::sockaddr_storage>::uninit();
     let msg_namelen = std::mem::size_of::<nix::sys::socket::sockaddr_storage>() as libc::socklen_t;
 
-    let mut hdr = libc::msghdr {
-        msg_name: msg_name.as_mut_ptr() as *mut libc::c_void,
-        msg_namelen,
-        msg_iov: &mut iov as *mut libc::iovec,
-        msg_iovlen: 1,
-        msg_control: std::ptr::null_mut(),
-        msg_controllen: 0,
-        msg_flags: 0,
-    };
+    let mut hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
+    hdr.msg_name = msg_name.as_mut_ptr() as *mut libc::c_void;
+    hdr.msg_namelen = msg_namelen;
+    hdr.msg_iov = &mut iov as *mut libc::iovec;
+    hdr.msg_iovlen = 1;
 
     let x = syscall!(recvmsg(fd, &mut hdr, flags)).map(|x| x as usize)?;
     let addr = unsafe { ssptr_to_sockaddr(msg_name, hdr.msg_namelen as _)? };
@@ -155,7 +151,7 @@ pub(crate) fn sendmsg_syscall(
     fd: RawFd,
     buf: *const u8,
     len: usize,
-    addr: &mut nix::sys::socket::SockAddr,
+    addr: &impl nix::sys::socket::SockaddrLike,
     flags: i32,
 ) -> io::Result<usize> {
     let mut iov = libc::iovec {
@@ -163,23 +159,21 @@ pub(crate) fn sendmsg_syscall(
         iov_len: len,
     };
 
-    let (msg_name, msg_namelen) = addr.as_ffi_pair();
-    let msg_name = msg_name as *const nix::sys::socket::sockaddr as *mut libc::c_void;
+    let msg_name = addr.as_ptr() as *mut libc::c_void;
+    let msg_namelen = addr.len();
 
-    let hdr = libc::msghdr {
-        msg_name,
-        msg_namelen,
-        msg_iov: &mut iov as *mut libc::iovec,
-        msg_iovlen: 1,
-        msg_control: std::ptr::null_mut(),
-        msg_controllen: 0,
-        msg_flags: 0,
-    };
+    let mut hdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
+    hdr.msg_name = msg_name;
+    hdr.msg_namelen = msg_namelen;
+    hdr.msg_iov = &mut iov as *mut libc::iovec;
+    hdr.msg_iovlen = 1;
 
     syscall!(sendmsg(fd, &hdr, flags)).map(|x| x as usize)
 }
 
 mod dma_buffer;
+mod membarrier;
+pub(crate) use membarrier::initialize_strategy as initialize_membarrier_strategy;
 pub(crate) mod source;
 pub(crate) mod sysfs;
 mod uring;
@@ -188,7 +182,7 @@ pub use self::dma_buffer::DmaBuffer;
 pub(crate) use self::{source::*, uring::*};
 use crate::error::{ExecutorErrorKind, GlommioError};
 use smallvec::SmallVec;
-use std::{ops::Deref, sync::atomic::AtomicBool};
+use std::{convert::TryFrom, ops::Deref, sync::atomic::AtomicBool};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReactorGlobalState {
@@ -370,8 +364,35 @@ impl Drop for SleepNotifier {
 }
 
 #[derive(Debug)]
+pub(crate) enum DmaSource {
+    Owned(DmaBuffer),
+    Shared(Rc<DmaBuffer>),
+}
+
+impl DmaSource {
+    fn uring_buffer_id(&self) -> Option<u32> {
+        match self {
+            DmaSource::Owned(buffer) => buffer.uring_buffer_id(),
+            DmaSource::Shared(buffer) => buffer.uring_buffer_id(),
+        }
+    }
+}
+
+impl Deref for DmaSource {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match &self {
+            Self::Owned(buffer) => buffer.as_bytes(),
+            Self::Shared(buffer) => buffer.as_bytes(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) enum IoBuffer {
-    Dma(DmaBuffer),
+    DmaSink(DmaBuffer),
+    DmaSource(DmaSource),
     Buffered(Vec<u8>),
 }
 
@@ -380,7 +401,8 @@ impl Deref for IoBuffer {
 
     fn deref(&self) -> &Self::Target {
         match &self {
-            IoBuffer::Dma(buffer) => buffer.as_bytes(),
+            IoBuffer::DmaSink(buffer) => buffer.as_bytes(),
+            IoBuffer::DmaSource(buffer) => buffer.deref(),
             IoBuffer::Buffered(buffer) => buffer.as_slice(),
         }
     }
@@ -404,6 +426,46 @@ pub(crate) enum PollableStatus {
     NonPollable(DirectIo),
 }
 
+// code imported from libc crate
+// libc::statx isn't used because it's not available when targeting musl
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct Statx {
+    pub stx_mask: u32,
+    pub stx_blksize: u32,
+    pub stx_attributes: u64,
+    pub stx_nlink: u32,
+    pub stx_uid: u32,
+    pub stx_gid: u32,
+    pub stx_mode: u16,
+    __statx_pad1: [u16; 1],
+    pub stx_ino: u64,
+    pub stx_size: u64,
+    pub stx_blocks: u64,
+    pub stx_attributes_mask: u64,
+    pub stx_atime: StatxTimestamp,
+    pub stx_btime: StatxTimestamp,
+    pub stx_ctime: StatxTimestamp,
+    pub stx_mtime: StatxTimestamp,
+    pub stx_rdev_major: u32,
+    pub stx_rdev_minor: u32,
+    pub stx_dev_major: u32,
+    pub stx_dev_minor: u32,
+    pub stx_mnt_id: u64,
+    pub stx_dio_mem_align: u32,
+    pub stx_dio_offset_align: u32,
+    __statx_pad3: [u64; 12],
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct StatxTimestamp {
+    pub tv_sec: i64,
+    pub tv_nsec: u32,
+    pub __statx_timestamp_pad1: [i32; 1],
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct TimeSpec64 {
     raw: uring_sys::__kernel_timespec,
@@ -411,7 +473,12 @@ pub(crate) struct TimeSpec64 {
 
 impl Default for TimeSpec64 {
     fn default() -> TimeSpec64 {
-        TimeSpec64::from(Duration::default())
+        TimeSpec64 {
+            raw: uring_sys::__kernel_timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+        }
     }
 }
 
@@ -434,15 +501,34 @@ impl From<TimeSpec64> for Duration {
     }
 }
 
-impl From<Duration> for TimeSpec64 {
-    fn from(dur: Duration) -> Self {
-        TimeSpec64 {
-            raw: uring_sys::__kernel_timespec {
-                tv_sec: dur.as_secs() as i64,
-                tv_nsec: dur.subsec_nanos() as libc::c_longlong,
-            },
+impl TryFrom<Duration> for TimeSpec64 {
+    type Error = TimeSpec64;
+
+    /// Tries to convert the [`std::time::Duration`] into a [`TimeSpec64`].
+    /// Returns [`Ok(TimeSpec64)`] if the duration can be natively represented
+    /// or [`Err(TimeSpec64)`] if the duration was truncated to
+    /// [`TimeSpec64::MAX`].
+    fn try_from(dur: Duration) -> Result<Self, Self::Error> {
+        if let Ok(secs) = i64::try_from(dur.as_secs()) {
+            Ok(TimeSpec64 {
+                raw: uring_sys::__kernel_timespec {
+                    tv_sec: secs,
+                    tv_nsec: dur.subsec_nanos() as libc::c_longlong,
+                },
+            })
+        } else {
+            Err(TimeSpec64::MAX)
         }
     }
+}
+
+impl TimeSpec64 {
+    pub const MAX: TimeSpec64 = TimeSpec64 {
+        raw: uring_sys::__kernel_timespec {
+            tv_sec: i64::MAX,
+            tv_nsec: 999_999_999,
+        },
+    };
 }
 
 pub(super) struct Latencies {

@@ -7,14 +7,14 @@ use std::{
     cell::Cell,
     fmt::{self, Debug, Formatter},
     io::{Error, ErrorKind},
+    rc::Rc,
 };
 
 use std::sync::{Arc, RwLock};
 
 use crate::{
     channels::shared_channel::{self, *},
-    GlommioError,
-    Result,
+    GlommioError, Result,
 };
 
 /// Sender side
@@ -60,7 +60,7 @@ impl<T: Send> Senders<T> {
                 let msg = if idx < self.nr_consumers() {
                     "Local message should not be sent via channel mesh".into()
                 } else {
-                    format!("Shard {} is invalid in the channel mesh", idx)
+                    format!("Shard {idx} is invalid in the channel mesh")
                 };
                 Err(GlommioError::IoError(Error::new(
                     ErrorKind::InvalidInput,
@@ -183,7 +183,7 @@ type SharedChannel<T> = (
 type SharedChannels<T> = Vec<Vec<SharedChannel<T>>>;
 
 /// The role an executor plays in the mesh
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     /// The executor produces message
     Producer,
@@ -252,7 +252,7 @@ pub type PartialMesh<T> = MeshBuilder<T, Partial>;
 pub struct MeshBuilder<T: Send, A: MeshAdapter> {
     nr_peers: usize,
     channel_size: usize,
-    peers: Arc<RwLock<Vec<Peer>>>,
+    peers: Rc<RwLock<Vec<Peer>>>,
     channels: Arc<SharedChannels<T>>,
     adapter: A,
 }
@@ -309,7 +309,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         MeshBuilder {
             nr_peers,
             channel_size,
-            peers: Arc::new(RwLock::new(Vec::new())),
+            peers: Rc::new(RwLock::new(Vec::new())),
             channels: Arc::new(Self::placeholder(nr_peers)),
             adapter,
         }

@@ -29,7 +29,7 @@ impl FromStr for StorageCache {
         match contents {
             "write back" => Ok(StorageCache::WriteBack),
             "write through" => Ok(StorageCache::WriteThrough),
-            _ => Err(format!("Invalid value {}", data)),
+            _ => Err(format!("Invalid value {data}")),
         }
     }
 }
@@ -114,15 +114,15 @@ impl BlockDevice {
         };
         let queue = dir.join("queue");
 
-        let rotational = read_int(&queue.join("rotational")) != 0;
-        let minimum_io_size = read_int(&queue.join("minimum_io_size")) as _;
-        let optimal_io_size = read_int(&queue.join("optimal_io_size")) as _;
-        let logical_block_size = read_int(&queue.join("logical_block_size")) as _;
-        let physical_block_size = read_int(&queue.join("physical_block_size")) as _;
-        let max_sectors_kb = read_int(&queue.join("max_sectors_kb")) as usize;
-        let max_segment_size = read_int(&queue.join("max_segment_size")) as usize;
+        let rotational = read_int(queue.join("rotational")) != 0;
+        let minimum_io_size = read_int(queue.join("minimum_io_size")) as _;
+        let optimal_io_size = read_int(queue.join("optimal_io_size")) as _;
+        let logical_block_size = read_int(queue.join("logical_block_size")) as _;
+        let physical_block_size = read_int(queue.join("physical_block_size")) as _;
+        let max_sectors_kb = read_int(queue.join("max_sectors_kb")) as usize;
+        let max_segment_size = read_int(queue.join("max_segment_size")) as usize;
 
-        let cache_data = read_to_string(&queue.join("write_cache")).unwrap();
+        let cache_data = read_to_string(queue.join("write_cache")).unwrap();
         let cache = cache_data.parse::<StorageCache>().unwrap();
         let subcomponents = read_dir(dir.join("slaves"))
             .unwrap()
@@ -223,7 +223,7 @@ pub(crate) struct ListIterator {
 
 impl ListIterator {
     pub(super) fn from_path(path: &Path) -> io::Result<Self> {
-        let s = std::fs::read_to_string(&path)?;
+        let s = std::fs::read_to_string(path)?;
         Self::from_str(s)
     }
 
@@ -465,7 +465,7 @@ impl RangeIter<Checked> {
 
     fn ret(&mut self, v: usize) -> Option<usize> {
         self.last_item = Some(v);
-        (v <= self.end).then(|| v)
+        (v <= self.end).then_some(v)
     }
 }
 
@@ -491,7 +491,7 @@ pub(super) mod test_helpers {
 
     impl HexBitIterator {
         pub(super) fn from_path(path: &Path) -> io::Result<Self> {
-            let s = std::fs::read_to_string(&path)?;
+            let s = std::fs::read_to_string(path)?;
             Self::from_str(s)
         }
 
@@ -800,11 +800,9 @@ mod test {
         assert!(ListIterator::from_str("5-80:0/1\0")?.all(|e| e.is_ok()));
         assert!(ListIterator::from_str(",,1,,4-6,,       ,,\0")?.any(|e| e.is_ok()));
 
-        assert!(
-            ListIterator::from_str("collect_ok_err\0")?
-                .collect_ok::<Vec<_>>()
-                .is_err()
-        );
+        assert!(ListIterator::from_str("collect_ok_err\0")?
+            .collect_ok::<Vec<_>>()
+            .is_err());
 
         Ok(())
     }
@@ -815,11 +813,11 @@ mod test {
         let cpus_online = ListIterator::from_path(&sysfs_path.join("cpu/online")).unwrap();
         for cpu in cpus_online {
             let cpu = cpu.unwrap();
-            let cpu_topology = sysfs_path.join(format!("cpu/cpu{}/topology", cpu));
+            let cpu_topology = sysfs_path.join(format!("cpu/cpu{cpu}/topology"));
             let paths = ["core_cpus", "core_siblings", "die_cpus", "package_cpus"];
             for path in &paths {
                 let f_mask = cpu_topology.join(path);
-                let f_list = cpu_topology.join(format!("{}_list", path));
+                let f_list = cpu_topology.join(format!("{path}_list"));
                 assert_eq!(
                     HexBitIterator::from_path(&f_mask)
                         .unwrap()

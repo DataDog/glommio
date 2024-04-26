@@ -51,8 +51,7 @@ use crate::{error::BuilderErrorKind, sys::hardware_topology, CpuLocation, Glommi
 
 use pq_tree::{
     marker::{Pack, Priority, Spread},
-    Level,
-    Node,
+    Level, Node,
 };
 use std::{
     collections::{
@@ -309,7 +308,7 @@ impl PartialEq for CpuSet {
 
 impl FromIterator<CpuLocation> for CpuSet {
     fn from_iter<I: IntoIterator<Item = CpuLocation>>(cpus: I) -> Self {
-        Self(HashSet::<CpuLocation>::from_iter(cpus.into_iter()))
+        Self(HashSet::<CpuLocation>::from_iter(cpus))
     }
 }
 
@@ -356,7 +355,7 @@ impl CpuSet {
     ///     .expect("Err: please file an issue with glommio")
     ///     .filter(|l| l.numa_node == 0);
     ///
-    /// println!("The filtered CPUs are: {:#?}", cpus);
+    /// println!("The filtered CPUs are: {cpus:#?}");
     /// ```
     #[must_use]
     pub fn filter<F>(mut self, f: F) -> Self
@@ -680,7 +679,7 @@ where
                     2 => Level::NumaNode(cpu_loc.numa_node),
                     3 => Level::Core(cpu_loc.core),
                     4 => Level::Cpu(cpu_loc.cpu),
-                    _ => unreachable!("unexpected tree level: {}", depth),
+                    _ => unreachable!("unexpected tree level: {depth}"),
                 }
             }
         } else {
@@ -692,7 +691,7 @@ where
                     2 => Level::Package(cpu_loc.package),
                     3 => Level::Core(cpu_loc.core),
                     4 => Level::Cpu(cpu_loc.cpu),
-                    _ => unreachable!("unexpected tree level: {}", depth),
+                    _ => unreachable!("unexpected tree level: {depth}"),
                 }
             }
         };

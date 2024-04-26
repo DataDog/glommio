@@ -40,13 +40,7 @@ use std::{
 };
 
 use intrusive_collections::{
-    container_of,
-    linked_list::LinkOps,
-    offset_of,
-    Adapter,
-    LinkedList,
-    LinkedListLink,
-    PointerOps,
+    container_of, linked_list::LinkOps, offset_of, Adapter, LinkedList, LinkedListLink, PointerOps,
 };
 
 use crate::{GlommioError, ResourceType};
@@ -425,7 +419,7 @@ impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
 
 impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let state = (*self.rw).state.borrow();
+        let state = self.rw.state.borrow();
 
         if state.closed {
             panic!("Related RwLock is already closed");
@@ -925,7 +919,7 @@ mod test {
             let lock = RwLock::new(());
             drop(lock.read().await.unwrap());
             drop(lock.write().await.unwrap());
-            #[allow(clippy::eval_order_dependence)]
+            #[allow(clippy::mixed_read_write_in_expression)]
             drop((lock.read().await.unwrap(), lock.read().await.unwrap()));
             drop(lock.read().await.unwrap());
         });

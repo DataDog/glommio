@@ -14,6 +14,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::Stat;
+
 type Result<T> = crate::Result<T, ()>;
 
 /// An asynchronously accessed file backed by the OS page cache.
@@ -191,10 +193,30 @@ impl BufferedFile {
         self.file.fdatasync().await.map_err(Into::into)
     }
 
+    /// Erases a range from the file without changing the size. Check the man
+    /// page for [`fallocate`] for a list of the supported filesystems.
+    /// Partial blocks are zeroed while whole blocks are simply unmapped
+    /// from the file. The reported file size (`file_size`) is unchanged but
+    /// the allocated file size may if you've erased whole filesystem blocks
+    /// ([`allocated_file_size`])
+    ///
+    /// [`fallocate`]: https://man7.org/linux/man-pages/man2/fallocate.2.html
+    /// [`allocated_file_size`]: struct.Stat.html#structfield.alloc_dma_buffer
+    pub async fn deallocate(&self, offset: u64, size: u64) -> Result<()> {
+        self.file.deallocate(offset, size).await
+    }
+
     /// pre-allocates space in the filesystem to hold a file at least as big as
-    /// the size argument.
-    pub async fn pre_allocate(&self, size: u64) -> Result<()> {
-        self.file.pre_allocate(size).await.map_err(Into::into)
+    /// the size argument. No existing data in the range [0, size) is modified.
+    /// If `keep_size` is false, then anything in [current file length, size)
+    /// will report zeroed blocks until overwritten and the file size reported
+    /// will be `size`. If `keep_size` is true then the existing file size
+    /// is unchanged.
+    pub async fn pre_allocate(&self, size: u64, keep_size: bool) -> Result<()> {
+        self.file
+            .pre_allocate(size, keep_size)
+            .await
+            .map_err(Into::into)
     }
 
     /// Truncates a file to the specified size.
@@ -230,6 +252,12 @@ impl BufferedFile {
         self.file.file_size().await.map_err(Into::into)
     }
 
+    /// Performs a stat operation on a file to retrieve multiple properties at
+    /// once.
+    pub async fn stat(&self) -> Result<Stat> {
+        self.file.statx().await.map(Into::into)
+    }
+
     /// Closes this file.
     pub async fn close(self) -> Result<()> {
         self.file.close().await.map_err(Into::into)
@@ -241,13 +269,15 @@ impl BufferedFile {
         self.file.path()
     }
 
-    pub(crate) fn discard(self) -> (RawFd, Option<PathBuf>) {
+    pub(crate) fn discard(self) -> (Option<RawFd>, Option<PathBuf>) {
         self.file.discard()
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::convert::TryInto;
+
     use super::*;
     use crate::test_utils::make_test_directories;
 
@@ -344,22 +374,94 @@ mod test {
 
         let reader = BufferedFile::open(path.join("testfile")).await.unwrap();
 
+        let cluster_size = reader.stat().await.unwrap().fs_cluster_size;
+        assert!(cluster_size >= 512, "{}", cluster_size);
+
         let rb = reader.read_at(0, 6).await.unwrap();
         assert_eq!(rb.len(), 0);
 
-        let wb = vec![0, 1, 2, 3, 4, 5];
-        let r = writer.write_at(wb, 10).await.unwrap();
-        assert_eq!(r, 6);
+        let r = writer
+            .write_at(vec![7, 8, 9, 10, 11, 12, 13], (cluster_size * 2).into())
+            .await
+            .unwrap();
+        assert_eq!(r, 7.try_into().unwrap());
 
-        let rb = reader.read_at(0, 6).await.unwrap();
-        assert_eq!(rb.len(), 6);
+        let stat = reader.stat().await.unwrap();
+        assert_eq!(stat.file_size, (cluster_size * 2 + 7).into());
+        assert_eq!(stat.allocated_file_size, cluster_size.into());
+        assert_eq!(stat.fs_cluster_size, cluster_size);
+
+        let rb = reader
+            .read_at(0, cluster_size.try_into().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), cluster_size.try_into().unwrap());
         for i in rb.iter() {
             assert_eq!(*i, 0);
         }
 
-        let rb = reader.read_at(10, 6).await.unwrap();
-        assert_eq!(rb.len(), 6);
-        check_contents!(*rb, 0);
+        let rb = reader.read_at((cluster_size * 2).into(), 40).await.unwrap();
+        assert_eq!(rb.len(), 7);
+        check_contents!(*rb, 7);
+
+        let r = writer
+            .write_at((513..900).map(|i| i as u8).collect(), 513)
+            .await
+            .unwrap();
+        assert_eq!(r, 387);
+        let stat = reader.stat().await.unwrap();
+        // File size is unchanged.
+        assert_eq!(stat.file_size, (cluster_size * 2 + 7).into());
+        // Allocated size should double because the sparse region should be
+        // dirtied sufficiently to need another full filesystem cluster.
+        assert_eq!(stat.allocated_file_size, (cluster_size * 2).into());
+
+        // Make sure the sparse contents are still 0'ed.
+        let rb = reader.read_at(0, 513).await.unwrap();
+        assert_eq!(rb.len(), 513);
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        // Make sure the non-zeroed contents at the beginning of the file
+        // are correct.
+        let rb = reader.read_at(513, 387).await.unwrap();
+        assert_eq!(rb.len(), 387);
+        check_contents!(*rb, 513);
+
+        // Make sure the other unallocated extent returns 0s.
+        let rb = reader
+            .read_at(
+                900,
+                ((cluster_size - 900) + cluster_size).try_into().unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rb.len(),
+            ((cluster_size - 900) + cluster_size).try_into().unwrap()
+        );
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
+
+        writer.deallocate(0, cluster_size.into()).await.unwrap();
+        let stat = writer.stat().await.unwrap();
+        // File size is unchanged.
+        assert_eq!(stat.file_size, (cluster_size * 2 + 7).into());
+        // Allocated size should go back to 0 because there's still one allocated
+        // cluster.
+        assert_eq!(stat.allocated_file_size, cluster_size.into());
+
+        // Deallocated range now returns 0s.
+        let rb = reader
+            .read_at(0, (cluster_size).try_into().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rb.len(), (cluster_size).try_into().unwrap());
+        for i in rb.iter() {
+            assert_eq!(*i, 0);
+        }
 
         writer.close().await.unwrap();
         reader.close().await.unwrap();

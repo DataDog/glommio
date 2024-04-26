@@ -25,7 +25,7 @@ fn main() {
 
     impl Handler<i32> for RequestHandler {
         fn handle(&self, msg: Msg, _src_shard: usize, cur_shard: usize) -> HandlerResult {
-            println!("shard {} received {}", cur_shard, msg);
+            println!("shard {cur_shard} received {msg}");
             assert_eq!(get_shard_for(&msg, self.nr_shards), cur_shard);
             ready(()).boxed_local()
         }
@@ -38,7 +38,7 @@ fn main() {
             let handler = RequestHandler { nr_shards };
             let mut sharded = Sharded::new(mesh, get_shard_for, handler).await.unwrap();
             let me = sharded.shard_id();
-            let messages = repeat_with(|| fastrand::i32(0..100)).take(10).inspect(move |x| println!("shard {} generated {}", me, x));
+            let messages = repeat_with(|| fastrand::i32(0..100)).take(10).inspect(move |x| println!("shard {me} generated {x}"));
             sharded.handle(messages).unwrap();
             sharded.close().await;
         }))

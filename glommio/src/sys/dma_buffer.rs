@@ -10,7 +10,7 @@
 
 use std::ptr;
 
-use crate::sys::uring::UringBuffer;
+use crate::{io::ReadResult, sys::uring::UringBuffer};
 use alloc::alloc::Layout;
 
 #[derive(Debug)]
@@ -25,7 +25,7 @@ impl SysAlloc {
             None
         } else {
             let layout = Layout::from_size_align(size, 4096).unwrap();
-            let data = unsafe { alloc::alloc::alloc(layout) as *mut u8 };
+            let data = unsafe { alloc::alloc::alloc(layout) };
             let data = ptr::NonNull::new(data)?;
             Some(SysAlloc { data, layout })
         }
@@ -53,6 +53,7 @@ pub(crate) enum BufferStorage {
     Sys(SysAlloc),
     Uring(UringBuffer),
     EventFd(*mut u8),
+    ReadResult(ReadResult),
 }
 
 impl BufferStorage {
@@ -61,6 +62,7 @@ impl BufferStorage {
             BufferStorage::Sys(x) => x.as_ptr(),
             BufferStorage::Uring(x) => x.as_ptr(),
             BufferStorage::EventFd(x) => *x as *const u8,
+            BufferStorage::ReadResult(x) => x.as_ptr(),
         }
     }
 
@@ -69,6 +71,9 @@ impl BufferStorage {
             BufferStorage::Sys(x) => x.as_mut_ptr(),
             BufferStorage::Uring(x) => x.as_mut_ptr(),
             BufferStorage::EventFd(x) => *x,
+            BufferStorage::ReadResult(_) => {
+                unreachable!("Attempt to access immutable ReadResult as a mutable pointer")
+            }
         }
     }
 }
@@ -113,7 +118,11 @@ impl DmaBuffer {
         }
     }
 
-    pub(crate) fn trim_to_size(&mut self, newsize: usize) {
+    /// Reduce the length of this buffer to be `newsize`. This value must be <= the current
+    /// [`len`](#method.len) and is a destructive operation (length cannot be increased).
+    /// NOTE: When using this with DmaFile, you have to make sure that `newsize` is properly
+    /// aligned or the write will fail due to O_DIRECT requirements.
+    pub fn trim_to_size(&mut self, newsize: usize) {
         assert!(newsize <= self.size);
         self.size = newsize;
     }
@@ -166,5 +175,15 @@ impl AsMut<[u8]> for DmaBuffer {
     #[inline(always)]
     fn as_mut(&mut self) -> &mut [u8] {
         self.as_bytes_mut()
+    }
+}
+
+impl From<ReadResult> for DmaBuffer {
+    fn from(value: ReadResult) -> Self {
+        Self {
+            trim: 0,
+            size: value.len(),
+            storage: BufferStorage::ReadResult(value),
+        }
     }
 }

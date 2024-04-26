@@ -58,8 +58,7 @@ mod probe;
 pub mod registrar;
 
 use std::{
-    fmt,
-    io,
+    fmt, io,
     mem::{self, MaybeUninit},
     os::unix::io::RawFd,
     ptr::{self, NonNull},
@@ -162,12 +161,12 @@ impl IoUring {
 
     /// Returns the `SubmissionQueue` part of the `IoUring`.
     pub fn sq(&self) -> SubmissionQueue<'_> {
-        SubmissionQueue::new(&*self)
+        SubmissionQueue::new(self)
     }
 
     /// Returns the `CompletionQueue` part of the `IoUring`.
     pub fn cq(&self) -> CompletionQueue<'_> {
-        CompletionQueue::new(&*self)
+        CompletionQueue::new(self)
     }
 
     /// Returns the `Registrar` part of the `IoUring`.

@@ -90,7 +90,7 @@ impl FileSchedulerInner {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FileScheduler {
     inner: Rc<FileSchedulerInner>,
     io_scheduler: Weak<IoScheduler>,
