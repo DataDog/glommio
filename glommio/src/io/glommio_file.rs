@@ -356,6 +356,10 @@ impl GlommioFile {
             dev_minor: self.dev_minor,
         }
     }
+
+    pub(crate) fn strong_count(&self) -> usize {
+        self.file.as_ref().map_or(0, Arc::strong_count)
+    }
 }
 
 /// This lets you open a DmaFile on one thread and then send it safely to another thread for processing.
@@ -384,7 +388,11 @@ impl OwnedGlommioFile {
         })
     }
 
-    pub fn downgrade(&self) -> WeakGlommioFile {
+    pub(crate) fn strong_count(&self) -> usize {
+        self.fd.as_ref().map_or(0, Arc::strong_count)
+    }
+
+    pub(crate) fn downgrade(&self) -> WeakGlommioFile {
         WeakGlommioFile {
             fd: self.fd.as_ref().map_or(AWeak::new(), Arc::downgrade),
             path: self.path.clone(),
@@ -437,7 +445,7 @@ impl From<GlommioFile> for OwnedGlommioFile {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub(crate) struct WeakGlommioFile {
     pub(crate) fd: AWeak<RawFd>,
     pub(crate) path: Option<PathBuf>,
@@ -447,6 +455,14 @@ pub(crate) struct WeakGlommioFile {
 }
 
 impl WeakGlommioFile {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn strong_count(&self) -> usize {
+        self.fd.strong_count()
+    }
+
     pub(crate) fn upgrade(&self) -> Option<OwnedGlommioFile> {
         self.fd.upgrade().map(|fd| OwnedGlommioFile {
             fd: Some(fd),
