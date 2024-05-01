@@ -11,7 +11,10 @@ pub use timer_impl::{Timer, TimerActionOnce, TimerActionRepeat};
 
 type Result<T> = crate::Result<T, ()>;
 
-/// Sleep for some time.
+/// Sleep for some time on the current task. Explicit sleeps can introduce undesirable delays if not used correctly.
+/// Consider using [crate::timer::timeout] instead if you are implementing timeout-like semantics or
+/// [crate::timer::TimerActionOnce] if you need to schedule a future for some later date in the future without needing
+/// to await.
 ///
 /// ```
 /// use glommio::{timer::sleep, LocalExecutor};

@@ -51,11 +51,17 @@ impl Inner {
 
 /// A timer that expires after a duration of time.
 ///
-/// Timers are futures that output the [`Instant`] at which they fired.
-/// Note that because of that, Timers always block the current task queue
-/// in which they currently execute.
+/// Timers are futures that output the [`Instant`] at which they fired. Awaiting it causes execution of the current
+/// task to be delayed by that amount which can be undesirable in an async framework to leverage full concurrency
+/// of execution.
 ///
-/// In most situations you will want to use [`TimerActionOnce`]
+/// In most situations you will want to use [`TimerActionOnce`] which is a convenience wrapper around spawning a new
+/// detached task on the executor into the current task queue [crate::spawn_local_into] that does a sleep before running
+/// a provided future). Detaching is important so that the future is actually scheduled immediately without needing to
+/// be awaited.
+///
+/// If you want timeout-like semantics where a future has to complete within a given deadline, consider using
+/// [crate::timer::timeout].
 ///
 /// # Examples
 ///
@@ -185,12 +191,29 @@ impl Future for Timer {
 /// The TimerActionOnce struct provides an ergonomic way to fire an action at a
 /// later point in time.
 ///
-/// In practice [`Timer`] is hard to use because it will always block the
-/// current task queue. This is rarely what one wants.
+/// In practice [`Timer`] is hard to use because it will always delay the
+/// current task it is awaited on. This is rarely what one wants to exploit the
+/// concurrency promises of an async framework.
 ///
 /// The [`TimerActionOnce`] creates a timer in the background and executes an
 /// action when the timer expires. It also provides a convenient way to cancel a
-/// timer.
+/// timer. This is a convenience wrapper around equivalent code like this:
+///
+/// ```
+/// use glommio::{timer::TimerActionOnce, LocalExecutorBuilder};
+/// use std::time::Duration;
+///
+/// let handle = LocalExecutorBuilder::default()
+///     .spawn(|| async move {
+///         let task = glommio::spawn_local(async move {
+///             glommio::timer::sleep(Duration::from_millis(100)).await;
+///             println!("Executed once")
+///         });
+///         task.detach().await;
+///     })
+///     .unwrap();
+/// handle.join().unwrap();
+/// ```
 ///
 /// [`Timer`]: struct.Timer.html
 #[derive(Debug)]
@@ -554,7 +577,7 @@ impl TimerActionRepeat {
     ///
     /// * `action_gen` a Future to be executed repeatedly. The Future's return
     ///   value must be
-    /// Option<Duration>. If [`Some`], It will execute again after Duration
+    /// `Option<Duration>`. If [`Some`], It will execute again after Duration
     /// elapses. If `None`, it stops.
     /// * `tq` the [`TaskQueueHandle`] for the TaskQueue we want.
     ///
@@ -618,7 +641,7 @@ impl TimerActionRepeat {
     ///
     /// * `action_gen` a Future to be executed repeatedly. The Future's return
     ///   value must be
-    /// Option<Duration>. If [`Some`], It will execute again after Duration
+    /// `Option<Duration>`. If [`Some`], It will execute again after Duration
     /// elapses. If `None`, it stops.
     ///
     /// # Examples

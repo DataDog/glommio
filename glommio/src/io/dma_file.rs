@@ -488,7 +488,7 @@ impl DmaFile {
     /// Copies a file range from one file to another in kernel space. This is going to have the same performance
     /// characteristic as splice except if both files are on the same filesystem and the filesystem supports reflinks.
     /// In that case, the underlying disk blocks will be CoW linked instead of actually performing a copy.
-    /// Since `copy_file_range` is not yet implemented on io_uring (https://github.com/axboe/liburing/issues/831),
+    /// Since `copy_file_range` is not yet implemented on io_uring <https://github.com/axboe/liburing/issues/831>,
     /// this is just a dispatch to the blocking thread pool to do the syscall.
     pub async fn copy_file_range_aligned(
         &self,
@@ -643,7 +643,7 @@ impl DmaFile {
     }
 
     /// The major ID of the device containing the filesystem where the file resides.
-    /// The device may be found by issuing a `readlink`` on `/sys/dev/block/<major>:<minor>`
+    /// The device may be found by issuing a `readlink` on `/sys/dev/block/<major>:<minor>`
     pub fn dev_major(&self) -> u32 {
         self.file.dev_major
     }
@@ -803,7 +803,7 @@ impl OwnedDmaFile {
     }
 
     /// The major ID of the device containing the filesystem where the file resides.
-    /// The device may be found by issuing a `readlink`` on `/sys/dev/block/<major>:<minor>`
+    /// The device may be found by issuing a `readlink` on `/sys/dev/block/<major>:<minor>`
     pub fn dev_major(&self) -> u32 {
         self.file.dev_major
     }
