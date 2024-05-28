@@ -32,6 +32,7 @@ fn main() {
         .file(src.join("queue.c"))
         .file(src.join("syscall.c"))
         .file(src.join("register.c"))
+        .flag("-D_GNU_SOURCE")
         .include(src.join("include"))
         .include(&configured_include)
         .extra_warnings(false)
@@ -40,6 +41,7 @@ fn main() {
     // (our additional, linkable C bindings)
     Build::new()
         .file(project.join("rusturing.c"))
+        .flag("-D_GNU_SOURCE")
         .include(src.join("include"))
         .include(&configured_include)
         .compile("rusturing");
