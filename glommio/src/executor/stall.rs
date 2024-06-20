@@ -172,14 +172,15 @@ impl StallDetector {
         struct SendWrapper(libc::pthread_t);
         unsafe impl Send for SendWrapper {}
         let tid = SendWrapper(unsafe { nix::libc::pthread_self() });
-        std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
+        std::thread::spawn(move || {
+            let tid = tid;
             while timer.wait().is_ok() {
                 if terminated.load(Ordering::Relaxed) {
-                    return
+                    return;
                 }
                 unsafe { nix::libc::pthread_kill(tid.0, signal) };
             }
-        }})
+        })
     }
 
     pub(crate) fn enter_task_queue(
