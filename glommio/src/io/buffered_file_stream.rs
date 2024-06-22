@@ -655,7 +655,12 @@ impl AsyncBufRead for Stdin {
     ) -> Poll<io::Result<&'a [u8]>> {
         match self.source.take() {
             Some(source) => {
-                let res = source.result().unwrap();
+                let res = match source.result() {
+                    Some(res) => res,
+                    None => {
+                        return Poll::Pending;
+                    }
+                };
                 match res {
                     Err(x) => Poll::Ready(Err(x)),
                     Ok(sz) => {
@@ -692,9 +697,9 @@ impl AsyncBufRead for Stdin {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test_utils::make_test_directories;
+    use crate::{test_utils::make_test_directories, GlommioError};
     use futures_lite::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
-    use std::io::ErrorKind;
+    use std::{io::ErrorKind, time::Duration};
 
     macro_rules! read_test {
         ( $name:ident, $dir:ident, $kind:ident, $file:ident, $file_size:ident: $size:tt, $code:block) => {
@@ -983,4 +988,20 @@ mod test {
         reader.close().await.unwrap();
         writer.close().await.unwrap();
     });
+
+    #[test]
+    fn test_stdin_fuse() {
+        use futures::StreamExt;
+
+        test_executor!(async move {
+            let mut si = StreamExt::fuse(stdin().lines());
+            let fut =
+                crate::timer::timeout(Duration::from_millis(1), async move {
+                    StreamExt::next(&mut si).await.ok_or(GlommioError::IoError(
+                        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin closed"),
+                    ))
+                });
+            assert!(matches!(fut.await, Err(GlommioError::TimedOut(_))));
+        });
+    }
 }
