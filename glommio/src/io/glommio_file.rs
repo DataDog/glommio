@@ -27,6 +27,113 @@ pub(super) type Device = u64;
 pub(super) type Inode = u64;
 pub(super) type Identity = (Device, Inode);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdvisoryLockState {
+    Unlocked = 0,
+    Locking = 1,
+    Locked = 2,
+}
+
+struct AdvisoryLockStateGuard<'a>(&'a AdvisoryLockStateHolder, bool);
+
+impl AdvisoryLockStateGuard<'_> {
+    fn commit(mut self) {
+        self.1 = false;
+        self.0.mark_locked();
+    }
+}
+
+impl Drop for AdvisoryLockStateGuard<'_> {
+    fn drop(&mut self) {
+        if self.1 {
+            self.0.abort_locking();
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct AdvisoryLockStateHolder {
+    state: std::sync::atomic::AtomicU8,
+}
+
+impl std::fmt::Debug for AdvisoryLockStateHolder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{:?}", self.state(),))
+    }
+}
+
+impl AdvisoryLockStateHolder {
+    fn map_state(state: u8) -> AdvisoryLockState {
+        match state {
+            0 => AdvisoryLockState::Unlocked,
+            1 => AdvisoryLockState::Locking,
+            2 => AdvisoryLockState::Locked,
+            rest => {
+                panic!("Memory corruption resulting in unexpected state value? state = {rest:?}")
+            }
+        }
+    }
+
+    fn state(&self) -> AdvisoryLockState {
+        Self::map_state(self.state.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn mark_locking<'a>(&'a self, file: &Path) -> Result<AdvisoryLockStateGuard<'a>> {
+        self.state
+            .compare_exchange_weak(
+                AdvisoryLockState::Unlocked as u8,
+                AdvisoryLockState::Locking as u8,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .map(|_| AdvisoryLockStateGuard(self, true))
+            .map_err(|state| match Self::map_state(state) {
+                AdvisoryLockState::Unlocked => crate::GlommioError::WouldBlock(ResourceType::File(
+                    format!("Failed to acquire lock but current state is unlocked on {file:?}?"),
+                )),
+                AdvisoryLockState::Locking => crate::GlommioError::WouldBlock(ResourceType::File(
+                    format!("The lock is already trying to be acquired on {file:?}"),
+                )),
+                AdvisoryLockState::Locked => crate::GlommioError::WouldBlock(ResourceType::File(
+                    format!("The lock is already acquired on {file:?}"),
+                )),
+            })
+    }
+
+    fn abort_locking(&self) {
+        self.state
+            .compare_exchange_weak(
+                AdvisoryLockState::Locking as u8,
+                AdvisoryLockState::Unlocked as u8,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .expect("Should only be called if the current state is locking");
+    }
+
+    fn mark_locked(&self) {
+        self.state
+            .compare_exchange_weak(
+                AdvisoryLockState::Locking as u8,
+                AdvisoryLockState::Locked as u8,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .expect("Should be in the locking state if we're making the lock as acquired!");
+    }
+
+    fn unlock(&self) {
+        self.state
+            .compare_exchange_weak(
+                AdvisoryLockState::Locked as u8,
+                AdvisoryLockState::Unlocked as u8,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .expect("Unlock called when in unexpected state!");
+    }
+}
+
 /// A wrapper over `std::fs::File` which carries a path (for better error
 /// messages) and prints a warning if closed synchronously.
 ///
@@ -35,6 +142,7 @@ pub(super) type Identity = (Device, Inode);
 #[derive(Debug, Clone)]
 pub(crate) struct GlommioFile {
     pub(crate) file: Option<Arc<RawFd>>,
+    pub(crate) lock_state: Option<Arc<AdvisoryLockStateHolder>>,
     // A file can appear in many paths, through renaming and linking.
     // If we do that, each path should have its own object. This is to
     // facilitate error displaying.
@@ -75,6 +183,7 @@ impl FromRawFd for GlommioFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         GlommioFile {
             file: Some(Arc::new(fd)),
+            lock_state: Some(Arc::new(AdvisoryLockStateHolder::default())),
             path: RefCell::new(None),
             inode: 0,
             dev_major: 0,
@@ -106,6 +215,7 @@ impl GlommioFile {
 
         let mut file = GlommioFile {
             file: Some(Arc::new(fd as _)),
+            lock_state: Some(Arc::new(Default::default())),
             path: RefCell::new(Some(path)),
             inode: 0,
             dev_major: 0,
@@ -128,6 +238,7 @@ impl GlommioFile {
             file: Some(Arc::new(nix::unistd::dup(
                 self.file.as_ref().unwrap().as_raw_fd(),
             )?)),
+            lock_state: self.lock_state.clone(),
             path: self.path.clone(),
             inode: self.inode,
             dev_major: self.dev_major,
@@ -178,8 +289,48 @@ impl GlommioFile {
         }
     }
 
+    pub(crate) async fn try_take_last_clone_unlocking_guard(
+        self,
+        guard: OwnedGlommioFile,
+    ) -> std::result::Result<Self, (Self, OwnedGlommioFile)> {
+        if guard.as_raw_fd() == self.as_raw_fd() {
+            std::mem::drop(guard);
+
+            match self.try_take_last_clone() {
+                Ok(took) => {
+                    unsafe { took.funlock().await }.expect("Unlocking advisory lock failed");
+                    Ok(took)
+                }
+                Err(failed) => {
+                    let guard = failed.clone().into();
+                    Err((failed, guard))
+                }
+            }
+        } else {
+            debug_assert!(Arc::ptr_eq(
+                self.lock_state.as_ref().unwrap(),
+                guard.lock_state.as_ref().unwrap()
+            ));
+
+            // Seperate file descriptors but the same file entry. Try taking the fd...
+            match self.try_take_last_clone() {
+                Ok(took) => {
+                    let original: GlommioFile = guard.into();
+                    unsafe { original.funlock().await }.expect("Unlocking advisory lock failed");
+                    Ok(took)
+                }
+                Err(failed) => Err((failed, guard)),
+            }
+        }
+    }
+
     pub(crate) fn discard(mut self) -> (Option<RawFd>, Option<PathBuf>) {
         // Destruct `self` signalling to `Drop` that there is no need to async close.
+        // Similarly, because we're about to close, we don't need to do anything with the advisory lock - if this is
+        // the last clone of the file, then it'll unlock implicitly by closing the fd. And if it's not (e.g. a dup
+        // exists), then we can't safely unlock yet anyway.
+        self.lock_state.take().unwrap();
+
         (Arc::into_inner(self.file.take().unwrap()), self.path.take())
     }
 
@@ -203,6 +354,67 @@ impl GlommioFile {
                 "Another clone of this file exists somewhere - cannot close fd",
             ))
         }
+    }
+
+    async fn flock(&self, op: &'static str, flags: libc::c_int) -> Result<()> {
+        let guard = self
+            .lock_state
+            .as_ref()
+            .unwrap()
+            .mark_locking(self.path.borrow().as_ref().unwrap())?;
+
+        let res = unsafe { libc::flock(self.as_raw_fd(), flags) };
+        if res == -1 {
+            return Err(GlommioError::create_enhanced(
+                std::io::Error::last_os_error(),
+                op,
+                self.path.borrow().as_ref(),
+                Some(self.as_raw_fd()),
+            ));
+        }
+
+        guard.commit();
+
+        Ok(())
+    }
+
+    pub(crate) async fn try_lock_shared(&self) -> Result<OwnedGlommioFile> {
+        // NOTE: The try variant could just do the syscall directly instead of dispatching to a blocking thread.
+        // For consistency though it's implemented the same was.
+        self.flock("try_lock_shared", libc::LOCK_SH | libc::LOCK_NB)
+            .await
+            .map(|()| self.clone().into())
+    }
+
+    pub(crate) async fn try_lock_exclusive(&self) -> Result<OwnedGlommioFile> {
+        // NOTE: The try variant could just do the syscall directly instead of dispatching to a blocking thread.
+        // For consistency though it's implemented the same way.
+        self.flock("try_lock_exclusive", libc::LOCK_EX | libc::LOCK_NB)
+            .await
+            .map(|()| self.clone().into())
+    }
+
+    pub(crate) async unsafe fn funlock(&self) -> Result<()> {
+        let lock_state = self.lock_state.as_ref().unwrap();
+        assert_eq!(
+            lock_state.state(),
+            AdvisoryLockState::Locked,
+            "Not holding the lock!"
+        );
+
+        let res = unsafe { libc::flock(self.as_raw_fd(), libc::LOCK_UN) };
+        if res == -1 {
+            return Err(GlommioError::create_enhanced(
+                std::io::Error::last_os_error(),
+                "funlock",
+                self.path.borrow().as_ref(),
+                Some(self.as_raw_fd()),
+            ));
+        }
+
+        lock_state.unlock();
+
+        Ok(())
     }
 
     pub(crate) fn with_path(self, path: Option<PathBuf>) -> GlommioFile {
@@ -350,6 +562,10 @@ impl GlommioFile {
     pub(crate) fn downgrade(&self) -> WeakGlommioFile {
         WeakGlommioFile {
             fd: self.file.as_ref().map_or(AWeak::new(), Arc::downgrade),
+            lock_state: self
+                .lock_state
+                .as_ref()
+                .map_or(AWeak::new(), Arc::downgrade),
             path: self.path.borrow().clone(),
             inode: self.inode,
             dev_major: self.dev_major,
@@ -366,6 +582,7 @@ impl GlommioFile {
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedGlommioFile {
     pub(crate) fd: Option<Arc<RawFd>>,
+    pub(crate) lock_state: Option<Arc<AdvisoryLockStateHolder>>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) inode: u64,
     pub(crate) dev_major: u32,
@@ -381,6 +598,7 @@ impl OwnedGlommioFile {
 
         Ok(Self {
             fd,
+            lock_state: self.lock_state.clone(),
             path: self.path.clone(),
             inode: self.inode,
             dev_major: self.dev_major,
@@ -395,11 +613,32 @@ impl OwnedGlommioFile {
     pub(crate) fn downgrade(&self) -> WeakGlommioFile {
         WeakGlommioFile {
             fd: self.fd.as_ref().map_or(AWeak::new(), Arc::downgrade),
+            lock_state: self
+                .lock_state
+                .as_ref()
+                .map_or(AWeak::new(), Arc::downgrade),
             path: self.path.clone(),
             inode: self.inode,
             dev_major: self.dev_major,
             dev_minor: self.dev_minor,
         }
+    }
+
+    pub(crate) unsafe fn funlock_immediately(&mut self) {
+        let advisory_lock = self.lock_state.take().unwrap();
+        assert_eq!(
+            advisory_lock.state(),
+            AdvisoryLockState::Locked,
+            "Not holding the lock!"
+        );
+
+        nix::fcntl::flock(
+            self.fd.as_ref().unwrap().as_raw_fd(),
+            nix::fcntl::FlockArg::Unlock,
+        )
+        .unwrap();
+
+        advisory_lock.unlock();
     }
 }
 
@@ -423,6 +662,7 @@ impl From<OwnedGlommioFile> for GlommioFile {
 
         GlommioFile {
             file: owned.fd.take(),
+            lock_state: owned.lock_state.take(),
             path: RefCell::new(owned.path.take()),
             inode: owned.inode,
             dev_major: owned.dev_major,
@@ -437,6 +677,7 @@ impl From<GlommioFile> for OwnedGlommioFile {
     fn from(mut value: GlommioFile) -> Self {
         Self {
             fd: value.file.take(),
+            lock_state: value.lock_state.take(),
             path: value.path.borrow_mut().take().map(|p| p.to_path_buf()),
             inode: value.inode,
             dev_major: value.dev_major,
@@ -448,6 +689,7 @@ impl From<GlommioFile> for OwnedGlommioFile {
 #[derive(Default, Debug, Clone)]
 pub(crate) struct WeakGlommioFile {
     pub(crate) fd: AWeak<RawFd>,
+    pub(crate) lock_state: AWeak<AdvisoryLockStateHolder>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) inode: u64,
     pub(crate) dev_major: u32,
@@ -466,6 +708,11 @@ impl WeakGlommioFile {
     pub(crate) fn upgrade(&self) -> Option<OwnedGlommioFile> {
         self.fd.upgrade().map(|fd| OwnedGlommioFile {
             fd: Some(fd),
+            lock_state: Some(
+                self.lock_state
+                    .upgrade()
+                    .expect("If the FD is live then so should the advisory lock state be"),
+            ),
             path: self.path.clone(),
             inode: self.inode,
             dev_major: self.dev_major,
