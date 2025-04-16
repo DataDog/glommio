@@ -3,27 +3,20 @@
 # https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
 
 [licenses]
-unlicensed = "deny"
 allow = [
     "MIT",
-    "BSD-3-Clause",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MPL-2.0",
     "Unlicense",
     "Zlib",
-    "Unicode-DFS-2016"
+    "Unicode-3.0"
 ]
-copyleft = "deny"
-default = "deny"
 confidence-threshold = 0.95
 private = { ignore = true }
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "deny"
-notice = "deny"
-unsound = "deny"
+version = 2
 
 [bans]
 multiple-versions = "allow"
