@@ -27,10 +27,12 @@
 //! 2) if the `Node` is not partially saturated, then it is either equally
 //!    saturated with the other `Node`s at its `Level` or one `Node` has a
 //!    greater saturation than the other:
-//!     a) if `Node`s are equally saturated, use the `Node` with the greater
-//!     number of total slots (i.e. greater number of CPUs that are online)
-//!     b) if `Node`s are not equally saturated, use the node with lower
-//!     saturation
+//!
+//!       a) if `Node`s are equally saturated, use the `Node` with the greater
+//!    number of total slots (i.e. greater number of CPUs that are online)
+//!
+//!       b) if `Node`s are not equally saturated, use the node with lower
+//!    saturation
 //!
 //! `Node:::select_cpu` is used to recursively proceed through levels in the
 //! tree until a `Cpu` is selected.  The `Nodes` which were traversed in

@@ -190,7 +190,7 @@ impl BufferedFile {
     /// all writes to the device, providing durability even if the system
     /// crashes or is rebooted.
     pub async fn fdatasync(&self) -> Result<()> {
-        self.file.fdatasync().await.map_err(Into::into)
+        self.file.fdatasync().await
     }
 
     /// Erases a range from the file without changing the size. Check the man
@@ -213,10 +213,7 @@ impl BufferedFile {
     /// will be `size`. If `keep_size` is true then the existing file size
     /// is unchanged.
     pub async fn pre_allocate(&self, size: u64, keep_size: bool) -> Result<()> {
-        self.file
-            .pre_allocate(size, keep_size)
-            .await
-            .map_err(Into::into)
+        self.file.pre_allocate(size, keep_size).await
     }
 
     /// Truncates a file to the specified size.
@@ -224,7 +221,7 @@ impl BufferedFile {
     /// Note: this syscall might be issued in a background thread depending on
     /// the system's capabilities.
     pub async fn truncate(&self, size: u64) -> Result<()> {
-        self.file.truncate(size).await.map_err(Into::into)
+        self.file.truncate(size).await
     }
 
     /// rename this file.
@@ -232,7 +229,7 @@ impl BufferedFile {
     /// Note: this syscall might be issued in a background thread depending on
     /// the system's capabilities.
     pub async fn rename<P: AsRef<Path>>(&mut self, new_path: P) -> Result<()> {
-        self.file.rename(new_path).await.map_err(Into::into)
+        self.file.rename(new_path).await
     }
 
     /// remove this file.
@@ -244,12 +241,12 @@ impl BufferedFile {
     /// Note: this syscall might be issued in a background thread depending on
     /// the system's capabilities.
     pub async fn remove(&self) -> Result<()> {
-        self.file.remove().await.map_err(Into::into)
+        self.file.remove().await
     }
 
     /// Returns the size of a file, in bytes.
     pub async fn file_size(&self) -> Result<u64> {
-        self.file.file_size().await.map_err(Into::into)
+        self.file.file_size().await
     }
 
     /// Performs a stat operation on a file to retrieve multiple properties at
@@ -260,7 +257,7 @@ impl BufferedFile {
 
     /// Closes this file.
     pub async fn close(self) -> Result<()> {
-        self.file.close().await.map_err(Into::into)
+        self.file.close().await
     }
 
     /// Returns an `Option` containing the path associated with this open

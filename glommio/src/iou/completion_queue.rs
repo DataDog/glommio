@@ -116,5 +116,5 @@ impl fmt::Debug for CompletionQueue<'_> {
     }
 }
 
-unsafe impl<'ring> Send for CompletionQueue<'ring> {}
-unsafe impl<'ring> Sync for CompletionQueue<'ring> {}
+unsafe impl Send for CompletionQueue<'_> {}
+unsafe impl Sync for CompletionQueue<'_> {}

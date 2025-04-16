@@ -133,7 +133,7 @@ impl Task {
 
         unsafe {
             let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
-            assert_ne!(refs, i16::max_value());
+            assert_ne!(refs, i16::MAX);
             ((*header).vtable.run)(ptr)
         }
     }

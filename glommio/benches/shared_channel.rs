@@ -125,9 +125,9 @@ fn test_mesh_mpmc(capacity: usize, peers: usize) {
             let (sender, mut receiver) = mesh.join().await.unwrap();
 
             let sender_task = async move {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 for _ in 0..runs {
-                    let mut peer = rng.gen_range(0..sender.nr_consumers());
+                    let mut peer = rng.random_range(0..sender.nr_consumers());
                     if peer == sender.producer_id().unwrap() && peer == 0 {
                         peer += 1;
                     } else if peer == sender.producer_id().unwrap() {

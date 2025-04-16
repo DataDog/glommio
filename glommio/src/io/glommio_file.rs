@@ -156,7 +156,7 @@ impl GlommioFile {
 
     pub(crate) fn identity(&self) -> Identity {
         (
-            (self.dev_major as u64) << 32 | self.dev_minor as u64,
+            ((self.dev_major as u64) << 32) | self.dev_minor as u64,
             self.inode,
         )
     }
@@ -437,7 +437,7 @@ impl From<GlommioFile> for OwnedGlommioFile {
     fn from(mut value: GlommioFile) -> Self {
         Self {
             fd: value.file.take(),
-            path: value.path.borrow_mut().take().map(|p| p.to_path_buf()),
+            path: value.path.borrow_mut().take(),
             inode: value.inode,
             dev_major: value.dev_major,
             dev_minor: value.dev_minor,

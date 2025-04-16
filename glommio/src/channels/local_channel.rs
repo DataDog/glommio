@@ -100,7 +100,7 @@ where
     }
 }
 
-impl<'a, T, F, R> Future for Waiter<'a, T, F>
+impl<T, F, R> Future for Waiter<'_, T, F>
 where
     F: FnMut() -> PollResult<R>,
 {
@@ -187,7 +187,7 @@ fn remove_from_the_waiting_queue<T>(node: Pin<&mut WaiterNode>, state: &mut Stat
         .expect("Future has to be queue into the waiting queue");
 }
 
-impl<'a, T, F> Drop for Waiter<'a, T, F> {
+impl<T, F> Drop for Waiter<'_, T, F> {
     fn drop(&mut self) {
         if self.node.link.is_linked() {
             //if future is linked into the waiting queue then it is already pinned
@@ -646,7 +646,7 @@ impl<'a, T> ChannelStream<'a, T> {
     }
 }
 
-impl<'a, T> Stream for ChannelStream<'a, T> {
+impl<T> Stream for ChannelStream<'_, T> {
     type Item = T;
 
     #[inline]
@@ -685,7 +685,7 @@ impl<'a, T> Stream for ChannelStream<'a, T> {
     }
 }
 
-impl<'a, T> Drop for ChannelStream<'a, T> {
+impl<T> Drop for ChannelStream<'_, T> {
     fn drop(&mut self) {
         remove_from_the_waiting_queue(self.node.as_mut(), &mut self.channel.state.borrow_mut());
     }

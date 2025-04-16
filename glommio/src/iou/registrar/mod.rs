@@ -213,8 +213,8 @@ impl fmt::Debug for Registrar<'_> {
     }
 }
 
-unsafe impl<'ring> Send for Registrar<'ring> {}
-unsafe impl<'ring> Sync for Registrar<'ring> {}
+unsafe impl Send for Registrar<'_> {}
+unsafe impl Sync for Registrar<'_> {}
 
 #[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Copy)]
 pub struct Personality {

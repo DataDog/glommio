@@ -1856,7 +1856,7 @@ impl<T> Future for Task<T> {
 /// }
 /// # });
 /// ```
-
+///
 /// [`Task`]: crate::Task
 /// [`Cell`]: std::cell::Cell
 /// [`RefCell`]: std::cell::RefCell
@@ -1867,7 +1867,7 @@ impl<T> Future for Task<T> {
 #[derive(Debug)]
 pub struct ScopedTask<'a, T>(multitask::Task<T>, PhantomData<&'a T>);
 
-impl<'a, T> ScopedTask<'a, T> {
+impl<T> ScopedTask<'_, T> {
     /// Cancels the task and waits for it to stop running.
     ///
     /// Returns the task's output if it was completed just before it got
@@ -1903,7 +1903,7 @@ impl<'a, T> ScopedTask<'a, T> {
     }
 }
 
-impl<'a, T> Future for ScopedTask<'a, T> {
+impl<T> Future for ScopedTask<'_, T> {
     type Output = T;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

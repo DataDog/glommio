@@ -1330,7 +1330,7 @@ impl AsyncWrite for DmaStreamWriter {
     }
 }
 
-impl<'a> AsyncWrite for &'a DmaStreamWriter {
+impl AsyncWrite for &DmaStreamWriter {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,

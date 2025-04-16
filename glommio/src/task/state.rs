@@ -37,7 +37,7 @@ pub(crate) const COMPLETED: u8 = 1 << 2;
 /// consumed by the [`JoinHandle`]. A task becomes closed when:
 ///
 /// 1. It gets canceled by [`Task::cancel()`], [`Task::drop()`], or
-/// [`JoinHandle::cancel()`]. 2. Its output gets awaited by the [`JoinHandle`].
+///    [`JoinHandle::cancel()`]. 2. Its output gets awaited by the [`JoinHandle`].
 /// 3. It panics while polling the future.
 /// 4. It is completed and the [`JoinHandle`] gets dropped.
 pub(crate) const CLOSED: u8 = 1 << 3;

@@ -113,5 +113,5 @@ impl fmt::Debug for SubmissionQueue<'_> {
     }
 }
 
-unsafe impl<'ring> Send for SubmissionQueue<'ring> {}
-unsafe impl<'ring> Sync for SubmissionQueue<'ring> {}
+unsafe impl Send for SubmissionQueue<'_> {}
+unsafe impl Sync for SubmissionQueue<'_> {}

@@ -675,6 +675,7 @@ pub(crate) trait UringCommon {
     fn submission_queue(&mut self) -> ReactorQueue;
     fn submit_sqes(&mut self) -> io::Result<usize>;
     fn waiting_kernel_submission(&self) -> usize;
+    #[allow(unused)]
     fn in_kernel(&self) -> usize;
     fn waiting_kernel_collection(&self) -> usize;
     fn needs_kernel_enter(&self) -> bool;

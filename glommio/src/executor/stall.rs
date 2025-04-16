@@ -263,7 +263,7 @@ impl<'detector> StallDetectorGuard<'detector> {
     }
 }
 
-impl<'detector> Drop for StallDetectorGuard<'detector> {
+impl Drop for StallDetectorGuard<'_> {
     fn drop(&mut self) {
         let _ = self.detector.disarm();
 

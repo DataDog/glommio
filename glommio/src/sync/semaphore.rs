@@ -151,7 +151,7 @@ impl<'a> Waiter<'a> {
     }
 }
 
-impl<'a> Drop for Waiter<'a> {
+impl Drop for Waiter<'_> {
     fn drop(&mut self) {
         if self.node.link.is_linked() {
             // If node is linked that is for sure is pinned so that is safe
@@ -162,7 +162,7 @@ impl<'a> Drop for Waiter<'a> {
     }
 }
 
-impl<'a> Future for Waiter<'a> {
+impl Future for Waiter<'_> {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -286,7 +286,7 @@ impl StaticPermit {
     }
 }
 
-impl<'a> Drop for Permit<'a> {
+impl Drop for Permit<'_> {
     fn drop(&mut self) {
         process_wakes(self.sem, self.units);
     }
