@@ -9,9 +9,9 @@ edition = "2021"
 byte-unit = "5.1.4"
 yansi = "~0.5.1"
 clap = "4.5.3"
-fastrand = "1.4.0"
+fastrand = "2"
 futures = "~0.3.5"
-futures-lite = "1.11.1"
+futures-lite = "2.6.0"
 glommio = { path = "../glommio" }
 
 # hyper and tokio for the hyper example. We just need the traits from Tokio

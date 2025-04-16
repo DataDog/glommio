@@ -65,8 +65,8 @@ pub mod spsc_queue;
 /// [`send`]: struct.LocalSender.html#method.send
 /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
 /// [`channel`]: https://doc.rust-lang.org/std/sync/mpsc/fn.channel.html
-/// [`next`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html#method.next
-/// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
+/// [`next`]: https://docs.rs/futures-lite/2.6.0/futures_lite/stream/trait.StreamExt.html#method.next
+/// [`StreamExt`]: https://docs.rs/futures-lite/2.6.0/futures_lite/stream/trait.StreamExt.html
 pub mod local_channel;
 
 /// Allow data to be transmitted across two tasks in different executors.
@@ -161,8 +161,8 @@ pub mod local_channel;
 /// [`send`]: struct.ConnectedSender.html#method.send
 /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
 /// [`channel`]: https://doc.rust-lang.org/std/sync/mpsc/fn.channel.html
-/// [`next`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html#method.next
-/// [`StreamExt`]: https://docs.rs/futures-lite/1.11.1/futures_lite/stream/trait.StreamExt.html
+/// [`next`]: https://docs.rs/futures-lite/2.6.0/futures_lite/stream/trait.StreamExt.html#method.next
+/// [`StreamExt`]: https://docs.rs/futures-lite/2.6.0/futures_lite/stream/trait.StreamExt.html
 pub mod shared_channel;
 
 /// A mesh-like structure to connect a set of executors
