@@ -162,7 +162,9 @@ pub use self::{
     },
     bulk_io::{IoVec, MergedBufferLimit, ReadAmplificationLimit, ReadManyResult},
     directory::Directory,
-    dma_file::{CloseResult, DmaFile, OwnedDmaFile, WeakDmaFile},
+    dma_file::{
+        AdvisoryLockGuard, CloseResult, DmaFile, OwnedDmaFile, WeakAdvisoryLockGuard, WeakDmaFile,
+    },
     dma_file_stream::{
         DmaStreamReader, DmaStreamReaderBuilder, DmaStreamWriter, DmaStreamWriterBuilder,
     },
