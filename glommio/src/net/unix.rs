@@ -186,7 +186,7 @@ impl UnixListener {
     /// ```
     pub fn incoming(&self) -> impl Stream<Item = Result<UnixStream>> + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
-            let res = listener.accept().await.map_err(Into::into);
+            let res = listener.accept().await;
             Some((res, listener))
         }))
     }

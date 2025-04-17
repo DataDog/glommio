@@ -390,8 +390,8 @@ impl<T: Send + Sized> ConnectedReceiver<T> {
     ///
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
-    /// [`StreamExt`]: https://docs.rs/futures-lite/1.11.2/futures_lite/stream/index.html
-    /// [`next`]: https://docs.rs/futures-lite/1.11.2/futures_lite/stream/trait.StreamExt.html#method.next
+    /// [`StreamExt`]: https://docs.rs/futures-lite/2.6.0/futures_lite/stream/index.htmll
+    /// [`next`]: https://docs.rs/futures-lite/2.6.0/futures_lite/stream/trait.StreamExt.html#method.next
     /// [`Rc`]: https://doc.rust-lang.org/std/rc/struct.Rc.html
     pub async fn recv(&self) -> Option<T> {
         let waiter = future::poll_fn(|cx| self.recv_one(cx));

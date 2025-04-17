@@ -2,7 +2,7 @@ use crate::sys::Statx;
 
 pub mod syscalls;
 
-pub const LIBURING_UDATA_TIMEOUT: libc::__u64 = libc::__u64::max_value();
+pub const LIBURING_UDATA_TIMEOUT: libc::__u64 = libc::__u64::MAX;
 
 // sqe opcode constants
 #[repr(C)]
@@ -112,6 +112,7 @@ pub const IORING_REGISTER_PROBE: libc::c_uint = 8;
 pub const IORING_REGISTER_PERSONALITY: libc::c_uint = 9;
 pub const IORING_UNREGISTER_PERSONALITY: libc::c_uint = 10;
 
+#[allow(non_camel_case_types)]
 #[derive(Debug)]
 #[repr(C)]
 pub struct io_uring {
@@ -124,6 +125,7 @@ pub struct io_uring {
     pub pad: [libc::c_uint; 3],
 }
 
+#[allow(non_camel_case_types)]
 #[derive(Debug)]
 #[repr(C)]
 pub struct io_uring_sq {
@@ -145,6 +147,7 @@ pub struct io_uring_sq {
     pub pad: [libc::c_uint; 4],
 }
 
+#[allow(non_camel_case_types)]
 #[derive(Debug)]
 #[repr(C)]
 pub struct io_uring_cq {
@@ -162,6 +165,7 @@ pub struct io_uring_cq {
     pub pad: [libc::c_uint; 4],
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 pub struct io_uring_sqe {
     pub opcode: libc::__u8,  /* type of operation for this sqe */
@@ -207,6 +211,7 @@ pub union buf_index_padding {
     pub __pad2: [libc::__u64; 3],
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct buf_index {
@@ -215,6 +220,7 @@ pub struct buf_index {
     pub splice_fd_in: libc::__s32,
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 pub struct io_uring_cqe {
     pub user_data: libc::__u64, /* sqe->data submission passed back */
@@ -222,6 +228,7 @@ pub struct io_uring_cqe {
     pub flags: libc::__u32,
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 pub struct io_uring_params {
     pub sq_entries: libc::__u32,
@@ -236,6 +243,7 @@ pub struct io_uring_params {
     pub cq_off: io_cqring_offsets,
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 pub struct io_sqring_offsets {
     pub head: libc::__u32,
@@ -249,6 +257,7 @@ pub struct io_sqring_offsets {
     pub resv2: libc::__u64,
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 pub struct io_cqring_offsets {
     pub head: libc::__u32,
@@ -260,6 +269,7 @@ pub struct io_cqring_offsets {
     pub resv: [libc::__u64; 2],
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 pub struct io_uring_probe {
     last_op: libc::__u8,
@@ -269,6 +279,7 @@ pub struct io_uring_probe {
     ops: [io_uring_probe_op; 0],
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 pub struct io_uring_probe_op {
     op: libc::__u8,
@@ -277,6 +288,7 @@ pub struct io_uring_probe_op {
     resv2: libc::__u32,
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct __kernel_timespec {

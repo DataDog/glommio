@@ -263,7 +263,7 @@ impl<'a, T> Waiter<'a, T> {
     }
 }
 
-impl<'a, T> Future for Waiter<'a, T> {
+impl<T> Future for Waiter<'_, T> {
     type Output = LockResult<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -305,7 +305,7 @@ impl<'a, T> Future for Waiter<'a, T> {
     }
 }
 
-impl<'a, T> Drop for Waiter<'a, T> {
+impl<T> Drop for Waiter<'_, T> {
     fn drop(&mut self) {
         if self.node.link.is_linked() {
             // If node is lined them future is already pinned
@@ -373,7 +373,7 @@ pub struct RwLockReadGuard<'a, T> {
     value_ref: Ref<'a, Option<T>>,
 }
 
-impl<'a, T> Deref for RwLockReadGuard<'a, T> {
+impl<T> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -381,7 +381,7 @@ impl<'a, T> Deref for RwLockReadGuard<'a, T> {
     }
 }
 
-impl<'a, T> Drop for RwLockReadGuard<'a, T> {
+impl<T> Drop for RwLockReadGuard<'_, T> {
     fn drop(&mut self) {
         let mut state = self.rw.state.borrow_mut();
 
@@ -409,7 +409,7 @@ pub struct RwLockWriteGuard<'a, T> {
     value_ref: RefMut<'a, Option<T>>,
 }
 
-impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
+impl<T> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -417,7 +417,7 @@ impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
     }
 }
 
-impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
+impl<T> DerefMut for RwLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         let state = self.rw.state.borrow();
 
@@ -429,7 +429,7 @@ impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
     }
 }
 
-impl<'a, T> Drop for RwLockWriteGuard<'a, T> {
+impl<T> Drop for RwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         let mut state = self.rw.state.borrow_mut();
 

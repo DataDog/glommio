@@ -515,7 +515,7 @@ impl DmaFile {
     /// As this is a DMA file, the OS will not be caching this file; however,
     /// there may be caches on the drive itself.
     pub async fn fdatasync(&self) -> Result<()> {
-        self.file.fdatasync().await.map_err(Into::into)
+        self.file.fdatasync().await
     }
 
     /// Returns the alignment required for I/O operations. Typical values will
@@ -977,7 +977,7 @@ pub(crate) mod test {
     };
     use futures::join;
     use futures_lite::{stream, StreamExt};
-    use rand::{seq::SliceRandom, thread_rng};
+    use rand::{rng, seq::SliceRandom};
     use std::{cell::RefCell, convert::TryInto, ops::Deref, path::PathBuf, time::Duration};
 
     macro_rules! dma_file_test {
@@ -1387,7 +1387,7 @@ pub(crate) mod test {
         let last_read = Rc::new(RefCell::new(-1));
 
         let mut iovs: Vec<(u64, usize)> = (0..512).map(|x| (x * 8, 8)).collect();
-        iovs.shuffle(&mut thread_rng());
+        iovs.shuffle(&mut rng());
         new_file
             .read_many(
                 stream::iter(iovs.into_iter()),
@@ -1421,7 +1421,7 @@ pub(crate) mod test {
         let last_read = Rc::new(RefCell::new(-1));
 
         let mut iovs: Vec<(u64, usize)> = (0..511).map(|x| (x * 8 + 1, 7)).collect();
-        iovs.shuffle(&mut thread_rng());
+        iovs.shuffle(&mut rng());
         new_file
             .read_many(
                 stream::iter(iovs.into_iter()),

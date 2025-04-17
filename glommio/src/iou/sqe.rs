@@ -508,8 +508,8 @@ impl<'a> SQE<'a> {
     }
 }
 
-unsafe impl<'a> Send for SQE<'a> {}
-unsafe impl<'a> Sync for SQE<'a> {}
+unsafe impl Send for SQE<'_> {}
+unsafe impl Sync for SQE<'_> {}
 
 #[derive(Debug)]
 pub struct SockAddrStorage {
@@ -699,7 +699,7 @@ impl<'ring> DerefMut for HardLinkedSQE<'ring> {
     }
 }
 
-impl<'ring> Drop for HardLinkedSQE<'ring> {
+impl Drop for HardLinkedSQE<'_> {
     fn drop(&mut self) {
         if !self.is_final {
             self.sqe.set_flags(SubmissionFlags::IO_HARDLINK);
@@ -748,7 +748,7 @@ impl<'ring> DerefMut for SoftLinkedSQE<'ring> {
     }
 }
 
-impl<'ring> Drop for SoftLinkedSQE<'ring> {
+impl Drop for SoftLinkedSQE<'_> {
     fn drop(&mut self) {
         if !self.is_final {
             self.sqe.set_flags(SubmissionFlags::IO_LINK);

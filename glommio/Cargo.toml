@@ -15,7 +15,7 @@ keywords = ["linux", "rust", "async", "iouring", "thread-per-core"]
 categories = ["asynchronous", "concurrency", "os", "filesystem", "network-programming"]
 readme = "../README.md"
 # This is also documented in the README.md under "Supported Rust Versions"
-rust-version = "1.65"
+rust-version = "1.70"
 
 [dependencies]
 ahash = "0.7"
@@ -27,7 +27,7 @@ concurrent-queue = "1.2"
 crossbeam = "0.8"
 enclose = "1.1"
 flume = { version = "0.11", features = ["async"] }
-futures-lite = "1.12"
+futures-lite = "2.6.0"
 intrusive-collections = "0.9"
 lazy_static = "1.4"
 libc = "0.2"
@@ -46,7 +46,7 @@ tracing = "0.1"
 typenum = "1.15"
 
 [dev-dependencies]
-fastrand = "1"
+fastrand = "2"
 futures = "0"
 hdrhistogram = "7"
 pretty_env_logger = "0"

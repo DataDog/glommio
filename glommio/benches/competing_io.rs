@@ -103,10 +103,10 @@ async fn run_io(name: &str, file: &ImmutableFile, count: usize, size: usize) {
             let file = file.clone();
             let hist = hist.clone();
             glommio::spawn_local(async move {
-                let mut rand = rand::thread_rng();
+                let mut rand = rand::rng();
                 for _ in 0..count / (2 << 10) {
                     let now = Instant::now();
-                    file.read_at(rand.gen_range(0..blocks) * size as u64, size)
+                    file.read_at(rand.random_range(0..blocks) * size as u64, size)
                         .await
                         .unwrap();
                     hist.borrow_mut()

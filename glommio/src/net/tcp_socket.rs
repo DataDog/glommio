@@ -351,7 +351,9 @@ impl AcceptedTcpStream {
     pub fn peer_addr(&self) -> Result<SocketAddr> {
         let socket = unsafe { Socket::from_raw_fd(self.fd) };
         let sock_addr = socket.peer_addr()?;
-        socket.into_raw_fd();
+        // The above from_raw_fd call isn't intended to close the socket. Hence the
+        // intentional leak here.
+        let _ = socket.into_raw_fd();
         Ok(sock_addr.as_socket().unwrap())
     }
 
