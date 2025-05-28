@@ -806,7 +806,7 @@ impl PollRing {
         let ring = iou::IoUring::new_with_flags(
             size as _,
             iou::SetupFlags::IOPOLL,
-            iou::SetupFeatures::empty(),
+            iou::SetupFeatures::FAST_POLL,
         )?;
         Ok(PollRing {
             size,
@@ -924,7 +924,11 @@ impl SleepableRing {
     ) -> io::Result<Self> {
         assert!(*IO_URING_RECENT_ENOUGH);
         Ok(SleepableRing {
-            ring: iou::IoUring::new(size as _)?,
+            ring: iou::IoUring::new_with_flags(
+                size as _,
+                iou::SetupFlags::empty(),
+                iou::SetupFeatures::FAST_POLL,
+            )?,
             size,
             submission_queue: UringQueueState::with_capacity(size * 4),
             name,
