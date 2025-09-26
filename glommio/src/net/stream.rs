@@ -13,7 +13,7 @@ use std::{
     cell::Cell,
     io,
     net::Shutdown,
-    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
     rc::{Rc, Weak},
     task::{Context, Poll, Waker},
     time::{Duration, Instant},
@@ -508,5 +508,19 @@ impl<S: AsRawFd, B: Buffered> GlommioStream<S, B> {
 
     pub(crate) fn consume(&mut self, amt: usize) {
         self.rx_buf.consume(amt);
+    }
+}
+
+impl<S: IntoRawFd, B: RxBuf> IntoRawFd for GlommioStream<S, B> {
+    fn into_raw_fd(self) -> RawFd {
+        // Clean up reactor resources before extracting the fd
+        let reactor = self.stream.reactor.upgrade();
+        if let Some(reactor) = reactor {
+            self.stream.write_timeout.cancel_timer(&reactor);
+            self.stream.read_timeout.cancel_timer(&reactor);
+        }
+        
+        // Extract the raw fd from the underlying stream
+        self.stream.stream.into_raw_fd()
     }
 }

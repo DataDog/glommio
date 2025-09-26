@@ -433,6 +433,12 @@ impl FromRawFd for TcpStream {
     }
 }
 
+impl<B: RxBuf> IntoRawFd for TcpStream<B> {
+    fn into_raw_fd(self) -> RawFd {
+        self.stream.into_raw_fd()
+    }
+}
+
 fn make_tcp_socket(addr: &SocketAddr) -> io::Result<Socket> {
     let domain = if addr.is_ipv6() {
         Domain::IPV6
