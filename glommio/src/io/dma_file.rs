@@ -1605,7 +1605,17 @@ pub(crate) mod test {
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
-                let res = x.1.unwrap();
+                let res = x.1;
+                // For CI tests, some operations are unsupported
+                if std::env::var("CI").is_ok_and(|val| val == "1" || val == "true") {
+                    if let Err(GlommioError::EnhancedIoError { source, .. }) = &res {
+                        if matches!(source.kind(), io::ErrorKind::Unsupported) {
+                            eprintln!("This Glommio operation is currently unsupported");
+                            return;
+                        }
+                    }
+                }
+                let res = res.unwrap();
                 assert_eq!(res.0.size(), 8);
                 assert_eq!(res.1.len(), 8);
                 assert_eq!(*last_read.borrow() + 1, x.0 as i64);
@@ -1639,7 +1649,17 @@ pub(crate) mod test {
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
-                let res = x.1.unwrap();
+                let res = x.1;
+                // For CI tests, some operations are unsupported
+                if std::env::var("CI").is_ok_and(|val| val == "1" || val == "true") {
+                    if let Err(GlommioError::EnhancedIoError { source, .. }) = &res {
+                        if matches!(source.kind(), io::ErrorKind::Unsupported) {
+                            eprintln!("This Glommio operation is currently unsupported");
+                            return;
+                        }
+                    }
+                }
+                let res = res.unwrap();
                 assert_eq!(res.0.size(), 7);
                 assert_eq!(res.1.len(), 7);
                 assert_eq!(*last_read.borrow() + 1, x.0 as i64);
@@ -1670,7 +1690,17 @@ pub(crate) mod test {
             .enumerate()
             .for_each(enclose! {(total_reads, last_read) |x| {
                 *total_reads.borrow_mut() += 1;
-                let res = x.1.unwrap();
+                let res = x.1;
+                // For CI tests, some operations are unsupported
+                if std::env::var("CI").is_ok_and(|val| val == "1" || val == "true") {
+                    if let Err(GlommioError::EnhancedIoError { source, .. }) = &res {
+                        if matches!(source.kind(), io::ErrorKind::Unsupported) {
+                            eprintln!("This Glommio operation is currently unsupported");
+                            return;
+                        }
+                    }
+                }
+                let res = res.unwrap();
                 assert_eq!(res.0.size(), 7);
                 assert_eq!(res.1.len(), 7);
                 assert_eq!(res.0.pos(), (x.0 * 8 + 1) as u64);
@@ -1979,7 +2009,17 @@ pub(crate) mod test {
         assert_eq!(written, buffer_size);
         file.close().await.unwrap();
 
-        let read = file2.read_at_aligned(0, buffer_size).await.unwrap();
+        let read = file2.read_at_aligned(0, buffer_size).await;
+        // For CI tests, some operations are unsupported
+        if std::env::var("CI").is_ok_and(|val| val == "1" || val == "true") {
+            if let Err(GlommioError::EnhancedIoError { source, .. }) = &read {
+                if matches!(source.kind(), io::ErrorKind::Unsupported) {
+                    eprintln!("This Glommio operation is currently unsupported");
+                    return;
+                }
+            }
+        }
+        let read = read.unwrap();
         assert_eq!(read.len(), buffer_size);
         assert_eq!(
             &read[0..6],
@@ -2114,7 +2154,17 @@ pub(crate) mod test {
                 .unwrap()
         );
 
-        let read = file2.read_at_aligned(0, buffer_len).await.unwrap();
+        let read = file2.read_at_aligned(0, buffer_len).await;
+        // For CI tests, some operations are unsupported
+        if std::env::var("CI").is_ok_and(|val| val == "1" || val == "true") {
+            if let Err(GlommioError::EnhancedIoError { source, .. }) = &read {
+                if matches!(source.kind(), io::ErrorKind::Unsupported) {
+                    eprintln!("This Glommio operation is currently unsupported");
+                    return;
+                }
+            }
+        }
+        let read = read.unwrap();
         assert_eq!(read.len(), buffer_len);
         assert_eq!(original_write_buffer.as_slice(), &read[..]);
     });
