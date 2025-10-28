@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use crate::{reactor::Reactor, task::JoinHandle, GlommioError, TaskQueueHandle};
+use crate::{reactor::Reactor, task::JoinHandle, GlommioError, LocalExecutor, TaskQueueHandle};
 use pin_project_lite::pin_project;
 use std::{
     cell::RefCell,
@@ -103,6 +103,32 @@ impl Timer {
     /// ```
     pub fn new(dur: Duration) -> Timer {
         let reactor = crate::executor().reactor();
+        Timer {
+            inner: Rc::new(RefCell::new(Inner {
+                id: reactor.register_timer(),
+                is_charged: false,
+                when: Instant::now() + dur,
+                reactor: Rc::downgrade(&reactor),
+            })),
+        }
+    }
+
+    /// Creates a timer that expires after the given duration of time. Uses passed executor
+    /// to schedule the timer
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glommio::{timer::Timer, LocalExecutor};
+    /// use std::time::Duration;
+    ///
+    /// let ex = LocalExecutor::default();
+    /// ex.run(async {
+    ///     Timer::new_with_executor(Duration::from_millis(100), &ex).await;
+    /// });
+    /// ```
+    pub fn new_with_executor(dur: Duration, ex: &LocalExecutor) -> Timer {
+        let reactor = ex.get_reactor();
         Timer {
             inner: Rc::new(RefCell::new(Inner {
                 id: reactor.register_timer(),

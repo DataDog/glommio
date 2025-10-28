@@ -1149,7 +1149,7 @@ pub struct LocalExecutor {
 }
 
 impl LocalExecutor {
-    fn get_reactor(&self) -> Rc<Reactor> {
+    pub(crate) fn get_reactor(&self) -> Rc<Reactor> {
         self.reactor.clone()
     }
 
