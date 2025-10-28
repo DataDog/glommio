@@ -3241,7 +3241,13 @@ mod test {
             } else {
                 // 100 ms may have passed without us running for 100ms in case
                 // there are other threads. Need to be a bit more relaxed
-                Duration::from_millis(90)
+                if cfg!(target_env = "musl") {
+                    // For my musl-based compilation, it'll also sometime returns
+                    // lower `getrusage` value
+                    Duration::from_millis(40)
+                } else {
+                    Duration::from_millis(90)
+                }
             };
 
             let ex_ru_start = getrusage();
