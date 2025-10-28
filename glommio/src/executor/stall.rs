@@ -173,6 +173,7 @@ impl StallDetector {
         unsafe impl Send for SendWrapper {}
         let tid = SendWrapper(unsafe { nix::libc::pthread_self() });
         std::thread::spawn(enclose::enclose! { (terminated, timer) move || {
+            let tid = tid;
             while timer.wait().is_ok() {
                 if terminated.load(Ordering::Relaxed) {
                     return
