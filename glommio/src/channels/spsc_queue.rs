@@ -3,6 +3,7 @@ use std::{
     fmt,
     marker::PhantomData,
     mem::{self, MaybeUninit},
+    rc::Rc,
     slice::from_raw_parts_mut,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -87,25 +88,9 @@ pub struct Consumer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
-impl<T> Clone for Consumer<T> {
-    fn clone(&self) -> Self {
-        Consumer {
-            buffer: self.buffer.clone(),
-        }
-    }
-}
-
 /// A handle to the queue which allows adding values onto the buffer
 pub struct Producer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
-}
-
-impl<T> Clone for Producer<T> {
-    fn clone(&self) -> Self {
-        Producer {
-            buffer: self.buffer.clone(),
-        }
-    }
 }
 
 impl<T> fmt::Debug for Consumer<T> {
@@ -321,6 +306,23 @@ impl<T> BufferHalf for Producer<T> {
     }
 }
 
+impl<T> BufferHalf for Rc<Producer<T>> {
+    type Item = T;
+    fn buffer(&self) -> &Buffer<T> {
+        &self.buffer
+    }
+
+    fn connect(&self, id: usize) {
+        assert_ne!(id, 0);
+        assert_ne!(id, usize::MAX);
+        self.buffer.ccache.producer_id.store(id, Ordering::Release);
+    }
+
+    fn peer_id(&self) -> usize {
+        self.buffer.pcache.consumer_id.load(Ordering::Acquire)
+    }
+}
+
 impl<T> Producer<T> {
     /// Attempt to push a value onto the buffer.
     ///
@@ -360,6 +362,23 @@ impl<T> Producer<T> {
 }
 
 impl<T> BufferHalf for Consumer<T> {
+    type Item = T;
+    fn buffer(&self) -> &Buffer<T> {
+        &self.buffer
+    }
+
+    fn connect(&self, id: usize) {
+        assert_ne!(id, usize::MAX);
+        assert_ne!(id, 0);
+        self.buffer.pcache.consumer_id.store(id, Ordering::Release);
+    }
+
+    fn peer_id(&self) -> usize {
+        self.buffer.ccache.producer_id.load(Ordering::Acquire)
+    }
+}
+
+impl<T> BufferHalf for Rc<Consumer<T>> {
     type Item = T;
     fn buffer(&self) -> &Buffer<T> {
         &self.buffer

@@ -36,7 +36,7 @@ type Result<T, V> = crate::Result<T, V>;
 /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
 pub struct SharedReceiver<T: Send + Sized> {
-    state: Option<Rc<ReceiverState<T>>>,
+    state: Option<ReceiverState<T>>,
 }
 
 /// The `SharedSender` is the sending end of the Shared Channel.
@@ -52,7 +52,7 @@ pub struct SharedReceiver<T: Send + Sized> {
 /// [`ConnectedSender`]: struct.ConnectedSender.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
 pub struct SharedSender<T: Send + Sized> {
-    state: Option<Rc<SenderState<T>>>,
+    state: Option<SenderState<T>>,
 }
 
 impl<T: Send + Sized> fmt::Debug for SharedSender<T> {
@@ -79,7 +79,7 @@ unsafe impl<T: Send + Sized> Send for SharedSender<T> {}
 /// The `ConnectedReceiver` is the receiving end of the Shared Channel.
 pub struct ConnectedReceiver<T: Send + Sized> {
     id: u64,
-    state: Rc<ReceiverState<T>>,
+    state: ReceiverState<T>,
     reactor: Weak<Reactor>,
     notifier: Arc<SleepNotifier>,
 }
@@ -87,7 +87,7 @@ pub struct ConnectedReceiver<T: Send + Sized> {
 /// The `ConnectedSender` is the sending end of the Shared Channel.
 pub struct ConnectedSender<T: Send + Sized> {
     id: u64,
-    state: Rc<SenderState<T>>,
+    state: SenderState<T>,
     reactor: Weak<Reactor>,
     notifier: Arc<SleepNotifier>,
 }
@@ -106,12 +106,28 @@ impl<T: Send + Sized> fmt::Debug for ConnectedSender<T> {
 
 #[derive(Debug)]
 struct SenderState<V: Send + Sized> {
-    buffer: Producer<V>,
+    buffer: Rc<Producer<V>>,
+}
+
+impl<V: Send + Sized> Clone for SenderState<V> {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
 struct ReceiverState<V: Send + Sized> {
-    buffer: Consumer<V>,
+    buffer: Rc<Consumer<V>>,
+}
+
+impl<V: Send + Sized> Clone for ReceiverState<V> {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+        }
+    }
 }
 
 struct Connector<T: BufferHalf + Clone> {
@@ -150,10 +166,14 @@ pub fn new_bounded<T: Send + Sized>(size: usize) -> (SharedSender<T>, SharedRece
     let (producer, consumer) = make(size);
     (
         SharedSender {
-            state: Some(Rc::new(SenderState { buffer: producer })),
+            state: Some(SenderState {
+                buffer: Rc::new(producer),
+            }),
         },
         SharedReceiver {
-            state: Some(Rc::new(ReceiverState { buffer: consumer })),
+            state: Some(ReceiverState {
+                buffer: Rc::new(consumer),
+            }),
         },
     )
 }
