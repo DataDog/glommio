@@ -34,7 +34,7 @@ an [introductory article.](https://www.datadoghq.com/blog/engineering/introducin
 
 ## Supported Rust Versions
 
-Glommio is built against the latest stable release. The minimum supported version is 1.70. The current Glommio version
+Glommio is built against the latest stable release. The minimum supported version is 1.92. The current Glommio version
 is not guaranteed to build on Rust versions earlier than the minimum supported version.
 
 ## Supported Linux kernels

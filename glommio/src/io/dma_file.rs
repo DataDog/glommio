@@ -21,7 +21,10 @@ use nix::sys::statfs::*;
 use std::{
     cell::Ref,
     io,
-    os::unix::io::{AsRawFd, RawFd},
+    os::{
+        fd::BorrowedFd,
+        unix::io::{AsFd, AsRawFd, RawFd},
+    },
     path::Path,
     rc::Rc,
     sync::{Arc, Weak as AWeak},
@@ -60,8 +63,8 @@ pub struct AdvisoryLockGuard(Option<Arc<OwnedGlommioFile>>);
 
 impl Drop for AdvisoryLockGuard {
     fn drop(&mut self) {
-        if let Some(mut locked) = self.0.take().and_then(Arc::into_inner) {
-            unsafe { locked.funlock_immediately() }
+        if let Some(locked) = self.0.take().and_then(Arc::into_inner) {
+            locked.funlock_immediately().expect("Cannopt unlock fd")
         }
     }
 }
@@ -159,6 +162,12 @@ impl AsRawFd for DmaFile {
     }
 }
 
+impl AsFd for DmaFile {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.file.as_fd()
+    }
+}
+
 impl DmaFile {
     /// Returns true if the DmaFiles represent the same file on the underlying
     /// device.
@@ -213,16 +222,14 @@ impl DmaFile {
         let pollable = if (fstype.0 as u64) == (libc::TMPFS_MAGIC as u64) {
             PollableStatus::NonPollable(DirectIo::Disabled)
         } else {
-            // Allow this to work on non direct I/O devices, but only if this is in-memory
             sys::direct_io_ify(file.as_raw_fd(), flags)?;
-            let reactor = file.reactor.upgrade().unwrap();
-            if reactor
-                .probe_iopoll_support(file.as_raw_fd(), o_direct_alignment, major, minor, path)
-                .await
+            if !sysfs::BlockDevice::has_io_poll(major, minor)
+                || sysfs::BlockDevice::is_rotational(major, minor)
+                || sysfs::BlockDevice::memory_device(major, minor)
             {
-                PollableStatus::Pollable
-            } else {
                 PollableStatus::NonPollable(DirectIo::Enabled)
+            } else {
+                PollableStatus::Pollable
             }
         };
 
@@ -247,7 +254,7 @@ impl DmaFile {
             | (opts.custom_flags as libc::c_int & !libc::O_ACCMODE);
 
         let res = DmaFile::open_at(dir, path, flags, opts.mode).await;
-        Ok(enhanced_try!(res, opdesc, Some(path), None)?)
+        Ok(enhanced_try!(res, opdesc, Some(path.to_path_buf()), None)?)
     }
 
     pub(super) fn attach_scheduler(&self) {
@@ -382,7 +389,7 @@ impl DmaFile {
             pos,
             self.pollable,
         );
-        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+        enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
     /// Equivalent to [`DmaFile::write_at`] except that the caller retains
@@ -442,7 +449,7 @@ impl DmaFile {
             pos,
             self.pollable,
         );
-        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+        enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
     /// Reads from a specific position in the file and returns the buffer.
@@ -771,7 +778,7 @@ impl DmaFile {
     /// NOTE: Clones are allowed to exist on any thread and all share the same underlying
     /// fd safely. try_take_last_clone is also safe to invoke from any thread and will
     /// behave correctly with respect to clones on other threads.
-    pub fn try_take_last_clone(mut self) -> std::result::Result<Self, Self> {
+    pub fn try_take_last_clone(mut self) -> std::result::Result<Self, Box<Self>> {
         match self.file.try_take_last_clone() {
             Ok(took) => {
                 self.file = took;
@@ -779,7 +786,7 @@ impl DmaFile {
             }
             Err(still_cloned) => {
                 self.file = still_cloned;
-                Err(self)
+                Err(Box::new(self))
             }
         }
     }
@@ -955,8 +962,6 @@ impl DmaFile {
 ///     .join()
 ///     .unwrap();
 ///
-///     assert_eq!(nix::fcntl::fcntl(original_fd, nix::fcntl::FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
-///
 ///     let file: DmaFile = result.into();
 ///     assert_ne!(file.as_raw_fd(), original_fd);
 ///     assert_eq!(file.inode(), original_inode);
@@ -995,7 +1000,7 @@ impl OwnedDmaFile {
             file: enhanced_try!(
                 self.file.dup(),
                 "Duplicating",
-                self.file.path.as_ref(),
+                self.file.path.clone(),
                 self.file.fd.as_ref().map(|fd| fd.as_raw_fd())
             )?,
             o_direct_alignment: self.o_direct_alignment,

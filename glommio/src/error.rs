@@ -494,7 +494,7 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::ExecutorError(ExecutorErrorKind::QueueError { index, kind }) => {
                 match kind {
                     QueueErrorKind::StillActive => {
-                        io::Error::new(io::ErrorKind::Other, format!("Queue #{index} still active"))
+                        io::Error::other(format!("Queue #{index} still active"))
                     }
                     QueueErrorKind::NotFound => {
                         io::Error::new(io::ErrorKind::NotFound, format!("Queue #{index} not found"))
@@ -508,10 +508,9 @@ impl<T> From<GlommioError<T>> for io::Error {
             GlommioError::BuilderError(BuilderErrorKind::NonExistentCpus { .. })
             | GlommioError::BuilderError(BuilderErrorKind::InsufficientCpus { .. })
             | GlommioError::BuilderError(BuilderErrorKind::NrShards { .. })
-            | GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(_)) => io::Error::new(
-                io::ErrorKind::Other,
-                format!("Executor builder error: {display_err}"),
-            ),
+            | GlommioError::BuilderError(BuilderErrorKind::ThreadPanic(_)) => {
+                io::Error::other(format!("Executor builder error: {display_err}"))
+            }
             GlommioError::EnhancedIoError { source, .. } => {
                 io::Error::new(source.kind(), display_err)
             }
@@ -521,7 +520,7 @@ impl<T> From<GlommioError<T>> for io::Error {
                     format!("IncorrectSourceType {x:?}"),
                 ),
                 ReactorErrorKind::MemLockLimit(a, b) => {
-                    io::Error::new(io::ErrorKind::Other, format!("MemLockLimit({a:?}/{b:?})"))
+                    io::Error::other(format!("MemLockLimit({a:?}/{b:?})"))
                 }
             },
             GlommioError::TimedOut(dur) => {
@@ -647,8 +646,7 @@ mod test {
 
     #[test]
     fn composite_error_from_into() {
-        let err: GlommioError<()> =
-            io::Error::new(io::ErrorKind::Other, "test other io-error").into();
+        let err: GlommioError<()> = io::Error::other("test other io-error").into();
         let _: io::Error = err.into();
 
         let err: GlommioError<()> =

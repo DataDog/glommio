@@ -1,16 +1,15 @@
 use byte_unit::{Byte, UnitType};
 use clap::{Arg, Command};
 use futures_lite::{
-    stream::{self, StreamExt},
     AsyncReadExt, AsyncWriteExt,
+    stream::{self, StreamExt},
 };
 use glommio::{
-    enclose,
+    LocalExecutorBuilder, Placement, enclose,
     io::{
         BufferedFile, DmaFile, DmaStreamReader, DmaStreamReaderBuilder, DmaStreamWriterBuilder,
         MergedBufferLimit, ReadAmplificationLimit, StreamReaderBuilder, StreamWriterBuilder,
     },
-    LocalExecutorBuilder, Placement,
 };
 use std::{
     cell::Cell,

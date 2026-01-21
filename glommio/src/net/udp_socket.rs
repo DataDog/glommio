@@ -46,7 +46,7 @@ fn sockaddr_storage_to_std(addr: SockaddrStorage) -> Option<SocketAddr> {
     match addr.family() {
         Some(nix::sys::socket::AddressFamily::Inet) => addr
             .as_sockaddr_in()
-            .map(|x| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(x.ip()), x.port()))),
+            .map(|x| SocketAddr::V4(SocketAddrV4::new(x.ip(), x.port()))),
         Some(nix::sys::socket::AddressFamily::Inet6) => addr.as_sockaddr_in6().map(|x| {
             SocketAddr::V6(SocketAddrV6::new(
                 x.ip(),
@@ -84,7 +84,7 @@ impl UdpSocket {
             .to_socket_addrs()
             .unwrap()
             .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
+            .ok_or_else(|| io::Error::other("empty address"))?;
 
         let domain = if addr.is_ipv6() {
             Domain::IPV6
@@ -136,7 +136,7 @@ impl UdpSocket {
     /// [`recv`]: UdpSocket::recv
     pub async fn connect<A: ToSocketAddrs>(&self, addr: A) -> Result<()> {
         let iter = addr.to_socket_addrs()?;
-        let mut err = io::Error::new(io::ErrorKind::Other, "No Valid addresses");
+        let mut err = io::Error::other("No Valid addresses");
         for addr in iter {
             let reactor = self.socket.reactor.upgrade().unwrap();
             let source = reactor.connect(self.socket.as_raw_fd(), SockaddrStorage::from(addr));
@@ -628,7 +628,7 @@ impl UdpSocket {
             .to_socket_addrs()
             .unwrap()
             .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
+            .ok_or_else(|| io::Error::other("empty address"))?;
 
         let sockaddr = SockaddrStorage::from(addr);
         self.socket.send_to(buf, sockaddr).await.map_err(Into::into)

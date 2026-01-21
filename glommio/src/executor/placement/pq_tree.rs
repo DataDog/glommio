@@ -78,9 +78,9 @@ where
     fn priority_pack(&self, other: &Self) -> Ordering {
         // if a node is partially saturated (i.e. currently being filled by the packing
         // iterator), then it takes priority
-        if self.nr_slots_selected % self.nr_slots != 0 {
+        if !self.nr_slots_selected.is_multiple_of(self.nr_slots) {
             Ordering::Greater
-        } else if other.nr_slots_selected % other.nr_slots != 0 {
+        } else if !other.nr_slots_selected.is_multiple_of(other.nr_slots) {
             Ordering::Less
         } else {
             // if the node is not partially saturated, then it is either equally saturated

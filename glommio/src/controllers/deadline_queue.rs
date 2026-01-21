@@ -496,9 +496,10 @@ impl<T: 'static> DeadlineQueue<T> {
     pub async fn push_work(&self, source: Rc<dyn DeadlineSource<Output = T>>) -> io::Result<T> {
         self.queue.admit(source.clone())?;
         self.sender.send(source.clone()).await?;
-        self.responder.recv().await.ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "no response from response channel")
-        })
+        self.responder
+            .recv()
+            .await
+            .ok_or_else(|| io::Error::other("no response from response channel"))
     }
 
     /// Returns the TaskQueueHandle associated with this controller

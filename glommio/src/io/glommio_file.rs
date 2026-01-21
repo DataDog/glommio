@@ -15,7 +15,10 @@ use std::{
     cell::{Ref, RefCell},
     convert::TryInto,
     io,
-    os::unix::io::{AsRawFd, FromRawFd, RawFd},
+    os::{
+        fd::{BorrowedFd, IntoRawFd, OwnedFd},
+        unix::io::{AsFd, AsRawFd, FromRawFd, RawFd},
+    },
     path::{Path, PathBuf},
     rc::{Rc, Weak},
     sync::{Arc, Weak as AWeak},
@@ -141,7 +144,7 @@ impl AdvisoryLockStateHolder {
 /// non-Buffered files
 #[derive(Debug, Clone)]
 pub(crate) struct GlommioFile {
-    pub(crate) file: Option<Arc<RawFd>>,
+    pub(crate) file: Option<Arc<OwnedFd>>,
     pub(crate) lock_state: Option<Arc<AdvisoryLockStateHolder>>,
     // A file can appear in many paths, through renaming and linking.
     // If we do that, each path should have its own object. This is to
@@ -164,10 +167,10 @@ That means that while the file is already out of scope, the file descriptor is s
 This is likely fine, but in extreme situations can lead to resource exhaustion. An explicit \
                  asynchronous close is still preferred",
                 self.path.borrow(),
-                file
+                file.as_raw_fd()
             );
             if let Some(r) = self.reactor.upgrade() {
-                r.sys.async_close(file);
+                r.sys.async_close(file.into_raw_fd());
             }
         }
     }
@@ -182,7 +185,7 @@ impl AsRawFd for GlommioFile {
 impl FromRawFd for GlommioFile {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         GlommioFile {
-            file: Some(Arc::new(fd)),
+            file: Some(Arc::new(OwnedFd::from_raw_fd(fd))),
             lock_state: Some(Arc::new(AdvisoryLockStateHolder::default())),
             path: RefCell::new(None),
             inode: 0,
@@ -191,6 +194,12 @@ impl FromRawFd for GlommioFile {
             reactor: Rc::downgrade(&crate::executor().reactor()),
             scheduler: RefCell::new(None),
         }
+    }
+}
+
+impl AsFd for GlommioFile {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.file.as_ref().unwrap().as_fd()
     }
 }
 
@@ -214,7 +223,7 @@ impl GlommioFile {
         let fd = source.collect_rw().await?;
 
         let mut file = GlommioFile {
-            file: Some(Arc::new(fd as _)),
+            file: Some(Arc::new(unsafe { OwnedFd::from_raw_fd(fd as _) })),
             lock_state: Some(Arc::new(Default::default())),
             path: RefCell::new(Some(path)),
             inode: 0,
@@ -234,10 +243,14 @@ impl GlommioFile {
     pub(crate) fn dup(&self) -> io::Result<Self> {
         let reactor = crate::executor().reactor();
 
+        let file = self
+            .file
+            .as_ref()
+            .expect("dup called on closed file")
+            .try_clone()?;
+
         let duped = Self {
-            file: Some(Arc::new(nix::unistd::dup(
-                self.file.as_ref().unwrap().as_raw_fd(),
-            )?)),
+            file: Some(Arc::new(file)),
             lock_state: self.lock_state.clone(),
             path: self.path.clone(),
             inode: self.inode,
@@ -331,7 +344,14 @@ impl GlommioFile {
         // exists), then we can't safely unlock yet anyway.
         self.lock_state.take().unwrap();
 
-        (Arc::into_inner(self.file.take().unwrap()), self.path.take())
+        let file = self.file.take().unwrap();
+        let owned = Arc::into_inner(file);
+
+        if let Some(fd) = owned {
+            (Some(fd.into_raw_fd()), self.path.take())
+        } else {
+            (None, self.path.take())
+        }
     }
 
     pub(crate) async fn close(self) -> Result<()> {
@@ -581,7 +601,7 @@ impl GlommioFile {
 /// This lets you open a DmaFile on one thread and then send it safely to another thread for processing.
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedGlommioFile {
-    pub(crate) fd: Option<Arc<RawFd>>,
+    pub(crate) fd: Option<Arc<OwnedFd>>,
     pub(crate) lock_state: Option<Arc<AdvisoryLockStateHolder>>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) inode: u64,
@@ -592,7 +612,7 @@ pub(crate) struct OwnedGlommioFile {
 impl OwnedGlommioFile {
     pub(crate) fn dup(&self) -> io::Result<Self> {
         let fd = match self.fd.as_ref() {
-            Some(fd) => Some(Arc::new(nix::unistd::dup(fd.as_raw_fd())?)),
+            Some(fd) => Some(Arc::new(fd.try_clone()?)),
             None => None,
         };
 
@@ -624,21 +644,27 @@ impl OwnedGlommioFile {
         }
     }
 
-    pub(crate) unsafe fn funlock_immediately(&mut self) {
-        let advisory_lock = self.lock_state.take().unwrap();
+    pub(crate) fn funlock_immediately(&self) -> Result<()> {
+        let advisory_lock = self.lock_state.as_ref().unwrap();
         assert_eq!(
             advisory_lock.state(),
             AdvisoryLockState::Locked,
             "Not holding the lock!"
         );
 
-        nix::fcntl::flock(
-            self.fd.as_ref().unwrap().as_raw_fd(),
-            nix::fcntl::FlockArg::Unlock,
-        )
-        .unwrap();
+        let res = unsafe { libc::flock(self.as_raw_fd(), libc::LOCK_UN) };
+        if res == -1 {
+            return Err(GlommioError::create_enhanced(
+                std::io::Error::last_os_error(),
+                "funlock",
+                self.path.clone(),
+                Some(self.as_raw_fd()),
+            ));
+        }
 
         advisory_lock.unlock();
+
+        Ok(())
     }
 }
 
@@ -688,7 +714,7 @@ impl From<GlommioFile> for OwnedGlommioFile {
 
 #[derive(Default, Debug, Clone)]
 pub(crate) struct WeakGlommioFile {
-    pub(crate) fd: AWeak<RawFd>,
+    pub(crate) fd: AWeak<OwnedFd>,
     pub(crate) lock_state: AWeak<AdvisoryLockStateHolder>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) inode: u64,
@@ -750,10 +776,10 @@ pub(crate) mod test {
                 files
             };
 
-            assert!(file_list().iter().any(|x| *x == gf_fd)); // sanity check that file is open
+            assert!(file_list().contains(&gf_fd)); // sanity check that file is open
             let _ = { gf }; // moves scope and drops
             sleep(Duration::from_millis(10)).await; // forces the reactor to run, which will drop the file
-            assert!(!file_list().iter().any(|x| *x == gf_fd)); // file is gone
+            assert!(!file_list().contains(&gf_fd)); // file is gone
         });
     }
 }

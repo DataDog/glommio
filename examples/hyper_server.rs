@@ -8,9 +8,9 @@ mod hyper_compat {
         sync::Semaphore,
     };
     use hyper::{
+        Error, Request, Response,
         body::{Body as HttpBody, Bytes, Frame, Incoming},
         service::service_fn,
-        Error, Request, Response,
     };
 
     use std::{
@@ -173,7 +173,7 @@ mod hyper_compat {
 }
 
 use glommio::{CpuSet, LocalExecutorPoolBuilder, PoolPlacement};
-use hyper::{body::Incoming, Method, Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode, body::Incoming};
 use hyper_compat::ResponseBody;
 use std::convert::Infallible;
 

@@ -118,7 +118,6 @@ impl Directory {
     pub fn sync_read_dir(&self) -> Result<std::fs::ReadDir> {
         let path = self.file.path_required("read directory")?;
         enhanced_try!(std::fs::read_dir(&*path), "Reading a directory", self.file)
-            .map_err(Into::into)
     }
 
     /// Issues fdatasync into the underlying file.

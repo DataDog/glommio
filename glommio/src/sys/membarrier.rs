@@ -160,7 +160,7 @@ mod mprotect {
                     0 as libc::off_t,
                 );
                 fatal_assert!(page != libc::MAP_FAILED);
-                fatal_assert!(page as libc::size_t % page_size == 0);
+                fatal_assert!((page as libc::size_t).is_multiple_of(page_size));
 
                 // Locking the page ensures that it stays in memory during the two mprotect
                 // calls in `Barrier::barrier()`. If the page was unmapped between those calls,

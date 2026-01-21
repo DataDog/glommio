@@ -26,7 +26,10 @@ use std::{
     cell::RefCell,
     io,
     net::{self, Shutdown, SocketAddr, ToSocketAddrs},
-    os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
+    os::{
+        fd::AsFd,
+        unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
+    },
     pin::Pin,
     rc::{Rc, Weak},
     task::{Context, Poll},
@@ -120,7 +123,7 @@ impl TcpListener {
             .to_socket_addrs()
             .unwrap()
             .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
+            .ok_or_else(|| io::Error::other("empty address"))?;
 
         let domain = if addr.is_ipv6() {
             Domain::IPV6
@@ -189,8 +192,8 @@ impl TcpListener {
             Some(source) => poll_source(source),
             None => {
                 let reactor = self.reactor.upgrade().unwrap();
-                let raw_fd = self.listener.as_raw_fd();
-                match yolo_accept(raw_fd) {
+                let fd = self.listener.as_fd();
+                match yolo_accept(fd) {
                     Some(r) => match r {
                         Ok(fd) => Poll::Ready(Ok(AcceptedTcpStream { fd })),
                         Err(err) => Poll::Ready(Err(GlommioError::IoError(err))),

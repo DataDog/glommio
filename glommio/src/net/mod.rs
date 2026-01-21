@@ -6,9 +6,15 @@
 //! This module provides glommio's networking support.
 use crate::sys;
 use nix::sys::socket::{MsgFlags, SockaddrLike};
-use std::{io, os::unix::io::RawFd};
+use std::{
+    io,
+    os::{
+        fd::AsRawFd,
+        unix::io::{BorrowedFd, RawFd},
+    },
+};
 
-fn yolo_accept(fd: RawFd) -> Option<io::Result<RawFd>> {
+fn yolo_accept(fd: BorrowedFd<'_>) -> Option<io::Result<RawFd>> {
     let flags =
         nix::fcntl::OFlag::from_bits(nix::fcntl::fcntl(fd, nix::fcntl::F_GETFL).unwrap()).unwrap();
     nix::fcntl::fcntl(
@@ -16,7 +22,7 @@ fn yolo_accept(fd: RawFd) -> Option<io::Result<RawFd>> {
         nix::fcntl::F_SETFL(flags | nix::fcntl::OFlag::O_NONBLOCK),
     )
     .unwrap();
-    let r = sys::accept_syscall(fd);
+    let r = sys::accept_syscall(fd.as_raw_fd());
     nix::fcntl::fcntl(fd, nix::fcntl::F_SETFL(flags)).unwrap();
     match r {
         Ok(x) => Some(Ok(x)),

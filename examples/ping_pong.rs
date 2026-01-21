@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use glommio::{enclose, LocalExecutor};
+use glommio::{LocalExecutor, enclose};
 use std::{cell::RefCell, rc::Rc};
 
 fn main() {

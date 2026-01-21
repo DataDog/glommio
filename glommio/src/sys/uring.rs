@@ -886,9 +886,8 @@ impl UringCommon for PollRing {
             },
             source_map,
         )
-        .map(|x| {
+        .inspect(|_| {
             self.in_kernel -= 1;
-            x
         })
     }
 
@@ -1199,9 +1198,8 @@ impl UringCommon for SleepableRing {
             },
             source_map,
         )
-        .map(|x| {
+        .inspect(|_| {
             self.in_kernel -= 1;
-            x
         })
     }
 

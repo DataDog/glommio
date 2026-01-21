@@ -349,7 +349,7 @@ impl<'a> SQE<'a> {
 
     #[inline]
     pub unsafe fn prep_poll_remove(&mut self, user_data: u64) {
-        uring_sys::io_uring_prep_poll_remove(self.sqe, user_data as _)
+        uring_sys::io_uring_prep_poll_remove(self.sqe, user_data)
     }
 
     #[inline]

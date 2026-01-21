@@ -329,8 +329,7 @@ impl UnixStream {
         let reactor = crate::executor().reactor();
 
         let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
-        let addr =
-            UnixAddr::new(addr.as_ref()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let addr = UnixAddr::new(addr.as_ref()).map_err(io::Error::other)?;
         let source = reactor.connect(socket.as_raw_fd(), addr);
         source.collect_rw().await?;
 
@@ -536,8 +535,7 @@ impl UnixDatagram {
     /// [`send`]: UnixDatagram::send
     /// [`recv`]: UnixDatagram::recv
     pub async fn connect<A: AsRef<Path>>(&self, addr: A) -> Result<()> {
-        let addr =
-            UnixAddr::new(addr.as_ref()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let addr = UnixAddr::new(addr.as_ref()).map_err(io::Error::other)?;
 
         let reactor = self.socket.reactor.upgrade().unwrap();
         let source = reactor.connect(self.socket.as_raw_fd(), addr);
@@ -684,8 +682,7 @@ impl UnixDatagram {
     /// })
     /// ```
     pub async fn send_to<A: AsRef<Path>>(&self, buf: &[u8], addr: A) -> Result<usize> {
-        let addr = nix::sys::socket::UnixAddr::new(addr.as_ref())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let addr = nix::sys::socket::UnixAddr::new(addr.as_ref()).map_err(io::Error::other)?;
         self.socket.send_to(buf, addr).await.map_err(Into::into)
     }
 
