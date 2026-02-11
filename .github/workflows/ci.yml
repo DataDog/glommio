@@ -58,7 +58,7 @@ jobs:
           cat << EOF > "run-gha-workflow.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
           echo "`nproc` CPU(s) available"
-          rustup install 1.70
+          rustup install 1.92
           rustup show
           rustup default stable
           cargo install cargo-sort

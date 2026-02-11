@@ -34,6 +34,6 @@ impl Probe {
 
 impl Drop for Probe {
     fn drop(&mut self) {
-        unsafe { libc::free(self.probe.as_ptr() as *mut _) }
+        unsafe { uring_sys::io_uring_free_probe(self.probe.as_ptr()) }
     }
 }

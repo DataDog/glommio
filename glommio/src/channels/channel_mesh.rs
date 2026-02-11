@@ -4,13 +4,10 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
 use std::{
-    cell::Cell,
     fmt::{self, Debug, Formatter},
     io::{Error, ErrorKind},
-    rc::Rc,
+    sync::{Arc, Mutex},
 };
-
-use std::sync::{Arc, RwLock};
 
 use crate::{
     channels::shared_channel::{self, *},
@@ -161,26 +158,17 @@ impl<T: Send> Receivers<T> {
 
 struct Peer {
     executor_id: usize,
-    notifier: Option<SharedSender<bool>>,
     role: Role,
 }
 
 impl Peer {
-    fn new(sender: Option<SharedSender<bool>>, role: Role) -> Self {
+    fn new(role: Role) -> Self {
         Self {
             executor_id: crate::executor().id(),
-            notifier: sender,
             role,
         }
     }
 }
-
-type SharedChannel<T> = (
-    Cell<Option<SharedSender<T>>>,
-    Cell<Option<SharedReceiver<T>>>,
-);
-
-type SharedChannels<T> = Vec<Vec<SharedChannel<T>>>;
 
 /// The role an executor plays in the mesh
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,6 +188,32 @@ impl Role {
 
     fn is_consumer(&self) -> bool {
         Self::Producer.ne(self)
+    }
+}
+
+struct JoinState<T: Send> {
+    peers: Vec<Peer>,
+    ready: bool,
+    senders: Vec<Vec<Option<SharedSender<T>>>>,
+    receivers: Vec<Vec<Option<SharedReceiver<T>>>>,
+}
+
+impl<T: Send> JoinState<T> {
+    fn new(nr_peers: usize) -> Self {
+        let mut senders: Vec<Vec<Option<SharedSender<T>>>> = Vec::with_capacity(nr_peers);
+        let mut receivers: Vec<Vec<Option<SharedReceiver<T>>>> = Vec::with_capacity(nr_peers);
+
+        for _ in 0..nr_peers {
+            senders.push((0..nr_peers).map(|_| None).collect());
+            receivers.push((0..nr_peers).map(|_| None).collect());
+        }
+
+        Self {
+            peers: Vec::new(),
+            ready: false,
+            senders,
+            receivers,
+        }
     }
 }
 
@@ -252,20 +266,16 @@ pub type PartialMesh<T> = MeshBuilder<T, Partial>;
 pub struct MeshBuilder<T: Send, A: MeshAdapter> {
     nr_peers: usize,
     channel_size: usize,
-    peers: Rc<RwLock<Vec<Peer>>>,
-    channels: Arc<SharedChannels<T>>,
+    state: Arc<Mutex<JoinState<T>>>,
     adapter: A,
 }
-
-unsafe impl<T: Send, A: MeshAdapter> Send for MeshBuilder<T, A> {}
 
 impl<T: Send, A: MeshAdapter> Clone for MeshBuilder<T, A> {
     fn clone(&self) -> Self {
         Self {
             nr_peers: self.nr_peers,
             channel_size: self.channel_size,
-            peers: self.peers.clone(),
-            channels: self.channels.clone(),
+            state: self.state.clone(),
             adapter: self.adapter.clone(),
         }
     }
@@ -309,8 +319,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         MeshBuilder {
             nr_peers,
             channel_size,
-            peers: Rc::new(RwLock::new(Vec::new())),
-            channels: Arc::new(Self::placeholder(nr_peers)),
+            state: Arc::new(Mutex::new(JoinState::new(nr_peers))),
             adapter,
         }
     }
@@ -320,80 +329,99 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         self.nr_peers
     }
 
-    fn placeholder(nr_peers: usize) -> SharedChannels<T> {
-        (0..nr_peers)
-            .map(|_| {
-                (0..nr_peers)
-                    .map(|_| (Cell::new(None), Cell::new(None)))
-                    .collect()
-            })
-            .collect()
-    }
+    async fn register(&self, role: Role) -> Result<(usize, usize), ()> {
+        let (is_last, exec_id) = {
+            let mut state = self.state.lock().unwrap();
 
-    fn register(&self, role: Role) -> Result<RegisterResult<bool>, ()> {
-        let mut peers = self.peers.write().unwrap();
-
-        if peers.len() == self.nr_peers {
-            return Err(GlommioError::IoError(Error::new(
-                ErrorKind::Other,
-                "The channel mesh is full.",
-            )));
-        }
-
-        let index = peers
-            .binary_search_by(|n| n.executor_id.cmp(&crate::executor().id()))
-            .expect_err("Should not join a mesh more than once.");
-
-        if peers.len() == self.nr_peers - 1 {
-            peers.insert(index, Peer::new(None, role));
-
-            for (idx_from, from) in peers.iter().enumerate() {
-                for (idx_to, to) in peers.iter().enumerate() {
-                    let channel = &self.channels[idx_from][idx_to];
-                    if idx_from != idx_to && self.adapter.connect(&from.role, &to.role) {
-                        let (sender, receiver) = shared_channel::new_bounded(self.channel_size);
-                        channel.0.set(Some(sender));
-                        channel.1.set(Some(receiver));
-                    }
-                }
+            if state.peers.len() == self.nr_peers {
+                return Err(GlommioError::IoError(Error::other(
+                    "The channel mesh is full.",
+                )));
             }
 
-            let peers: Vec<_> = peers
-                .iter_mut()
-                .filter_map(|notifier| notifier.notifier.take())
-                .collect();
+            let exec_id = crate::executor().id();
+            let index = state
+                .peers
+                .binary_search_by(|n| n.executor_id.cmp(&exec_id))
+                .expect_err("Should not join a mesh more than once.");
 
-            Ok(RegisterResult::NotificationSenders(peers))
+            state.peers.insert(index, Peer::new(role));
+
+            (state.peers.len() == self.nr_peers, exec_id)
+        };
+
+        if is_last {
+            // If this was the last joiner, build the channels
+            let mut state = self.state.lock().unwrap();
+            if !state.ready {
+                let n = state.peers.len();
+                for from_idx in 0..n {
+                    for to_idx in 0..n {
+                        if from_idx == to_idx {
+                            continue;
+                        }
+
+                        let from_role = state.peers[from_idx].role;
+                        let to_role = state.peers[to_idx].role;
+
+                        if self.adapter.connect(&from_role, &to_role) {
+                            let (tx, rx) = shared_channel::new_bounded(self.channel_size);
+                            state.senders[from_idx][to_idx] = Some(tx);
+                            state.receivers[from_idx][to_idx] = Some(rx);
+                        }
+                    }
+                }
+
+                state.ready = true;
+            }
         } else {
-            let (sender, receiver) = shared_channel::new_bounded(1);
-            peers.insert(index, Peer::new(Some(sender), role));
-            Ok(RegisterResult::NotificationReceiver(receiver))
+            // Wait until last joiner finishes building
+            loop {
+                let ready = {
+                    let state = self.state.lock().unwrap();
+                    state.ready
+                };
+
+                if ready {
+                    break;
+                }
+
+                futures_lite::future::yield_now().await;
+            }
         }
+
+        let state = self.state.lock().unwrap();
+        // At this point st.ready == true and st.peers is stable.
+
+        let peer_id = state
+            .peers
+            .binary_search_by(|p| p.executor_id.cmp(&exec_id))
+            .unwrap();
+
+        let role_id = state.peers[..peer_id]
+            .iter()
+            .filter(|p| p.role == role)
+            .count();
+
+        Ok((peer_id, role_id))
     }
 
     async fn join_with(self, role: Role) -> Result<(Senders<T>, Receivers<T>), ()> {
-        match Self::register(&self, role)? {
-            RegisterResult::NotificationReceiver(receiver) => {
-                receiver.connect().await.recv().await.unwrap();
-            }
-            RegisterResult::NotificationSenders(peers) => {
-                for peer in peers {
-                    peer.connect().await.send(true).await.unwrap();
-                }
-            }
-        }
+        let (peer_id, role_id) = self.register(role).await?;
 
-        let (peer_id, role_id) = {
-            let peers = self.peers.read().unwrap();
-            let peer_id = peers
-                .binary_search_by(|n| n.executor_id.cmp(&crate::executor().id()))
-                .unwrap();
-            let role_id = peers
-                .iter()
-                .take(peer_id)
-                .filter(|r| r.role.eq(&role))
-                .count();
-            (peer_id, role_id)
+        // Extract Senders and Receivers for this peer
+        let (mut senders, mut receivers) = {
+            let mut st = self.state.lock().unwrap();
+
+            let mut row = Vec::with_capacity(self.nr_peers);
+            let mut col = Vec::with_capacity(self.nr_peers);
+
+            for i in 0..self.nr_peers {
+                row.push(st.senders[peer_id][i].take());
+                col.push(st.receivers[i][peer_id].take());
+            }
+
+            (row, col)
         };
 
         let producer_id = if role.is_producer() {
@@ -408,32 +436,32 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
             None
         };
 
-        let mut senders = Vec::with_capacity(self.nr_peers);
-        let mut receivers = Vec::with_capacity(self.nr_peers);
+        let mut senders_vec = Vec::with_capacity(self.nr_peers);
+        let mut receivers_vec = Vec::with_capacity(self.nr_peers);
 
         for i in 0..self.nr_peers {
-            let sender = self.channels[peer_id][i].0.take();
-            let receiver = self.channels[i][peer_id].1.take();
+            let sender = senders[i].take();
+            let receiver = receivers[i].take();
 
-            let sender = sender.map(|sender| crate::spawn_local(sender.connect()).detach());
-            let receiver = receiver.map(|receiver| crate::spawn_local(receiver.connect()).detach());
+            let sender = sender.map(|s| crate::spawn_local(s.connect()).detach());
+            let receiver = receiver.map(|r| crate::spawn_local(r.connect()).detach());
 
             match sender {
                 None => {
                     if self.adapter.is_full() {
-                        senders.push(None)
+                        senders_vec.push(None)
                     }
                 }
-                Some(sender) => senders.push(Some(sender.await.unwrap())),
+                Some(h) => senders_vec.push(Some(h.await.unwrap())),
             }
 
             match receiver {
                 None => {
                     if self.adapter.is_full() {
-                        receivers.push(None)
+                        receivers_vec.push(None)
                     }
                 }
-                Some(receiver) => receivers.push(Some(receiver.await.unwrap())),
+                Some(h) => receivers_vec.push(Some(h.await.unwrap())),
             }
         }
 
@@ -441,20 +469,15 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
             Senders {
                 peer_id,
                 producer_id,
-                senders,
+                senders: senders_vec,
             },
             Receivers {
                 peer_id,
                 consumer_id,
-                receivers,
+                receivers: receivers_vec,
             },
         ))
     }
-}
-
-enum RegisterResult<T: Send> {
-    NotificationReceiver(SharedReceiver<T>),
-    NotificationSenders(Vec<SharedSender<T>>),
 }
 
 #[cfg(test)]

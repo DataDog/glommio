@@ -69,11 +69,11 @@ impl IntWriter {
 
                 println!(
                     "{}: Wrote {} ({}%), {:.0} int/s, scheduler shares: {} , {:.2} % CPU",
-                    Paint::blue(format!("{}s", elapsed.as_secs())),
+                    format!("{}s", elapsed.as_secs()).blue(),
                     self.count.get(),
-                    Paint::new(format!("{:.0}", ratio)).bold(),
+                    format!("{:.0}", ratio).bold(),
                     intratio,
-                    Paint::new(tq_stats.current_shares().to_string()).bold(),
+                    tq_stats.current_shares().to_string().bold(),
                     cpuratio
                 );
                 self.next_print
@@ -168,10 +168,7 @@ fn main() {
                 "cpuhog",
             );
 
-            println!(
-                "{}",
-                Paint::new("Welcome to the Deadline Writer example").bold()
-            );
+            println!("{}", "Welcome to the Deadline Writer example".bold());
             println!(
                 "In this example we will write a sequence of integers to a variable, busy looping \
                  for 500us after each write"
@@ -183,7 +180,7 @@ fn main() {
             println!(
                 "For {} results, this test is pinned to your CPU0. Make sure nothing else of \
                  significance is running there. You should be able to see it at 100% at all times!",
-                Paint::new("best").bold()
+                "best".bold()
             );
 
             println!("\n\nPlease tell me how many integers you would like to write");
@@ -191,28 +188,25 @@ fn main() {
             println!(
                 "Ok, now let's write {} integers with both the writer and the CPU hog having the \
                  same priority",
-                Paint::blue(to_write.to_string())
+                to_write.to_string().blue()
             );
             let dur = static_writer(to_write, 1000, cpuhog_tq).await;
-            println!(
-                "Finished writing in {}",
-                Paint::green(format!("{dur:#.0?}"))
-            );
+            println!("Finished writing in {}", format!("{dur:#.0?}").green());
             println!(
                 "This was using {} shares, and short of reducing the priority of the CPU hog. {}",
-                Paint::green("1000"),
-                Paint::new("This is as fast as we can do!").bold()
+                "1000".green(),
+                "This is as fast as we can do!".bold()
             );
             println!(
                 "With {} shares, this would have taken approximately {}",
-                Paint::green("100"),
-                Paint::green(format!("{:#.1?}", dur * 10))
+                "100".green(),
+                format!("{:#.1?}", dur * 10).green()
             );
             println!(
                 "With {} shares, this would have taken approximately {}. {}.",
-                Paint::green("1"),
-                Paint::green(format!("{:#.1?}", dur * 1000)),
-                Paint::new("Can't go any slower than that!").bold()
+                "1".green(),
+                format!("{:#.1?}", dur * 1000).green(),
+                "Can't go any slower than that!".bold()
             );
 
             println!(
@@ -233,10 +227,7 @@ fn main() {
                 let deadline = DeadlineQueue::new("example", Duration::from_millis(250));
                 let test = IntWriter::new(to_write, Duration::from_secs(duration as u64));
                 let dur = deadline.push_work(test).await.unwrap();
-                println!(
-                    "Finished writing in {}",
-                    Paint::green(format!("{dur:#.2?}"))
-                );
+                println!("Finished writing in {}", format!("{dur:#.2?}").green());
                 stop.set(true);
                 hog.await.unwrap();
                 println!(

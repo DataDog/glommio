@@ -1,4 +1,4 @@
-use futures_lite::{future::ready, stream::repeat_with, FutureExt, StreamExt};
+use futures_lite::{FutureExt, StreamExt, future::ready, stream::repeat_with};
 
 use glommio::{
     channels::{

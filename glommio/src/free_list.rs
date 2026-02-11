@@ -72,7 +72,7 @@ impl<T> FreeList<T> {
     }
     pub(crate) fn dealloc(&mut self, idx: Idx<T>) -> T {
         let slot = Slot::Free {
-            next_free: mem::replace(&mut self.first_free, Some(idx)),
+            next_free: Option::replace(&mut self.first_free, idx),
         };
         match mem::replace(&mut self.slots[idx.to_raw()], slot) {
             Slot::Full { item } => item,

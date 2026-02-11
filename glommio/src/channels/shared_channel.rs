@@ -36,7 +36,7 @@ type Result<T, V> = crate::Result<T, V>;
 /// [`ConnectedReceiver`]: struct.ConnectedReceiver.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
 pub struct SharedReceiver<T: Send + Sized> {
-    state: Option<Rc<ReceiverState<T>>>,
+    state: Option<Arc<ReceiverState<T>>>,
 }
 
 /// The `SharedSender` is the sending end of the Shared Channel.
@@ -52,7 +52,7 @@ pub struct SharedReceiver<T: Send + Sized> {
 /// [`ConnectedSender`]: struct.ConnectedSender.html
 /// [`Send`]: https://doc.rust-lang.org/std/marker/trait.Send.html
 pub struct SharedSender<T: Send + Sized> {
-    state: Option<Rc<SenderState<T>>>,
+    state: Option<Arc<SenderState<T>>>,
 }
 
 impl<T: Send + Sized> fmt::Debug for SharedSender<T> {
@@ -73,13 +73,10 @@ impl<T: Send + Sized> fmt::Debug for SharedReceiver<T> {
     }
 }
 
-unsafe impl<T: Send + Sized> Send for SharedReceiver<T> {}
-unsafe impl<T: Send + Sized> Send for SharedSender<T> {}
-
 /// The `ConnectedReceiver` is the receiving end of the Shared Channel.
 pub struct ConnectedReceiver<T: Send + Sized> {
     id: u64,
-    state: Rc<ReceiverState<T>>,
+    state: Arc<ReceiverState<T>>,
     reactor: Weak<Reactor>,
     notifier: Arc<SleepNotifier>,
 }
@@ -87,7 +84,7 @@ pub struct ConnectedReceiver<T: Send + Sized> {
 /// The `ConnectedSender` is the sending end of the Shared Channel.
 pub struct ConnectedSender<T: Send + Sized> {
     id: u64,
-    state: Rc<SenderState<T>>,
+    state: Arc<SenderState<T>>,
     reactor: Weak<Reactor>,
     notifier: Arc<SleepNotifier>,
 }
@@ -114,18 +111,18 @@ struct ReceiverState<V: Send + Sized> {
     buffer: Consumer<V>,
 }
 
-struct Connector<T: BufferHalf + Clone> {
+struct Connector<T: BufferHalf> {
     buffer: T,
     reactor: Weak<Reactor>,
 }
 
-impl<T: BufferHalf + Clone> Connector<T> {
+impl<T: BufferHalf> Connector<T> {
     fn new(buffer: T, reactor: Weak<Reactor>) -> Self {
         Self { buffer, reactor }
     }
 }
 
-impl<T: BufferHalf + Clone> Future for Connector<T> {
+impl<T: BufferHalf> Future for Connector<T> {
     type Output = Arc<SleepNotifier>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let reactor = self.reactor.upgrade().unwrap();
@@ -150,10 +147,10 @@ pub fn new_bounded<T: Send + Sized>(size: usize) -> (SharedSender<T>, SharedRece
     let (producer, consumer) = make(size);
     (
         SharedSender {
-            state: Some(Rc::new(SenderState { buffer: producer })),
+            state: Some(Arc::new(SenderState { buffer: producer })),
         },
         SharedReceiver {
-            state: Some(Rc::new(ReceiverState { buffer: consumer })),
+            state: Some(Arc::new(ReceiverState { buffer: consumer })),
         },
     )
 }
@@ -176,7 +173,7 @@ impl<T: 'static + Send + Sized> SharedSender<T> {
         }}));
 
         let reactor = Rc::downgrade(&reactor);
-        let peer = Connector::new(state.buffer.clone(), reactor.clone());
+        let peer = Connector::new(state.buffer.clone_internal(), reactor.clone());
         let notifier = peer.await;
         ConnectedSender {
             id,
@@ -341,7 +338,7 @@ impl<T: 'static + Send + Sized> SharedReceiver<T> {
         }}));
 
         let reactor = Rc::downgrade(&reactor);
-        let peer = Connector::new(state.buffer.clone(), reactor.clone());
+        let peer = Connector::new(state.buffer.clone_internal(), reactor.clone());
         let notifier = peer.await;
         ConnectedReceiver {
             id,

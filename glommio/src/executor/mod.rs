@@ -177,7 +177,7 @@ impl Ord for TaskQueue {
 
 impl PartialOrd for TaskQueue {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(other.vruntime.cmp(&self.vruntime))
+        Some(self.cmp(other))
     }
 }
 
@@ -1025,7 +1025,7 @@ impl LocalExecutorPoolBuilder {
                 } else {
                     // this `Err` isn't visible to the user; the pool builder directly returns an
                     // `Err` from the `std::thread::Builder`
-                    Err(io::Error::new(io::ErrorKind::Other, "spawn failed").into())
+                    Err(io::Error::other("spawn failed").into())
                 }
             }
         });

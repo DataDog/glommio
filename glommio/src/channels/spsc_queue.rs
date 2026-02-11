@@ -1,9 +1,8 @@
 use std::{
-    cell::{Cell, UnsafeCell},
+    cell::UnsafeCell,
     fmt,
     marker::PhantomData,
-    mem::{self, MaybeUninit},
-    slice::from_raw_parts_mut,
+    mem::MaybeUninit,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -15,7 +14,7 @@ use std::{
 struct ProducerCacheline {
     /// Index position of current tail
     tail: AtomicUsize,
-    limit: Cell<usize>,
+    limit: AtomicUsize,
     /// Id == 0 : never connected
     /// Id == usize::MAX: disconnected
     consumer_id: AtomicUsize,
@@ -37,6 +36,8 @@ struct Slot<T> {
     has_value: AtomicBool,
 }
 
+unsafe impl<T: Send> Sync for Slot<T> {}
+
 /// The internal memory buffer used by the queue.
 ///
 /// `Buffer` holds a pointer to allocated memory which represents the bounded
@@ -44,7 +45,7 @@ struct Slot<T> {
 /// consumer use to track location in the ring.
 #[repr(C)]
 pub(crate) struct Buffer<T> {
-    buffer_storage: *mut Slot<T>,
+    buffer_storage: Box<[Slot<T>]>,
     capacity: usize,
     mask: usize,
     lookahead: usize,
@@ -59,7 +60,7 @@ impl<T> fmt::Debug for Buffer<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let head = self.ccache.head.load(Ordering::Relaxed);
         let tail = self.pcache.tail.load(Ordering::Relaxed);
-        let limit = self.pcache.limit.get();
+        let limit = self.pcache.limit.load(Ordering::Relaxed);
         let id_to_str = |id| match id {
             0 => "not connected".into(),
             usize::MAX => "disconnected".into(),
@@ -79,29 +80,80 @@ impl<T> fmt::Debug for Buffer<T> {
             .finish()
     }
 }
-
 unsafe impl<T: Sync> Sync for Buffer<T> {}
 
-/// A handle to the queue which allows consuming values from the buffer
+/// A handle to the queue which allows consuming values from the buffer.
+///
+/// # SPSC Guarantee
+///
+/// This type does NOT implement `Clone`. The queue is designed as a
+/// Single-Producer-Single-Consumer (SPSC) queue, and allowing multiple
+/// consumers would violate memory safety guarantees.
+///
+/// Cloning the consumer would allow multiple threads to concurrently call
+/// `try_pop()`, which uses `Ordering::Relaxed` and assumes exclusive access.
+/// This can lead to:
+/// - Multiple consumers reading the same value from the queue
+/// - Double-free when both consumers drop the same value
+/// - Heap corruption and undefined behavior
+///
+/// See issue #700 for details.
 pub struct Consumer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
-impl<T> Clone for Consumer<T> {
-    fn clone(&self) -> Self {
+impl<T> Consumer<T> {
+    /// Internal cloning method for use within glommio.
+    ///
+    /// # Safety
+    ///
+    /// This is intentionally NOT exposed via the Clone trait to prevent
+    /// external code from creating multiple consumers, which would violate
+    /// SPSC guarantees and cause memory corruption.
+    ///
+    /// Internal use within glommio (e.g., shared_channel) must ensure that
+    /// only one consumer is actually active at any time, even if multiple
+    /// Consumer handles exist temporarily during handoff.
+    pub(crate) fn clone_internal(&self) -> Self {
         Consumer {
             buffer: self.buffer.clone(),
         }
     }
 }
 
-/// A handle to the queue which allows adding values onto the buffer
+/// A handle to the queue which allows adding values onto the buffer.
+///
+/// # SPSC Guarantee
+///
+/// This type does NOT implement `Clone`. The queue is designed as a
+/// Single-Producer-Single-Consumer (SPSC) queue, and allowing multiple
+/// producers would violate memory safety guarantees.
+///
+/// Cloning the producer would allow multiple threads to concurrently call
+/// `try_push()`, which uses `Ordering::Relaxed` and assumes exclusive access.
+/// This can lead to:
+/// - Multiple producers writing to the same slot
+/// - Values being overwritten without being dropped (memory leak)
+/// - Lost updates and data corruption
+///
+/// See issue #700 for details.
 pub struct Producer<T> {
     pub(crate) buffer: Arc<Buffer<T>>,
 }
 
-impl<T> Clone for Producer<T> {
-    fn clone(&self) -> Self {
+impl<T> Producer<T> {
+    /// Internal cloning method for use within glommio.
+    ///
+    /// # Safety
+    ///
+    /// This is intentionally NOT exposed via the Clone trait to prevent
+    /// external code from creating multiple producers, which would violate
+    /// SPSC guarantees and cause memory corruption.
+    ///
+    /// Internal use within glommio (e.g., shared_channel) must ensure that
+    /// only one producer is actually active at any time, even if multiple
+    /// Producer handles exist temporarily during handoff.
+    pub(crate) fn clone_internal(&self) -> Self {
         Producer {
             buffer: self.buffer.clone(),
         }
@@ -120,9 +172,6 @@ impl<T> fmt::Debug for Producer<T> {
     }
 }
 
-unsafe impl<T: Send> Send for Consumer<T> {}
-unsafe impl<T: Send> Send for Producer<T> {}
-
 impl<T> Buffer<T> {
     /// Attempt to pop a value off the buffer.
     ///
@@ -132,26 +181,16 @@ impl<T> Buffer<T> {
     /// else, etc.)
     fn try_pop(&self) -> Option<T> {
         let head = self.ccache.head.load(Ordering::Relaxed);
-        let slot = unsafe { &*self.buffer_storage.add(head & self.mask) };
+        let slot = &self.buffer_storage[head & self.mask];
         if !slot.has_value.load(Ordering::Acquire) {
             return None;
         }
         let v = Some(unsafe { slot.value.get().read().assume_init() });
         slot.has_value.store(false, Ordering::Release);
-        self.ccache.head.store(head + 1, Ordering::Relaxed);
+        self.ccache
+            .head
+            .store(head.wrapping_add(1), Ordering::Relaxed);
         v
-    }
-
-    fn has_space(&self, tail: usize) -> bool {
-        let index = (tail + self.lookahead) & self.mask;
-        let slot = unsafe { &*self.buffer_storage.add(index) };
-        if !slot.has_value.load(Ordering::Acquire) {
-            self.pcache.limit.set(tail + self.lookahead + 1);
-            true
-        } else {
-            let slot = unsafe { &*self.buffer_storage.add(tail & self.mask) };
-            !slot.has_value.load(Ordering::Acquire)
-        }
     }
 
     /// Attempt to push a value onto the buffer.
@@ -164,17 +203,34 @@ impl<T> Buffer<T> {
         if self.consumer_disconnected() {
             return Some(v);
         }
+
         let tail = self.pcache.tail.load(Ordering::Relaxed);
-        if tail >= self.pcache.limit.get() && !self.has_space(tail) {
-            return Some(v);
+        let limit = self.pcache.limit.load(Ordering::Relaxed);
+
+        if tail == limit {
+            let idx = tail.wrapping_add(self.lookahead);
+            let slot = &self.buffer_storage[idx & self.mask];
+            if !slot.has_value.load(Ordering::Acquire) {
+                self.pcache.limit.store(idx, Ordering::Relaxed);
+            } else {
+                let slot: &Slot<T> = &self.buffer_storage[tail & self.mask];
+                if slot.has_value.load(Ordering::Acquire) {
+                    return Some(v);
+                }
+                self.pcache
+                    .limit
+                    .store(tail.wrapping_add(1), Ordering::Relaxed);
+            }
         }
-        let slot = unsafe {
-            let slot = &*self.buffer_storage.add(tail & self.mask);
+
+        let slot = &self.buffer_storage[tail & self.mask];
+        unsafe {
             slot.value.get().write(MaybeUninit::new(v));
-            slot
-        };
+        }
         slot.has_value.store(true, Ordering::Release);
-        self.pcache.tail.store(tail + 1, Ordering::Relaxed);
+        self.pcache
+            .tail
+            .store(tail.wrapping_add(1), Ordering::Relaxed);
         None
     }
 
@@ -221,21 +277,12 @@ impl<T> Drop for Buffer<T> {
         // Pop the rest of the values off the queue. By moving them into this scope,
         // we implicitly call their destructor
         while self.try_pop().is_some() {}
-        // We don't want to run any destructors here, because we didn't run
-        // any of the constructors through the vector. And whatever object was
-        // in fact still alive we popped above.
-        let _drop = unsafe {
-            // Nightly clippy warns about this but ptr::from_raw_parts_mut isn't stable yet.
-            #[allow(clippy::cast_slice_from_raw_parts)]
-            let ptr = from_raw_parts_mut(self.buffer_storage, self.capacity) as *mut [Slot<T>];
-            Box::from_raw(ptr)
-        };
     }
 }
 
 /// Creates a new `spsc_queue` returning its producer and consumer
 /// endpoints.
-pub fn make<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+pub fn make<T: Send>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     inner_make(capacity, 0)
 }
 
@@ -248,10 +295,10 @@ fn inner_make<T>(capacity: usize, initial_value: usize) -> (Producer<T>, Consume
         buffer_storage,
         capacity,
         mask: capacity - 1,
-        lookahead: std::cmp::min(capacity / 4, MAX_LOOKAHEAD),
+        lookahead: (capacity / 4).clamp(1, MAX_LOOKAHEAD),
         pcache: ProducerCacheline {
             tail: AtomicUsize::new(initial_value),
-            limit: Cell::new(0),
+            limit: AtomicUsize::new(initial_value),
             consumer_id: AtomicUsize::new(0),
         },
         ccache: ConsumerCacheline {
@@ -268,16 +315,14 @@ fn inner_make<T>(capacity: usize, initial_value: usize) -> (Producer<T>, Consume
     )
 }
 
-fn allocate_buffer<T>(capacity: usize) -> *mut Slot<T> {
-    let mut boxed: Box<[Slot<T>]> = (0..capacity)
-        .map(|_| Slot {
-            has_value: AtomicBool::new(false),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-        })
-        .collect();
-    let ptr = boxed.as_mut_ptr();
-    mem::forget(boxed);
-    ptr
+fn allocate_buffer<T>(capacity: usize) -> Box<[Slot<T>]> {
+    std::iter::repeat_with(|| Slot {
+        value: UnsafeCell::new(MaybeUninit::uninit()),
+        has_value: AtomicBool::new(false),
+    })
+    .take(capacity)
+    .collect::<Vec<_>>()
+    .into_boxed_slice()
 }
 
 pub(crate) trait BufferHalf {
@@ -469,7 +514,6 @@ mod tests {
         }
     }
 
-    #[should_panic]
     #[test]
     fn test_wrap() {
         let (p, c) = super::inner_make(10, usize::MAX - 1);
@@ -481,5 +525,12 @@ mod tests {
         for i in 0..10 {
             assert_eq!(c.try_pop(), Some(i));
         }
+    }
+
+    fn assert_send_sync<T: Send + Sync>() {}
+    #[test]
+    fn producer_consumer_are_send() {
+        assert_send_sync::<Producer<u32>>();
+        assert_send_sync::<Consumer<u32>>();
     }
 }

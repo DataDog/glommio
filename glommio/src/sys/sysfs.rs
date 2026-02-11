@@ -6,7 +6,7 @@
 use ahash::AHashMap;
 use std::{
     cell::RefCell,
-    fs::{canonicalize, read_dir, read_to_string},
+    fs::{read_dir, read_to_string},
     io,
     marker::PhantomData,
     path::{Path, PathBuf},
@@ -39,6 +39,7 @@ impl FromStr for StorageCache {
 pub(crate) struct BlockDevice {
     memory_device: bool,
     rotational: bool,
+    io_poll: bool,
     minimum_io_size: usize,
     optimal_io_size: usize,
     logical_block_size: usize,
@@ -46,12 +47,11 @@ pub(crate) struct BlockDevice {
     max_sectors_size: usize,
     max_segment_size: usize,
     cache: StorageCache,
-    iopoll: Option<bool>,
     subcomponents: Vec<PathBuf>,
 }
 
 macro_rules! block_property {
-    ( $map:expr, $property:tt, $major:expr, $minor:expr ) => {
+    ($property:tt, $major:expr, $minor:expr ) => {
         DEV_MAP.with(|x| {
             let key = ($major, $minor);
             let mut map = x.borrow_mut();
@@ -62,24 +62,35 @@ macro_rules! block_property {
     };
 }
 
-macro_rules! set_block_property {
-    ( $map:expr, $property:tt, $major:expr, $minor:expr, $value:expr ) => {
-        DEV_MAP.with(|x| {
-            let key = ($major, $minor);
-            let mut map = x.borrow_mut();
-            let bdev = map.entry(key).or_insert_with(|| BlockDevice::new(key));
-
-            bdev.$property = $value;
-        })
-    };
+fn read_int(path: &Path) -> io::Result<isize> {
+    let data = read_to_string(path)?;
+    let contents = data.trim_matches('\n');
+    Ok(contents.parse::<isize>().unwrap())
 }
 
-fn read_int<P: AsRef<Path>>(path: P) -> isize {
-    let path = path.as_ref();
-    let data =
-        read_to_string(path).unwrap_or_else(|err| panic!("reading {} ({})", path.display(), err));
-    let contents = data.trim_matches('\n');
-    contents.parse::<isize>().unwrap()
+fn read_int_opt(path: &Path) -> Option<isize> {
+    match read_int(path) {
+        Ok(v) => Some(v),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => None,
+    }
+}
+
+/// Walk up from `dev_dir` until we find a dir with `queue/rotational`.
+/// This handles partitions (e.g. .../block/sdb/sdb1) where the queue is on the parent disk (sdb).
+fn find_queue_dir(mut dev_dir: PathBuf) -> Option<PathBuf> {
+    loop {
+        let q = dev_dir.join("queue");
+        if q.join("rotational").exists() {
+            return Some(q);
+        }
+        if q.is_dir() {
+            return Some(q);
+        }
+        if !dev_dir.pop() {
+            return None;
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -88,6 +99,7 @@ impl BlockDevice {
         BlockDevice {
             memory_device: true,
             rotational: false,
+            io_poll: false,
             minimum_io_size: 512,
             optimal_io_size: 128 << 10,
             logical_block_size: 512,
@@ -95,43 +107,75 @@ impl BlockDevice {
             max_sectors_size: 128 << 10,
             max_segment_size: (u32::MAX - 1) as usize,
             cache: StorageCache::WriteBack,
-            iopoll: Some(false),
             subcomponents: Vec::new(),
         }
     }
 
     fn new(dev_id: (usize, usize)) -> BlockDevice {
-        // /sys/dev/block/major:minor is a symlink to the device in /sys/devices/
-        // However if this a partition, we actually want to look at the main device.
-        // So minor is always zero.
-        let dir_path = format!("/sys/dev/block/{}:{}", dev_id.0, 0);
-        let dir = match canonicalize(Path::new(dir_path.as_str())) {
-            Ok(path) => path,
-            Err(x) => match x.kind() {
-                io::ErrorKind::NotFound => return BlockDevice::in_memory(),
-                _ => panic!("Unexpected error: {:?}", x),
-            },
+        // Prefer /sys/dev/block/major:minor, then resolve it.
+        let link = PathBuf::from(format!("/sys/dev/block/{}:{}", dev_id.0, dev_id.1));
+
+        let dir = match link.canonicalize() {
+            Ok(p) => p,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return BlockDevice::in_memory(),
+            Err(e) => panic!("Unexpected error canonicalizing {}: {e:?}", link.display()),
         };
-        let queue = dir.join("queue");
 
-        let rotational = read_int(queue.join("rotational")) != 0;
-        let minimum_io_size = read_int(queue.join("minimum_io_size")) as _;
-        let optimal_io_size = read_int(queue.join("optimal_io_size")) as _;
-        let logical_block_size = read_int(queue.join("logical_block_size")) as _;
-        let physical_block_size = read_int(queue.join("physical_block_size")) as _;
-        let max_sectors_kb = read_int(queue.join("max_sectors_kb")) as usize;
-        let max_segment_size = read_int(queue.join("max_segment_size")) as usize;
+        // Find the correct queue directory (partition-safe).
+        let queue = match find_queue_dir(dir.clone()) {
+            Some(q) => q,
+            None => {
+                // If we can’t find queue, treat it as non-pollable and return conservative defaults.
+                // (But keep it as "not memory".)
+                return BlockDevice {
+                    memory_device: false,
+                    rotational: true,
+                    io_poll: false,
+                    minimum_io_size: 512,
+                    optimal_io_size: 128 << 10,
+                    logical_block_size: 512,
+                    physical_block_size: 512,
+                    max_sectors_size: 128 << 10,
+                    max_segment_size: (u32::MAX - 1) as usize,
+                    cache: StorageCache::WriteBack,
+                    subcomponents: Vec::new(),
+                };
+            }
+        };
 
-        let cache_data = read_to_string(queue.join("write_cache")).unwrap();
-        let cache = cache_data.parse::<StorageCache>().unwrap();
+        // Rotational should exist for real block queues, but don’t hard-fail.
+        let rotational = read_int_opt(&queue.join("rotational")).unwrap_or(1) != 0;
+
+        // io_poll may not exist on older kernels/drivers; treat missing as false.
+        let io_poll = read_int_opt(&queue.join("io_poll")).unwrap_or(0) != 0;
+
+        let minimum_io_size = read_int_opt(&queue.join("minimum_io_size")).unwrap_or(512) as usize;
+        let optimal_io_size =
+            read_int_opt(&queue.join("optimal_io_size")).unwrap_or(128 << 10) as usize;
+        let logical_block_size =
+            read_int_opt(&queue.join("logical_block_size")).unwrap_or(512) as usize;
+        let physical_block_size =
+            read_int_opt(&queue.join("physical_block_size")).unwrap_or(512) as usize;
+
+        let max_sectors_kb = read_int_opt(&queue.join("max_sectors_kb")).unwrap_or(128) as usize;
+        let max_segment_size = read_int_opt(&queue.join("max_segment_size"))
+            .unwrap_or((u32::MAX - 1) as isize) as usize;
+
+        // write_cache might be missing on some virtual devices; default to write back.
+        let cache = read_to_string(queue.join("write_cache"))
+            .ok()
+            .and_then(|s| s.parse::<StorageCache>().ok())
+            .unwrap_or(StorageCache::WriteBack);
+
         let subcomponents = read_dir(dir.join("slaves"))
-            .unwrap()
-            .map(|x| x.unwrap().path())
-            .collect();
+            .ok()
+            .map(|it| it.filter_map(|x| x.ok().map(|e| e.path())).collect())
+            .unwrap_or_default();
 
         BlockDevice {
             memory_device: false,
             rotational,
+            io_poll,
             minimum_io_size,
             optimal_io_size,
             logical_block_size,
@@ -139,53 +183,48 @@ impl BlockDevice {
             max_sectors_size: max_sectors_kb << 10,
             max_segment_size,
             cache,
-            iopoll: None,
             subcomponents,
         }
     }
 
     pub(crate) fn memory_device(major: usize, minor: usize) -> bool {
-        block_property!(DEV_MAP, memory_device, major, minor)
+        block_property!(memory_device, major, minor)
     }
 
     pub(crate) fn is_rotational(major: usize, minor: usize) -> bool {
-        block_property!(DEV_MAP, rotational, major, minor)
+        block_property!(rotational, major, minor)
+    }
+
+    pub(crate) fn has_io_poll(major: usize, minor: usize) -> bool {
+        block_property!(io_poll, major, minor)
     }
 
     pub(crate) fn minimum_io_size(major: usize, minor: usize) -> usize {
-        block_property!(DEV_MAP, minimum_io_size, major, minor)
+        block_property!(minimum_io_size, major, minor)
     }
 
     pub(crate) fn optimal_io_size(major: usize, minor: usize) -> usize {
-        block_property!(DEV_MAP, optimal_io_size, major, minor)
+        block_property!(optimal_io_size, major, minor)
     }
 
     pub(crate) fn logical_block_size(major: usize, minor: usize) -> usize {
-        block_property!(DEV_MAP, logical_block_size, major, minor)
+        block_property!(logical_block_size, major, minor)
     }
 
     pub(crate) fn physical_block_size(major: usize, minor: usize) -> usize {
-        block_property!(DEV_MAP, physical_block_size, major, minor)
+        block_property!(physical_block_size, major, minor)
     }
 
     pub(crate) fn max_sectors_size(major: usize, minor: usize) -> usize {
-        block_property!(DEV_MAP, max_sectors_size, major, minor)
+        block_property!(max_sectors_size, major, minor)
     }
 
     pub(crate) fn max_segment_size(major: usize, minor: usize) -> usize {
-        block_property!(DEV_MAP, max_segment_size, major, minor)
+        block_property!(max_segment_size, major, minor)
     }
 
     pub(crate) fn is_md(major: usize, minor: usize) -> bool {
-        !block_property!(DEV_MAP, subcomponents, major, minor).is_empty()
-    }
-
-    pub(crate) fn iopoll(major: usize, minor: usize) -> Option<bool> {
-        block_property!(DEV_MAP, iopoll, major, minor)
-    }
-
-    pub(crate) fn set_iopoll_support(major: usize, minor: usize, supported: bool) {
-        set_block_property!(DEV_MAP, iopoll, major, minor, Some(supported))
+        !block_property!(subcomponents, major, minor).is_empty()
     }
 }
 

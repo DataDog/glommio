@@ -71,7 +71,7 @@ struct FileSchedulerInner {
     sources: RefCell<RBTree<ScheduledSourceAdapter>>,
 }
 
-intrusive_adapter!(FileSchedulerAdapter = Rc<FileSchedulerInner>: FileSchedulerInner { link: RBTreeLink });
+intrusive_adapter!(FileSchedulerAdapter = Rc<FileSchedulerInner>: FileSchedulerInner { link => RBTreeLink });
 impl<'a> KeyAdapter<'a> for FileSchedulerAdapter {
     type Key = Identity;
     fn get_key(&self, s: &'a FileSchedulerInner) -> Self::Key {
@@ -177,7 +177,7 @@ struct ScheduledSourceInner {
     data_range: Range<u64>,
 }
 
-intrusive_adapter!(ScheduledSourceAdapter = Rc<ScheduledSourceInner>: ScheduledSourceInner { link: RBTreeLink });
+intrusive_adapter!(ScheduledSourceAdapter = Rc<ScheduledSourceInner>: ScheduledSourceInner { link => RBTreeLink });
 impl<'a> KeyAdapter<'a> for ScheduledSourceAdapter {
     type Key = u64;
     fn get_key(&self, s: &'a ScheduledSourceInner) -> Self::Key {

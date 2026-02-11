@@ -13,9 +13,9 @@ mod hyper_compat {
     use glommio::net::TcpStream;
 
     use http_body_util::BodyExt;
-    use hyper::body::{Body as HttpBody, Bytes, Frame};
     use hyper::Error;
     use hyper::Request;
+    use hyper::body::{Body as HttpBody, Bytes, Frame};
     use std::io;
     use std::marker::PhantomData;
 
@@ -71,38 +71,6 @@ mod hyper_compat {
                     Ok(())
                 })
             }
-        }
-    }
-
-    struct GlommioSleep(glommio::timer::Timer);
-
-    impl Future for GlommioSleep {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-            match Pin::new(&mut self.0).poll(cx) {
-                Poll::Ready(_) => Poll::Ready(()),
-                Poll::Pending => Poll::Pending,
-            }
-        }
-    }
-
-    impl hyper::rt::Sleep for GlommioSleep {}
-    unsafe impl Send for GlommioSleep {}
-    unsafe impl Sync for GlommioSleep {}
-
-    #[derive(Clone, Copy, Debug)]
-    pub struct GlommioTimer;
-
-    impl hyper::rt::Timer for GlommioTimer {
-        fn sleep(&self, duration: std::time::Duration) -> Pin<Box<dyn hyper::rt::Sleep>> {
-            Box::pin(GlommioSleep(glommio::timer::Timer::new(duration)))
-        }
-
-        fn sleep_until(&self, deadline: std::time::Instant) -> Pin<Box<dyn hyper::rt::Sleep>> {
-            Box::pin(GlommioSleep(glommio::timer::Timer::new(
-                deadline - std::time::Instant::now(),
-            )))
         }
     }
 

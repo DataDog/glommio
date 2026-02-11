@@ -3,7 +3,7 @@
 //
 // This product includes software developed at Datadog (https://www.datadoghq.com/). Copyright 2020 Datadog, Inc.
 //
-use glommio::{defer, timer::TimerActionOnce, LocalExecutorBuilder};
+use glommio::{LocalExecutorBuilder, defer, timer::TimerActionOnce};
 use std::time::Duration;
 
 fn main() {

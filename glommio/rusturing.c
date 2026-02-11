@@ -108,7 +108,7 @@ extern inline void rust_io_uring_prep_poll_add(struct io_uring_sqe *sqe, int fd,
     io_uring_prep_poll_add(sqe, fd, poll_mask);
 }
 
-extern inline void rust_io_uring_prep_poll_remove(struct io_uring_sqe *sqe, void *user_data)
+extern inline void rust_io_uring_prep_poll_remove(struct io_uring_sqe *sqe, __u64 user_data)
 {
     io_uring_prep_poll_remove(sqe, user_data);
 }
@@ -311,4 +311,9 @@ extern inline int rust_io_uring_peek_cqe(struct io_uring *ring, struct io_uring_
 extern inline int rust_io_uring_wait_cqe(struct io_uring *ring, struct io_uring_cqe **cqe_ptr)
 {
     return io_uring_wait_cqe(ring, cqe_ptr);
+}
+
+extern inline struct io_uring_sqe *rust_io_uring_get_sqe(struct io_uring *ring)
+{
+    return io_uring_get_sqe(ring);
 }
