@@ -105,14 +105,23 @@ impl BlockDevice {
         // However if this a partition, we actually want to look at the main device.
         // So minor is always zero.
         let dir_path = format!("/sys/dev/block/{}:{}", dev_id.0, 0);
-        let dir = match canonicalize(Path::new(dir_path.as_str())) {
+        let mut dir = match canonicalize(Path::new(dir_path.as_str())) {
             Ok(path) => path,
             Err(x) => match x.kind() {
                 io::ErrorKind::NotFound => return BlockDevice::in_memory(),
                 _ => panic!("Unexpected error: {:?}", x),
             },
         };
-        let queue = dir.join("queue");
+        let mut queue = dir.join("queue");
+        if !queue.exists()
+            && dir
+                .file_name()
+                .and_then(|str| str.to_str())
+                .is_some_and(|name| name.starts_with("md"))
+        {
+            dir = dir.parent().unwrap().to_owned();
+            queue = dir.join("queue");
+        }
 
         let rotational = read_int(queue.join("rotational")) != 0;
         let minimum_io_size = read_int(queue.join("minimum_io_size")) as _;
