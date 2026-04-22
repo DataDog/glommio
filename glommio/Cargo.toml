@@ -22,7 +22,7 @@ ahash = "0.7"
 backtrace = { version = "0.3" }
 bitflags = "2.4"
 bitmaps = "3.1"
-buddy-alloc = "0.4"
+buddy-alloc = "0.6"
 concurrent-queue = "1.2"
 crossbeam = "0.8"
 enclose = "1.1"
