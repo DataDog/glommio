@@ -18,7 +18,7 @@ readme = "../README.md"
 rust-version = "1.70"
 
 [dependencies]
-ahash = "0.7"
+ahash = "0.8"
 backtrace = { version = "0.3" }
 bitflags = "2.4"
 bitmaps = "3.1"
