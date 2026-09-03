@@ -7,7 +7,7 @@ use core::{fmt, task::Waker};
 #[cfg(feature = "debugging")]
 use std::cell::Cell;
 use std::sync::{
-    atomic::{AtomicI16, Ordering},
+    atomic::{AtomicI32, Ordering},
     Arc,
 };
 
@@ -15,6 +15,9 @@ use crate::{
     sys::SleepNotifier,
     task::{raw::TaskVTable, state::*, utils::abort_on_panic},
 };
+
+pub(crate) type RefCount = i32;
+pub(crate) type AtomicRefCount = AtomicI32;
 
 /// The header of a task.
 ///
@@ -31,7 +34,7 @@ pub(crate) struct Header {
     pub(crate) latency_matters: bool,
 
     /// Current reference count of the task.
-    pub(crate) references: AtomicI16,
+    pub(crate) references: AtomicRefCount,
 
     /// The task that is blocked on the `JoinHandle`.
     ///

@@ -4134,6 +4134,19 @@ mod test {
     }
 
     #[test]
+    fn wake_refcount_overflow() {
+        LocalExecutor::default().run(async {
+            const NUM_CLONES: usize = u16::MAX as usize;
+
+            crate::spawn_local(poll_fn::<(), _>(move |cx| {
+                let _wakers = Vec::from_iter((0..NUM_CLONES).map(|_| cx.waker().clone()));
+                Poll::Ready(())
+            }))
+            .await;
+        })
+    }
+
+    #[test]
     fn blocking_function() {
         LocalExecutor::default().run(async {
             let started = Instant::now();

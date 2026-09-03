@@ -16,7 +16,10 @@ use core::{
 use crate::task::debugging::TaskDebugger;
 use crate::{
     dbg_context,
-    task::{header::Header, state::*},
+    task::{
+        header::{Header, RefCount},
+        state::*,
+    },
 };
 use std::sync::atomic::Ordering;
 
@@ -70,7 +73,7 @@ impl<R> JoinHandle<R> {
                     // If we schedule it, need to bump the reference count, since after run() we
                     // decrement it.
                     let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
-                    assert_ne!(refs, i16::MAX);
+                    assert_ne!(refs, RefCount::MAX);
 
                     ((*header).vtable.schedule)(ptr);
                 }
@@ -132,7 +135,7 @@ impl<R> Drop for JoinHandle<R> {
                     if refs == 0 {
                         if state & CLOSED == 0 {
                             let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
-                            assert_ne!(refs, i16::MAX);
+                            assert_ne!(refs, RefCount::MAX);
                             ((*header).vtable.schedule)(ptr);
                         } else {
                             ((*header).vtable.destroy)(ptr);

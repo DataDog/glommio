@@ -13,14 +13,14 @@ use core::{
 };
 #[cfg(feature = "debugging")]
 use std::cell::Cell;
-use std::sync::atomic::{AtomicI16, Ordering};
+use std::sync::atomic::Ordering;
 
 #[cfg(feature = "debugging")]
 use crate::task::debugging::TaskDebugger;
 use crate::{
     dbg_context, sys,
     task::{
-        header::Header,
+        header::{AtomicRefCount, Header, RefCount},
         state::*,
         utils::{abort, abort_on_panic, extend},
         Task,
@@ -132,7 +132,7 @@ where
                 notifier: sys::get_sleep_notifier_for(executor_id).unwrap(),
                 state: SCHEDULED | HANDLE,
                 latency_matters,
-                references: AtomicI16::new(0),
+                references: AtomicRefCount::new(0),
                 awaiter: None,
                 vtable: &TaskVTable {
                     schedule: Self::schedule,
@@ -276,12 +276,12 @@ where
     #[track_caller]
     fn increment_references(header: &Header) {
         let refs = header.references.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(refs, i16::MAX, "Waker invariant broken: {header:?}");
+        assert_ne!(refs, RefCount::MAX, "Waker invariant broken: {header:?}");
     }
 
     #[inline]
     #[track_caller]
-    fn decrement_references(header: &Header) -> i16 {
+    fn decrement_references(header: &Header) -> RefCount {
         let refs = header.references.fetch_sub(1, Ordering::Relaxed);
         assert_ne!(refs, 0, "Waker invariant broken: {header:?}");
         refs - 1

@@ -9,7 +9,12 @@ use core::{fmt, future::Future, marker::PhantomData, mem, ptr::NonNull};
 use crate::task::debugging::TaskDebugger;
 use crate::{
     dbg_context,
-    task::{header::Header, raw::RawTask, state::*, JoinHandle},
+    task::{
+        header::{Header, RefCount},
+        raw::RawTask,
+        state::*,
+        JoinHandle,
+    },
 };
 
 use std::sync::atomic::Ordering;
@@ -133,7 +138,7 @@ impl Task {
 
         unsafe {
             let refs = (*header).references.fetch_add(1, Ordering::Relaxed);
-            assert_ne!(refs, i16::MAX);
+            assert_ne!(refs, RefCount::MAX);
             ((*header).vtable.run)(ptr)
         }
     }
