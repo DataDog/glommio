@@ -51,6 +51,7 @@ futures = "0"
 hdrhistogram = "7"
 pretty_env_logger = "0"
 rand = "0"
+rusty-fork = "0.3"
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
 tracing-subscriber = { version = "0", features = ["env-filter"] }
 

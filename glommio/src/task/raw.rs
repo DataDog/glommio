@@ -407,8 +407,8 @@ where
 
     /// Cleans up task's resources and deallocates it.
     ///
-    /// The schedule function will be dropped, and the task will then get
-    /// deallocated. The task must be closed before this function is called.
+    /// The schedule function and header will be dropped, and the task will then
+    /// get deallocated. The task must be closed before this function is called.
     #[inline]
     unsafe fn destroy(ptr: *const ()) {
         dbg_context!(ptr, "destroy", {
@@ -422,6 +422,10 @@ where
             abort_on_panic(|| {
                 // Drop the schedule function.
                 (raw.schedule as *mut S).drop_in_place();
+
+                // Drop the header so resources owned by it, such as the executor's
+                // sleep notifier, are released before the task allocation is freed.
+                (raw.header as *mut Header).drop_in_place();
             });
 
             // Finally, deallocate the memory reserved by the task.

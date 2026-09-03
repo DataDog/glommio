@@ -2864,9 +2864,11 @@ impl ExecutorProxy {
 #[cfg(test)]
 mod test {
     use core::mem::MaybeUninit;
+    use rusty_fork::rusty_fork_test;
     use std::{
         cell::Cell,
         collections::HashMap,
+        fs,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc, Mutex,
@@ -2881,11 +2883,89 @@ mod test {
 
     use crate::{
         enclose,
+        io::{DmaFile, OpenOptions, OwnedDmaFile},
         timer::{self, sleep, Timer},
         SharesManager,
     };
 
     use super::*;
+
+    fn eventfd_count() -> usize {
+        fs::read_dir("/proc/self/fd")
+            .expect("failed to enumerate this process's file descriptors")
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                fs::read_link(entry.path()).ok()
+            })
+            .filter(|target| target == std::path::Path::new("anon_inode:[eventfd]"))
+            .count()
+    }
+
+    fn run_shared_channel_round() {
+        let (sender, receiver) = crate::channels::shared_channel::new_bounded(1);
+
+        let sender = LocalExecutorBuilder::default()
+            .io_memory(0)
+            .spawn(move || async move {
+                let sender = sender.connect().await;
+                let file = OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .tmpfile(true)
+                    .dma_open(std::env::temp_dir())
+                    .await
+                    .unwrap();
+                let file: OwnedDmaFile = file.into();
+                sender.send(file).await.unwrap();
+            })
+            .unwrap();
+
+        let receiver = LocalExecutorBuilder::default()
+            .io_memory(0)
+            .spawn(move || async move {
+                let receiver = receiver.connect().await;
+                let file: DmaFile = receiver.recv().await.unwrap().into();
+                assert!(file.read_at(0, 1).await.unwrap().is_empty());
+                file.close().await.unwrap();
+            })
+            .unwrap();
+
+        sender.join().unwrap();
+        receiver.join().unwrap();
+    }
+
+    // The fork is critical here as it makes sure that the eventfd_count check works regardless of other tests
+    // running in the same process (which is what happens when running with cargo test instead of cargo nextest).
+    rusty_fork_test! {
+        #[test]
+        fn executor_shutdown_does_not_leak_eventfds() {
+            // The disconnected notifier is a process-wide singleton. Initialize it before
+            // measuring so the baseline contains every eventfd that is expected to persist.
+            let _ = crate::sys::get_sleep_notifier_for(usize::MAX);
+            let initial_eventfds = eventfd_count();
+
+            // Run enough rounds to make the leak from #448 unambiguous, then check that
+            // additional executor shutdowns do not accumulate descriptors either.
+            for _ in 0..10 {
+                run_shared_channel_round();
+            }
+            assert_eq!(
+                eventfd_count(),
+                initial_eventfds,
+                "eventfds leaked after 10 rounds"
+            );
+
+            for _ in 0..90 {
+                run_shared_channel_round();
+            }
+            assert_eq!(
+                eventfd_count(),
+                initial_eventfds,
+                "eventfds leaked after 100 rounds"
+            );
+        }
+    }
 
     #[test]
     fn create_and_destroy_executor() {

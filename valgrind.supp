@@ -1,0 +1,26 @@
+# The process-global reactor registry removes each SleepNotifier entry, but the
+# hash map retains its bucket allocation for reuse until process exit.
+{
+   glommio_reactor_notifier_registry_capacity
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   ...
+   fun:*hashbrown*RawTableInner*new_uninitialized*
+   ...
+   fun:*glommio*ReactorGlobalState*new_local_state
+}
+
+# The Rust test harness retains the std::sync::mpmc context for its main
+# thread-local test-event receiver until process exit.
+{
+   rust_test_harness_mpmc_context_tls
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   ...
+   fun:current_or_unnamed
+   fun:*std4sync4mpmc7context*Context3new
+   ...
+   fun:*test*run_tests*
+}
