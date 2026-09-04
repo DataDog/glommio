@@ -1,5 +1,10 @@
 #include "liburing.h"
 
+extern inline struct io_uring_sqe *rust_io_uring_get_sqe(struct io_uring *ring)
+{
+    return io_uring_get_sqe(ring);
+}
+
 extern inline int rust_io_uring_opcode_supported(struct io_uring_probe *p, int op)
 {
     return io_uring_opcode_supported(p, op);
@@ -108,7 +113,7 @@ extern inline void rust_io_uring_prep_poll_add(struct io_uring_sqe *sqe, int fd,
     io_uring_prep_poll_add(sqe, fd, poll_mask);
 }
 
-extern inline void rust_io_uring_prep_poll_remove(struct io_uring_sqe *sqe, void *user_data)
+extern inline void rust_io_uring_prep_poll_remove(struct io_uring_sqe *sqe, __u64 user_data)
 {
     io_uring_prep_poll_remove(sqe, user_data);
 }

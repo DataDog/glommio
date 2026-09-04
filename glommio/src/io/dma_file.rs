@@ -217,7 +217,13 @@ impl DmaFile {
             sys::direct_io_ify(file.as_raw_fd(), flags)?;
             let reactor = file.reactor.upgrade().unwrap();
             if reactor
-                .probe_iopoll_support(file.as_raw_fd(), o_direct_alignment, major, minor, path)
+                .probe_iopoll_support(
+                    file.as_raw_fd(),
+                    o_direct_alignment,
+                    major,
+                    minor,
+                    (dir, path),
+                )
                 .await
             {
                 PollableStatus::Pollable
@@ -382,7 +388,7 @@ impl DmaFile {
             pos,
             self.pollable,
         );
-        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+        enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
     /// Equivalent to [`DmaFile::write_at`] except that the caller retains
@@ -442,7 +448,7 @@ impl DmaFile {
             pos,
             self.pollable,
         );
-        enhanced_try!(source.collect_rw().await, "Writing", self.file).map_err(Into::into)
+        enhanced_try!(source.collect_rw().await, "Writing", self.file)
     }
 
     /// Reads from a specific position in the file and returns the buffer.
@@ -771,6 +777,7 @@ impl DmaFile {
     /// NOTE: Clones are allowed to exist on any thread and all share the same underlying
     /// fd safely. try_take_last_clone is also safe to invoke from any thread and will
     /// behave correctly with respect to clones on other threads.
+    #[expect(clippy::result_large_err)]
     pub fn try_take_last_clone(mut self) -> std::result::Result<Self, Self> {
         match self.file.try_take_last_clone() {
             Ok(took) => {

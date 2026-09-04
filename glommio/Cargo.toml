@@ -15,7 +15,7 @@ keywords = ["linux", "rust", "async", "iouring", "thread-per-core"]
 categories = ["asynchronous", "concurrency", "os", "filesystem", "network-programming"]
 readme = "../README.md"
 # This is also documented in the README.md under "Supported Rust Versions"
-rust-version = "1.70"
+rust-version = "1.76"
 
 [dependencies]
 ahash = "0.7"
@@ -50,7 +50,7 @@ fastrand = "2"
 futures = "0"
 hdrhistogram = "7"
 pretty_env_logger = "0"
-rand = "0"
+rand = "^0.9.0"
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
 tracing-subscriber = { version = "0", features = ["env-filter"] }
 

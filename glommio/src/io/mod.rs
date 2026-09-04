@@ -109,7 +109,7 @@ macro_rules! enhanced_try {
                 let enhanced = crate::error::GlommioError::<()>::EnhancedIoError {
                     source,
                     op: $op,
-                    path: $path.and_then(|x| Some(x.to_path_buf())),
+                    path: $path.map(|x| x.to_path_buf()),
                     fd: $fd,
                 };
                 Err(enhanced)

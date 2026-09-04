@@ -377,7 +377,7 @@ impl StreamWriter {
         if res.is_ok() {
             if let IoBuffer::Buffered(mut buffer) = source.extract_buffer() {
                 self.file_pos += buffer.len() as u64;
-                buffer.truncate(0);
+                buffer.clear();
                 self.buffer.replace_buffer(buffer);
             } else {
                 unreachable!("expected vec buffer");

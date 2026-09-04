@@ -177,7 +177,7 @@ impl Ord for TaskQueue {
 
 impl PartialOrd for TaskQueue {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(other.vruntime.cmp(&self.vruntime))
+        Some(self.cmp(other))
     }
 }
 
@@ -1025,7 +1025,7 @@ impl LocalExecutorPoolBuilder {
                 } else {
                     // this `Err` isn't visible to the user; the pool builder directly returns an
                     // `Err` from the `std::thread::Builder`
-                    Err(io::Error::new(io::ErrorKind::Other, "spawn failed").into())
+                    Err(io::Error::other("spawn failed").into())
                 }
             }
         });
@@ -3235,14 +3235,10 @@ mod test {
             .unwrap();
 
         ex.run(async {
-            let threshold = if std::env::var("CI").is_ok_and(|val| val == "1" || val == "true") {
-                // In CI this test seems to measure ~49.8 ms - not sure why the gap in CI.
-                Duration::from_millis(40)
-            } else {
-                // 100 ms may have passed without us running for 100ms in case
-                // there are other threads. Need to be a bit more relaxed
-                Duration::from_millis(90)
-            };
+            // We have to use a conservative threshold because if we run the tests concurrently, the spin time
+            // is evaluated against wall clock and under contention this thread may end up not getting scheduled
+            // frequently enough to actually spin for 100ms.
+            let threshold = Duration::from_millis(30);
 
             let ex_ru_start = getrusage();
             timer::sleep(dur).await;
@@ -4177,7 +4173,7 @@ mod test {
                 // we created 5 blocking jobs each taking 100ms but our thread pool only has 4
                 // threads. We expect one of those jobs to take twice as long as the others.
 
-                let mut ts = join_all(blocking.into_iter()).await;
+                let mut ts = join_all(blocking).await;
                 assert_eq!(ts.len(), 5);
 
                 ts.sort_unstable();

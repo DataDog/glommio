@@ -120,7 +120,7 @@ impl TcpListener {
             .to_socket_addrs()
             .unwrap()
             .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
+            .ok_or_else(|| io::Error::other("empty address"))?;
 
         let domain = if addr.is_ipv6() {
             Domain::IPV6

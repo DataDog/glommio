@@ -11,7 +11,7 @@ on:
 
 jobs:
   doc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
@@ -31,7 +31,7 @@ jobs:
     #   run: cargo deadlinks --dir target/doc/glommio
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
@@ -44,7 +44,7 @@ jobs:
         run: cargo build --all --all-targets
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
@@ -58,7 +58,7 @@ jobs:
           cat << EOF > "run-gha-workflow.sh"
           PATH=$PATH:/usr/share/rust/.cargo/bin
           echo "`nproc` CPU(s) available"
-          rustup install 1.70
+          rustup install 1.76
           rustup show
           rustup default stable
           cargo install cargo-sort

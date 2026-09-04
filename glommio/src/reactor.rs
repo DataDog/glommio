@@ -6,13 +6,17 @@
 //!
 
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::BTreeMap,
     ffi::CString,
     fmt,
     future::Future,
     io, mem,
-    os::unix::{ffi::OsStrExt, io::RawFd},
+    os::unix::{
+        ffi::OsStrExt,
+        io::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    },
     path::Path,
     rc::Rc,
     sync::{
@@ -63,7 +67,7 @@ impl SharedChannels {
             wake!(waker);
         }
 
-        for (_, (pending, check)) in self.wakers_map.iter_mut() {
+        for (pending, check) in self.wakers_map.values_mut() {
             if pending.is_empty() {
                 continue;
             }
@@ -242,7 +246,7 @@ impl Reactor {
         alignment: u64,
         major: usize,
         minor: usize,
-        path: &Path,
+        dir_and_path: (RawFd, &Path),
     ) -> bool {
         match sysfs::BlockDevice::iopoll(major, minor) {
             None => {
@@ -260,25 +264,116 @@ impl Reactor {
                 let source =
                     self.new_source(raw, SourceType::Read(PollableStatus::Pollable, None), None);
                 self.sys.read_dma(&source, 0, alignment as usize);
-                let iopoll = if let Err(err) = source.collect_rw().await {
-                    if let Some(libc::ENOTSUP) = err.raw_os_error() {
-                        false
-                    } else {
-                        // The IO requests failed, but not because the poll ring doesn't work.
-                        error!(
-                            "got unexpected error when probing iopoll support for file {path:?} \
-                             (fd: {raw}) hosted on ({major}, {minor}); the poll ring will be \
-                             disabled for this device: {err}"
-                        );
+                let iopoll = match source.collect_rw().await {
+                    // An empty file completes reads successfully at EOF. Retry against a
+                    // non-empty anonymous file on the same filesystem so that the result
+                    // represents actual I/O rather than EOF.
+                    Ok(0) => {
+                        let probe = self
+                            .iopoll_probe_tmpfile(major, minor, dir_and_path, alignment)
+                            .await;
+                        probe
+                    }
+                    Ok(_) => true,
+                    Err(err) => {
+                        if err.raw_os_error() != Some(libc::ENOTSUP) {
+                            let (_, path) = dir_and_path;
+                            // The I/O request failed, but not because the poll ring doesn't work.
+                            error!(
+                                "got unexpected error when probing iopoll support for file {path:?} \
+                                 (fd: {raw}) hosted on ({major}, {minor}); the poll ring will be \
+                                 disabled for this device: {err}"
+                            );
+                        }
                         false
                     }
-                } else {
-                    true
                 };
                 sysfs::BlockDevice::set_iopoll_support(major, minor, iopoll);
                 iopoll
             }
             Some(iopoll) => iopoll,
+        }
+    }
+
+    async fn iopoll_open_probe_tmpfile(&self, (dir, path): (RawFd, &Path)) -> io::Result<OwnedFd> {
+        let flags =
+            libc::O_TMPFILE | libc::O_EXCL | libc::O_RDWR | libc::O_CLOEXEC | libc::O_DIRECT;
+        let mode = 0o600;
+
+        let reactor = crate::executor().reactor();
+        let probe_path = if dir != -1 {
+            Cow::Borrowed(Path::new("."))
+        } else {
+            let path = if path.is_dir() {
+                path
+            } else {
+                path.parent().unwrap_or_else(|| Path::new("."))
+            };
+
+            if path.is_relative() {
+                Cow::Owned(path.canonicalize()?)
+            } else {
+                Cow::Borrowed(path)
+            }
+        };
+        let source = reactor.open_at(dir, &probe_path, flags, mode);
+        let fd = source
+            .collect_rw()
+            .await
+            .inspect_err(|err| error!("Failed to open anonymous tempfile: {err}"))?;
+        Ok(unsafe { OwnedFd::from_raw_fd(fd as _) })
+    }
+
+    async fn iopoll_is_tmpfile_pollable(&self, probe_file: OwnedFd, alignment: u64) -> bool {
+        let mut buffer = self.alloc_dma_buffer(alignment as usize);
+        buffer.as_bytes_mut().fill(0);
+        let source = self.write_dma(
+            probe_file.as_raw_fd(),
+            DmaSource::Owned(buffer),
+            0,
+            PollableStatus::Pollable,
+        );
+        if matches!(
+            source.collect_rw().await,
+            Ok(size) if size == alignment as usize
+        ) {
+            let source = self.new_source(
+                probe_file.as_raw_fd(),
+                SourceType::Read(PollableStatus::Pollable, None),
+                None,
+            );
+            self.sys.read_dma(&source, 0, alignment as usize);
+            let _result = source.collect_rw().await;
+            let result = matches!(
+                source.collect_rw().await,
+                Ok(size) if size == alignment as usize
+            );
+            result
+        } else {
+            false
+        }
+    }
+
+    async fn iopoll_probe_tmpfile(
+        &self,
+        major: usize,
+        minor: usize,
+        dir_and_path: (RawFd, &Path),
+        alignment: u64,
+    ) -> bool {
+        match self.iopoll_open_probe_tmpfile(dir_and_path).await {
+            Ok(probe_file) => self.iopoll_is_tmpfile_pollable(probe_file, alignment).await,
+            Err(err) => {
+                let (_, path) = dir_and_path;
+
+                // We don't cache this as we failed to determine the kind of device this is.
+                error!(
+                    "failed to create an IOPOLL probe file near {path:?} hosted on \
+                        ({major}, {minor}); the poll ring will be disabled for this \
+                        device: {err}"
+                );
+                false
+            }
         }
     }
 

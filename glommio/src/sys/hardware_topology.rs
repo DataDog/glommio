@@ -7,7 +7,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    io::{self, ErrorKind},
+    io::{self},
     path::Path,
 };
 
@@ -39,7 +39,7 @@ fn build_cpu_location(
 
     let package_id = ListIterator::from_path(&cpu_path.join("physical_package_id"))?
         .next()
-        .ok_or_else(|| io::Error::new(ErrorKind::Other, "failed to parse physical_package_id"))??;
+        .ok_or_else(|| io::Error::other("failed to parse physical_package_id"))??;
 
     Ok(CpuLocation {
         cpu,
@@ -146,7 +146,7 @@ fn get_core_id(
             let core = ListIterator::from_path(&cpu_path.join("core_id"))?
                 .next()
                 .transpose()?
-                .ok_or_else(|| io::Error::new(ErrorKind::Other, "failed to parse core_id"))?;
+                .ok_or_else(|| io::Error::other("failed to parse core_id"))?;
             for sibling in cpu_siblings {
                 cpu_to_core.insert(sibling?, core);
             }

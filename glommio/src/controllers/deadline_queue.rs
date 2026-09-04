@@ -497,7 +497,7 @@ impl<T: 'static> DeadlineQueue<T> {
         self.queue.admit(source.clone())?;
         self.sender.send(source.clone()).await?;
         self.responder.recv().await.ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "no response from response channel")
+            io::Error::other("no response from response channel")
         })
     }
 

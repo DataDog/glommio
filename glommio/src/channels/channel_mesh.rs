@@ -334,8 +334,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         let mut peers = self.peers.write().unwrap();
 
         if peers.len() == self.nr_peers {
-            return Err(GlommioError::IoError(Error::new(
-                ErrorKind::Other,
+            return Err(GlommioError::IoError(Error::other(
                 "The channel mesh is full.",
             )));
         }

@@ -553,7 +553,7 @@ fn submit_event_chain(
                 continue;
             }
 
-            for (op, mut sqe) in ops.into_iter().zip(sqes.into_iter()) {
+            for (op, mut sqe) in ops.into_iter().zip(sqes) {
                 let allocator = allocator.clone();
                 fill_sqe(
                     &mut sqe,
@@ -886,9 +886,8 @@ impl UringCommon for PollRing {
             },
             source_map,
         )
-        .map(|x| {
+        .inspect(|_x| {
             self.in_kernel -= 1;
-            x
         })
     }
 
@@ -1199,9 +1198,8 @@ impl UringCommon for SleepableRing {
             },
             source_map,
         )
-        .map(|x| {
+        .inspect(|_x| {
             self.in_kernel -= 1;
-            x
         })
     }
 
