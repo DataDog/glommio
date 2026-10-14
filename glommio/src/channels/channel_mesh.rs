@@ -7,7 +7,6 @@ use std::{
     cell::Cell,
     fmt::{self, Debug, Formatter},
     io::{Error, ErrorKind},
-    rc::Rc,
 };
 
 use std::sync::{Arc, RwLock};
@@ -252,7 +251,7 @@ pub type PartialMesh<T> = MeshBuilder<T, Partial>;
 pub struct MeshBuilder<T: Send, A: MeshAdapter> {
     nr_peers: usize,
     channel_size: usize,
-    peers: Rc<RwLock<Vec<Peer>>>,
+    peers: Arc<RwLock<Vec<Peer>>>,
     channels: Arc<SharedChannels<T>>,
     adapter: A,
 }
@@ -309,7 +308,7 @@ impl<T: 'static + Send, A: MeshAdapter> MeshBuilder<T, A> {
         MeshBuilder {
             nr_peers,
             channel_size,
-            peers: Rc::new(RwLock::new(Vec::new())),
+            peers: Arc::new(RwLock::new(Vec::new())),
             channels: Arc::new(Self::placeholder(nr_peers)),
             adapter,
         }
@@ -515,6 +514,22 @@ mod tests {
     #[allow(unused_must_use)]
     fn test_join_more_than_capacity() {
         do_test_channel_mesh(1, 1, 2);
+    }
+
+    #[test]
+    fn test_clone_across_threads() {
+        let builder = MeshBuilder::<bool, _>::full(2, 1);
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                let b = builder.clone();
+                s.spawn(move || {
+                    for _ in 0..1000 {
+                        drop(b.clone());
+                    }
+                });
+            }
+        });
+        assert_eq!(Arc::strong_count(&builder.peers), 1);
     }
 
     fn do_test_channel_mesh(nr_peers: usize, channel_size: usize, nr_executors: usize) {
