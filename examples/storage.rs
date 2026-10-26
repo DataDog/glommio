@@ -1,5 +1,5 @@
 use byte_unit::{Byte, UnitType};
-use clap::{Arg, Command};
+use clap::{value_parser, Arg, Command};
 use futures_lite::{
     stream::{self, StreamExt},
     AsyncReadExt, AsyncWriteExt,
@@ -280,8 +280,8 @@ async fn random_many_read<S: Into<String>>(
     );
 }
 
-fn main() {
-    let matches = Command::new("storage example")
+fn command() -> Command {
+    Command::new("storage example")
         .version("0.1.0")
         .author("Glauber Costa <glauber@datadoghq.com>")
         .about("demonstrate glommio's storage APIs")
@@ -297,10 +297,13 @@ fn main() {
                 .long("size-gb")
                 .action(clap::ArgAction::Set)
                 .required(false)
+                .value_parser(value_parser!(u64).range(1..=(u64::MAX >> 30)))
                 .help("size of the file in GB (default: 2 * memory_size)"),
         )
-        .get_matches();
+}
 
+fn main() {
+    let matches = command().get_matches();
     let path = matches.get_one::<String>("storage_dir").unwrap();
     let mut dir = PathBuf::from(path);
     assert!(dir.exists());
@@ -414,4 +417,42 @@ fn main() {
         .unwrap();
 
     local_ex.join().unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_gb_is_a_byte_representable_integer() {
+        for size in [1, 2, u64::MAX >> 30] {
+            let value = size.to_string();
+            let matches = command()
+                .try_get_matches_from(["storage", "--dir", "/tmp", "--size-gb", &value])
+                .unwrap();
+            assert_eq!(matches.get_one::<u64>("file_size"), Some(&size));
+        }
+    }
+
+    #[test]
+    fn size_gb_rejects_invalid_values() {
+        for value in [
+            "0".to_owned(),
+            "bad".to_owned(),
+            "-1".to_owned(),
+            ((u64::MAX >> 30) + 1).to_string(),
+        ] {
+            assert!(command()
+                .try_get_matches_from(["storage", "--dir", "/tmp", "--size-gb", &value])
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn omitted_size_keeps_the_default_path() {
+        let matches = command()
+            .try_get_matches_from(["storage", "--dir", "/tmp"])
+            .unwrap();
+        assert!(matches.get_one::<u64>("file_size").is_none());
+    }
 }
